@@ -1,0 +1,28 @@
+# Mountain Climber
+
+A CLI-based CAD tool designed for AI agents. The goal is to build the best CAD tool in the world for agents — issue commands, get back structured output to design CAD drawings.
+
+## Project Structure
+
+- `/prd` — Product requirements documents
+- `/app` — Application code
+
+## Setup
+
+Before running `cadtool` or `pytest`, activate the virtual environment:
+
+    source app/.venv/bin/activate
+
+The package is installed in editable mode inside that venv. If the venv doesn't exist, create it with **Python 3.12** (CadQuery/OCP requires 3.12 or earlier):
+
+    /opt/homebrew/bin/python3.12 -m venv app/.venv
+    source app/.venv/bin/activate
+    pip install -e app/ pytest
+
+## Development Process
+
+- **Red/Green TDD** — Always write a failing test first (red), then write the minimal code to make it pass (green). Refactor only after green.
+
+## Notes
+
+This file should be updated as the project evolves. Keep it current with new conventions, decisions, and patterns as they emerge.

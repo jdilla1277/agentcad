@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cadtool"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["click>=8.0", "cadquery>=2.0"]
+
+[project.scripts]
+cadtool = "cadtool.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
