@@ -129,11 +129,155 @@ def test_run_label_in_directory_name(runner, isolated_dir):
     assert (isolated_dir / "v1_my_label" / "output.step").exists()
 
 
-def test_run_script_error_no_directory_created(runner, isolated_dir):
+def test_run_script_error_creates_failed_directory(runner, isolated_dir):
     _init_project(runner)
     _write_script(isolated_dir, content="this is not valid python(")
     result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
     assert result.exit_code == 1
-    assert not (isolated_dir / "v1_broken").exists()
+    # Failed directory exists with _failed suffix
+    failed_dir = isolated_dir / "v1_broken_failed"
+    assert failed_dir.is_dir()
+    # meta.json with status failed and error key
+    meta = json.loads((failed_dir / "meta.json").read_text())
+    assert meta["status"] == "failed"
+    assert "error" in meta
+    # Script copied
+    assert (failed_dir / "script.py").exists()
+    # No STEP output
+    assert not (failed_dir / "output.step").exists()
+    # Manifest has 1 failed entry
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
-    assert len(manifest["versions"]) == 0
+    assert len(manifest["versions"]) == 1
+    assert manifest["versions"][0]["status"] == "failed"
+
+
+def test_run_failed_json_response(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content="this is not valid python(")
+    result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
+    parsed = json.loads(result.output)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "failed"
+    assert parsed["version"] == 1
+    assert "error" in parsed
+    assert parsed["path"] == "v1_broken_failed/"
+
+
+def test_run_failed_does_not_advance_current(runner, isolated_dir):
+    _init_project(runner)
+    # Successful v1
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "good"])
+    # Failed v2
+    _write_script(isolated_dir, content="bad(")
+    runner.invoke(cli, ["run", "script.py", "--output", "bad"])
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == "good"
+
+
+def test_run_failed_consumes_version_number(runner, isolated_dir):
+    _init_project(runner)
+    # Failed v1
+    _write_script(isolated_dir, content="bad(")
+    runner.invoke(cli, ["run", "script.py", "--output", "broken"])
+    # Successful v2
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "fixed"])
+    parsed = json.loads(result.output)
+    assert parsed["version"] == 2
+    assert (isolated_dir / "v2_fixed").is_dir()
+
+
+def test_run_runtime_error_creates_failed_version(runner, isolated_dir):
+    _init_project(runner)
+    script = """\
+import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 10)
+raise ValueError("something went wrong")
+show_object(result)
+"""
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
+    assert result.exit_code == 1
+    failed_dir = isolated_dir / "v1_broken_failed"
+    assert failed_dir.is_dir()
+    meta = json.loads((failed_dir / "meta.json").read_text())
+    assert meta["status"] == "failed"
+    assert "something went wrong" in meta["error"]
+
+
+def test_run_no_show_object_creates_failed_version(runner, isolated_dir):
+    _init_project(runner)
+    script = """\
+import cadquery as cq
+result = cq.Workplane("XY").box(10, 10, 10)
+"""
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "empty"])
+    assert result.exit_code == 1
+    failed_dir = isolated_dir / "v1_empty_failed"
+    assert failed_dir.is_dir()
+    meta = json.loads((failed_dir / "meta.json").read_text())
+    assert meta["status"] == "failed"
+
+
+# --- Render integration tests ---
+
+
+def test_run_with_render_produces_png(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    assert result.exit_code == 0
+    png = isolated_dir / "v1_label" / "renders" / "iso.png"
+    assert png.exists()
+    assert png.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_run_with_render_multiple_views(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "front,iso"])
+    assert result.exit_code == 0
+    renders_dir = isolated_dir / "v1_label" / "renders"
+    assert (renders_dir / "front.png").exists()
+    assert (renders_dir / "iso.png").exists()
+
+
+def test_run_with_render_all(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "all"])
+    assert result.exit_code == 0
+    renders_dir = isolated_dir / "v1_label" / "renders"
+    for name in ["front", "right", "top", "iso"]:
+        assert (renders_dir / f"{name}.png").exists()
+
+
+def test_run_with_render_meta_json(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "renders" in meta
+    assert "iso" in meta["renders"]
+    assert meta["renders"]["iso"] == "v1_label/renders/iso.png"
+
+
+def test_run_with_render_json_response(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    parsed = json.loads(result.output)
+    assert "renders" in parsed
+    assert parsed["renders"]["iso"] == "v1_label/renders/iso.png"
+
+
+def test_run_without_render_no_renders_key(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label"])
+    parsed = json.loads(result.output)
+    assert "renders" not in parsed
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "renders" not in meta
