@@ -12,8 +12,8 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M2 | 2D geometry primitives (`add-rect`, `add-circle`, `list`) | Done |
 | M3 | Geometry enrichment (`--label`, `count`, `delete`, `get`) | Done |
 | M4 | `cadtool run` — CadQuery script execution & STEP export | Done |
-| M5 | Error handling & failed versions | **Next** |
-| M6 | PNG rendering | Planned |
+| M5 | Error handling & failed versions | Done |
+| M6 | PNG rendering | **Next** |
 | M7 | GLB/OBJ export | Planned |
 | M8 | `cadtool render` (custom views) | Planned |
 | ~~M9~~ | ~~2D primitive cleanup~~ | Done (absorbed into M4) |
@@ -62,22 +62,13 @@ See [m4_plan.md](m4_plan.md) for full plan.
 
 ---
 
-## Milestone 5: Error Handling & Failed Versions
+## Milestone 5: Error Handling & Failed Versions ✓
 
 **Goal:** Failed runs are preserved with `_failed` suffix, error details in JSON.
 
-### Tasks
-1. Catch CadQuery script errors (syntax, geometry, import failures)
-2. Write `_failed` suffixed directory and `output_failed.step` if partial geometry exists
-3. Return structured error JSON with error message
-4. Record failed version in `cadtool.json`
+See [m5_plan.md](m5_plan.md) for full plan.
 
-### Tests
-- Script with syntax error returns `"status": "failed"` JSON
-- Script with geometry error (e.g., self-intersecting) returns error JSON
-- Failed directory uses `_failed` suffix
-- Failed version is recorded in manifest
-- No renders are produced on failure
+**Delivered:** 30 tests, 2 commands (`init`, `run`). Script failures (syntax errors, runtime errors, missing `show_object()`) create `_failed` directories with `script.py` + `meta.json`, tracked in manifest with `status: "failed"`. Failed runs consume version numbers; `current` does not advance. CLI errors unchanged.
 
 ---
 
