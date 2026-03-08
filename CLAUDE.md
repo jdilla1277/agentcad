@@ -22,6 +22,7 @@ The package is installed in editable mode inside that venv. If the venv doesn't 
 ## Development Process
 
 - **Red/Green TDD** — Always write a failing test first (red), then write the minimal code to make it pass (green). Refactor only after green.
+- **Work in branches** — Do all work in feature branches off `main`. Never commit directly to `main`.
 
 ## Notes
 
