@@ -14,12 +14,12 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M4 | `cadtool run` — CadQuery script execution & STEP export | Done |
 | M5 | Error handling & failed versions | Done |
 | M6 | PNG rendering | Done |
-| M7 | GLB/OBJ export | Planned |
+| M7 | GLB & STL export | **Next** |
 | M8 | `cadtool render` (custom views, `--zoom`, `--focus`) | Planned |
 | ~~M9~~ | ~~2D primitive cleanup~~ | Done (absorbed into M4) |
 | M10 | `cadtool context`, `cadtool docs` & `cadtool diff` | Planned |
 | M11 | Assembly & multi-part rendering | Planned |
-| M12 | Polish & distribution | Planned |
+| M12 | Polish, distribution & OBJ export | Planned |
 
 ---
 
@@ -83,21 +83,19 @@ See [m6_plan.md](m6_plan.md) for full plan.
 
 ---
 
-## Milestone 7: GLB & OBJ Export
+## Milestone 7: GLB & STL Export
 
-**Goal:** Tessellated mesh exports for human review and interop.
+**Goal:** Mesh exports for web viewers, 3D printing, and agent interop.
 
-### Tasks
-1. GLB export via pythonOCC tessellation
-2. OBJ export via pythonOCC tessellation
-3. Wire into `--formats` flag: `glb`, `obj`
-4. Record in output JSON
+See [m7_plan.md](m7_plan.md) for full plan.
 
-### Tests
-- `--formats step,glb` produces valid GLB file
-- `--formats step,obj` produces valid OBJ file
-- GLB opens correctly (validated by file header/magic bytes)
-- Output JSON includes correct paths
+### Summary
+- `--export` option on `cadtool run`: `stl`, `glb`, or `stl,glb`
+- STL via CadQuery `exporters.export()` (one-liner)
+- GLB via OCP `RWGltf_CafWriter` (tessellate → XCAF doc → binary glTF)
+- STEP always produced; `--export` adds mesh formats alongside
+- Export paths added to `outputs` in meta.json and CLI JSON
+- OBJ deferred to M12 — no built-in OCP writer, GLB covers same use cases
 
 ---
 
@@ -170,9 +168,9 @@ Completed as part of M4. Removed `add-rect`, `add-circle`, `list`, `delete`, `ge
 
 ---
 
-## Milestone 12: Polish & Distribution
+## Milestone 12: Polish, Distribution & OBJ Export
 
-**Goal:** Installable, documented, ready for real use.
+**Goal:** Installable, documented, ready for real use. Add OBJ as a late export format.
 
 ### Tasks
 1. `--help` on all commands with clear descriptions
@@ -180,25 +178,29 @@ Completed as part of M4. Removed `add-rect`, `add-circle`, `list`, `delete`, `ge
 3. `pip install git+https://github.com/...` works cleanly
 4. End-to-end test: init → run → render → context (full workflow)
 5. Verify all JSON output matches documented schema
+6. OBJ export via manual triangle extraction (`BRepMesh_IncrementalMesh` → `TopExp_Explorer` → `Poly_Triangulation` → write `v`/`vn`/`f` lines)
+7. Wire OBJ into `--export` flag alongside `stl` and `glb`
 
 ### Tests
 - End-to-end workflow test passes
 - `--help` output exists for all commands
 - Install from git produces a working `cadtool` command
 - Invalid inputs return helpful JSON errors (not stack traces)
+- `--export obj` produces valid OBJ file (vertices, normals, faces)
+- OBJ output matches geometry from equivalent STL/GLB export
 
 ---
 
 ## Dependency Graph
 
 ```
-M1 (init) → M4 (run/STEP) → M5 (errors) → M6 (PNG) → M7 (GLB/OBJ) → M8 (render)
+M1 (init) → M4 (run/STEP) → M5 (errors) → M6 (PNG) → M7 (GLB/STL) → M8 (render)
                                                                            ↓
 M1 ──────────────────────────────────────────────── M10 (context/docs/diff)
                                                                            ↓
 M8 (render) ──────────────────────────────────────→ M11 (assembly)
                                                                            ↓
-                                                                     M12 (polish)
+                                                              M12 (polish + OBJ)
 ```
 
-M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the pipeline. M10 adds agent discoverability and version comparison. M11 introduces multi-part assemblies. M12 polishes for distribution. M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
+M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the pipeline. M10 adds agent discoverability and version comparison. M11 introduces multi-part assemblies. M12 polishes for distribution and adds OBJ export (deferred from M7 due to no built-in OCP writer). M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
