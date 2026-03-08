@@ -24,6 +24,12 @@ The package is installed in editable mode inside that venv. If the venv doesn't 
 - **Red/Green TDD** — Always write a failing test first (red), then write the minimal code to make it pass (green). Refactor only after green.
 - **Work in branches** — Do all work in feature branches off `main`. Never commit directly to `main`.
 
+## PRD Structure
+
+- `prd/v0_implementation_plan.md` — master milestone tracker
+- `prd/m{N}_plan.md` — per-milestone detailed plans
+- `prd/cadtool_scope.md` — v0 scope document
+
 ## Notes
 
 This file should be updated as the project evolves. Keep it current with new conventions, decisions, and patterns as they emerge.
