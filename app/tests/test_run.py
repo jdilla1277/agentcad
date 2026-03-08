@@ -219,3 +219,65 @@ result = cq.Workplane("XY").box(10, 10, 10)
     assert failed_dir.is_dir()
     meta = json.loads((failed_dir / "meta.json").read_text())
     assert meta["status"] == "failed"
+
+
+# --- Render integration tests ---
+
+
+def test_run_with_render_produces_png(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    assert result.exit_code == 0
+    png = isolated_dir / "v1_label" / "renders" / "iso.png"
+    assert png.exists()
+    assert png.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_run_with_render_multiple_views(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "front,iso"])
+    assert result.exit_code == 0
+    renders_dir = isolated_dir / "v1_label" / "renders"
+    assert (renders_dir / "front.png").exists()
+    assert (renders_dir / "iso.png").exists()
+
+
+def test_run_with_render_all(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "all"])
+    assert result.exit_code == 0
+    renders_dir = isolated_dir / "v1_label" / "renders"
+    for name in ["front", "right", "top", "iso"]:
+        assert (renders_dir / f"{name}.png").exists()
+
+
+def test_run_with_render_meta_json(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "renders" in meta
+    assert "iso" in meta["renders"]
+    assert meta["renders"]["iso"] == "v1_label/renders/iso.png"
+
+
+def test_run_with_render_json_response(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    parsed = json.loads(result.output)
+    assert "renders" in parsed
+    assert parsed["renders"]["iso"] == "v1_label/renders/iso.png"
+
+
+def test_run_without_render_no_renders_key(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label"])
+    parsed = json.loads(result.output)
+    assert "renders" not in parsed
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "renders" not in meta
