@@ -56,7 +56,7 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 @click.command()
 @click.argument("script")
 @click.option("--output", required=True, help="Label for this version.")
-@click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso,all).")
+@click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
 def run(script, output, render):
     """Execute a CadQuery script and produce a versioned STEP file."""
     manifest = load_manifest(command="run")

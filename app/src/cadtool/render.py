@@ -72,7 +72,7 @@ def render_shape(shape, view_name, output_path, width=800, height=600):
     context = AIS_InteractiveContext(viewer)
     ais_shape = AIS_Shape(shape)
     ais_shape.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
-    context.Display(ais_shape, True)
+    context.Display(ais_shape, 1, -1, True)
 
     # Set orientation, fit, and render
     view.SetProj(orientation)
