@@ -22,6 +22,10 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M11 | Geometry helpers (`loft_sections`, `tapered_sweep`, `naca_wire`, `mirror_fuse`) | Done |
 | M12 | `cadtool export` command | Done |
 | M13 | OBJ export & end-to-end verification | Done |
+| M14 | Geometric metrics in build output (fast-loop epic) | Done |
+| M15 | Script preamble — implicit runtime context (fast-loop epic) | Done |
+| M16 | Pre-execution validation (fast-loop epic) | Done |
+| M17 | Friction fixes — auto-compound, docs improvements | Done |
 
 ---
 
@@ -184,3 +188,42 @@ M1 ─────────────────────────�
 ```
 
 M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the rendering and export pipeline. M10 adds agent discoverability. M11 pivoted from assemblies to geometry helpers based on friction testing. M12 added standalone `cadtool export` for post-hoc mesh conversion. M13 is the remaining work: distribution verification and OBJ export. M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
+
+M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap wins to reduce wasted iterations.
+
+---
+
+## Milestone 14: Geometric Metrics in Build Output
+
+**Epic:** [Fast Loop](fast-loop/overview.md) | **Plan:** [m14_metrics.md](fast-loop/m14_metrics.md)
+
+**Goal:** Every successful `cadtool run` returns geometric metrics (bbox, volume, area, face/edge counts, validity) so agents can verify shape correctness without rendering.
+
+---
+
+## Milestone 15: Script Preamble
+
+**Epic:** [Fast Loop](fast-loop/overview.md) | **Plan:** [m15_preamble.md](fast-loop/m15_preamble.md)
+
+**Goal:** Scripts run with `cq`, `show_object`, and all helpers pre-injected. Agent writes pure design intent, zero import boilerplate.
+
+---
+
+## Milestone 16: Pre-Execution Validation
+
+**Epic:** [Fast Loop](fast-loop/overview.md) | **Plan:** [m16_validation.md](fast-loop/m16_validation.md)
+
+**Goal:** Catch preventable mistakes (syntax errors, missing `show_object()`, bad imports) in <100ms before the expensive build, without consuming a version number.
+
+---
+
+## Milestone 17: Friction Fixes — Auto-Compound & Docs
+
+**Goal:** Fix silent data loss from multiple `show_object()` calls and fill documentation gaps exposed by the Golden Gate Bridge friction log.
+
+**Delivered:** 202 tests (190 → 202), 7 commands. Five fixes:
+1. **Auto-compound** — `cadtool run` now combines multiple `show_object()` results into a single `cq.Compound.makeCompound()`. Warning added to JSON output and meta.json.
+2. **Quickstart docs** — New `cadtool docs quickstart` section with minimal example and multi-show_object pattern.
+3. **Units note** — `cadtool docs metrics` documents that cadtool is unit-agnostic.
+4. **tapered_sweep limitation** — `cadtool docs helpers` documents that tapered_sweep works best with smooth spines.
+5. **Type conversion patterns** — `cadtool docs helpers` documents `cq.Shape.cast()` and `cq.Compound.makeCompound()` patterns.

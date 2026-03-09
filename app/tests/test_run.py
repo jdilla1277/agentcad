@@ -12,6 +12,13 @@ result = cq.Workplane("XY").box(10, 10, 10)
 show_object(result)
 """
 
+MULTI_SHOW_SCRIPT = """\
+box = cq.Workplane("XY").box(10, 10, 10)
+show_object(box)
+cyl = cq.Workplane("XY").workplane(offset=20).circle(5).extrude(10)
+show_object(cyl)
+"""
+
 
 def _init_project(runner):
     runner.invoke(cli, ["init", "--name", "test_project"])
@@ -129,38 +136,32 @@ def test_run_label_in_directory_name(runner, isolated_dir):
     assert (isolated_dir / "v1_my_label" / "output.step").exists()
 
 
-def test_run_script_error_creates_failed_directory(runner, isolated_dir):
+def test_run_syntax_error_caught_by_validation(runner, isolated_dir):
+    """Syntax errors are now caught by validation — no version consumed, no disk artifacts."""
     _init_project(runner)
     _write_script(isolated_dir, content="this is not valid python(")
     result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
     assert result.exit_code == 1
-    # Failed directory exists with _failed suffix
-    failed_dir = isolated_dir / "v1_broken_failed"
-    assert failed_dir.is_dir()
-    # meta.json with status failed and error key
-    meta = json.loads((failed_dir / "meta.json").read_text())
-    assert meta["status"] == "failed"
-    assert "error" in meta
-    # Script copied
-    assert (failed_dir / "script.py").exists()
-    # No STEP output
-    assert not (failed_dir / "output.step").exists()
-    # Manifest has 1 failed entry
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "validation_error"
+    assert any(c["check"] == "syntax_error" for c in parsed["checks"])
+    # No version directory created
+    assert not (isolated_dir / "v1_broken_failed").is_dir()
+    # Manifest unchanged
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
-    assert len(manifest["versions"]) == 1
-    assert manifest["versions"][0]["status"] == "failed"
+    assert len(manifest["versions"]) == 0
 
 
-def test_run_failed_json_response(runner, isolated_dir):
+def test_run_validation_error_json_response(runner, isolated_dir):
+    """Syntax errors return validation_error with checks array."""
     _init_project(runner)
     _write_script(isolated_dir, content="this is not valid python(")
     result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
     parsed = json.loads(result.output)
     assert parsed["command"] == "run"
-    assert parsed["status"] == "failed"
-    assert parsed["version"] == 1
-    assert "error" in parsed
-    assert parsed["path"] == "v1_broken_failed/"
+    assert parsed["status"] == "validation_error"
+    assert "checks" in parsed
+    assert "version" not in parsed
 
 
 def test_run_failed_does_not_advance_current(runner, isolated_dir):
@@ -168,24 +169,29 @@ def test_run_failed_does_not_advance_current(runner, isolated_dir):
     # Successful v1
     _write_script(isolated_dir)
     runner.invoke(cli, ["run", "script.py", "--output", "good"])
-    # Failed v2
-    _write_script(isolated_dir, content="bad(")
+    # Runtime error v2 (passes validation, fails at execution)
+    _write_script(isolated_dir, content=(
+        'import cadquery as cq\n'
+        'raise ValueError("boom")\n'
+        'show_object(cq.Workplane("XY").box(1,1,1))\n'
+    ))
     runner.invoke(cli, ["run", "script.py", "--output", "bad"])
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
     assert manifest["current"] == "good"
 
 
-def test_run_failed_consumes_version_number(runner, isolated_dir):
+def test_run_validation_error_does_not_consume_version(runner, isolated_dir):
+    """Validation errors don't consume a version number."""
     _init_project(runner)
-    # Failed v1
+    # Validation error (syntax)
     _write_script(isolated_dir, content="bad(")
     runner.invoke(cli, ["run", "script.py", "--output", "broken"])
-    # Successful v2
+    # Next successful run is v1, not v2
     _write_script(isolated_dir)
     result = runner.invoke(cli, ["run", "script.py", "--output", "fixed"])
     parsed = json.loads(result.output)
-    assert parsed["version"] == 2
-    assert (isolated_dir / "v2_fixed").is_dir()
+    assert parsed["version"] == 1
+    assert (isolated_dir / "v1_fixed").is_dir()
 
 
 def test_run_runtime_error_creates_failed_version(runner, isolated_dir):
@@ -206,7 +212,8 @@ show_object(result)
     assert "something went wrong" in meta["error"]
 
 
-def test_run_no_show_object_creates_failed_version(runner, isolated_dir):
+def test_run_no_show_object_caught_by_validation(runner, isolated_dir):
+    """Missing show_object is now caught by validation — no version consumed."""
     _init_project(runner)
     script = """\
 import cadquery as cq
@@ -215,10 +222,13 @@ result = cq.Workplane("XY").box(10, 10, 10)
     _write_script(isolated_dir, content=script)
     result = runner.invoke(cli, ["run", "script.py", "--output", "empty"])
     assert result.exit_code == 1
-    failed_dir = isolated_dir / "v1_empty_failed"
-    assert failed_dir.is_dir()
-    meta = json.loads((failed_dir / "meta.json").read_text())
-    assert meta["status"] == "failed"
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "validation_error"
+    assert any(c["check"] == "show_object_missing" for c in parsed["checks"])
+    # No version directory
+    assert not (isolated_dir / "v1_empty_failed").is_dir()
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert len(manifest["versions"]) == 0
 
 
 # --- Render integration tests ---
@@ -356,6 +366,45 @@ def test_run_without_export_no_extra_outputs(runner, isolated_dir):
     assert "glb" not in meta["outputs"]
 
 
+# --- Metrics integration tests ---
+
+
+def test_run_success_includes_metrics(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "metrics" in parsed
+    m = parsed["metrics"]
+    assert "bounding_box" in m
+    assert "volume" in m
+    assert "surface_area" in m
+    assert "face_count" in m
+    assert "edge_count" in m
+    assert "is_valid" in m
+    # 10x10x10 box
+    assert m["volume"] > 900
+    assert m["face_count"] == 6
+
+
+def test_run_meta_json_includes_metrics(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    meta = json.loads((isolated_dir / "v1" / "meta.json").read_text())
+    assert "metrics" in meta
+    assert meta["metrics"]["face_count"] == 6
+
+
+def test_run_failed_no_metrics(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content="bad(")
+    result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
+    parsed = json.loads(result.output)
+    assert "metrics" not in parsed
+
+
 def test_run_with_export_obj(runner, isolated_dir):
     _init_project(runner)
     _write_script(isolated_dir)
@@ -412,3 +461,72 @@ def test_end_to_end_workflow(runner, isolated_dir):
     r = runner.invoke(cli, ["diff", "1", "2"])
     assert r.exit_code == 0
     assert json.loads(r.output)["status"] == "success"
+
+
+# --- Multiple show_object() tests ---
+
+
+def test_run_multiple_show_object_produces_compound(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "multi"])
+    assert result.exit_code == 0
+    step = isolated_dir / "v1_multi" / "output.step"
+    assert step.exists()
+    assert step.stat().st_size > 0
+
+
+def test_run_multiple_show_object_warning_in_json(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "multi"])
+    parsed = json.loads(result.output)
+    assert "warning" in parsed
+    assert "show_object()" in parsed["warning"]
+
+
+def test_run_multiple_show_object_warning_in_meta(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    runner.invoke(cli, ["run", "script.py", "--output", "multi"])
+    meta = json.loads((isolated_dir / "v1_multi" / "meta.json").read_text())
+    assert "warning" in meta
+
+
+def test_run_multiple_show_object_metrics_cover_both(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "multi"])
+    parsed = json.loads(result.output)
+    m = parsed["metrics"]
+    # Box is 10x10x10 at origin (z: -5 to 5), cyl at offset 20 extends to z=30
+    z_extent = m["dimensions"]["z"]
+    assert z_extent > 25  # must cover both shapes
+
+
+def test_run_single_show_object_no_warning(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    parsed = json.loads(result.output)
+    assert "warning" not in parsed
+
+
+def test_run_multiple_show_object_with_render(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "multi", "--render", "iso"])
+    assert result.exit_code == 0
+    png = isolated_dir / "v1_multi" / "renders" / "iso.png"
+    assert png.exists()
+    assert png.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_run_multiple_show_object_with_export(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "multi", "--export", "stl"])
+    assert result.exit_code == 0
+    stl = isolated_dir / "v1_multi" / "output.stl"
+    assert stl.exists()
+    assert stl.stat().st_size > 0

@@ -94,6 +94,15 @@ def diff(ref1, ref2):
         ),
     }
 
+    # Compare metrics if present in either version
+    m1 = meta1.get("metrics", {})
+    m2 = meta2.get("metrics", {})
+    if m1 or m2:
+        all_keys = sorted(set(m1.keys()) | set(m2.keys()))
+        changes["metrics"] = {
+            k: _scalar_diff(m1.get(k), m2.get(k)) for k in all_keys
+        }
+
     click.echo(json.dumps({
         "command": "diff",
         "status": "success",
