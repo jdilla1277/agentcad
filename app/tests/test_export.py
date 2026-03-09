@@ -2,7 +2,7 @@ from pathlib import Path
 
 import cadquery as cq
 
-from cadtool.export import export_glb
+from cadtool.export import export_glb, export_obj
 
 
 def _make_box():
@@ -33,3 +33,44 @@ def test_export_glb_different_shapes_differ(tmp_path):
     export_glb(_make_box(), str(box_path))
     export_glb(_make_cylinder(), str(cyl_path))
     assert box_path.read_bytes() != cyl_path.read_bytes()
+
+
+# --- OBJ export tests ---
+
+
+def test_export_obj_produces_file(tmp_path):
+    out = tmp_path / "output.obj"
+    export_obj(_make_box(), str(out))
+    assert out.exists()
+    assert out.stat().st_size > 0
+
+
+def test_export_obj_has_vertices_and_faces(tmp_path):
+    out = tmp_path / "output.obj"
+    export_obj(_make_box(), str(out))
+    text = out.read_text()
+    lines = text.strip().split("\n")
+    v_lines = [l for l in lines if l.startswith("v ")]
+    vn_lines = [l for l in lines if l.startswith("vn ")]
+    f_lines = [l for l in lines if l.startswith("f ")]
+    assert len(v_lines) > 0, "OBJ should have vertices"
+    assert len(vn_lines) > 0, "OBJ should have normals"
+    assert len(f_lines) > 0, "OBJ should have faces"
+
+
+def test_export_obj_faces_are_triangles(tmp_path):
+    out = tmp_path / "output.obj"
+    export_obj(_make_box(), str(out))
+    text = out.read_text()
+    f_lines = [l for l in text.strip().split("\n") if l.startswith("f ")]
+    for line in f_lines:
+        parts = line.split()[1:]  # skip "f"
+        assert len(parts) == 3, f"Expected triangles, got {len(parts)} vertices: {line}"
+
+
+def test_export_obj_different_shapes_differ(tmp_path):
+    box_path = tmp_path / "box.obj"
+    cyl_path = tmp_path / "cyl.obj"
+    export_obj(_make_box(), str(box_path))
+    export_obj(_make_cylinder(), str(cyl_path))
+    assert box_path.read_text() != cyl_path.read_text()

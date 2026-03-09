@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-VALID_FORMATS = {"stl", "glb"}
+VALID_FORMATS = {"stl", "glb", "obj"}
 
 
 def _is_version_dir(directory):
@@ -15,9 +15,9 @@ def _is_version_dir(directory):
 
 @click.command("export")
 @click.argument("step_file")
-@click.option("--format", "formats", required=True, help="Comma-separated mesh formats: stl, glb")
+@click.option("--format", "formats", required=True, help="Comma-separated mesh formats: stl, glb, obj")
 def export_cmd(step_file, formats):
-    """Export a STEP file to mesh formats (STL, GLB)."""
+    """Export a STEP file to mesh formats (STL, GLB, OBJ)."""
     step_path = Path(step_file)
     if not step_path.exists():
         click.echo(json.dumps({
@@ -34,7 +34,7 @@ def export_cmd(step_file, formats):
         click.echo(json.dumps({
             "command": "export",
             "status": "error",
-            "message": f"Unsupported format(s): {', '.join(invalid)}. Supported: stl, glb",
+            "message": f"Unsupported format(s): {', '.join(invalid)}. Supported: stl, glb, obj",
         }))
         sys.exit(1)
 
@@ -57,6 +57,9 @@ def export_cmd(step_file, formats):
         elif fmt == "glb":
             from cadtool.export import export_glb
             export_glb(topo_shape, str(out_path))
+        elif fmt == "obj":
+            from cadtool.export import export_obj
+            export_obj(topo_shape, str(out_path))
         outputs[fmt] = str(out_path)
 
     # Update meta.json if in a version directory
