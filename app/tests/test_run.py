@@ -354,3 +354,61 @@ def test_run_without_export_no_extra_outputs(runner, isolated_dir):
     meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
     assert "stl" not in meta["outputs"]
     assert "glb" not in meta["outputs"]
+
+
+def test_run_with_export_obj(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "obj"])
+    assert result.exit_code == 0
+    obj = isolated_dir / "v1_label" / "output.obj"
+    assert obj.exists()
+    assert obj.stat().st_size > 0
+
+
+# --- End-to-end workflow test ---
+
+
+def test_end_to_end_workflow(runner, isolated_dir):
+    """Full workflow: init -> run -> render -> export -> context -> diff."""
+    # 1. init
+    r = runner.invoke(cli, ["init", "--name", "e2e_test"])
+    assert r.exit_code == 0
+    assert json.loads(r.output)["status"] == "success"
+
+    # 2. run
+    _write_script(isolated_dir)
+    r = runner.invoke(cli, ["run", "script.py", "--output", "box"])
+    assert r.exit_code == 0
+    parsed = json.loads(r.output)
+    assert parsed["status"] == "success"
+    assert parsed["version"] == 1
+    step_path = isolated_dir / "v1_box" / "output.step"
+    assert step_path.exists()
+
+    # 3. render
+    r = runner.invoke(cli, ["render", str(step_path), "--view", "iso"])
+    assert r.exit_code == 0
+    assert json.loads(r.output)["status"] == "success"
+
+    # 4. export
+    r = runner.invoke(cli, ["export", str(step_path), "--format", "stl,glb,obj"])
+    assert r.exit_code == 0
+    assert json.loads(r.output)["status"] == "success"
+
+    # 5. run a second version
+    r = runner.invoke(cli, ["run", "script.py", "--output", "box2"])
+    assert r.exit_code == 0
+    assert json.loads(r.output)["version"] == 2
+
+    # 6. context
+    r = runner.invoke(cli, ["context"])
+    assert r.exit_code == 0
+    ctx = json.loads(r.output)
+    assert ctx["status"] == "success"
+    assert ctx["current"] == "box2"
+
+    # 7. diff
+    r = runner.invoke(cli, ["diff", "1", "2"])
+    assert r.exit_code == 0
+    assert json.loads(r.output)["status"] == "success"

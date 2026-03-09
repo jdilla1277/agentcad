@@ -106,8 +106,29 @@ def test_export_standalone_step(runner, isolated_dir):
 
 def test_export_invalid_format_error(runner, isolated_dir):
     step_path = _create_step(runner, isolated_dir)
-    result = runner.invoke(cli, ["export", str(step_path), "--format", "obj"])
+    result = runner.invoke(cli, ["export", str(step_path), "--format", "fbx"])
     assert result.exit_code == 1
     parsed = json.loads(result.output)
     assert parsed["command"] == "export"
     assert parsed["status"] == "error"
+
+
+def test_export_obj_produces_file(runner, isolated_dir):
+    step_path = _create_step(runner, isolated_dir)
+    result = runner.invoke(cli, ["export", str(step_path), "--format", "obj"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+    obj_path = Path(parsed["outputs"]["obj"])
+    assert obj_path.exists()
+    assert obj_path.stat().st_size > 0
+
+
+def test_export_all_three_formats(runner, isolated_dir):
+    step_path = _create_step(runner, isolated_dir)
+    result = runner.invoke(cli, ["export", str(step_path), "--format", "stl,glb,obj"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert Path(parsed["outputs"]["stl"]).exists()
+    assert Path(parsed["outputs"]["glb"]).exists()
+    assert Path(parsed["outputs"]["obj"]).exists()

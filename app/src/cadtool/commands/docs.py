@@ -38,10 +38,10 @@ SECTIONS = {
     ),
     "export": (
         "Exporting mesh formats:\n"
-        "  cadtool export <step_file> --format stl,glb\n"
-        "  cadtool run script.py --output label --export stl,glb\n"
+        "  cadtool export <step_file> --format stl,glb,obj\n"
+        "  cadtool run script.py --output label --export stl,glb,obj\n"
         "\n"
-        "  Supported formats: stl, glb\n"
+        "  Supported formats: stl, glb, obj\n"
         "  Files are written alongside the STEP file.\n"
         "  In a version directory, meta.json outputs are updated.\n"
         "\n"

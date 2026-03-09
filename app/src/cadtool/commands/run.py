@@ -122,6 +122,12 @@ def run(script, output, render, export):
                 glb_path = version_dir / "output.glb"
                 export_glb(topo_shape, str(glb_path))
                 exports_meta["glb"] = f"{dir_name}/output.glb"
+            elif fmt == "obj":
+                from cadtool.export import export_obj
+
+                obj_path = version_dir / "output.obj"
+                export_obj(topo_shape, str(obj_path))
+                exports_meta["obj"] = f"{dir_name}/output.obj"
 
     # Render views if requested
     renders_meta = {}

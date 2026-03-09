@@ -18,9 +18,10 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M8 | `cadtool render` (custom views, `--zoom`) | Done |
 | ~~M9~~ | ~~2D primitive cleanup~~ | Done (absorbed into M4) |
 | M9b | `--focus` for `cadtool render` | Done |
-| M10 | `cadtool context`, `cadtool docs` & `cadtool diff` | Planned |
-| M11 | Assembly & multi-part rendering | Planned |
-| M12 | Polish, distribution & OBJ export | Planned |
+| M10 | `cadtool context`, `cadtool docs` & `cadtool diff` | Done |
+| M11 | Geometry helpers (`loft_sections`, `tapered_sweep`, `naca_wire`, `mirror_fuse`) | Done |
+| M12 | `cadtool export` command | Done |
+| M13 | OBJ export & end-to-end verification | Done |
 
 ---
 
@@ -124,67 +125,49 @@ The friction log also noted that `--view all` overwrites same-named renders — 
 
 ---
 
-## Milestone 10: `cadtool context`, `cadtool docs` & `cadtool diff`
+## Milestone 10: `cadtool context`, `cadtool docs` & `cadtool diff` ✓
 
 **Goal:** Agent discoverability and version comparison commands.
 
-### Tasks
-1. `cadtool context` returns project state summary (current version, version count, project name)
-2. `cadtool context --json` returns structured JSON
-3. `cadtool docs` returns full markdown documentation
-4. `cadtool docs <section>` returns specific section (e.g., `render`, `schema`)
-5. `cadtool diff <v1> <v2>` compares two versions (meta.json, outputs, renders)
-6. Document response schema differences (success vs failure keys)
-
-### Tests
-- `cadtool context` in an initialized project returns project summary
-- `cadtool context --json` returns valid JSON with project state
-- `cadtool context` outside a project returns helpful error
-- `cadtool docs` returns non-empty markdown
-- `cadtool docs render` returns render-specific docs
-- `cadtool docs schema` returns the output schema
-- `cadtool diff v1 v2` returns structured comparison of two versions
+**Delivered:** 111 tests (84 → 111), 6 commands (`init`, `run`, `render`, `context`, `docs`, `diff`). `cadtool context` returns project state (name, version count, current label, tool version). `cadtool docs [section]` returns hardcoded documentation across 6 sections (commands, render, export, schema, helpers, workflow). `cadtool diff <ref1> <ref2>` compares two versions by number or label, showing scalar diffs and set diffs for outputs/renders.
 
 ---
 
-## Milestone 11: Assembly & Multi-Part Rendering
+## Milestone 11: Geometry Helpers ✓
 
-**Goal:** Combine multiple parts into an assembly and render them together.
+**Goal:** Reusable organic geometry primitives for CadQuery scripts.
 
-### Tasks
-1. Assembly concept — a way to group multiple versioned parts with spatial positioning
-2. `cadtool assemble` command to define part placement (translation, rotation)
-3. Multi-part rendering — render all parts in a single view to verify alignment
-4. Assembly manifest tracking (parts list, positions, assembly version)
+### Context
 
-### Tests
-- `cadtool assemble` creates an assembly from existing versioned parts
-- Assembly renders show all parts in correct relative positions
-- Assembly meta.json tracks constituent parts and positions
-- Output JSON includes assembly structure
+The original M11 plan was "Assembly & Multi-Part Rendering" but real-world friction testing showed that agents needed organic shape primitives more urgently than assembly commands. The scope pivoted to a helpers module.
+
+**Delivered:** 141 tests (111 → 133 before M12), `cadtool.helpers` module with 4 functions:
+- `loft_sections(sections, smooth=True)` — loft through TopoDS_Wire sections to produce a solid
+- `tapered_sweep(spine, radii)` — loft circular sections along a spine with varying radii
+- `naca_wire(y, le_x, te_x, thickness, profile='0012')` — NACA 4-digit closed-TE airfoil wire
+- `mirror_fuse(shape, plane='XZ')` — mirror and fuse about a coordinate plane
+
+Docs section added to `cadtool docs helpers`.
 
 ---
 
-## Milestone 12: Polish, Distribution & OBJ Export
+## Milestone 12: `cadtool export` Command ✓
 
-**Goal:** Installable, documented, ready for real use. Add OBJ as a late export format.
+**Goal:** Post-hoc mesh export from existing STEP files without re-running scripts.
 
-### Tasks
-1. `--help` on all commands with clear descriptions
-2. Input validation and helpful error messages across all commands
-3. `pip install git+https://github.com/...` works cleanly
-4. End-to-end test: init → run → render → context (full workflow)
-5. Verify all JSON output matches documented schema
-6. OBJ export via manual triangle extraction (`BRepMesh_IncrementalMesh` → `TopExp_Explorer` → `Poly_Triangulation` → write `v`/`vn`/`f` lines)
-7. Wire OBJ into `--export` flag alongside `stl` and `glb`
+### Context
 
-### Tests
-- End-to-end workflow test passes
-- `--help` output exists for all commands
-- Install from git produces a working `cadtool` command
-- Invalid inputs return helpful JSON errors (not stack traces)
-- `--export obj` produces valid OBJ file (vertices, normals, faces)
-- OBJ output matches geometry from equivalent STL/GLB export
+Friction log from the Empire State Building exercise revealed a workflow gap: after `cadtool run` produces a STEP file, there was no CLI path to export it to mesh formats after the fact. Agents had to re-run scripts or drop to raw Python (which caused venv traps).
+
+**Delivered:** 141 tests (133 → 141), 7 commands. `cadtool export <step_file> --format stl,glb` imports a STEP file and exports to requested mesh formats. Output files go next to the STEP file. Version directory detection updates meta.json outputs. Invalid formats return JSON error.
+
+---
+
+## Milestone 13: OBJ Export & End-to-End Verification ✓
+
+**Goal:** OBJ export format and end-to-end workflow test.
+
+**Delivered:** 149 tests (141 → 149), 7 commands. `export_obj()` in `export.py` using manual triangle extraction (`BRepMesh_IncrementalMesh` → `TopExp_Explorer` with `TopoDS.Face_s()` downcast → `Poly_Triangulation` → `v`/`vn`/`f` lines with per-face normals). OBJ wired into both `cadtool export --format obj` and `cadtool run --export obj`. End-to-end workflow test covers init → run → render → export → context → diff. Distribution works via `pip install git+...` (pyproject.toml entry point + deps already configured).
 
 ---
 
@@ -195,9 +178,9 @@ M1 (init) → M4 (run/STEP) → M5 (errors) → M6 (PNG) → M7 (GLB/STL) → M8
                                                                            ↓
 M1 ──────────────────────────────────────────────── M10 (context/docs/diff)
                                                                            ↓
-M8 (render) ──────────────────────────────────────→ M11 (assembly)
+                                                    M11 (helpers) + M12 (export cmd)
                                                                            ↓
-                                                              M12 (polish + OBJ)
+                                                         M13 (distribution + OBJ)
 ```
 
-M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the pipeline. M10 adds agent discoverability and version comparison. M11 introduces multi-part assemblies. M12 polishes for distribution and adds OBJ export (deferred from M7 due to no built-in OCP writer). M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
+M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the rendering and export pipeline. M10 adds agent discoverability. M11 pivoted from assemblies to geometry helpers based on friction testing. M12 added standalone `cadtool export` for post-hoc mesh conversion. M13 is the remaining work: distribution verification and OBJ export. M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
