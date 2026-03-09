@@ -71,6 +71,22 @@ def run(script, output, render, export):
         }))
         sys.exit(1)
 
+    # Pre-execution validation (before version allocation)
+    from cadtool.validate import validate_script
+
+    raw_source = script_path.read_text()
+    PREAMBLE = "import cadquery as cq; from cadtool.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse\n"
+    script_source = PREAMBLE + raw_source
+
+    validation_errors = validate_script(script_source)
+    if validation_errors:
+        click.echo(json.dumps({
+            "command": "run",
+            "status": "validation_error",
+            "checks": validation_errors,
+        }))
+        sys.exit(1)
+
     # Determine version number before execution (failures consume a number)
     versions = manifest.get("versions", [])
     version_num = len(versions) + 1
@@ -78,8 +94,6 @@ def run(script, output, render, export):
 
     # Execute CadQuery script via CQGI
     from cadquery import cqgi, exporters
-
-    script_source = script_path.read_text()
     try:
         build_result = cqgi.parse(script_source).build()
     except Exception as e:
@@ -94,6 +108,27 @@ def run(script, output, render, export):
         _record_failure(manifest, script_path, label, version_num,
                         "Script produced no results. Did you call show_object()?")
 
+    # Extract shape(s) — auto-compound if multiple show_object() calls
+    import cadquery as cq
+
+    warning = None
+    if len(build_result.results) == 1:
+        shape = build_result.results[0].shape
+    else:
+        shapes = []
+        for r in build_result.results:
+            s = r.shape
+            if hasattr(s, 'val'):
+                shapes.append(s.val())
+            else:
+                shapes.append(cq.Shape.cast(s))
+        shape = cq.Workplane("XY").newObject([cq.Compound.makeCompound(shapes)])
+        warning = (
+            f"{len(build_result.results)} show_object() calls detected, "
+            "results combined into a single compound. "
+            "Consider using cq.Compound.makeCompound() in your script instead."
+        )
+
     # Script succeeded — create version directory and write files
     dir_name = f"v{version_num}_{label}" if label != f"v{version_num}" else label
     version_dir = Path.cwd() / dir_name
@@ -103,8 +138,13 @@ def run(script, output, render, export):
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
 
     # Export STEP file
-    shape = build_result.results[0].shape
     exporters.export(shape, str(version_dir / "output.step"))
+
+    # Compute geometric metrics
+    from cadtool.metrics import compute_metrics
+
+    topo_shape_for_metrics = shape.val().wrapped
+    metrics = compute_metrics(topo_shape_for_metrics)
 
     # Export mesh formats if requested
     exports_meta = {}
@@ -154,6 +194,9 @@ def run(script, output, render, export):
             **exports_meta,
         },
     }
+    meta["metrics"] = metrics
+    if warning:
+        meta["warning"] = warning
     if renders_meta:
         meta["renders"] = renders_meta
     meta_path = version_dir / "meta.json"
@@ -182,6 +225,9 @@ def run(script, output, render, export):
             **exports_meta,
         },
     }
+    output_json["metrics"] = metrics
+    if warning:
+        output_json["warning"] = warning
     if renders_meta:
         output_json["renders"] = renders_meta
     click.echo(json.dumps(output_json))

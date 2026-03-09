@@ -17,12 +17,16 @@ def test_docs_lists_sections(runner):
     result = runner.invoke(cli, ["docs"])
     data = json.loads(result.output)
     sections = data["sections"]
+    assert "quickstart" in sections
     assert "install" in sections
     assert "commands" in sections
     assert "render" in sections
     assert "export" in sections
     assert "schema" in sections
     assert "helpers" in sections
+    assert "metrics" in sections
+    assert "preamble" in sections
+    assert "validation" in sections
     assert "workflow" in sections
 
 
@@ -94,6 +98,17 @@ def test_docs_install_section(runner):
     assert "pip install" in content
 
 
+def test_docs_metrics_section(runner):
+    result = runner.invoke(cli, ["docs", "metrics"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "bounding_box" in content
+    assert "volume" in content
+    assert "surface_area" in content
+    assert "face_count" in content
+
+
 def test_docs_unknown_section_error(runner):
     result = runner.invoke(cli, ["docs", "nonexistent"])
     assert result.exit_code == 1
@@ -108,3 +123,56 @@ def test_docs_works_without_project(runner, isolated_dir):
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["status"] == "success"
+
+
+# --- M17: Quickstart section (Fix 2) ---
+
+
+def test_docs_quickstart_section(runner):
+    result = runner.invoke(cli, ["docs", "quickstart"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "show_object" in content
+    assert "cq.Workplane" in content
+
+
+def test_docs_quickstart_shows_multi_show_object(runner):
+    result = runner.invoke(cli, ["docs", "quickstart"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "compound" in content.lower()
+
+
+# --- M17: Units note in metrics (Fix 3) ---
+
+
+def test_docs_metrics_mentions_units(runner):
+    result = runner.invoke(cli, ["docs", "metrics"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "unit-agnostic" in content
+
+
+# --- M17: tapered_sweep limitation (Fix 4) ---
+
+
+def test_docs_helpers_tapered_sweep_limitation(runner):
+    result = runner.invoke(cli, ["docs", "helpers"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "smooth spines" in content
+
+
+# --- M17: Helper type conversion (Fix 5) ---
+
+
+def test_docs_helpers_conversion_patterns(runner):
+    result = runner.invoke(cli, ["docs", "helpers"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "cq.Shape.cast" in content

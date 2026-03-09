@@ -137,6 +137,51 @@ def test_diff_unknown_version_error(runner, isolated_dir):
     assert "99" in data["message"]
 
 
+def test_diff_shows_metric_changes(runner, isolated_dir):
+    """Diff shows metric differences when metrics are present."""
+    _setup_two_versions(isolated_dir)
+    # Add metrics to v1 and v2 with different values
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["metrics"] = {"volume": 1000.0, "face_count": 6}
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["metrics"] = {"volume": 1570.8, "face_count": 3}
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    assert "metrics" in data["changes"]
+    m = data["changes"]["metrics"]
+    assert m["volume"] == {"from": 1000.0, "to": 1570.8}
+    assert m["face_count"] == {"from": 6, "to": 3}
+
+
+def test_diff_metrics_same_values_are_none(runner, isolated_dir):
+    """Metrics with same values show None."""
+    _setup_two_versions(isolated_dir)
+    metrics = {"volume": 1000.0, "face_count": 6}
+    for d in ["v1_box", "v2_cyl"]:
+        meta = json.loads((isolated_dir / d / "meta.json").read_text())
+        meta["metrics"] = metrics
+        (isolated_dir / d / "meta.json").write_text(json.dumps(meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    m = data["changes"]["metrics"]
+    assert m["volume"] is None
+    assert m["face_count"] is None
+
+
+def test_diff_no_metrics_graceful(runner, isolated_dir):
+    """Diff works when neither version has metrics (pre-M14 versions)."""
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    # Should still succeed, metrics changes empty or absent
+    assert data["status"] == "success"
+
+
 def test_diff_unknown_label_error(runner, isolated_dir):
     _setup_two_versions(isolated_dir)
     result = runner.invoke(cli, ["diff", "box", "missing"])
