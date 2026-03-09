@@ -56,7 +56,9 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 @click.command()
 @click.argument("script")
 @click.option("--output", required=True, help="Label for this version.")
-def run(script, output):
+@click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
+@click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb).")
+def run(script, output, render, export):
     """Execute a CadQuery script and produce a versioned STEP file."""
     manifest = load_manifest(command="run")
 
@@ -104,6 +106,35 @@ def run(script, output):
     shape = build_result.results[0].shape
     exporters.export(shape, str(version_dir / "output.step"))
 
+    # Export mesh formats if requested
+    exports_meta = {}
+    if export:
+        formats = [f.strip() for f in export.split(",")]
+        topo_shape = shape.val().wrapped
+        for fmt in formats:
+            if fmt == "stl":
+                stl_path = version_dir / "output.stl"
+                exporters.export(shape, str(stl_path), exportType="STL")
+                exports_meta["stl"] = f"{dir_name}/output.stl"
+            elif fmt == "glb":
+                from cadtool.export import export_glb
+
+                glb_path = version_dir / "output.glb"
+                export_glb(topo_shape, str(glb_path))
+                exports_meta["glb"] = f"{dir_name}/output.glb"
+
+    # Render views if requested
+    renders_meta = {}
+    if render:
+        from cadtool.render import render_views, ALL_VIEWS
+
+        view_names = ALL_VIEWS if render == "all" else [v.strip() for v in render.split(",")]
+        renders_dir = version_dir / "renders"
+        topo_shape = shape.val().wrapped
+        rendered = render_views(topo_shape, view_names, renders_dir)
+        for view_name, abs_path in rendered.items():
+            renders_meta[view_name] = f"{dir_name}/renders/{view_name}.png"
+
     # Write meta.json
     created = datetime.now(timezone.utc).isoformat()
     meta = {
@@ -114,8 +145,11 @@ def run(script, output):
         "script": f"{dir_name}/script.py",
         "outputs": {
             "step": f"{dir_name}/output.step",
+            **exports_meta,
         },
     }
+    if renders_meta:
+        meta["renders"] = renders_meta
     meta_path = version_dir / "meta.json"
     meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
@@ -131,7 +165,7 @@ def run(script, output):
     save_manifest(manifest)
 
     # Output success JSON
-    click.echo(json.dumps({
+    output_json = {
         "command": "run",
         "status": "success",
         "version": version_num,
@@ -139,5 +173,9 @@ def run(script, output):
         "outputs": {
             "step": f"{dir_name}/output.step",
             "script": f"{dir_name}/script.py",
+            **exports_meta,
         },
-    }))
+    }
+    if renders_meta:
+        output_json["renders"] = renders_meta
+    click.echo(json.dumps(output_json))

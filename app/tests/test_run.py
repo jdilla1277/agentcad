@@ -219,3 +219,138 @@ result = cq.Workplane("XY").box(10, 10, 10)
     assert failed_dir.is_dir()
     meta = json.loads((failed_dir / "meta.json").read_text())
     assert meta["status"] == "failed"
+
+
+# --- Render integration tests ---
+
+
+def test_run_with_render_produces_png(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    assert result.exit_code == 0
+    png = isolated_dir / "v1_label" / "renders" / "iso.png"
+    assert png.exists()
+    assert png.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_run_with_render_multiple_views(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "front,iso"])
+    assert result.exit_code == 0
+    renders_dir = isolated_dir / "v1_label" / "renders"
+    assert (renders_dir / "front.png").exists()
+    assert (renders_dir / "iso.png").exists()
+
+
+def test_run_with_render_all(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "all"])
+    assert result.exit_code == 0
+    renders_dir = isolated_dir / "v1_label" / "renders"
+    for name in ["front", "right", "top", "iso"]:
+        assert (renders_dir / f"{name}.png").exists()
+
+
+def test_run_with_render_meta_json(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "renders" in meta
+    assert "iso" in meta["renders"]
+    assert meta["renders"]["iso"] == "v1_label/renders/iso.png"
+
+
+def test_run_with_render_json_response(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "iso"])
+    parsed = json.loads(result.output)
+    assert "renders" in parsed
+    assert parsed["renders"]["iso"] == "v1_label/renders/iso.png"
+
+
+def test_run_without_render_no_renders_key(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label"])
+    parsed = json.loads(result.output)
+    assert "renders" not in parsed
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "renders" not in meta
+
+
+# --- Export integration tests ---
+
+
+def test_run_with_export_stl(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "stl"])
+    assert result.exit_code == 0
+    stl = isolated_dir / "v1_label" / "output.stl"
+    assert stl.exists()
+    assert stl.stat().st_size > 0
+
+
+def test_run_with_export_glb(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "glb"])
+    assert result.exit_code == 0
+    glb = isolated_dir / "v1_label" / "output.glb"
+    assert glb.exists()
+    assert glb.read_bytes()[:4] == b"glTF"
+
+
+def test_run_with_export_multiple(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "stl,glb"])
+    assert result.exit_code == 0
+    assert (isolated_dir / "v1_label" / "output.stl").exists()
+    assert (isolated_dir / "v1_label" / "output.glb").exists()
+
+
+def test_run_with_export_and_render(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "glb", "--render", "iso"])
+    assert result.exit_code == 0
+    assert (isolated_dir / "v1_label" / "output.glb").exists()
+    assert (isolated_dir / "v1_label" / "renders" / "iso.png").exists()
+
+
+def test_run_with_export_meta_json(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "stl,glb"])
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert meta["outputs"]["stl"] == "v1_label/output.stl"
+    assert meta["outputs"]["glb"] == "v1_label/output.glb"
+    assert meta["outputs"]["step"] == "v1_label/output.step"
+
+
+def test_run_with_export_json_response(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "stl,glb"])
+    parsed = json.loads(result.output)
+    assert parsed["outputs"]["stl"] == "v1_label/output.stl"
+    assert parsed["outputs"]["glb"] == "v1_label/output.glb"
+    assert parsed["outputs"]["step"] == "v1_label/output.step"
+
+
+def test_run_without_export_no_extra_outputs(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label"])
+    parsed = json.loads(result.output)
+    assert "stl" not in parsed["outputs"]
+    assert "glb" not in parsed["outputs"]
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "stl" not in meta["outputs"]
+    assert "glb" not in meta["outputs"]

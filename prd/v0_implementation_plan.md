@@ -13,12 +13,14 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M3 | Geometry enrichment (`--label`, `count`, `delete`, `get`) | Done |
 | M4 | `cadtool run` — CadQuery script execution & STEP export | Done |
 | M5 | Error handling & failed versions | Done |
-| M6 | PNG rendering | **Next** |
-| M7 | GLB/OBJ export | Planned |
-| M8 | `cadtool render` (custom views) | Planned |
+| M6 | PNG rendering | Done |
+| M7 | GLB & STL export | Done |
+| M8 | `cadtool render` (custom views, `--zoom`) | Done |
 | ~~M9~~ | ~~2D primitive cleanup~~ | Done (absorbed into M4) |
-| M10 | `cadtool context` & `cadtool docs` | Planned |
-| M11 | Polish & distribution | Planned |
+| M9b | `--focus` for `cadtool render` | Done |
+| M10 | `cadtool context`, `cadtool docs` & `cadtool diff` | Planned |
+| M11 | Assembly & multi-part rendering | Planned |
+| M12 | Polish, distribution & OBJ export | Planned |
 
 ---
 
@@ -72,63 +74,33 @@ See [m5_plan.md](m5_plan.md) for full plan.
 
 ---
 
-## Milestone 6: PNG Rendering
+## Milestone 6: PNG Rendering ✓
 
-**Goal:** Produce PNG renders from STEP files at standard angles.
+**Goal:** Produce PNG renders from CadQuery results for agent visual inspection.
 
-### Tasks
-1. Integrate pythonOCC offscreen rendering (macOS)
-2. Implement standard views: front, side, top, iso
-3. `--formats` flag parsing: `png` = all four views, `png-front` = single view
-4. Renders saved to `vN/renders/` directory
-5. Render paths recorded in output JSON and `meta.json`
+See [m6_plan.md](m6_plan.md) for full plan.
 
-### Tests
-- `cadtool run script.py --output v1 --formats step,png` produces 4 PNGs
-- `--formats step,png-iso` produces only iso render
-- Render files are valid PNGs with non-zero size
-- Output JSON lists correct render paths
-- Default formats (`step,png`) work when `--formats` is omitted
+**Delivered:** 43 tests, 2 commands (`init`, `run`). OCP offscreen rendering via `V3d_View.ToPixMap` with software GL, shaded mode. `--render` option on `cadtool run` accepts comma-separated views (`iso`, `front,top`, `all`). Renders saved to `vN_label/renders/`, paths recorded in meta.json and CLI JSON output. 7 views available (front, back, left, right, top, bottom, iso); `all` expands to the standard 4 (front, right, top, iso). No renders on failed runs.
 
 ---
 
-## Milestone 7: GLB & OBJ Export
+## Milestone 7: GLB & STL Export ✓
 
-**Goal:** Tessellated mesh exports for human review and interop.
+**Goal:** Mesh exports for web viewers, 3D printing, and agent interop.
 
-### Tasks
-1. GLB export via pythonOCC tessellation
-2. OBJ export via pythonOCC tessellation
-3. Wire into `--formats` flag: `glb`, `obj`
-4. Record in output JSON
+See [m7_plan.md](m7_plan.md) for full plan.
 
-### Tests
-- `--formats step,glb` produces valid GLB file
-- `--formats step,obj` produces valid OBJ file
-- GLB opens correctly (validated by file header/magic bytes)
-- Output JSON includes correct paths
+**Delivered:** 53 tests, 2 commands (`init`, `run`). `--export stl,glb` option on `cadtool run`. STL via CadQuery `exporters.export()`. GLB via OCP `RWGltf_CafWriter` (tessellate → XCAF doc → binary glTF). STEP always produced; `--export` adds mesh formats alongside. Export paths in `outputs` in meta.json and CLI JSON. OBJ deferred to M12.
 
 ---
 
-## Milestone 8: `cadtool render`
+## Milestone 8: `cadtool render` ✓
 
-**Goal:** Render additional views of an existing version without creating a new version.
+**Goal:** Render additional views of an existing STEP file without creating a new version.
 
-### Tasks
-1. `cadtool render <step_path> --view <angle>`
-2. Standard views: `iso`, `front`, `side`, `top`
-3. Custom angle: `--view "45,30"`
-4. `--zoom` flag
-5. `--focus` flag for camera target
-6. `--name` flag for named renders
-7. Named renders saved to version's `renders/` directory and recorded in `meta.json`
+See [m8_plan.md](m8_plan.md) for full plan.
 
-### Tests
-- Rendering an existing STEP file produces a PNG
-- Custom angle views produce correct output
-- `--name` flag saves render with custom filename
-- `meta.json` is updated with new render entry
-- `--zoom` and `--focus` affect the output (file differs from default)
+**Delivered:** 74 tests, 3 commands (`init`, `run`, `render`). `cadtool render <step_path> --view <spec>` renders PNGs from existing STEP files. Named views (`iso`, `front,top`, `all`), custom angles (`--view 45,30` as azimuth,elevation), `--zoom` factor, `--name` for custom filenames. Version directory detection (regex `v\d+_\w+` + meta.json) saves to `renders/` and updates meta.json; standalone STEP files get PNGs alongside. `render.py` refactored with `_setup_render()` helper, `parse_view_spec()`, and `render_shape_custom()`. `--focus` deferred to M9.
 
 ---
 
@@ -138,15 +110,31 @@ Completed as part of M4. Removed `add-rect`, `add-circle`, `list`, `delete`, `ge
 
 ---
 
-## Milestone 10: `cadtool context` & `cadtool docs`
+## Milestone 9b: `--focus` for `cadtool render` ✓
 
-**Goal:** Agent discoverability commands.
+**Goal:** Make `cadtool render` zoom usable for detail inspection.
+
+### Context
+
+M8 friction testing (`feedback/2026-03-08/friction-log-cadtool-render.md`) revealed that `--zoom` on thin orthographic views (e.g. front view of a flat part) produces unusable close-ups because zoom magnifies from the frame center after `FitAll`. Without a way to shift the camera target, agents can't reliably zoom into specific features. `--focus` solves this.
+
+The friction log also noted that `--view all` overwrites same-named renders — this is correct behavior. Standard view names are "latest"; agents use `--name` to protect important renders.
+
+**Delivered:** 84 tests (74 → 84), 3 commands. `--focus x,y,z` sets camera target via `view.SetAt()`. `--no-fit` skips `FitAll()` for exact framing with `--focus` + `--zoom`. `_apply_camera()` helper extracted in render.py to share focus/fit/zoom logic across `render_shape()` and `render_shape_custom()`.
+
+---
+
+## Milestone 10: `cadtool context`, `cadtool docs` & `cadtool diff`
+
+**Goal:** Agent discoverability and version comparison commands.
 
 ### Tasks
 1. `cadtool context` returns project state summary (current version, version count, project name)
 2. `cadtool context --json` returns structured JSON
 3. `cadtool docs` returns full markdown documentation
 4. `cadtool docs <section>` returns specific section (e.g., `render`, `schema`)
+5. `cadtool diff <v1> <v2>` compares two versions (meta.json, outputs, renders)
+6. Document response schema differences (success vs failure keys)
 
 ### Tests
 - `cadtool context` in an initialized project returns project summary
@@ -155,12 +143,31 @@ Completed as part of M4. Removed `add-rect`, `add-circle`, `list`, `delete`, `ge
 - `cadtool docs` returns non-empty markdown
 - `cadtool docs render` returns render-specific docs
 - `cadtool docs schema` returns the output schema
+- `cadtool diff v1 v2` returns structured comparison of two versions
 
 ---
 
-## Milestone 11: Polish & Distribution
+## Milestone 11: Assembly & Multi-Part Rendering
 
-**Goal:** Installable, documented, ready for real use.
+**Goal:** Combine multiple parts into an assembly and render them together.
+
+### Tasks
+1. Assembly concept — a way to group multiple versioned parts with spatial positioning
+2. `cadtool assemble` command to define part placement (translation, rotation)
+3. Multi-part rendering — render all parts in a single view to verify alignment
+4. Assembly manifest tracking (parts list, positions, assembly version)
+
+### Tests
+- `cadtool assemble` creates an assembly from existing versioned parts
+- Assembly renders show all parts in correct relative positions
+- Assembly meta.json tracks constituent parts and positions
+- Output JSON includes assembly structure
+
+---
+
+## Milestone 12: Polish, Distribution & OBJ Export
+
+**Goal:** Installable, documented, ready for real use. Add OBJ as a late export format.
 
 ### Tasks
 1. `--help` on all commands with clear descriptions
@@ -168,23 +175,29 @@ Completed as part of M4. Removed `add-rect`, `add-circle`, `list`, `delete`, `ge
 3. `pip install git+https://github.com/...` works cleanly
 4. End-to-end test: init → run → render → context (full workflow)
 5. Verify all JSON output matches documented schema
+6. OBJ export via manual triangle extraction (`BRepMesh_IncrementalMesh` → `TopExp_Explorer` → `Poly_Triangulation` → write `v`/`vn`/`f` lines)
+7. Wire OBJ into `--export` flag alongside `stl` and `glb`
 
 ### Tests
 - End-to-end workflow test passes
 - `--help` output exists for all commands
 - Install from git produces a working `cadtool` command
 - Invalid inputs return helpful JSON errors (not stack traces)
+- `--export obj` produces valid OBJ file (vertices, normals, faces)
+- OBJ output matches geometry from equivalent STL/GLB export
 
 ---
 
 ## Dependency Graph
 
 ```
-M1 (init) → M4 (run/STEP) → M5 (errors) → M6 (PNG) → M7 (GLB/OBJ) → M8 (render)
+M1 (init) → M4 (run/STEP) → M5 (errors) → M6 (PNG) → M7 (GLB/STL) → M8 (render)
                                                                            ↓
-M1 ──────────────────────────────────────────────────────────→ M10 (context/docs)
+M1 ──────────────────────────────────────────────── M10 (context/docs/diff)
                                                                            ↓
-                                                                     M11 (polish)
+M8 (render) ──────────────────────────────────────→ M11 (assembly)
+                                                                           ↓
+                                                              M12 (polish + OBJ)
 ```
 
-M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the pipeline. M10-M11 polish for distribution. M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
+M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the pipeline. M10 adds agent discoverability and version comparison. M11 introduces multi-part assemblies. M12 polishes for distribution and adds OBJ export (deferred from M7 due to no built-in OCP writer). M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
