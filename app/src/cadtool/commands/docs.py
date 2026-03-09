@@ -4,6 +4,18 @@ import sys
 import click
 
 SECTIONS = {
+    "install": (
+        "Installation:\n"
+        "  Requires Python 3.10-3.12 (OpenCascade bindings do not support 3.13+).\n"
+        "\n"
+        "  pip install git+https://github.com/jdilla1277/mountain-climber.git#subdirectory=app\n"
+        "\n"
+        "  This installs cadtool and all dependencies (CadQuery, OpenCascade, Click)\n"
+        "  automatically. No separate package installation is needed.\n"
+        "\n"
+        "  After installing, the 'cadtool' command is available in your shell.\n"
+        "  Run 'cadtool docs' to see full documentation.\n"
+    ),
     "commands": (
         "cadtool commands:\n"
         "  init    — Initialize a new cadtool project (creates cadtool.json).\n"

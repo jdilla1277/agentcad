@@ -17,6 +17,7 @@ def test_docs_lists_sections(runner):
     result = runner.invoke(cli, ["docs"])
     data = json.loads(result.output)
     sections = data["sections"]
+    assert "install" in sections
     assert "commands" in sections
     assert "render" in sections
     assert "export" in sections
@@ -82,6 +83,15 @@ def test_docs_helpers_section(runner):
     assert "tapered_sweep" in content
     assert "naca_wire" in content
     assert "mirror_fuse" in content
+
+
+def test_docs_install_section(runner):
+    result = runner.invoke(cli, ["docs", "install"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "Python 3.10-3.12" in content
+    assert "pip install" in content
 
 
 def test_docs_unknown_section_error(runner):
