@@ -27,3 +27,18 @@ def test_unknown_subcommand_fails(runner):
 def test_run_subcommand_registered(runner):
     result = runner.invoke(cli, ["run", "--help"])
     assert result.exit_code == 0
+
+
+def test_context_subcommand_registered(runner):
+    result = runner.invoke(cli, ["context", "--help"])
+    assert result.exit_code == 0
+
+
+def test_docs_subcommand_registered(runner):
+    result = runner.invoke(cli, ["docs", "--help"])
+    assert result.exit_code == 0
+
+
+def test_diff_subcommand_registered(runner):
+    result = runner.invoke(cli, ["diff", "--help"])
+    assert result.exit_code == 0

@@ -14,9 +14,10 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M4 | `cadtool run` — CadQuery script execution & STEP export | Done |
 | M5 | Error handling & failed versions | Done |
 | M6 | PNG rendering | Done |
-| M7 | GLB & STL export | **Next** |
-| M8 | `cadtool render` (custom views, `--zoom`, `--focus`) | Planned |
+| M7 | GLB & STL export | Done |
+| M8 | `cadtool render` (custom views, `--zoom`) | Done |
 | ~~M9~~ | ~~2D primitive cleanup~~ | Done (absorbed into M4) |
+| M9b | `--focus` for `cadtool render` | Done |
 | M10 | `cadtool context`, `cadtool docs` & `cadtool diff` | Planned |
 | M11 | Assembly & multi-part rendering | Planned |
 | M12 | Polish, distribution & OBJ export | Planned |
@@ -83,47 +84,43 @@ See [m6_plan.md](m6_plan.md) for full plan.
 
 ---
 
-## Milestone 7: GLB & STL Export
+## Milestone 7: GLB & STL Export ✓
 
 **Goal:** Mesh exports for web viewers, 3D printing, and agent interop.
 
 See [m7_plan.md](m7_plan.md) for full plan.
 
-### Summary
-- `--export` option on `cadtool run`: `stl`, `glb`, or `stl,glb`
-- STL via CadQuery `exporters.export()` (one-liner)
-- GLB via OCP `RWGltf_CafWriter` (tessellate → XCAF doc → binary glTF)
-- STEP always produced; `--export` adds mesh formats alongside
-- Export paths added to `outputs` in meta.json and CLI JSON
-- OBJ deferred to M12 — no built-in OCP writer, GLB covers same use cases
+**Delivered:** 53 tests, 2 commands (`init`, `run`). `--export stl,glb` option on `cadtool run`. STL via CadQuery `exporters.export()`. GLB via OCP `RWGltf_CafWriter` (tessellate → XCAF doc → binary glTF). STEP always produced; `--export` adds mesh formats alongside. Export paths in `outputs` in meta.json and CLI JSON. OBJ deferred to M12.
 
 ---
 
-## Milestone 8: `cadtool render`
+## Milestone 8: `cadtool render` ✓
 
-**Goal:** Render additional views of an existing version without creating a new version.
+**Goal:** Render additional views of an existing STEP file without creating a new version.
 
-### Tasks
-1. `cadtool render <step_path> --view <angle>`
-2. Standard views: `iso`, `front`, `side`, `top`
-3. Custom angle: `--view "45,30"`
-4. `--zoom` flag
-5. `--focus` flag for camera target
-6. `--name` flag for named renders
-7. Named renders saved to version's `renders/` directory and recorded in `meta.json`
+See [m8_plan.md](m8_plan.md) for full plan.
 
-### Tests
-- Rendering an existing STEP file produces a PNG
-- Custom angle views produce correct output
-- `--name` flag saves render with custom filename
-- `meta.json` is updated with new render entry
-- `--zoom` and `--focus` affect the output (file differs from default)
+**Delivered:** 74 tests, 3 commands (`init`, `run`, `render`). `cadtool render <step_path> --view <spec>` renders PNGs from existing STEP files. Named views (`iso`, `front,top`, `all`), custom angles (`--view 45,30` as azimuth,elevation), `--zoom` factor, `--name` for custom filenames. Version directory detection (regex `v\d+_\w+` + meta.json) saves to `renders/` and updates meta.json; standalone STEP files get PNGs alongside. `render.py` refactored with `_setup_render()` helper, `parse_view_spec()`, and `render_shape_custom()`. `--focus` deferred to M9.
 
 ---
 
 ## ~~Milestone 9: 2D Primitive Cleanup~~ ✓ (absorbed into M4)
 
 Completed as part of M4. Removed `add-rect`, `add-circle`, `list`, `delete`, `get` commands, `objects`/`next_id` from manifest, and all associated tests.
+
+---
+
+## Milestone 9b: `--focus` for `cadtool render` ✓
+
+**Goal:** Make `cadtool render` zoom usable for detail inspection.
+
+### Context
+
+M8 friction testing (`feedback/2026-03-08/friction-log-cadtool-render.md`) revealed that `--zoom` on thin orthographic views (e.g. front view of a flat part) produces unusable close-ups because zoom magnifies from the frame center after `FitAll`. Without a way to shift the camera target, agents can't reliably zoom into specific features. `--focus` solves this.
+
+The friction log also noted that `--view all` overwrites same-named renders — this is correct behavior. Standard view names are "latest"; agents use `--name` to protect important renders.
+
+**Delivered:** 84 tests (74 → 84), 3 commands. `--focus x,y,z` sets camera target via `view.SetAt()`. `--no-fit` skips `FitAll()` for exact framing with `--focus` + `--zoom`. `_apply_camera()` helper extracted in render.py to share focus/fit/zoom logic across `render_shape()` and `render_shape_custom()`.
 
 ---
 

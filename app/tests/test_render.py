@@ -2,7 +2,15 @@ from pathlib import Path
 
 import cadquery as cq
 
-from cadtool.render import render_shape, render_views, VIEWS
+import pytest
+
+from cadtool.render import (
+    render_shape,
+    render_shape_custom,
+    render_views,
+    parse_view_spec,
+    VIEWS,
+)
 
 
 def _make_box_shape():
@@ -64,3 +72,104 @@ def test_render_views_creates_files(tmp_path):
 def test_views_dict_has_expected_keys():
     expected = {"front", "back", "left", "right", "top", "bottom", "iso"}
     assert set(VIEWS.keys()) == expected
+
+
+# --- parse_view_spec tests ---
+
+
+def test_parse_view_spec_single_named():
+    result = parse_view_spec("iso")
+    assert result == [("named", "iso")]
+
+
+def test_parse_view_spec_multiple_named():
+    result = parse_view_spec("front,top,iso")
+    assert result == [("named", "front"), ("named", "top"), ("named", "iso")]
+
+
+def test_parse_view_spec_all():
+    result = parse_view_spec("all")
+    assert len(result) == 4
+    assert all(t == "named" for t, _ in result)
+    assert [v for _, v in result] == ["front", "right", "top", "iso"]
+
+
+def test_parse_view_spec_custom_angle():
+    result = parse_view_spec("45,30")
+    assert result == [("custom", (45.0, 30.0))]
+
+
+def test_parse_view_spec_invalid():
+    with pytest.raises(ValueError):
+        parse_view_spec("notaview")
+
+
+# --- zoom tests ---
+
+
+def test_render_shape_with_zoom(tmp_path):
+    shape = _make_box_shape()
+    default_path = tmp_path / "default.png"
+    zoomed_path = tmp_path / "zoomed.png"
+    render_shape(shape, "iso", default_path)
+    render_shape(shape, "iso", zoomed_path, zoom=2.0)
+    assert default_path.read_bytes() != zoomed_path.read_bytes()
+
+
+# --- custom angle render tests ---
+
+
+def test_render_shape_custom_produces_png(tmp_path):
+    shape = _make_box_shape()
+    out = tmp_path / "custom.png"
+    render_shape_custom(shape, 45, 30, out)
+    assert out.exists()
+    assert out.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_render_shape_custom_different_angles_differ(tmp_path):
+    shape = _make_box_shape()
+    a_path = tmp_path / "a.png"
+    b_path = tmp_path / "b.png"
+    render_shape_custom(shape, 0, 0, a_path)
+    render_shape_custom(shape, 90, 45, b_path)
+    assert a_path.read_bytes() != b_path.read_bytes()
+
+
+# --- focus tests ---
+
+
+def test_render_shape_focus_changes_output(tmp_path):
+    shape = _make_box_shape()
+    default_path = tmp_path / "default.png"
+    focused_path = tmp_path / "focused.png"
+    render_shape(shape, "iso", default_path)
+    render_shape(shape, "iso", focused_path, focus=(5, 5, 5))
+    assert default_path.read_bytes() != focused_path.read_bytes()
+
+
+def test_render_shape_focus_with_zoom(tmp_path):
+    shape = _make_box_shape()
+    focused_path = tmp_path / "focused.png"
+    focused_zoomed_path = tmp_path / "focused_zoomed.png"
+    render_shape(shape, "iso", focused_path, focus=(5, 5, 5))
+    render_shape(shape, "iso", focused_zoomed_path, focus=(5, 5, 5), zoom=3.0)
+    assert focused_path.read_bytes() != focused_zoomed_path.read_bytes()
+
+
+def test_render_shape_custom_focus(tmp_path):
+    shape = _make_box_shape()
+    default_path = tmp_path / "default.png"
+    focused_path = tmp_path / "focused.png"
+    render_shape_custom(shape, 45, 30, default_path)
+    render_shape_custom(shape, 45, 30, focused_path, focus=(5, 5, 5))
+    assert default_path.read_bytes() != focused_path.read_bytes()
+
+
+def test_render_shape_no_fit(tmp_path):
+    shape = _make_box_shape()
+    fit_path = tmp_path / "fit.png"
+    nofit_path = tmp_path / "nofit.png"
+    render_shape(shape, "iso", fit_path, focus=(5, 5, 5), zoom=2.0)
+    render_shape(shape, "iso", nofit_path, focus=(5, 5, 5), zoom=2.0, fit=False)
+    assert fit_path.read_bytes() != nofit_path.read_bytes()
