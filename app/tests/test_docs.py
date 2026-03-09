@@ -19,7 +19,9 @@ def test_docs_lists_sections(runner):
     sections = data["sections"]
     assert "commands" in sections
     assert "render" in sections
+    assert "export" in sections
     assert "schema" in sections
+    assert "helpers" in sections
     assert "workflow" in sections
 
 
@@ -59,6 +61,27 @@ def test_docs_workflow_section(runner):
     content = data["content"]
     assert "init" in content
     assert "run" in content
+
+
+def test_docs_export_section(runner):
+    result = runner.invoke(cli, ["docs", "export"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "stl" in content
+    assert "glb" in content
+    assert "export_glb" in content
+
+
+def test_docs_helpers_section(runner):
+    result = runner.invoke(cli, ["docs", "helpers"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "loft_sections" in content
+    assert "tapered_sweep" in content
+    assert "naca_wire" in content
+    assert "mirror_fuse" in content
 
 
 def test_docs_unknown_section_error(runner):
