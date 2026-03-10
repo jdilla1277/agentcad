@@ -29,7 +29,7 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M18 | Quick preview mode (fast-loop Phase 2) | Done |
 | M19 | Multi-solid colored GLB export | Done |
 | M20 | Patterns docs, positioning helpers & `cadtool view` | Done |
-| M21 | Parametric scripts (fast-loop Phase 2) | Planned |
+| M21 | Parametric scripts (fast-loop Phase 2) | Done |
 | M22 | Persistent worker / daemon mode (fast-loop Phase 2) | Planned |
 
 ---
@@ -269,11 +269,13 @@ M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap win
 
 ---
 
-## Milestone 21: Parametric Scripts
+## Milestone 21: Parametric Scripts ✓
 
-**Epic:** [Fast Loop](fast-loop/overview.md)
+**Epic:** [Fast Loop](fast-loop/overview.md) | **Plan:** [m21_plan.md](m21_plan.md)
 
 **Goal:** `--params key=val,key=val` on `cadtool run` passes parameter overrides to CQGI. Agents iterate by changing numbers, not rewriting code.
+
+**Delivered:** 247 tests (234 → 247), 8 commands. `--params length=60,width=20` on `cadtool run` overrides top-level script constants via CQGI's AST-level parameter injection. Type coercion: bool → int → float → str. Unknown params and bad format return `status: "error"` before version allocation. Params recorded in output JSON and meta.json. `cadtool diff` shows param changes. New `cadtool docs parametric` section.
 
 ---
 

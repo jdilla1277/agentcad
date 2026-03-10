@@ -224,3 +224,15 @@ def test_docs_patterns_mentions_revolve(runner):
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "revolve" in data["content"].lower()
+
+
+# --- M21: Parametric docs ---
+
+
+def test_docs_parametric_section(runner):
+    result = runner.invoke(cli, ["docs", "parametric"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "--params" in content
+    assert "key=value" in content
