@@ -299,3 +299,15 @@ def test_docs_commands_mentions_inspect(runner):
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "inspect" in data["content"]
+
+
+# --- M26: twistExtrude performance warning ---
+
+
+def test_docs_patterns_mentions_twist_extrude(runner):
+    result = runner.invoke(cli, ["docs", "patterns"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "twistExtrude" in content
+    assert "polyline" in content
