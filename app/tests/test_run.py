@@ -1,5 +1,6 @@
 import json
 import shutil
+import struct
 from pathlib import Path
 
 from cadtool.cli import cli
@@ -530,3 +531,85 @@ def test_run_multiple_show_object_with_export(runner, isolated_dir):
     stl = isolated_dir / "v1_multi" / "output.stl"
     assert stl.exists()
     assert stl.stat().st_size > 0
+
+
+# --- Preview integration tests ---
+
+
+def test_run_preview_produces_png(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview"])
+    assert result.exit_code == 0
+    png = isolated_dir / "v1_label" / "preview.png"
+    assert png.exists()
+    assert png.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_run_preview_json_response(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview"])
+    parsed = json.loads(result.output)
+    assert "preview" in parsed
+    assert parsed["preview"] == "v1_label/preview.png"
+
+
+def test_run_preview_meta_json(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview"])
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "preview" in meta
+    assert meta["preview"] == "v1_label/preview.png"
+
+
+def test_run_preview_not_in_renders(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview"])
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "renders" not in meta
+
+
+def test_run_preview_with_render_coexist(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview", "--render", "iso"])
+    assert result.exit_code == 0
+    assert (isolated_dir / "v1_label" / "preview.png").exists()
+    assert (isolated_dir / "v1_label" / "renders" / "iso.png").exists()
+
+
+def test_run_without_preview_no_preview_key(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label"])
+    parsed = json.loads(result.output)
+    assert "preview" not in parsed
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert "preview" not in meta
+
+
+def test_run_export_glb_multi_show_object_has_materials(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "multi", "--export", "glb"])
+    assert result.exit_code == 0
+    glb_path = isolated_dir / "v1_multi" / "output.glb"
+    assert glb_path.exists()
+    data = glb_path.read_bytes()
+    json_length = struct.unpack("<I", data[12:16])[0]
+    gltf = json.loads(data[20:20 + json_length])
+    assert len(gltf["materials"]) >= 2
+
+
+def test_run_preview_is_256x256(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview"])
+    png = isolated_dir / "v1_label" / "preview.png"
+    data = png.read_bytes()
+    width, height = struct.unpack(">II", data[16:24])
+    assert width == 256
+    assert height == 256

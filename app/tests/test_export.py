@@ -1,3 +1,5 @@
+import json
+import struct
 from pathlib import Path
 
 import cadquery as cq
@@ -74,3 +76,55 @@ def test_export_obj_different_shapes_differ(tmp_path):
     export_obj(_make_box(), str(box_path))
     export_obj(_make_cylinder(), str(cyl_path))
     assert box_path.read_text() != cyl_path.read_text()
+
+
+# --- Multi-solid GLB export tests ---
+
+
+def _parse_glb_json(path):
+    """Parse the JSON chunk from a binary glTF file."""
+    data = Path(path).read_bytes()
+    # 12-byte header: magic(4) + version(4) + length(4)
+    # JSON chunk: length(4) + type(4) + data
+    json_length = struct.unpack("<I", data[12:16])[0]
+    return json.loads(data[20:20 + json_length])
+
+
+def _make_compound():
+    """Two non-touching solids in a compound."""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
+    from OCP.TopoDS import TopoDS_Compound, TopoDS_Builder
+    from OCP.gp import gp_Pnt, gp_Ax2, gp_Dir
+    box = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
+    cyl = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(50, 0, 0), gp_Dir(0, 0, 1)), 5, 20).Shape()
+    builder = TopoDS_Builder()
+    compound = TopoDS_Compound()
+    builder.MakeCompound(compound)
+    builder.Add(compound, box)
+    builder.Add(compound, cyl)
+    return compound
+
+
+def test_export_glb_multi_solid_distinct_meshes(tmp_path):
+    out = tmp_path / "output.glb"
+    export_glb(_make_compound(), str(out))
+    gltf = _parse_glb_json(out)
+    assert len(gltf["meshes"]) >= 2
+
+
+def test_export_glb_multi_solid_distinct_materials(tmp_path):
+    out = tmp_path / "output.glb"
+    export_glb(_make_compound(), str(out))
+    gltf = _parse_glb_json(out)
+    assert len(gltf["materials"]) >= 2
+
+
+def test_export_glb_multi_solid_colors_differ(tmp_path):
+    out = tmp_path / "output.glb"
+    export_glb(_make_compound(), str(out))
+    gltf = _parse_glb_json(out)
+    colors = [
+        tuple(m["pbrMetallicRoughness"]["baseColorFactor"])
+        for m in gltf["materials"]
+    ]
+    assert len(set(colors)) >= 2, f"Expected distinct colors, got {colors}"

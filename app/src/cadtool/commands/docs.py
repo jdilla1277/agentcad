@@ -42,6 +42,7 @@ SECTIONS = {
         "cadtool commands:\n"
         "  init    — Initialize a new cadtool project (creates cadtool.json).\n"
         "  run     — Execute a CadQuery script, produce versioned STEP output.\n"
+        "            Options: --render, --export, --preview (256x256 iso)\n"
         "  render  — Render PNG views of an existing STEP file.\n"
         "  export  — Export an existing STEP file to mesh formats (STL, GLB).\n"
         "  context — Show the current project state (versions, current label).\n"
@@ -84,6 +85,8 @@ SECTIONS = {
         "    export_glb(shape, 'output.glb')  # shape must be a TopoDS_Shape\n"
         "\n"
         "  STL export uses CadQuery's built-in exporter.\n"
+        "  GLB export auto-colors individual solids — each part gets a distinct\n"
+        "  color from a built-in palette for easy identification in 3D viewers.\n"
         "  GLB export handles tessellation automatically — do not use\n"
         "  cadquery.exporters.export() for GLTF/GLB (it is not supported).\n"
     ),
