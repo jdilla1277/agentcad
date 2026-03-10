@@ -166,6 +166,10 @@ CADQUERY PATTERNS
     .workplane(offset=N)          stack along normal
     .center(x, y)                 move pen relative to origin
     .move(x, y)                   move pen only (origin stays)
+\b
+  twistExtrude performance:
+    For profiles with >100 points, use polyline() instead of spline().
+    1000-point spline + twistExtrude can take 5+ minutes; polyline < 1 min.
 
 \b
 DEBUGGING

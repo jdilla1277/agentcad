@@ -256,6 +256,11 @@ SECTIONS = {
         "      arm = cq.Workplane('XY').circle(5).extrude(120).val().wrapped\n"
         "      tilted = rotate(arm, 'Y', 30)      # 30° from vertical\n"
         "      placed = translate(tilted, 0, 0, 8) # attach to base top\n"
+        "\n"
+        "  twistExtrude performance:\n"
+        "    For profiles with >100 points, use polyline() instead of spline().\n"
+        "    The spline kernel scales poorly — 1000-point spline + twistExtrude\n"
+        "    can take 5+ minutes. polyline completes in under a minute.\n"
     ),
     "inspect": (
         "Inspecting shape topology:\n"
