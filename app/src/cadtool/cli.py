@@ -7,6 +7,7 @@ from cadtool.commands.export_cmd import export_cmd
 from cadtool.commands.init import init
 from cadtool.commands.render import render
 from cadtool.commands.run import run
+from cadtool.commands.view import view
 
 
 @click.group()
@@ -21,3 +22,4 @@ cli.add_command(export_cmd)
 cli.add_command(init)
 cli.add_command(render)
 cli.add_command(run)
+cli.add_command(view)

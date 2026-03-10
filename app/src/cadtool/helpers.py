@@ -18,7 +18,7 @@ from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.TopAbs import TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Compound
-from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 
 def loft_sections(sections, smooth=True):
@@ -201,3 +201,41 @@ def mirror_fuse(shape, plane="XZ"):
     builder.Add(compound, shape)
     builder.Add(compound, mirrored)
     return compound
+
+
+def translate(shape, x, y, z):
+    """Translate a shape by (x, y, z).
+
+    Args:
+        shape: TopoDS_Shape to translate.
+        x, y, z: Translation distances.
+
+    Returns:
+        TopoDS_Shape at the new position.
+    """
+    trsf = gp_Trsf()
+    trsf.SetTranslation(gp_Vec(x, y, z))
+    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
+
+def rotate(shape, axis, angle_deg):
+    """Rotate a shape around a coordinate axis through the origin.
+
+    Args:
+        shape: TopoDS_Shape to rotate.
+        axis: "X", "Y", or "Z".
+        angle_deg: Rotation angle in degrees.
+
+    Returns:
+        TopoDS_Shape at the new orientation.
+    """
+    axes = {
+        "X": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)),
+        "Y": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)),
+        "Z": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
+    }
+    if axis not in axes:
+        raise ValueError(f"axis must be 'X', 'Y', or 'Z', got '{axis}'")
+    trsf = gp_Trsf()
+    trsf.SetRotation(axes[axis], math.radians(angle_deg))
+    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()

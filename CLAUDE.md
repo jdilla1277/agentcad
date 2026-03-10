@@ -30,6 +30,16 @@ The package is installed in editable mode inside that venv. If the venv doesn't 
 - `prd/m{N}_plan.md` — per-milestone detailed plans
 - `prd/cadtool_scope.md` — v0 scope document
 
+## Agent Friction Testing
+
+To test cadtool as an agent would actually experience it (no repo access, no source code), use the fresh install script:
+
+    ./scripts/fresh-install-test.sh              # install from local repo
+    ./scripts/fresh-install-test.sh --from-git   # install from GitHub main
+    ./scripts/fresh-install-test.sh --from-git --ref branch-name
+
+This creates an isolated workspace in `/tmp` with a clean venv. Point the agent at the printed workspace path. The agent will only have access to the `cadtool` CLI — no source, tests, or PRDs to cheat from.
+
 ## Friction Log Philosophy
 
 Every friction point in the stack is our problem. If an agent hits a CadQuery footgun, a confusing OCP API, or an unintuitive workplane behavior — that's a cadtool problem. We own the experience end-to-end. Fix it with better docs, helpers, wrappers, or guardrails. There is no "upstream issue, not our bug."
