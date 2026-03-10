@@ -1,93 +1,127 @@
 # cadtool
 
-A CLI-based CAD tool designed for AI agents. Write CadQuery scripts, get back structured JSON output, versioned STEP files, PNG renders, and mesh exports.
-
-## Requirements
-
-- **Python 3.10-3.12** (the OpenCascade bindings do not support 3.13+)
+cadtool is a command-line CAD tool built for AI agents. You write a short Python script describing 3D geometry, and cadtool turns it into versioned STEP files, PNG renders, mesh exports, and structured JSON — all from the terminal.
 
 ## Install
+
+You need **Python 3.10–3.12**. The OpenCascade bindings don't support 3.13+.
 
 ```bash
 pip install git+https://github.com/jdilla1277/mountain-climber.git#subdirectory=app
 ```
 
-This installs `cadtool` and all dependencies (CadQuery, OpenCascade bindings, Click) automatically.
+That's it — CadQuery, OpenCascade, and everything else comes along for the ride.
 
-## Quick Start
+## Your first model in 60 seconds
+
+**1. Create a project:**
 
 ```bash
-# Initialize a project
 cadtool init --name myproject
-
-# Write a CadQuery script
-cat > box.py << 'EOF'
-import cadquery as cq
-result = cq.Workplane("XY").box(10, 20, 5)
-show_object(result)
-EOF
-
-# Run it — produces a versioned STEP file
-cadtool run box.py --output box
-
-# Render PNG views
-cadtool render v1_box/output.step --view iso
-
-# Export to mesh formats
-cadtool export v1_box/output.step --format stl,glb,obj
-
-# Check project state
-cadtool context
-
-# Compare versions
-cadtool diff 1 2
 ```
+
+**2. Write a script.** cadtool pre-injects `cq` (CadQuery) and `show_object` automatically — no imports needed:
+
+```python
+# box.py
+box = cq.Workplane('XY').box(10, 20, 5)
+show_object(box)
+```
+
+**3. Run it:**
+
+```bash
+cadtool run box.py --output first --render iso --preview
+```
+
+You'll get back JSON like this:
+
+```json
+{
+  "command": "run",
+  "status": "success",
+  "version": 1,
+  "label": "first",
+  "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
+  "metrics": {
+    "dimensions": {"x": 10.0, "y": 20.0, "z": 5.0},
+    "volume": 1000.0,
+    "surface_area": 700.0,
+    "face_count": 6,
+    "edge_count": 12,
+    "is_valid": true
+  },
+  "preview": "v1_first/preview.png",
+  "renders": {"iso": "v1_first/renders/iso.png"}
+}
+```
+
+Your project directory now looks like this:
+
+```
+myproject/
+  cadtool.json
+  box.py
+  v1_first/
+    output.step
+    script.py
+    meta.json
+    preview.png
+    renders/
+      iso.png
+```
+
+Every run creates a new versioned directory (`v1_first`, `v2_tweaked`, `v3_final`...). Nothing is overwritten.
 
 ## Commands
 
-| Command | Description |
+| Command | What it does |
 |---------|-------------|
-| `cadtool init` | Initialize a new project (creates `cadtool.json`) |
-| `cadtool run` | Execute a CadQuery script, produce versioned STEP output |
+| `cadtool init` | Create a new project |
+| `cadtool run` | Execute a script → versioned STEP, metrics, renders, exports |
 | `cadtool render` | Render PNG views of an existing STEP file |
-| `cadtool export` | Export a STEP file to mesh formats (STL, GLB, OBJ) |
-| `cadtool context` | Show project state (versions, current label) |
-| `cadtool docs` | Show built-in documentation |
-| `cadtool diff` | Compare two versions of a model |
+| `cadtool export` | Export STEP to mesh formats (STL, GLB, OBJ) |
+| `cadtool inspect` | Topology report — shells, faces, edges, validity |
+| `cadtool diff` | Compare metrics between two versions |
+| `cadtool context` | Show project state |
+| `cadtool view` | Open a model in the browser (three.js) |
+| `cadtool daemon` | Background worker to skip cold-start on repeat runs |
+| `cadtool docs` | Built-in documentation (15 sections) |
 
-All commands return structured JSON with `command` and `status` fields.
+Every command returns JSON with `command` and `status` keys. Parse the output to drive your workflow.
 
-## Scripts
+## Writing scripts
 
-Scripts use the [CadQuery](https://cadquery.readthedocs.io/) Python API. Every script must call `show_object()` to register its output:
+Scripts use the [CadQuery](https://cadquery.readthedocs.io/) API. The only requirement is calling `show_object()` with your result — that tells cadtool what geometry to output.
 
-```python
-import cadquery as cq
-result = cq.Workplane("XY").box(10, 20, 5)
-show_object(result)
+These names are available automatically (no imports needed):
+
+| Name | What it does |
+|------|-------------|
+| `cq` | The cadquery module |
+| `show_object` | Register geometry for output (required) |
+| `translate(shape, x, y, z)` | Move a shape |
+| `rotate(shape, axis, angle)` | Rotate around `'X'`, `'Y'`, or `'Z'` |
+| `mirror_fuse(shape, plane)` | Mirror and boolean-fuse |
+| `loft_sections(wires, smooth)` | Loft wires into a solid |
+| `tapered_sweep(spine, radii)` | Sweep circles along a path |
+| `naca_wire(y, le_x, te_x, t)` | NACA 4-digit airfoil wire |
+
+Run `cadtool docs helpers` for full details on each.
+
+## Built-in documentation
+
+```bash
+cadtool docs              # everything
+cadtool docs quickstart   # getting started
+cadtool docs helpers      # geometry helper functions
+cadtool docs patterns     # common CadQuery patterns and footguns
+cadtool docs render       # render options and camera control
+cadtool docs parametric   # overriding script parameters
+cadtool docs inspect      # topology debugging
 ```
 
-cadtool also provides geometry helpers for organic shapes:
-
-```python
-from cadtool.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse
-```
-
-Run `cadtool docs helpers` for details.
-
-## Built-in Documentation
-
-After installing, run `cadtool docs` for full documentation, or `cadtool docs <section>` for a specific topic:
-
-```
-cadtool docs install      # installation instructions
-cadtool docs commands     # command reference
-cadtool docs workflow     # typical workflow
-cadtool docs export       # export formats
-cadtool docs render       # render options
-cadtool docs helpers      # geometry helpers
-cadtool docs schema       # JSON response schema
-```
+For AI agents: `cadtool --help` outputs a comprehensive operational briefing with examples, JSON schemas, and patterns — everything needed to start producing geometry immediately.
 
 ## Development
 
