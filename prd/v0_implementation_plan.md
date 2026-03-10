@@ -319,3 +319,157 @@ M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap win
 5. **`cadtool view` relative path** — `Path(file).resolve()` so relative paths work with file URIs.
 6. **Version directory collision** — `exist_ok=True` on `mkdir()` in both success and failure paths.
 7. **Custom angles in `--render` on `cadtool run`** — Uses `parse_view_spec()` to support `--render 45:30` and mixed specs like `--render front,45:30`. New `cadtool docs inspect` section.
+
+---
+
+## Milestone 25: `--help` Operational Briefing & README
+
+**Source:** Agent friction testing — first contact experience.
+
+**Goal:** Make `cadtool --help` a complete operational briefing so an AI agent can be productive on first contact without discovering `cadtool docs`. Rewrite README for human-first agent-delegated workflow.
+
+**Status:** In Progress (PR #15)
+
+---
+
+# v0.2 Roadmap — Friction-Driven
+
+Open friction points from all test sessions, organized as small shippable milestones.
+
+**Sources:**
+- [Helical gear friction log (2026-03-10)](../feedback/2026-03-10_15-56-10.md) — latest
+- [Helical gear friction log (2026-03-10)](../feedback/2026-03-10/friction-log-helical-gear.md) — original
+- [Landing gear friction log (2026-03-09)](../feedback/2026-03-09/friction-log-landing-gear.md)
+- [Discovery friction log (2026-03-09)](../feedback/2026-03-09/friction-log-discovery.md)
+- [B-2 Spirit friction log (2026-03-08)](../feedback/2026-03-08/friction-log-b2-spirit.md)
+- [Golden Gate Bridge friction log (2026-03-08)](../feedback/2026-03-08/friction-log-golden-gate-bridge.md)
+
+| Milestone | Description | Size | Source |
+|-----------|-------------|------|--------|
+| M26 | Performance warnings in docs (twistExtrude, spline scaling) | XS | Helical gear #1 |
+| M27 | Friendlier `cadtool init` when project exists | XS | Helical gear #6 |
+| M28 | Better Python version / import error diagnostics | S | Helical gear (original) #1, #2 |
+| M29 | Progress indicator for long `cadtool run` | M | Helical gear #3 |
+| M30 | `involute_gear_profile` helper | M | Helical gear #2 |
+| M31 | User-specified part colors in GLB export | S | Golden Gate Bridge, Landing Gear |
+| M32 | `context` includes file paths per version | XS | Discovery log |
+| M33 | Intermediate geometry preview / multi-shape show_object with labels | L | B-2 Spirit, Discovery, Landing Gear |
+
+---
+
+## Milestone 26: Performance Warnings in Docs
+
+**Source:** [Helical gear (latest)](../feedback/2026-03-10_15-56-10.md) friction point #1
+
+**Goal:** Document the twistExtrude + spline performance cliff so agents don't burn 5-minute timeouts on complex profiles.
+
+**Scope:**
+- Add warning to `cadtool docs patterns`: "For twistExtrude with complex profiles (>100 points), prefer polyline over spline — the spline kernel scales poorly with point count."
+- 1 test, 1 docs string edit.
+
+**Status:** Pending
+
+---
+
+## Milestone 27: Friendlier `cadtool init` Error
+
+**Source:** [Helical gear (latest)](../feedback/2026-03-10_15-56-10.md) friction point #6
+
+**Goal:** When `cadtool init` is run in a directory that already has `cadtool.json`, return a helpful error that tells the agent what to do next.
+
+**Scope:**
+- Change error message to include: "Project already initialized. Run 'cadtool context' to see project state."
+- 1 test update.
+
+**Status:** Pending
+
+---
+
+## Milestone 28: Better Python Version / Import Error Diagnostics
+
+**Source:** [Helical gear (original)](../feedback/2026-03-10/friction-log-helical-gear.md) friction points #1, #2
+
+**Goal:** When CadQuery/OCP imports fail due to wrong Python version, tell the agent *why* instead of listing every OCP module as "not found."
+
+**Scope:**
+- In `validate.py` import check: if cadquery import fails AND `sys.version_info >= (3, 13)`, return a targeted message: "CadQuery requires Python 3.10-3.12. Current: {version}. Recreate venv with python3.12."
+- Alternatively, check Python version in `cadtool init` or at CLI startup.
+- ~3 tests.
+
+**Status:** Pending
+
+---
+
+## Milestone 29: Progress Indicator for Long Runs
+
+**Source:** [Helical gear (latest)](../feedback/2026-03-10_15-56-10.md) friction point #3, [B-2 Spirit](../feedback/2026-03-08/friction-log-b2-spirit.md)
+
+**Goal:** When `cadtool run` takes >10 seconds, emit periodic progress to stderr so the agent (or human) knows it's working, not hung.
+
+**Scope:**
+- Option A: Background thread in `run.py` that writes `{"progress": "still running", "elapsed_s": N}` to stderr every 10 seconds during CQGI execution.
+- Option B: Daemon sends heartbeat messages through the socket.
+- JSON stdout remains clean (only final result). Progress goes to stderr only.
+- ~3 tests.
+
+**Status:** Pending
+
+---
+
+## Milestone 30: `involute_gear_profile` Helper
+
+**Source:** [Helical gear (latest)](../feedback/2026-03-10_15-56-10.md) friction point #2
+
+**Goal:** `involute_gear_profile(module, teeth, pressure_angle)` returns a closed TopoDS_Wire of an involute spur gear tooth profile. Eliminates ~80 lines of trig that agents currently write from scratch.
+
+**Scope:**
+- New function in `helpers.py`: involute curve generation, tooth tip/root arcs, full gear profile as closed wire.
+- Add to preamble injection.
+- Add to `cadtool docs helpers`.
+- ~8 tests (tooth count, module scaling, pressure angle, wire closure, valid shape).
+
+**Status:** Pending
+
+---
+
+## Milestone 31: User-Specified Part Colors in GLB Export
+
+**Source:** [Golden Gate Bridge](../feedback/2026-03-08/friction-log-golden-gate-bridge.md), [Landing Gear](../feedback/2026-03-09/friction-log-landing-gear.md)
+
+**Goal:** Let scripts assign colors to parts so GLB exports are meaningful (e.g., "International Orange" for the Golden Gate Bridge, "black" for tires).
+
+**Scope:**
+- Extend `show_object()` or add a color argument: `show_object(part, color="orange")`.
+- `export_glb()` uses user-specified colors when available, falls back to auto-palette.
+- ~5 tests.
+
+**Status:** Pending
+
+---
+
+## Milestone 32: File Paths in `cadtool context`
+
+**Source:** [Discovery friction log](../feedback/2026-03-09/friction-log-discovery.md)
+
+**Goal:** Each version in `cadtool context` output includes its file paths so the agent doesn't have to infer `v{N}_{label}/output.step` from convention.
+
+**Scope:**
+- Add `"outputs"` dict to each version entry in context JSON.
+- 1-2 tests.
+
+**Status:** Pending
+
+---
+
+## Milestone 33: Intermediate Geometry Preview
+
+**Source:** [B-2 Spirit](../feedback/2026-03-08/friction-log-b2-spirit.md), [Discovery](../feedback/2026-03-09/friction-log-discovery.md), [Landing Gear](../feedback/2026-03-09/friction-log-landing-gear.md)
+
+**Goal:** Let agents render intermediate construction geometry (individual wires, partial surfaces) during script development, not just the final result.
+
+**Scope:** TBD — this is the biggest architectural question. Options:
+- Named `show_object()` calls with selective rendering: `show_object(wire, name="root_section")`
+- A `cadtool preview` command that renders any TopoDS_Shape from a script without requiring `show_object()`
+- A debug mode that renders every `show_object()` call individually
+
+**Status:** Pending (needs design)
