@@ -221,6 +221,10 @@ def translate(shape, x, y, z):
 def rotate(shape, axis, angle_deg):
     """Rotate a shape around a coordinate axis through the origin.
 
+    Follows right-hand rule: positive angle = counterclockwise when
+    looking from positive axis toward origin.
+    E.g. positive Y rotation moves +Z toward +X.
+
     Args:
         shape: TopoDS_Shape to rotate.
         axis: "X", "Y", or "Z".

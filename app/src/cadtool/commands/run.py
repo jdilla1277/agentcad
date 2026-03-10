@@ -84,9 +84,23 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 @click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb).")
 @click.option("--preview", is_flag=True, default=False, help="Render a quick 256x256 iso preview.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
-def run(script, output, render, export, preview, params):
+@click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
+def run(script, output, render, export, preview, params, dry_run):
     """Execute a CadQuery script and produce a versioned STEP file."""
     manifest = load_manifest(command="run")
+
+    # Python version check (before CadQuery imports)
+    if sys.version_info >= (3, 13):
+        click.echo(json.dumps({
+            "command": "run",
+            "status": "error",
+            "message": (
+                f"cadtool requires Python 3.10-3.12 "
+                f"(found {sys.version_info[0]}.{sys.version_info[1]}). "
+                f"CadQuery/OCP bindings are not available on newer Python versions."
+            ),
+        }))
+        sys.exit(1)
 
     script_path = Path(script)
     if not script_path.exists():
@@ -195,6 +209,24 @@ def run(script, output, render, export, preview, params):
             "Consider using cq.Compound.makeCompound() in your script instead."
         )
 
+    # Compute geometric metrics
+    from cadtool.metrics import compute_metrics
+
+    topo_shape_for_metrics = shape.val().wrapped
+    metrics = compute_metrics(topo_shape_for_metrics)
+
+    # Dry-run: return metrics only, no version/disk artifacts
+    if dry_run:
+        output_json = {
+            "command": "run",
+            "status": "success",
+            "metrics": metrics,
+        }
+        if warning:
+            output_json["warning"] = warning
+        click.echo(json.dumps(output_json))
+        return
+
     # Script succeeded — create version directory and write files
     dir_name = f"v{version_num}_{label}" if label != f"v{version_num}" else label
     version_dir = Path.cwd() / dir_name
@@ -205,12 +237,6 @@ def run(script, output, render, export, preview, params):
 
     # Export STEP file
     exporters.export(shape, str(version_dir / "output.step"))
-
-    # Compute geometric metrics
-    from cadtool.metrics import compute_metrics
-
-    topo_shape_for_metrics = shape.val().wrapped
-    metrics = compute_metrics(topo_shape_for_metrics)
 
     # Export mesh formats if requested
     exports_meta = {}

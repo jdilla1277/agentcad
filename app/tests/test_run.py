@@ -734,3 +734,66 @@ def test_run_without_params_no_params_key(runner, isolated_dir):
     assert "params" not in parsed
     meta = json.loads((isolated_dir / "v1" / "meta.json").read_text())
     assert "params" not in meta
+
+
+# --- Python version check tests (M22) ---
+
+
+def test_run_python_version_too_new_error(runner, isolated_dir, monkeypatch):
+    """Python 3.13+ returns clear error, no version consumed."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    monkeypatch.setattr("sys.version_info", (3, 14, 0, "final", 0))
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    assert result.exit_code == 1
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "error"
+    assert "3.10" in parsed["message"]
+    assert "3.14" in parsed["message"]
+
+
+def test_run_python_version_ok_no_error(runner, isolated_dir, monkeypatch):
+    """Python 3.12 does not trigger version error."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    monkeypatch.setattr("sys.version_info", (3, 12, 0, "final", 0))
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+
+
+# --- Dry-run tests (M22) ---
+
+
+def test_run_dry_run_returns_metrics(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1", "--dry-run"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+    assert "metrics" in parsed
+    assert parsed["metrics"]["face_count"] == 6
+
+
+def test_run_dry_run_no_version_consumed(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "v1", "--dry-run"])
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert len(manifest["versions"]) == 0
+    # No version directory created
+    assert not (isolated_dir / "v1").is_dir()
+    assert not (isolated_dir / "v1_v1").is_dir()
+
+
+def test_run_dry_run_no_disk_artifacts(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "v1", "--dry-run"])
+    # Only cadtool.json and script.py should exist
+    files = [f.name for f in isolated_dir.iterdir()]
+    assert "cadtool.json" in files
+    assert "script.py" in files
+    assert not any(f.startswith("v1") for f in files)

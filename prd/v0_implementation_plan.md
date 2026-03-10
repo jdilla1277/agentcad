@@ -30,7 +30,8 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M19 | Multi-solid colored GLB export | Done |
 | M20 | Patterns docs, positioning helpers & `cadtool view` | Done |
 | M21 | Parametric scripts (fast-loop Phase 2) | Done |
-| M22 | Persistent worker / daemon mode (fast-loop Phase 2) | Planned |
+| M22 | Friction fixes — Python version check, rotate docs, dry-run | Done |
+| M23 | Persistent worker / daemon mode (fast-loop Phase 2) | Planned |
 
 ---
 
@@ -279,7 +280,21 @@ M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap win
 
 ---
 
-## Milestone 22: Persistent Worker (Daemon Mode)
+## Milestone 22: Friction Fixes — Desk Lamp Friction Log ✓
+
+**Goal:** Fix the P0 and P1 issues surfaced by the desk lamp agent friction test.
+
+**Source:** [Desk lamp friction log](/Users/jamesdillard/Documents/friction-log.md)
+
+**Delivered:** 254 tests (247 → 254), 8 commands. Four deliverables:
+1. **P0 — Python version check** — `cadtool run` checks `sys.version_info >= (3, 13)` after `load_manifest()`, before any CadQuery imports. Returns clear error with found version and required range. No version consumed.
+2. **P1 — `rotate()` direction convention** — Docstring and `cadtool docs helpers` now document right-hand rule: positive angle = counterclockwise when looking from positive axis toward origin.
+3. **P2 — `--dry-run` mode** — `cadtool run script.py --output label --dry-run` executes the script, computes metrics, and returns them without creating a version directory, consuming a version number, or writing any disk artifacts.
+4. **P2 — Angled positioning example** — `cadtool docs patterns` includes a worked example showing build-at-origin, rotate, translate pattern for tilted parts.
+
+---
+
+## Milestone 23: Persistent Worker (Daemon Mode)
 
 **Epic:** [Fast Loop](fast-loop/overview.md)
 
