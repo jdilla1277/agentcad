@@ -32,13 +32,13 @@ The package is installed in editable mode inside that venv. If the venv doesn't 
 
 ## Agent Friction Testing
 
-To test cadtool as an agent would actually experience it (no repo access, no source code), use the fresh install script:
+To test cadtool as an agent would actually experience it (no repo access, no source code), install from pip in a fresh directory:
 
-    ./scripts/fresh-install-test.sh              # install from local repo
-    ./scripts/fresh-install-test.sh --from-git   # install from GitHub main
-    ./scripts/fresh-install-test.sh --from-git --ref branch-name
+    mkdir /tmp/cadtool-test && cd /tmp/cadtool-test
+    python3.12 -m venv .venv && source .venv/bin/activate
+    pip install git+https://github.com/jdilla1277/mountain-climber.git#subdirectory=app
 
-This creates an isolated workspace in `/tmp` with a clean venv. Point the agent at the printed workspace path. The agent will only have access to the `cadtool` CLI — no source, tests, or PRDs to cheat from.
+Then start Claude Code (or any agent) in that directory. The agent only has the `cadtool` CLI — no source, tests, or PRDs to read.
 
 ## Friction Log Philosophy
 
