@@ -198,3 +198,29 @@ def test_docs_export_mentions_colored_glb(runner):
     data = json.loads(result.output)
     content = data["content"].lower()
     assert "color" in content or "per-solid" in content
+
+
+# --- M20: Patterns section ---
+
+
+def test_docs_patterns_section(runner):
+    result = runner.invoke(cli, ["docs", "patterns"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "build" in data["content"].lower() and "origin" in data["content"].lower()
+
+
+def test_docs_patterns_mentions_compound_vs_union(runner):
+    result = runner.invoke(cli, ["docs", "patterns"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "makeCompound" in content
+    assert "union" in content
+
+
+def test_docs_patterns_mentions_revolve(runner):
+    result = runner.invoke(cli, ["docs", "patterns"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "revolve" in data["content"].lower()

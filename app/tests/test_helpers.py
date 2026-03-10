@@ -1,5 +1,6 @@
 import math
 
+import cadquery as cq
 import pytest
 from OCP.BRep import BRep_Tool
 from OCP.BRepBndLib import BRepBndLib
@@ -10,7 +11,7 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt
 
-from cadtool.helpers import loft_sections, mirror_fuse, naca_wire, tapered_sweep
+from cadtool.helpers import loft_sections, mirror_fuse, naca_wire, rotate, tapered_sweep, translate
 
 
 # ── Test utilities ──────────────────────────────────────────────
@@ -213,3 +214,61 @@ class TestMirrorFuse:
         shape = self._make_half_box()
         with pytest.raises(ValueError):
             mirror_fuse(shape, plane="ABC")
+
+
+# ── translate tests ───────────────────────────────────────────
+
+
+class TestTranslate:
+    def test_translate_moves_bounding_box(self):
+        box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+        moved = translate(box, 50, 0, 0)
+        bb = _bounding_box(moved)
+        assert bb[0] > 40  # xmin moved from -5 to 45
+
+    def test_translate_preserves_volume(self):
+        box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+        moved = translate(box, 50, 100, 200)
+        from OCP.GProp import GProp_GProps
+        from OCP.BRepGProp import BRepGProp
+        props_orig, props_moved = GProp_GProps(), GProp_GProps()
+        BRepGProp.VolumeProperties_s(box, props_orig)
+        BRepGProp.VolumeProperties_s(moved, props_moved)
+        assert abs(props_orig.Mass() - props_moved.Mass()) < 0.01
+
+    def test_translate_zero_is_identity(self):
+        box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+        moved = translate(box, 0, 0, 0)
+        bb_orig = _bounding_box(box)
+        bb_moved = _bounding_box(moved)
+        for a, b in zip(bb_orig, bb_moved):
+            assert abs(a - b) < 0.01
+
+
+# ── rotate tests ──────────────────────────────────────────────
+
+
+class TestRotate:
+    def test_rotate_z_90_swaps_dims(self):
+        box = cq.Workplane("XY").box(10, 20, 5).val().wrapped
+        rotated = rotate(box, "Z", 90)
+        bb = _bounding_box(rotated)
+        x_extent = bb[3] - bb[0]
+        y_extent = bb[4] - bb[1]
+        assert abs(x_extent - 20) < 0.1  # was Y=20, now X≈20
+        assert abs(y_extent - 10) < 0.1  # was X=10, now Y≈10
+
+    def test_rotate_preserves_volume(self):
+        box = cq.Workplane("XY").box(10, 20, 5).val().wrapped
+        rotated = rotate(box, "X", 45)
+        from OCP.GProp import GProp_GProps
+        from OCP.BRepGProp import BRepGProp
+        props_orig, props_rotated = GProp_GProps(), GProp_GProps()
+        BRepGProp.VolumeProperties_s(box, props_orig)
+        BRepGProp.VolumeProperties_s(rotated, props_rotated)
+        assert abs(props_orig.Mass() - props_rotated.Mass()) < 0.01
+
+    def test_rotate_invalid_axis_raises(self):
+        box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+        with pytest.raises(ValueError, match="must be"):
+            rotate(box, "W", 90)

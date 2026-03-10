@@ -173,3 +173,24 @@ def test_render_shape_no_fit(tmp_path):
     render_shape(shape, "iso", fit_path, focus=(5, 5, 5), zoom=2.0)
     render_shape(shape, "iso", nofit_path, focus=(5, 5, 5), zoom=2.0, fit=False)
     assert fit_path.read_bytes() != nofit_path.read_bytes()
+
+
+# --- mixed view spec tests (M20) ---
+
+
+def test_parse_view_spec_mixed_named_and_angle():
+    result = parse_view_spec("front,right,45:15")
+    assert len(result) == 3
+    assert result[0] == ("named", "front")
+    assert result[1] == ("named", "right")
+    assert result[2] == ("custom", (45.0, 15.0))
+
+
+def test_parse_view_spec_colon_angle_only():
+    result = parse_view_spec("45:15")
+    assert result == [("custom", (45.0, 15.0))]
+
+
+def test_parse_view_spec_backward_compat_comma_angle():
+    result = parse_view_spec("45,30")
+    assert result == [("custom", (45.0, 30.0))]

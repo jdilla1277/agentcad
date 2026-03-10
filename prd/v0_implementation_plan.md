@@ -28,7 +28,7 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M17 | Friction fixes — auto-compound, docs improvements | Done |
 | M18 | Quick preview mode (fast-loop Phase 2) | Done |
 | M19 | Multi-solid colored GLB export | Done |
-| M20 | Patterns docs, positioning helper & `cadtool view` | Planned |
+| M20 | Patterns docs, positioning helpers & `cadtool view` | Done |
 | M21 | Parametric scripts (fast-loop Phase 2) | Planned |
 | M22 | Persistent worker / daemon mode (fast-loop Phase 2) | Planned |
 
@@ -255,25 +255,17 @@ M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap win
 
 ---
 
-## Milestone 20: Patterns Docs, Positioning Helper & `cadtool view`
+## Milestone 20: Patterns Docs, Positioning Helpers & `cadtool view` ✓
 
-**Goal:** Three friction fixes from the landing gear log — eliminate positioning footguns with docs and a helper, and make GLB output viewable with zero friction.
+**Goal:** Four friction fixes from the landing gear log — eliminate positioning footguns with docs and helpers, make GLB output viewable with zero friction, and allow mixed view specs.
 
-**Motivation:** Landing gear friction log (F1, F2, F6). Agents waste iterations on workplane/transform confusion. Users can't view GLB output on macOS without third-party tools.
+**Motivation:** Landing gear friction log (F1, F2, F3, F6). Agents waste iterations on workplane/transform confusion. Users can't view GLB output on macOS without third-party tools.
 
-**Scope:**
-
-1. **`cadtool docs patterns`** — New docs section covering:
-   - Build-at-origin-then-position pattern
-   - Revolve axis gotchas (axis is relative to workplane origin, `.move()` shifts sketch not origin)
-   - `cq.Compound.makeCompound()` vs `.union()` (spatial grouping vs boolean fuse)
-   - Workplane coordinate mapping (`transformed()`, `center()`, `workplane()`)
-
-2. **`translate(shape, x, y, z)` helper** — Wraps `gp_Trsf.SetTranslation()` + `BRepBuilderAPI_Transform`. The real friction isn't making shapes, it's putting them where you want. One-liner positioning for TopoDS_Shape objects. Add to preamble.
-
-3. **`cadtool view <file>`** — Opens a GLB/STEP file in the browser via a self-contained HTML page with three.js. Serves locally, opens `webbrowser.open()`. No external dependencies. Solves "GLB doesn't open on Mac" completely.
-
-4. **Mixed view specs (F3)** — Allow `--view front,right,45:15` in `cadtool render`. Colon separates azimuth:elevation to disambiguate from comma separator.
+**Delivered:** 234 tests (215 → 234), 8 commands. Four deliverables:
+1. **`cadtool docs patterns`** — New docs section covering build-at-origin-then-position, revolve axis gotchas, compound vs union, and workplane positioning.
+2. **`translate(shape, x, y, z)` + `rotate(shape, axis, angle_deg)` helpers** — Positioning primitives wrapping `gp_Trsf` + `BRepBuilderAPI_Transform`. Added to preamble, docs, and helpers section.
+3. **`cadtool view <file>`** — Opens GLB/STEP in browser via self-contained HTML with three.js CDN. STEP auto-exports to GLB. Returns JSON with file URL.
+4. **Mixed view specs** — `--view front,right,45:15` with colon syntax for angles. Backward-compatible with legacy `45,30` format.
 
 ---
 

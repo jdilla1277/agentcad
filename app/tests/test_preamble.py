@@ -72,6 +72,24 @@ def test_error_line_numbers_reasonable(runner, isolated_dir):
     assert "deliberate error on line 2" in parsed["error"]
 
 
+def test_preamble_translate_available(runner, isolated_dir):
+    _init_project(runner)
+    script = "box = cq.Workplane('XY').box(10,10,10).val().wrapped\nmoved = translate(box, 50, 0, 0)\nshow_object(cq.Workplane('XY').newObject([cq.Shape.cast(moved)]))\n"
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "t"])
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+
+
+def test_preamble_rotate_available(runner, isolated_dir):
+    _init_project(runner)
+    script = "box = cq.Workplane('XY').box(10,10,10).val().wrapped\nspun = rotate(box, 'Z', 45)\nshow_object(cq.Workplane('XY').newObject([cq.Shape.cast(spun)]))\n"
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "r"])
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+
+
 def test_docs_preamble_section(runner):
     """cadtool docs preamble lists available pre-injected names."""
     result = runner.invoke(cli, ["docs", "preamble"])
@@ -83,3 +101,5 @@ def test_docs_preamble_section(runner):
     assert "tapered_sweep" in content
     assert "naca_wire" in content
     assert "mirror_fuse" in content
+    assert "translate" in content
+    assert "rotate" in content

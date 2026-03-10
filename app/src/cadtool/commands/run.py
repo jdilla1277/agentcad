@@ -76,7 +76,7 @@ def run(script, output, render, export, preview):
     from cadtool.validate import validate_script
 
     raw_source = script_path.read_text()
-    PREAMBLE = "import cadquery as cq; from cadtool.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse\n"
+    PREAMBLE = "import cadquery as cq; from cadtool.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse, translate, rotate\n"
     script_source = PREAMBLE + raw_source
 
     validation_errors = validate_script(script_source)
