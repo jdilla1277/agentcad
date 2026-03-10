@@ -236,3 +236,24 @@ def test_docs_parametric_section(runner):
     content = data["content"]
     assert "--params" in content
     assert "key=value" in content
+
+
+# --- M22: Rotate direction convention ---
+
+
+def test_docs_helpers_rotate_direction_convention(runner):
+    result = runner.invoke(cli, ["docs", "helpers"])
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "right-hand rule" in content.lower() or "counterclockwise" in content.lower()
+
+
+# --- M22: Angled positioning example ---
+
+
+def test_docs_patterns_angled_positioning_example(runner):
+    result = runner.invoke(cli, ["docs", "patterns"])
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "rotate(" in content and "translate(" in content
+    assert "arm" in content.lower() or "angle" in content.lower()
