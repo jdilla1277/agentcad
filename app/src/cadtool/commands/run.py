@@ -43,7 +43,7 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
     """Record a script failure on disk and in the manifest."""
     dir_name = f"v{version_num}_{label}_failed"
     version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True)
+    version_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy script into failed directory
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
@@ -260,7 +260,7 @@ def run(script, output, render, export, preview, params, dry_run):
     # Script succeeded — create version directory and write files
     dir_name = f"v{version_num}_{label}" if label != f"v{version_num}" else label
     version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True)
+    version_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy script into version directory
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
@@ -294,14 +294,26 @@ def run(script, output, render, export, preview, params, dry_run):
     # Render views if requested
     renders_meta = {}
     if render:
-        from cadtool.render import render_views, ALL_VIEWS
+        from cadtool.render import (
+            parse_view_spec, render_shape as render_shape_view,
+            render_shape_custom, render_views, ALL_VIEWS,
+        )
 
-        view_names = ALL_VIEWS if render == "all" else [v.strip() for v in render.split(",")]
         renders_dir = version_dir / "renders"
+        renders_dir.mkdir(parents=True, exist_ok=True)
         topo_shape = shape.val().wrapped
-        rendered = render_views(topo_shape, view_names, renders_dir)
-        for view_name, abs_path in rendered.items():
-            renders_meta[view_name] = f"{dir_name}/renders/{view_name}.png"
+        view_specs = parse_view_spec(render)
+        for spec_type, spec_value in view_specs:
+            if spec_type == "named":
+                out_path = renders_dir / f"{spec_value}.png"
+                render_shape_view(topo_shape, spec_value, out_path)
+                renders_meta[spec_value] = f"{dir_name}/renders/{spec_value}.png"
+            else:
+                az, el = spec_value
+                name = f"{int(az)}_{int(el)}"
+                out_path = renders_dir / f"{name}.png"
+                render_shape_custom(topo_shape, az, el, out_path)
+                renders_meta[name] = f"{dir_name}/renders/{name}.png"
 
     # Quick preview if requested
     preview_meta = None

@@ -116,3 +116,39 @@ class TestMetricsReturnTypes:
         assert isinstance(self.metrics["bounding_box"], dict)
         assert isinstance(self.metrics["dimensions"], dict)
         assert isinstance(self.metrics["center_of_mass"], dict)
+
+
+# --- M24: Validity diagnostics ---
+
+
+class TestValidityDiagnostics:
+    def test_valid_shape_has_no_validity_errors(self):
+        shape = _make_box()
+        m = compute_metrics(shape)
+        assert m["is_valid"] is True
+        assert m.get("validity_errors") is None
+
+    def test_valid_shape_no_warnings(self):
+        shape = _make_box()
+        m = compute_metrics(shape)
+        assert m.get("warnings") is None
+
+
+class TestNegativeVolumeWarning:
+    def test_positive_volume_no_warning(self):
+        shape = _make_box()
+        m = compute_metrics(shape)
+        assert m["volume"] > 0
+        assert m.get("warnings") is None
+
+    def test_negative_volume_produces_warning(self):
+        """A reversed shell produces negative volume — should get a warning."""
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+        from OCP.TopoDS import TopoDS
+        box = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
+        # Reverse the shape to flip normals → negative volume
+        reversed_shape = box.Reversed()
+        m = compute_metrics(reversed_shape)
+        assert m["volume"] < 0
+        assert "warnings" in m
+        assert any("negative volume" in w.lower() for w in m["warnings"])

@@ -49,6 +49,7 @@ SECTIONS = {
         "  context — Show the current project state (versions, current label).\n"
         "  docs    — Show this documentation.\n"
         "  diff    — Compare two versions of a model.\n"
+        "  inspect — Inspect STEP file topology (shells, faces, edges).\n"
         "  daemon  — Manage the background worker (start, stop, status).\n"
     ),
     "render": (
@@ -255,6 +256,25 @@ SECTIONS = {
         "      arm = cq.Workplane('XY').circle(5).extrude(120).val().wrapped\n"
         "      tilted = rotate(arm, 'Y', 30)      # 30° from vertical\n"
         "      placed = translate(tilted, 0, 0, 8) # attach to base top\n"
+    ),
+    "inspect": (
+        "Inspecting shape topology:\n"
+        "  cadtool inspect <step_file>\n"
+        "\n"
+        "  Reports the internal topology of a STEP file:\n"
+        "    solid_count      Number of solid bodies\n"
+        "    shell_count      Number of shells\n"
+        "    shells           Per-shell details (closed/open, face count)\n"
+        "    face_count       Total unique faces\n"
+        "    face_orientations  Forward vs reversed face counts\n"
+        "    edge_count       Total unique edges\n"
+        "    free_edge_count  Edges belonging to fewer than 2 faces (holes)\n"
+        "    is_valid         BRepCheck validity\n"
+        "\n"
+        "  Use this to debug geometry issues:\n"
+        "    - Hollow shapes: check shell closed status and free edges\n"
+        "    - Inverted normals: check face orientation balance\n"
+        "    - Invalid geometry: check is_valid field\n"
     ),
     "daemon": (
         "Daemon mode (persistent worker):\n"

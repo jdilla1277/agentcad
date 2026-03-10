@@ -65,3 +65,22 @@ def test_view_step_auto_exports(runner, isolated_dir, monkeypatch):
     assert len(opened_urls) == 1
     parsed = json.loads(result.output)
     assert parsed["status"] == "success"
+
+
+# --- M24: Relative path fix ---
+
+
+def test_view_relative_path(runner, isolated_dir, monkeypatch):
+    """cadtool view should work with relative paths."""
+    subdir = isolated_dir / "subdir"
+    subdir.mkdir()
+    glb_path = _make_glb(subdir)
+
+    opened_urls = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+    # Use relative path
+    result = runner.invoke(cli, ["view", "subdir/output.glb"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+    assert opened_urls[0].startswith("file://")

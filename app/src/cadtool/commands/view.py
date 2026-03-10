@@ -97,7 +97,7 @@ animate();
 @click.argument("file")
 def view(file):
     """Open a GLB or STEP file in the browser for 3D viewing."""
-    file_path = Path(file)
+    file_path = Path(file).resolve()
 
     if not file_path.exists():
         click.echo(json.dumps({

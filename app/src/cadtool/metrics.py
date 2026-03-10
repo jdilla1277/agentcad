@@ -5,7 +5,8 @@ from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_WIRE
+from OCP.TopExp import TopExp_Explorer as TopExp_Exp
 from OCP.TopExp import TopExp
 from OCP.TopTools import TopTools_IndexedMapOfShape
 
@@ -64,7 +65,7 @@ def compute_metrics(topo_shape):
     analyzer = BRepCheck_Analyzer(topo_shape)
     is_valid = analyzer.IsValid()
 
-    return {
+    result = {
         "bounding_box": bb,
         "dimensions": dims,
         "volume": volume,
@@ -74,3 +75,30 @@ def compute_metrics(topo_shape):
         "edge_count": edge_count,
         "is_valid": is_valid,
     }
+
+    # Validity diagnostics — when invalid, extract BRepCheck error descriptions
+    if not is_valid:
+        errors = set()
+        for shape_type in (TopAbs_FACE, TopAbs_EDGE, TopAbs_WIRE, TopAbs_SHELL):
+            exp = TopExp_Exp(topo_shape, shape_type)
+            while exp.More():
+                check_result = analyzer.Result(exp.Current())
+                if check_result:
+                    for status in check_result.Status():
+                        if status.value != 0:  # BRepCheck_NoError = 0
+                            errors.add(status.name)
+                exp.Next()
+        if errors:
+            result["validity_errors"] = sorted(errors)
+
+    # Negative volume warning
+    warnings = []
+    if volume < 0:
+        warnings.append(
+            "Negative volume detected — shape may have inverted normals. "
+            "Check face orientation or try reversing the shape."
+        )
+    if warnings:
+        result["warnings"] = warnings
+
+    return result
