@@ -100,15 +100,21 @@ def _setup_render(shape, width=800, height=600):
     driver.ChangeOptions().buffersNoSwap = True
 
     viewer = V3d_Viewer(driver)
-    ambient = V3d_AmbientLight(Quantity_Color(0.3, 0.3, 0.3, Quantity_TOC_RGB))
+    ambient = V3d_AmbientLight(Quantity_Color(0.5, 0.5, 0.5, Quantity_TOC_RGB))
     viewer.AddLight(ambient)
     viewer.SetLightOn(ambient)
-    dir_light = V3d_DirectionalLight(
+    key_light = V3d_DirectionalLight(
         gp_Dir(1, -1, -1),
         Quantity_Color(0.8, 0.8, 0.8, Quantity_TOC_RGB),
     )
-    viewer.AddLight(dir_light)
-    viewer.SetLightOn(dir_light)
+    viewer.AddLight(key_light)
+    viewer.SetLightOn(key_light)
+    fill_light = V3d_DirectionalLight(
+        gp_Dir(-1, 1, 0.5),
+        Quantity_Color(0.4, 0.4, 0.4, Quantity_TOC_RGB),
+    )
+    viewer.AddLight(fill_light)
+    viewer.SetLightOn(fill_light)
 
     view = viewer.CreateView()
     window = Aspect_NeutralWindow()

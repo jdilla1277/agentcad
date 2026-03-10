@@ -240,6 +240,31 @@ result = cq.Workplane("XY").box(10, 10, 10)
     assert len(manifest["versions"]) == 0
 
 
+# --- M24: Custom angles in --render ---
+
+
+def test_run_render_custom_angle(runner, isolated_dir):
+    """cadtool run --render 45:30 should produce a custom-angle render."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "45:30"])
+    assert result.exit_code == 0
+    png = isolated_dir / "v1_label" / "renders" / "45_30.png"
+    assert png.exists()
+    assert png.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_run_render_mixed_named_and_angle(runner, isolated_dir):
+    """cadtool run --render front,45:30 should render both."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "front,45:30"])
+    assert result.exit_code == 0
+    renders_dir = isolated_dir / "v1_label" / "renders"
+    assert (renders_dir / "front.png").exists()
+    assert (renders_dir / "45_30.png").exists()
+
+
 # --- Render integration tests ---
 
 
@@ -797,3 +822,18 @@ def test_run_dry_run_no_disk_artifacts(runner, isolated_dir):
     assert "cadtool.json" in files
     assert "script.py" in files
     assert not any(f.startswith("v1") for f in files)
+
+
+# --- M24: Version directory collision ---
+
+
+def test_run_existing_version_dir_no_crash(runner, isolated_dir):
+    """Pre-existing version directory should not cause a crash."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    # Create the directory that run would create
+    (isolated_dir / "v1_label").mkdir()
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"

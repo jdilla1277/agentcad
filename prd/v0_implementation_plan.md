@@ -32,7 +32,7 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M21 | Parametric scripts (fast-loop Phase 2) | Done |
 | M22 | Friction fixes — Python version check, rotate docs, dry-run | Done |
 | M23 | Persistent worker / daemon mode (fast-loop Phase 2) | Done |
-| M24 | Friction fixes — geometry debugging, render quality, bug fixes | Planned |
+| M24 | Friction fixes — geometry debugging, render quality, bug fixes | Done |
 
 ---
 
@@ -305,24 +305,17 @@ M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap win
 
 ---
 
-## Milestone 24: Friction Fixes — Helical Gear Friction Log
+## Milestone 24: Friction Fixes — Helical Gear Friction Log ✓
 
 **Source:** [Helical gear friction log](../feedback/2026-03-10/friction-log-helical-gear.md)
 
 **Goal:** Fix geometry debugging gaps and quality-of-life issues surfaced by the helical gear agent friction test. The agent spent ~15 of 20 minutes diagnosing a hollow gear with no debugging tools.
 
-**Scope:**
-
-1. **`is_valid: false` with no explanation (high, small effort).** When `is_valid` is false, use `BRepCheck_Analyzer` to include a reason string (e.g. "open shell", "self-intersecting"). Currently agents see a boolean with zero diagnostic value.
-
-2. **Negative volume warning (medium, tiny effort).** If `volume < 0`, add a `"warnings"` list to the output JSON: `"Negative volume detected - shape may have inverted normals"`. Almost free.
-
-3. **`cadtool inspect` command (high, medium effort).** New command: `cadtool inspect <step_file>` reports shell topology — number of shells, open/closed status, open edge count, face orientation stats. The biggest debugging gap.
-
-4. **Renders too dark (medium, small effort).** Add ambient lighting or lighter default material in `render.py` so surfaces are clearly distinguishable from the background. Affects every user.
-
-5. **`cadtool view` relative path fix (low, tiny effort).** `Path.resolve()` before converting to file URI. One-line fix.
-
-6. **Version directory collision (low, small effort).** `FileExistsError` when re-running with same output label after a failed run. Handle existing directories gracefully.
-
-7. **Custom angles in `--render` on `cadtool run` (low, small effort).** Route `--render 30:50` through `parse_view_spec()` so custom angles work on `run`, not just `cadtool render`.
+**Delivered:** ~20 new tests (284 → ~304), 10 commands (added `inspect`). Seven fixes:
+1. **`is_valid` diagnostics** — When `is_valid` is false, `compute_metrics()` returns `validity_errors` list with `BRepCheck_Status` names. Iterates all sub-shapes via `TopExp_Explorer`.
+2. **Negative volume warning** — `compute_metrics()` returns `warnings` list when `volume < 0`: "Negative volume detected — shape may have inverted normals."
+3. **`cadtool inspect` command** — Reports solid/shell/face/edge counts, per-shell open/closed status, face orientations (forward/reversed), free edge count, and BRepCheck validity.
+4. **Brighter renders** — Ambient light bumped from 0.3 to 0.5, added fill light from (-1, 1, 0.5) at 0.4 intensity. Surfaces clearly visible from all angles.
+5. **`cadtool view` relative path** — `Path(file).resolve()` so relative paths work with file URIs.
+6. **Version directory collision** — `exist_ok=True` on `mkdir()` in both success and failure paths.
+7. **Custom angles in `--render` on `cadtool run`** — Uses `parse_view_spec()` to support `--render 45:30` and mixed specs like `--render front,45:30`. New `cadtool docs inspect` section.

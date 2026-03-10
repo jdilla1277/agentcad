@@ -29,6 +29,7 @@ def test_docs_lists_sections(runner):
     assert "validation" in sections
     assert "workflow" in sections
     assert "daemon" in sections
+    assert "inspect" in sections
 
 
 def test_docs_commands_section(runner):
@@ -278,3 +279,23 @@ def test_docs_commands_mentions_daemon(runner):
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "daemon" in data["content"]
+
+
+# --- M24: Inspect docs ---
+
+
+def test_docs_inspect_section(runner):
+    result = runner.invoke(cli, ["docs", "inspect"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "solid_count" in content
+    assert "shell" in content.lower()
+    assert "free_edge" in content
+
+
+def test_docs_commands_mentions_inspect(runner):
+    result = runner.invoke(cli, ["docs", "commands"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "inspect" in data["content"]

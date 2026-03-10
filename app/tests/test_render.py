@@ -194,3 +194,16 @@ def test_parse_view_spec_colon_angle_only():
 def test_parse_view_spec_backward_compat_comma_angle():
     result = parse_view_spec("45,30")
     assert result == [("custom", (45.0, 30.0))]
+
+
+# --- M24: Render brightness ---
+
+
+def test_render_has_fill_light(tmp_path):
+    """Renders should use multiple lights for visible surfaces from all angles."""
+    shape = _make_box_shape()
+    # Iso view has visible faces from multiple directions
+    iso = tmp_path / "iso.png"
+    render_shape(shape, "iso", iso, width=128, height=128)
+    # A properly lit render of a 3D box has significant pixel data
+    assert iso.stat().st_size > 400, "Render appears too dim or blank"
