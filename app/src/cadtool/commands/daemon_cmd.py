@@ -31,7 +31,8 @@ def start():
         socket_path=_socket_path(),
         pid_path=_pid_path(),
     )
-    output = {"command": "daemon", "status": "success", **result}
+    ok = result.get("started", False) or "already running" in result.get("message", "").lower()
+    output = {"command": "daemon", "status": "success" if ok else "error", **result}
     click.echo(json.dumps(output))
 
 
@@ -42,7 +43,8 @@ def stop():
         socket_path=_socket_path(),
         pid_path=_pid_path(),
     )
-    output = {"command": "daemon", "status": "success", **result}
+    ok = result.get("stopped", False)
+    output = {"command": "daemon", "status": "success" if ok else "error", **result}
     click.echo(json.dumps(output))
 
 
