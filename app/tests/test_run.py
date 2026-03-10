@@ -13,6 +13,14 @@ result = cq.Workplane("XY").box(10, 10, 10)
 show_object(result)
 """
 
+PARAMETRIC_SCRIPT = """\
+length = 50.0
+width = 20.0
+height = 10.0
+result = cq.Workplane("XY").box(length, width, height)
+show_object(result)
+"""
+
 MULTI_SHOW_SCRIPT = """\
 box = cq.Workplane("XY").box(10, 10, 10)
 show_object(box)
@@ -613,3 +621,116 @@ def test_run_preview_is_256x256(runner, isolated_dir):
     width, height = struct.unpack(">II", data[16:24])
     assert width == 256
     assert height == 256
+
+
+# --- Parametric script tests (M21) ---
+
+
+def test_run_params_override_changes_output(runner, isolated_dir):
+    """Overriding length from 50 to 100 changes the bounding box."""
+    _init_project(runner)
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    r1 = runner.invoke(cli, ["run", "script.py", "--output", "default"])
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    r2 = runner.invoke(cli, ["run", "script.py", "--output", "big", "--params", "length=100"])
+    m1 = json.loads(r1.output)["metrics"]
+    m2 = json.loads(r2.output)["metrics"]
+    assert m2["dimensions"]["x"] > m1["dimensions"]["x"]
+
+
+def test_run_params_in_json_response(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "length=100"])
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+    assert "params" in parsed
+    assert parsed["params"]["length"] == 100.0
+
+
+def test_run_params_in_meta_json(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "length=100"])
+    meta = json.loads((isolated_dir / "v1_p" / "meta.json").read_text())
+    assert "params" in meta
+    assert meta["params"]["length"] == 100.0
+
+
+def test_run_params_multiple_values(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "length=60,width=30"])
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+    assert parsed["params"]["length"] == 60.0
+    assert parsed["params"]["width"] == 30.0
+
+
+def test_run_params_int_preserved(runner, isolated_dir):
+    """Integer values stay as int, not float."""
+    _init_project(runner)
+    script = "count = 5\nresult = cq.Workplane('XY').box(count, count, count)\nshow_object(result)\n"
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "count=10"])
+    parsed = json.loads(result.output)
+    assert parsed["params"]["count"] == 10
+    assert isinstance(parsed["params"]["count"], int)
+
+
+def test_run_params_float_coercion(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "length=0.5"])
+    parsed = json.loads(result.output)
+    assert parsed["params"]["length"] == 0.5
+    assert isinstance(parsed["params"]["length"], float)
+
+
+def test_run_params_string_value(runner, isolated_dir):
+    _init_project(runner)
+    script = "label = 'default'\nresult = cq.Workplane('XY').box(10, 10, 10)\nshow_object(result)\n"
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "label=test"])
+    parsed = json.loads(result.output)
+    assert parsed["params"]["label"] == "test"
+
+
+def test_run_params_bool_true(runner, isolated_dir):
+    _init_project(runner)
+    script = "smooth = False\nresult = cq.Workplane('XY').box(10, 10, 10)\nshow_object(result)\n"
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "smooth=true"])
+    parsed = json.loads(result.output)
+    assert parsed["params"]["smooth"] is True
+
+
+def test_run_params_unknown_parameter_error(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "nonexistent=5"])
+    assert result.exit_code == 1
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "error"
+    assert "nonexistent" in parsed["message"]
+    # Should list available params to help the agent
+    assert "length" in parsed["message"]
+
+
+def test_run_params_bad_format_error(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=PARAMETRIC_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "p", "--params", "badformat"])
+    assert result.exit_code == 1
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "error"
+
+
+def test_run_without_params_no_params_key(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    parsed = json.loads(result.output)
+    assert "params" not in parsed
+    meta = json.loads((isolated_dir / "v1" / "meta.json").read_text())
+    assert "params" not in meta

@@ -189,3 +189,23 @@ def test_diff_unknown_label_error(runner, isolated_dir):
     data = json.loads(result.output)
     assert data["status"] == "error"
     assert "missing" in data["message"]
+
+
+# --- M21: Params in diff ---
+
+
+def test_diff_shows_param_changes(runner, isolated_dir):
+    """Diff shows parameter differences when params are present."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["params"] = {"length": 50.0}
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["params"] = {"length": 100.0}
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    assert "params" in data["changes"]
+    assert data["changes"]["params"]["length"] == {"from": 50.0, "to": 100.0}

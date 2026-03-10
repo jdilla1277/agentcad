@@ -9,6 +9,30 @@ import click
 from cadtool.manifest import MANIFEST_FILE, load_manifest, save_manifest
 
 
+def _parse_params(raw):
+    """Parse a --params string like 'length=60,width=20' into a dict."""
+    params = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if "=" not in pair:
+            raise ValueError(f"Invalid param format: '{pair}'. Expected key=value.")
+        key, val = pair.split("=", 1)
+        key, val = key.strip(), val.strip()
+        # Bool
+        if val.lower() in ("true", "false"):
+            params[key] = val.lower() == "true"
+        else:
+            # Int → Float → String
+            try:
+                params[key] = int(val)
+            except ValueError:
+                try:
+                    params[key] = float(val)
+                except ValueError:
+                    params[key] = val
+    return params
+
+
 def _record_failure(manifest, script_path, label, version_num, error_msg):
     """Record a script failure on disk and in the manifest."""
     dir_name = f"v{version_num}_{label}_failed"
@@ -59,7 +83,8 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 @click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
 @click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb).")
 @click.option("--preview", is_flag=True, default=False, help="Render a quick 256x256 iso preview.")
-def run(script, output, render, export, preview):
+@click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
+def run(script, output, render, export, preview, params):
     """Execute a CadQuery script and produce a versioned STEP file."""
     manifest = load_manifest(command="run")
 
@@ -88,15 +113,55 @@ def run(script, output, render, export, preview):
         }))
         sys.exit(1)
 
+    # Parse --params before version allocation (errors should be cheap)
+    parsed_params = None
+    if params:
+        try:
+            parsed_params = _parse_params(params)
+        except ValueError as e:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": str(e),
+            }))
+            sys.exit(1)
+
+    # Parse the script model (before version allocation to catch param errors)
+    from cadquery import cqgi, exporters
+    from cadquery.cqgi import InvalidParameterError
+
+    model = cqgi.parse(script_source)
+
+    # Validate parameter names before version allocation
+    if parsed_params:
+        available = set(model.metadata.parameters.keys())
+        unknown = set(parsed_params.keys()) - available
+        if unknown:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": (
+                    f"Unknown parameter(s): {', '.join(sorted(unknown))}. "
+                    f"Available: {', '.join(sorted(available)) if available else '(none)'}"
+                ),
+            }))
+            sys.exit(1)
+
     # Determine version number before execution (failures consume a number)
     versions = manifest.get("versions", [])
     version_num = len(versions) + 1
     label = output
 
     # Execute CadQuery script via CQGI
-    from cadquery import cqgi, exporters
     try:
-        build_result = cqgi.parse(script_source).build()
+        build_result = model.build(build_parameters=parsed_params)
+    except InvalidParameterError as e:
+        click.echo(json.dumps({
+            "command": "run",
+            "status": "error",
+            "message": str(e),
+        }))
+        sys.exit(1)
     except Exception as e:
         _record_failure(manifest, script_path, label, version_num,
                         f"Script execution failed: {e}")
@@ -204,6 +269,8 @@ def run(script, output, render, export, preview):
         },
     }
     meta["metrics"] = metrics
+    if parsed_params:
+        meta["params"] = parsed_params
     if warning:
         meta["warning"] = warning
     if preview_meta:
@@ -237,6 +304,8 @@ def run(script, output, render, export, preview):
         },
     }
     output_json["metrics"] = metrics
+    if parsed_params:
+        output_json["params"] = parsed_params
     if warning:
         output_json["warning"] = warning
     if preview_meta:

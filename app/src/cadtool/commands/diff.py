@@ -103,6 +103,15 @@ def diff(ref1, ref2):
             k: _scalar_diff(m1.get(k), m2.get(k)) for k in all_keys
         }
 
+    # Compare params if present in either version
+    p1 = meta1.get("params", {})
+    p2 = meta2.get("params", {})
+    if p1 or p2:
+        all_param_keys = sorted(set(p1.keys()) | set(p2.keys()))
+        changes["params"] = {
+            k: _scalar_diff(p1.get(k), p2.get(k)) for k in all_param_keys
+        }
+
     click.echo(json.dumps({
         "command": "diff",
         "status": "success",
