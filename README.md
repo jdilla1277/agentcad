@@ -4,35 +4,28 @@ cadtool is a command-line CAD tool built for AI agents. You write a short Python
 
 ## Install
 
-You need **Python 3.10–3.12**. The OpenCascade bindings don't support 3.13+.
-
 ```bash
+mkdir myproject && cd myproject
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install git+https://github.com/jdilla1277/mountain-climber.git#subdirectory=app
 ```
 
-That's it — CadQuery, OpenCascade, and everything else comes along for the ride.
+> **Don't have Python 3.12?** `brew install python@3.12` (macOS) or `sudo apt install python3.12 python3.12-venv` (Ubuntu). The OpenCascade bindings require 3.10–3.12 — 3.13+ won't work.
 
 ## Your first model in 60 seconds
 
-**1. Create a project:**
-
 ```bash
 cadtool init --name myproject
-```
 
-**2. Write a script.** cadtool pre-injects `cq` (CadQuery) and `show_object` automatically — no imports needed:
-
-```python
-# box.py
+cat > box.py << 'EOF'
 box = cq.Workplane('XY').box(10, 20, 5)
 show_object(box)
-```
+EOF
 
-**3. Run it:**
-
-```bash
 cadtool run box.py --output first --render iso --preview
 ```
+
+That's it — cadtool pre-injects `cq` (CadQuery) and `show_object` automatically, so scripts don't need any imports.
 
 You'll get back JSON like this:
 
