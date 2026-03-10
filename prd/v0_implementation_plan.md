@@ -31,7 +31,8 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M20 | Patterns docs, positioning helpers & `cadtool view` | Done |
 | M21 | Parametric scripts (fast-loop Phase 2) | Done |
 | M22 | Friction fixes — Python version check, rotate docs, dry-run | Done |
-| M23 | Persistent worker / daemon mode (fast-loop Phase 2) | Planned |
+| M23 | Persistent worker / daemon mode (fast-loop Phase 2) | Done |
+| M24 | Friction fixes — geometry debugging, render quality, bug fixes | Planned |
 
 ---
 
@@ -294,8 +295,34 @@ M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap win
 
 ---
 
-## Milestone 23: Persistent Worker (Daemon Mode)
+## Milestone 23: Persistent Worker (Daemon Mode) ✓
 
 **Epic:** [Fast Loop](fast-loop/overview.md)
 
 **Goal:** Background process keeps CadQuery/OCP loaded in memory. `cadtool run` auto-routes to daemon if running, eliminating 3-5s cold start per invocation.
+
+**Delivered:** 28 new tests (254 → ~282), 9 commands (added `daemon` group with `start`/`stop`/`status`). `daemon.py` module with Unix domain socket IPC (length-prefixed JSON protocol), `DaemonServer` class with `handle_request()` dispatch, eager module warm-up at startup. `cadtool run` auto-routes through daemon when available, falls back to direct execution when not. `CADTOOL_DAEMON` env var prevents recursive routing. `start_daemon()` launches subprocess via `python -m cadtool.daemon`, PID file for lifecycle tracking, stale socket cleanup. New `cadtool docs daemon` section.
+
+---
+
+## Milestone 24: Friction Fixes — Helical Gear Friction Log
+
+**Source:** [Helical gear friction log](../feedback/2026-03-10/friction-log-helical-gear.md)
+
+**Goal:** Fix geometry debugging gaps and quality-of-life issues surfaced by the helical gear agent friction test. The agent spent ~15 of 20 minutes diagnosing a hollow gear with no debugging tools.
+
+**Scope:**
+
+1. **`is_valid: false` with no explanation (high, small effort).** When `is_valid` is false, use `BRepCheck_Analyzer` to include a reason string (e.g. "open shell", "self-intersecting"). Currently agents see a boolean with zero diagnostic value.
+
+2. **Negative volume warning (medium, tiny effort).** If `volume < 0`, add a `"warnings"` list to the output JSON: `"Negative volume detected - shape may have inverted normals"`. Almost free.
+
+3. **`cadtool inspect` command (high, medium effort).** New command: `cadtool inspect <step_file>` reports shell topology — number of shells, open/closed status, open edge count, face orientation stats. The biggest debugging gap.
+
+4. **Renders too dark (medium, small effort).** Add ambient lighting or lighter default material in `render.py` so surfaces are clearly distinguishable from the background. Affects every user.
+
+5. **`cadtool view` relative path fix (low, tiny effort).** `Path.resolve()` before converting to file URI. One-line fix.
+
+6. **Version directory collision (low, small effort).** `FileExistsError` when re-running with same output label after a failed run. Handle existing directories gracefully.
+
+7. **Custom angles in `--render` on `cadtool run` (low, small effort).** Route `--render 30:50` through `parse_view_spec()` so custom angles work on `run`, not just `cadtool render`.

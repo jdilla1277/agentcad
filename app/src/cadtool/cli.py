@@ -1,6 +1,7 @@
 import click
 
 from cadtool.commands.context import context
+from cadtool.commands.daemon_cmd import daemon
 from cadtool.commands.diff import diff
 from cadtool.commands.docs import docs
 from cadtool.commands.export_cmd import export_cmd
@@ -16,6 +17,7 @@ def cli():
 
 
 cli.add_command(context)
+cli.add_command(daemon)
 cli.add_command(diff)
 cli.add_command(docs)
 cli.add_command(export_cmd)

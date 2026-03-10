@@ -28,6 +28,7 @@ def test_docs_lists_sections(runner):
     assert "preamble" in sections
     assert "validation" in sections
     assert "workflow" in sections
+    assert "daemon" in sections
 
 
 def test_docs_commands_section(runner):
@@ -257,3 +258,23 @@ def test_docs_patterns_angled_positioning_example(runner):
     content = data["content"]
     assert "rotate(" in content and "translate(" in content
     assert "arm" in content.lower() or "angle" in content.lower()
+
+
+# --- M23: Daemon docs ---
+
+
+def test_docs_daemon_section(runner):
+    result = runner.invoke(cli, ["docs", "daemon"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "daemon start" in content
+    assert "daemon stop" in content
+    assert "daemon status" in content
+
+
+def test_docs_commands_mentions_daemon(runner):
+    result = runner.invoke(cli, ["docs", "commands"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert "daemon" in data["content"]

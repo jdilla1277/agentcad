@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -6,7 +7,12 @@ from pathlib import Path
 
 import click
 
+from cadtool.daemon import _default_socket_path, send_request
 from cadtool.manifest import MANIFEST_FILE, load_manifest, save_manifest
+
+
+def _daemon_socket_path():
+    return _default_socket_path()
 
 
 def _parse_params(raw):
@@ -87,6 +93,30 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
 def run(script, output, render, export, preview, params, dry_run):
     """Execute a CadQuery script and produce a versioned STEP file."""
+    # Try routing through daemon if available (skip if already inside daemon)
+    if not os.environ.get("CADTOOL_DAEMON"):
+        argv = ["run", script, "--output", output]
+        if render:
+            argv.extend(["--render", render])
+        if export:
+            argv.extend(["--export", export])
+        if preview:
+            argv.append("--preview")
+        if params:
+            argv.extend(["--params", params])
+        if dry_run:
+            argv.append("--dry-run")
+
+        result = send_request(
+            {"type": "run", "cwd": str(Path.cwd()), "argv": argv},
+            socket_path=_daemon_socket_path(),
+        )
+        if result is not None:
+            if result.get("output"):
+                click.echo(result["output"], nl=False)
+            sys.exit(result.get("exit_code", 0))
+
+    # Fallback: direct execution
     manifest = load_manifest(command="run")
 
     # Python version check (before CadQuery imports)
