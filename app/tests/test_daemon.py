@@ -405,7 +405,55 @@ class TestDaemonCLI:
         assert result.exit_code == 0
         output = json.loads(result.output)
         assert output["command"] == "daemon"
+        assert output["status"] == "error"
         assert output["stopped"] is False
+
+    def test_daemon_start_cli_fail_reports_error(self, runner, monkeypatch):
+        """CLI reports status=error when daemon fails to start."""
+        from cadtool.cli import cli
+
+        monkeypatch.setattr(
+            "cadtool.commands.daemon_cmd._socket_path",
+            lambda: "/tmp/cadtool-test-nonexistent.sock",
+        )
+        monkeypatch.setattr(
+            "cadtool.commands.daemon_cmd._pid_path",
+            lambda: "/tmp/cadtool-test-nonexistent.pid",
+        )
+        # Monkeypatch start_daemon to simulate failure
+        monkeypatch.setattr(
+            "cadtool.commands.daemon_cmd.start_daemon",
+            lambda **kw: {"started": False, "message": "Daemon failed to start: ImportError"},
+        )
+        result = runner.invoke(cli, ["daemon", "start"])
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["command"] == "daemon"
+        assert output["status"] == "error"
+        assert output["started"] is False
+        assert "ImportError" in output["message"]
+
+    def test_daemon_start_cli_already_running_is_success(self, runner, monkeypatch):
+        """CLI reports status=success when daemon is already running."""
+        from cadtool.cli import cli
+
+        monkeypatch.setattr(
+            "cadtool.commands.daemon_cmd._socket_path",
+            lambda: "/tmp/cadtool-test-nonexistent.sock",
+        )
+        monkeypatch.setattr(
+            "cadtool.commands.daemon_cmd._pid_path",
+            lambda: "/tmp/cadtool-test-nonexistent.pid",
+        )
+        monkeypatch.setattr(
+            "cadtool.commands.daemon_cmd.start_daemon",
+            lambda **kw: {"started": False, "message": "Daemon already running", "pid": 12345},
+        )
+        result = runner.invoke(cli, ["daemon", "start"])
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["command"] == "daemon"
+        assert output["status"] == "success"
 
 
 # ---------- Phase 5: Run routing ----------

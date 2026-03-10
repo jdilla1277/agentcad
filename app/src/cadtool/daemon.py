@@ -243,18 +243,36 @@ def start_daemon(socket_path=None, pid_path=None):
          "--socket", socket_path, "--pid", pid_path],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
 
-    # Wait for socket to appear (up to 10s)
-    for _ in range(100):
+    # Wait for socket to appear (up to 30s — cold CadQuery/OCP import can take 15-20s)
+    for _ in range(300):
         if os.path.exists(socket_path):
+            break
+        # If process already exited, no point waiting
+        if proc.poll() is not None:
             break
         time.sleep(0.1)
     else:
-        return {"started": False, "message": "Daemon failed to start"}
+        return {"started": True, "pid": proc.pid}
 
-    return {"started": True, "pid": proc.pid}
+    # If we broke out of the loop, check if it was success or failure
+    if os.path.exists(socket_path):
+        return {"started": True, "pid": proc.pid}
+
+    # Process crashed — capture stderr for diagnostics
+    stderr = ""
+    try:
+        stderr = proc.stderr.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        pass
+    msg = "Daemon failed to start"
+    if stderr:
+        # Take the last line as the most relevant error
+        last_line = stderr.strip().splitlines()[-1]
+        msg = f"Daemon failed to start: {last_line}"
+    return {"started": False, "message": msg}
 
 
 # ---------- __main__ ----------
