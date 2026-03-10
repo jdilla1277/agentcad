@@ -58,7 +58,8 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 @click.option("--output", required=True, help="Label for this version.")
 @click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
 @click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb).")
-def run(script, output, render, export):
+@click.option("--preview", is_flag=True, default=False, help="Render a quick 256x256 iso preview.")
+def run(script, output, render, export, preview):
     """Execute a CadQuery script and produce a versioned STEP file."""
     manifest = load_manifest(command="run")
 
@@ -181,6 +182,14 @@ def run(script, output, render, export):
         for view_name, abs_path in rendered.items():
             renders_meta[view_name] = f"{dir_name}/renders/{view_name}.png"
 
+    # Quick preview if requested
+    preview_meta = None
+    if preview:
+        from cadtool.render import render_shape
+        preview_path = version_dir / "preview.png"
+        render_shape(topo_shape_for_metrics, "iso", preview_path, width=256, height=256)
+        preview_meta = f"{dir_name}/preview.png"
+
     # Write meta.json
     created = datetime.now(timezone.utc).isoformat()
     meta = {
@@ -197,6 +206,8 @@ def run(script, output, render, export):
     meta["metrics"] = metrics
     if warning:
         meta["warning"] = warning
+    if preview_meta:
+        meta["preview"] = preview_meta
     if renders_meta:
         meta["renders"] = renders_meta
     meta_path = version_dir / "meta.json"
@@ -228,6 +239,8 @@ def run(script, output, render, export):
     output_json["metrics"] = metrics
     if warning:
         output_json["warning"] = warning
+    if preview_meta:
+        output_json["preview"] = preview_meta
     if renders_meta:
         output_json["renders"] = renders_meta
     click.echo(json.dumps(output_json))

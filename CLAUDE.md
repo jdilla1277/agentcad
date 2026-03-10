@@ -30,6 +30,10 @@ The package is installed in editable mode inside that venv. If the venv doesn't 
 - `prd/m{N}_plan.md` — per-milestone detailed plans
 - `prd/cadtool_scope.md` — v0 scope document
 
+## Friction Log Philosophy
+
+Every friction point in the stack is our problem. If an agent hits a CadQuery footgun, a confusing OCP API, or an unintuitive workplane behavior — that's a cadtool problem. We own the experience end-to-end. Fix it with better docs, helpers, wrappers, or guardrails. There is no "upstream issue, not our bug."
+
 ## Notes
 
 This file should be updated as the project evolves. Keep it current with new conventions, decisions, and patterns as they emerge.

@@ -9,31 +9,60 @@ from OCP.RWGltf import RWGltf_CafWriter
 from OCP.TColStd import TColStd_IndexedDataMapOfStringString
 from OCP.TCollection import TCollection_AsciiString, TCollection_ExtendedString
 from OCP.TDocStd import TDocStd_Document
-from OCP.TopAbs import TopAbs_FACE
+from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
+from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 from OCP.XCAFApp import XCAFApp_Application
-from OCP.XCAFDoc import XCAFDoc_DocumentTool
+from OCP.XCAFDoc import XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
+
+
+_GLB_PALETTE = [
+    (0.33, 0.55, 0.80),  # Steel blue
+    (0.90, 0.35, 0.30),  # Coral red
+    (0.30, 0.69, 0.31),  # Forest green
+    (0.95, 0.70, 0.20),  # Gold
+    (0.61, 0.35, 0.71),  # Purple
+    (0.00, 0.59, 0.53),  # Teal
+    (0.95, 0.50, 0.13),  # Orange
+    (0.85, 0.44, 0.57),  # Pink
+    (0.47, 0.33, 0.28),  # Brown
+    (0.35, 0.76, 0.83),  # Sky blue
+]
 
 
 def export_glb(shape, output_path, linear_deflection=0.1):
     """Export an OCP TopoDS_Shape to binary glTF (.glb).
 
-    Tessellates the shape, wraps it in an XCAF document, and writes
-    via RWGltf_CafWriter.
+    Decomposes compounds into individual solids, assigns each a distinct
+    color from a palette, and writes via RWGltf_CafWriter.
     """
-    # Tessellate
     BRepMesh_IncrementalMesh(shape, linear_deflection)
 
-    # Create XCAF document and add shape
     app = XCAFApp_Application.GetApplication_s()
     doc = TDocStd_Document(TCollection_ExtendedString("XmlXCAF"))
     app.InitDocument(doc)
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
-    shape_tool.AddShape(shape)
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
 
-    # Write binary glTF
+    # Extract individual solids for per-part coloring
+    solids = []
+    explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+    while explorer.More():
+        solids.append(TopoDS.Solid_s(explorer.Current()))
+        explorer.Next()
+
+    if not solids:
+        # No solids (e.g. shell/face) — add shape as-is, no color
+        shape_tool.AddShape(shape)
+    else:
+        for i, solid in enumerate(solids):
+            label = shape_tool.AddShape(solid)
+            r, g, b = _GLB_PALETTE[i % len(_GLB_PALETTE)]
+            color = Quantity_Color(r, g, b, Quantity_TOC_RGB)
+            color_tool.SetColor(label, color, XCAFDoc_ColorSurf)
+
     writer = RWGltf_CafWriter(TCollection_AsciiString(str(output_path)), True)
     writer.Perform(doc, TColStd_IndexedDataMapOfStringString(), Message_ProgressRange())
 

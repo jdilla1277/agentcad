@@ -176,3 +176,25 @@ def test_docs_helpers_conversion_patterns(runner):
     data = json.loads(result.output)
     content = data["content"]
     assert "cq.Shape.cast" in content
+
+
+# --- M18: Preview in commands docs ---
+
+
+def test_docs_commands_mentions_preview(runner):
+    result = runner.invoke(cli, ["docs", "commands"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "--preview" in content
+
+
+# --- M19: Colored GLB in export docs ---
+
+
+def test_docs_export_mentions_colored_glb(runner):
+    result = runner.invoke(cli, ["docs", "export"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"].lower()
+    assert "color" in content or "per-solid" in content

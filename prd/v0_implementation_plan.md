@@ -26,6 +26,11 @@ Milestones are ordered by dependency. Each milestone is a shippable increment. R
 | M15 | Script preamble — implicit runtime context (fast-loop epic) | Done |
 | M16 | Pre-execution validation (fast-loop epic) | Done |
 | M17 | Friction fixes — auto-compound, docs improvements | Done |
+| M18 | Quick preview mode (fast-loop Phase 2) | Done |
+| M19 | Multi-solid colored GLB export | Done |
+| M20 | Patterns docs, positioning helper & `cadtool view` | Planned |
+| M21 | Parametric scripts (fast-loop Phase 2) | Planned |
+| M22 | Persistent worker / daemon mode (fast-loop Phase 2) | Planned |
 
 ---
 
@@ -189,7 +194,7 @@ M1 ─────────────────────────�
 
 M1 is the foundation. M4 delivered the core 3D pipeline (and absorbed M9 cleanup). M5-M8 build out the rendering and export pipeline. M10 adds agent discoverability. M11 pivoted from assemblies to geometry helpers based on friction testing. M12 added standalone `cadtool export` for post-hoc mesh conversion. M13 is the remaining work: distribution verification and OBJ export. M2-M3 (2D primitives) were scaffolding milestones — code has been removed.
 
-M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap wins to reduce wasted iterations.
+M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap wins to reduce wasted iterations. M17 addressed friction discovered during real model testing. M18 added quick preview for faster iteration. M19-M20 address output quality and agent footguns surfaced by friction logs. M21-M22 are iteration speed optimizations (parametric scripts, daemon).
 
 ---
 
@@ -227,3 +232,61 @@ M14-M16 are Phase 1 of the [fast-loop epic](fast-loop/overview.md) — cheap win
 3. **Units note** — `cadtool docs metrics` documents that cadtool is unit-agnostic.
 4. **tapered_sweep limitation** — `cadtool docs helpers` documents that tapered_sweep works best with smooth spines.
 5. **Type conversion patterns** — `cadtool docs helpers` documents `cq.Shape.cast()` and `cq.Compound.makeCompound()` patterns.
+
+---
+
+## Milestone 18: Quick Preview Mode ✓
+
+**Epic:** [Fast Loop](fast-loop/overview.md) | **Plan:** [m18_preview.md](fast-loop/m18_preview.md)
+
+**Goal:** `--preview` flag on `cadtool run` produces a fast 256x256 iso PNG for shape verification during iteration. Ephemeral — not tracked in render history.
+
+**Delivered:** 210 tests (202 → 210), 7 commands. `--preview` flag on `cadtool run` renders a 256x256 iso PNG to `vN_label/preview.png`. Preview path added to output JSON and meta.json as top-level `"preview"` key (not under `"renders"`). `--preview` and `--render` coexist independently. Docs updated with `--preview` in commands section.
+
+---
+
+## Milestone 19: Multi-Solid Colored GLB Export ✓
+
+**Goal:** GLB exports preserve individual solids with per-part colors. Agents build multi-part assemblies; humans reviewing the output need to distinguish parts visually.
+
+**Motivation:** Landing gear friction log — 7-part assembly exports as indistinguishable gray blob. STEP preserves separate solids but GLB flattens everything. The XCAF framework already in `export_glb()` natively supports multi-shape docs with `XCAFDoc_ColorTool`.
+
+**Delivered:** 215 tests (210 → 215), 7 commands. `export_glb()` decomposes compounds into individual solids via `TopExp_Explorer(TopAbs_SOLID)`, adds each as a separate XCAF shape with a distinct color from a 10-color palette via `XCAFDoc_ColorTool.SetColor()`. Fallback: shapes with no solids (shell/face) are added as-is. Export docs updated to mention per-solid coloring.
+
+---
+
+## Milestone 20: Patterns Docs, Positioning Helper & `cadtool view`
+
+**Goal:** Three friction fixes from the landing gear log — eliminate positioning footguns with docs and a helper, and make GLB output viewable with zero friction.
+
+**Motivation:** Landing gear friction log (F1, F2, F6). Agents waste iterations on workplane/transform confusion. Users can't view GLB output on macOS without third-party tools.
+
+**Scope:**
+
+1. **`cadtool docs patterns`** — New docs section covering:
+   - Build-at-origin-then-position pattern
+   - Revolve axis gotchas (axis is relative to workplane origin, `.move()` shifts sketch not origin)
+   - `cq.Compound.makeCompound()` vs `.union()` (spatial grouping vs boolean fuse)
+   - Workplane coordinate mapping (`transformed()`, `center()`, `workplane()`)
+
+2. **`translate(shape, x, y, z)` helper** — Wraps `gp_Trsf.SetTranslation()` + `BRepBuilderAPI_Transform`. The real friction isn't making shapes, it's putting them where you want. One-liner positioning for TopoDS_Shape objects. Add to preamble.
+
+3. **`cadtool view <file>`** — Opens a GLB/STEP file in the browser via a self-contained HTML page with three.js. Serves locally, opens `webbrowser.open()`. No external dependencies. Solves "GLB doesn't open on Mac" completely.
+
+4. **Mixed view specs (F3)** — Allow `--view front,right,45:15` in `cadtool render`. Colon separates azimuth:elevation to disambiguate from comma separator.
+
+---
+
+## Milestone 21: Parametric Scripts
+
+**Epic:** [Fast Loop](fast-loop/overview.md)
+
+**Goal:** `--params key=val,key=val` on `cadtool run` passes parameter overrides to CQGI. Agents iterate by changing numbers, not rewriting code.
+
+---
+
+## Milestone 22: Persistent Worker (Daemon Mode)
+
+**Epic:** [Fast Loop](fast-loop/overview.md)
+
+**Goal:** Background process keeps CadQuery/OCP loaded in memory. `cadtool run` auto-routes to daemon if running, eliminating 3-5s cold start per invocation.
