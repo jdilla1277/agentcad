@@ -49,6 +49,7 @@ SECTIONS = {
         "  context — Show the current project state (versions, current label).\n"
         "  docs    — Show this documentation.\n"
         "  diff    — Compare two versions of a model.\n"
+        "  daemon  — Manage the background worker (start, stop, status).\n"
     ),
     "render": (
         "Rendering:\n"
@@ -254,6 +255,23 @@ SECTIONS = {
         "      arm = cq.Workplane('XY').circle(5).extrude(120).val().wrapped\n"
         "      tilted = rotate(arm, 'Y', 30)      # 30° from vertical\n"
         "      placed = translate(tilted, 0, 0, 8) # attach to base top\n"
+    ),
+    "daemon": (
+        "Daemon mode (persistent worker):\n"
+        "  cadtool daemon start   — Start background worker (3-5s warm-up).\n"
+        "  cadtool daemon stop    — Stop background worker.\n"
+        "  cadtool daemon status  — Check if worker is running.\n"
+        "\n"
+        "  The daemon keeps CadQuery/OCP loaded in memory so subsequent\n"
+        "  'cadtool run' invocations skip the 3-5s cold import.\n"
+        "\n"
+        "  When the daemon is running, 'cadtool run' automatically routes\n"
+        "  through it. If the daemon is not running, 'cadtool run' falls\n"
+        "  back to direct execution (no error, no delay).\n"
+        "\n"
+        "  IPC: Unix domain socket at /tmp/cadtool-daemon-<uid>.sock\n"
+        "  Only 'cadtool run' routes through the daemon.\n"
+        "  Other commands (render, export, etc.) run directly.\n"
     ),
     "workflow": (
         "Typical workflow:\n"
