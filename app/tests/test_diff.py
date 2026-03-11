@@ -209,3 +209,83 @@ def test_diff_shows_param_changes(runner, isolated_dir):
     data = json.loads(result.output)
     assert "params" in data["changes"]
     assert data["changes"]["params"]["length"] == {"from": 50.0, "to": 100.0}
+
+
+# --- M33: Parts in diff ---
+
+
+def test_diff_shows_parts_name_changes(runner, isolated_dir):
+    """Diff shows added/unchanged part names between versions."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0}},
+    ]
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0}},
+        {"name": "pin", "color": "blue", "metrics": {"volume": 50.0}},
+    ]
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    assert "parts" in data["changes"]
+    names = data["changes"]["parts"]["names"]
+    assert "pin" in names["added"]
+    assert "deck" in names["unchanged"]
+    assert names["removed"] == []
+
+
+def test_diff_shows_per_part_metric_changes(runner, isolated_dir):
+    """Diff shows metric changes for shared parts."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0, "face_count": 6}},
+    ]
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 200.0, "face_count": 6}},
+    ]
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    deck = data["changes"]["parts"]["deck"]
+    assert deck["volume"] == {"from": 100.0, "to": 200.0}
+    assert deck["face_count"] is None  # same value
+
+
+def test_diff_no_parts_graceful(runner, isolated_dir):
+    """Diff works when neither version has parts."""
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    assert data["status"] == "success"
+    assert "parts" not in data["changes"]
+
+
+def test_diff_parts_color_change(runner, isolated_dir):
+    """Diff shows color change for a shared part."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0}},
+    ]
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["parts"] = [
+        {"name": "deck", "color": "blue", "metrics": {"volume": 100.0}},
+    ]
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.output)
+    deck = data["changes"]["parts"]["deck"]
+    assert deck["color"] == {"from": "gray", "to": "blue"}

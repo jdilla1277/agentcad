@@ -30,6 +30,7 @@ def test_docs_lists_sections(runner):
     assert "workflow" in sections
     assert "daemon" in sections
     assert "inspect" in sections
+    assert "parts" in sections
 
 
 def test_docs_commands_section(runner):
@@ -311,3 +312,18 @@ def test_docs_patterns_mentions_twist_extrude(runner):
     content = data["content"]
     assert "twistExtrude" in content
     assert "polyline" in content
+
+
+# --- M33: Parts docs ---
+
+
+def test_docs_parts_section(runner):
+    result = runner.invoke(cli, ["docs", "parts"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "show_object" in content
+    assert "name=" in content
+    assert "color" in content.lower()
+    assert "metrics" in content.lower()
+    assert "diff" in content.lower()
