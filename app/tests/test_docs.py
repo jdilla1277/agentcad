@@ -327,3 +327,27 @@ def test_docs_parts_section(runner):
     assert "color" in content.lower()
     assert "metrics" in content.lower()
     assert "diff" in content.lower()
+
+
+# --- M35: Wire helpers + elliptical_sweep docs ---
+
+
+def test_docs_helpers_mentions_wire_helpers(runner):
+    result = runner.invoke(cli, ["docs", "helpers"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "ellipse_wire" in content
+    assert "spline_wire" in content
+    assert "polygon_wire" in content
+    assert "rounded_rect_wire" in content
+    assert "elliptical_sweep" in content
+
+
+def test_docs_preamble_mentions_wire_helpers(runner):
+    result = runner.invoke(cli, ["docs", "preamble"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    content = data["content"]
+    assert "ellipse_wire" in content
+    assert "elliptical_sweep" in content

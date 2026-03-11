@@ -14,11 +14,16 @@ from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt
 from cadtool.helpers import (
     assemble,
     bbox_point,
+    ellipse_wire,
+    elliptical_sweep,
     loft_sections,
     mirror_fuse,
     naca_wire,
     place_at,
+    polygon_wire,
     rotate,
+    rounded_rect_wire,
+    spline_wire,
     tapered_sweep,
     translate,
 )
@@ -422,3 +427,151 @@ class TestAssemble:
         # show_object expects a CQ object — val() should not raise
         val = result.val()
         assert val is not None
+
+
+# ── ellipse_wire tests ────────────────────────────────────────
+
+
+class TestEllipseWire:
+    def test_ellipse_wire_produces_wire(self):
+        wire = ellipse_wire(10, 5)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)  # should not raise
+
+    def test_ellipse_wire_at_center_and_normal(self):
+        wire = ellipse_wire(10, 5, center=(20, 30, 40), normal=(0, 1, 0))
+        bb = _bounding_box(wire)
+        # Ellipse at (20,30,40) with normal=(0,1,0): lies in XZ plane at y=30
+        assert abs(bb[1] - 30) < 0.01  # ymin
+        assert abs(bb[4] - 30) < 0.01  # ymax
+
+    def test_ellipse_wire_swaps_when_y_larger(self):
+        """y_radius > x_radius should auto-swap and still produce valid wire."""
+        wire = ellipse_wire(5, 10)
+        assert not wire.IsNull()
+        bb = _bounding_box(wire)
+        # After swap, x extent should be 5*2=10, y extent should be 10*2=20
+        x_span = bb[3] - bb[0]
+        y_span = bb[4] - bb[1]
+        assert abs(x_span - 10) < 0.1
+        assert abs(y_span - 20) < 0.1
+
+    def test_ellipse_wire_circle_when_equal(self):
+        wire = ellipse_wire(10, 10)
+        assert not wire.IsNull()
+        bb = _bounding_box(wire)
+        x_span = bb[3] - bb[0]
+        y_span = bb[4] - bb[1]
+        assert abs(x_span - 20) < 0.1
+        assert abs(y_span - 20) < 0.1
+
+
+# ── spline_wire tests ────────────────────────────────────────
+
+
+class TestSplineWire:
+    def test_spline_wire_closed(self):
+        # Circle-like points in XY plane
+        pts = [(10, 0, 0), (0, 10, 0), (-10, 0, 0), (0, -10, 0)]
+        wire = spline_wire(pts, closed=True)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)  # should not raise
+
+    def test_spline_wire_open(self):
+        pts = [(0, 0, 0), (5, 10, 0), (10, 0, 0)]
+        wire = spline_wire(pts, closed=False)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)
+
+    def test_spline_wire_too_few_points(self):
+        with pytest.raises(ValueError):
+            spline_wire([(0, 0, 0), (1, 1, 1)])
+
+
+# ── polygon_wire tests ───────────────────────────────────────
+
+
+class TestPolygonWire:
+    def test_polygon_wire_closed_triangle(self):
+        pts = [(0, 0, 0), (10, 0, 0), (5, 10, 0)]
+        wire = polygon_wire(pts, closed=True)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)
+
+    def test_polygon_wire_open(self):
+        pts = [(0, 0, 0), (10, 0, 0), (10, 10, 0)]
+        wire = polygon_wire(pts, closed=False)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)
+
+    def test_polygon_wire_too_few_points(self):
+        with pytest.raises(ValueError):
+            polygon_wire([(0, 0, 0), (1, 1, 1)])
+
+
+# ── rounded_rect_wire tests ──────────────────────────────────
+
+
+class TestRoundedRectWire:
+    def test_rounded_rect_wire_produces_wire(self):
+        wire = rounded_rect_wire(20, 10, 2)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)
+
+    def test_rounded_rect_wire_zero_fillet(self):
+        wire = rounded_rect_wire(20, 10, 0)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)
+
+    def test_rounded_rect_wire_at_center_and_normal(self):
+        wire = rounded_rect_wire(20, 10, 2, center=(50, 50, 0), normal=(0, 0, 1))
+        bb = _bounding_box(wire)
+        x_center = (bb[0] + bb[3]) / 2
+        y_center = (bb[1] + bb[4]) / 2
+        assert abs(x_center - 50) < 0.1
+        assert abs(y_center - 50) < 0.1
+
+
+# ── elliptical_sweep tests ───────────────────────────────────
+
+
+class TestEllipticalSweep:
+    def test_elliptical_sweep_produces_solid(self):
+        spine = [(0, 0, 0), (0, 0, 5), (0, 0, 10)]
+        x_radii = [5, 7, 5]
+        y_radii = [3, 4, 3]
+        result = elliptical_sweep(spine, x_radii, y_radii)
+        assert result.ShapeType() == TopoDS.Solid_s(result).ShapeType()
+
+    def test_elliptical_sweep_matches_tapered_when_equal(self):
+        """When x == y at all points, should approximate tapered_sweep volume."""
+        spine = [(0, 0, 0), (0, 0, 5), (0, 0, 10), (0, 0, 15), (0, 0, 20)]
+        radii = [5, 7, 10, 7, 5]
+        tapered = tapered_sweep(spine, radii)
+        elliptical = elliptical_sweep(spine, radii, radii)
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+        props_t, props_e = GProp_GProps(), GProp_GProps()
+        BRepGProp.VolumeProperties_s(tapered, props_t)
+        BRepGProp.VolumeProperties_s(elliptical, props_e)
+        # Should be within 1% of each other
+        assert abs(props_t.Mass() - props_e.Mass()) / props_t.Mass() < 0.01
+
+    def test_elliptical_sweep_elliptical_bbox(self):
+        """x_radii > y_radii should produce wider-than-deep bounding box."""
+        spine = [(0, 0, 0), (0, 0, 10)]
+        x_radii = [10, 10]
+        y_radii = [3, 3]
+        result = elliptical_sweep(spine, x_radii, y_radii)
+        bb = _bounding_box(result)
+        x_span = bb[3] - bb[0]
+        y_span = bb[4] - bb[1]
+        assert x_span > y_span * 2
+
+    def test_elliptical_sweep_mismatched_lengths(self):
+        with pytest.raises(ValueError):
+            elliptical_sweep([(0, 0, 0), (0, 0, 10)], [5, 5], [3])
+
+    def test_elliptical_sweep_minimum_two_points(self):
+        with pytest.raises(ValueError):
+            elliptical_sweep([(0, 0, 0)], [5], [3])
