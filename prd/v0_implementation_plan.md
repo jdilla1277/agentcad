@@ -354,6 +354,7 @@ Open friction points from all test sessions, organized as small shippable milest
 | M31 | User-specified part colors in GLB export | S | Golden Gate Bridge, Landing Gear |
 | M32 | `context` includes file paths per version | XS | Discovery log |
 | M33 | Intermediate geometry preview / multi-shape show_object with labels | L | B-2 Spirit, Discovery, Landing Gear |
+| M34 | Assembly positioning helpers (`bbox_point`, `place_at`, `assemble`) | S | Eiffel Tower |
 
 ---
 
@@ -473,3 +474,18 @@ Open friction points from all test sessions, organized as small shippable milest
 - A debug mode that renders every `show_object()` call individually
 
 **Status:** Pending (needs design)
+
+---
+
+## Milestone 34: Assembly Positioning Helpers
+
+**Source:** [Eiffel Tower friction log](../feedback/2026-03-10_eiffel-tower-friction-log.md)
+
+**Goal:** Eliminate manual coordinate math and type ceremony when positioning and assembling multi-part models.
+
+**Delivered:** 14 new tests, 3 new functions in `helpers.py`:
+- `bbox_point(shape, x, y, z)` — Query min/center/max point on a shape's bounding box. Returns (x, y, z) tuple.
+- `place_at(shape, from_pt, to_pt)` — Translate shape so from_pt moves to to_pt. Declarative snap-to positioning.
+- `assemble(*shapes)` — Combine TopoDS_Shape objects into a compound ready for show_object(). Eliminates Shape.cast/makeCompound/newObject ceremony.
+
+All three added to preamble, `cadtool docs helpers`, and `cadtool docs patterns` (assembly positioning example).
