@@ -56,10 +56,6 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(50, 100, 50);
 scene.add(dirLight);
 
-// Grid
-const grid = new THREE.GridHelper(200, 20, 0x444466, 0x333355);
-scene.add(grid);
-
 // Load model
 const loader = new GLTFLoader();
 loader.load('MODEL_URL', (gltf) => {
