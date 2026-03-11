@@ -837,3 +837,34 @@ def test_run_existing_version_dir_no_crash(runner, isolated_dir):
     assert result.exit_code == 0
     parsed = json.loads(result.output)
     assert parsed["status"] == "success"
+
+
+# --- Daemon "via" field tests ---
+
+
+def test_run_via_daemon_field_in_output(runner, isolated_dir, monkeypatch):
+    """When routed through daemon, output JSON includes 'via': 'daemon'."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    # Enable daemon routing (undo the autouse _no_daemon fixture)
+    monkeypatch.delenv("CADTOOL_DAEMON", raising=False)
+    # Simulate daemon returning a successful result
+    daemon_output = json.dumps({"command": "run", "status": "success", "version": 1})
+    monkeypatch.setattr(
+        "cadtool.commands.run.send_request",
+        lambda *a, **kw: {"type": "result", "exit_code": 0, "output": daemon_output},
+    )
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["via"] == "daemon"
+
+
+def test_run_direct_no_via_field(runner, isolated_dir):
+    """Direct execution (no daemon) should not include 'via' field."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert "via" not in parsed
