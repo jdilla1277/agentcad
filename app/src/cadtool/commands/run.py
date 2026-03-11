@@ -112,8 +112,16 @@ def run(script, output, render, export, preview, params, dry_run):
             socket_path=_daemon_socket_path(),
         )
         if result is not None:
-            if result.get("output"):
-                click.echo(result["output"], nl=False)
+            output = result.get("output", "")
+            # Inject "via": "daemon" so callers know which path handled it
+            try:
+                data = json.loads(output)
+                data["via"] = "daemon"
+                output = json.dumps(data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            if output:
+                click.echo(output, nl=False)
             sys.exit(result.get("exit_code", 0))
 
     # Fallback: direct execution
