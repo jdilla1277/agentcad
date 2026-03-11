@@ -19,7 +19,7 @@ CadQuery Python scripts.
    script-writing patterns, response schema, metrics, and debugging.
 4. Initialize a project: cadtool init --name <project_name>
 
-Once you've done that, please build me: <describe what you want>
+Once you've done that, please build me:
 ```
 
 ## For Agents
