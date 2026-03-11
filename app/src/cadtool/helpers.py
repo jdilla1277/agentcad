@@ -14,12 +14,13 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Transform,
 )
 from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+from OCP.GC import GC_MakeArcOfCircle
 from OCP.GeomAPI import GeomAPI_PointsToBSpline
 from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.TopAbs import TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Compound
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pnt, gp_Trsf, gp_Vec
 
 
 def loft_sections(sections, smooth=True):
@@ -314,3 +315,226 @@ def assemble(*shapes):
     wrapped = [cq.Shape.cast(s) for s in shapes]
     compound = cq.Compound.makeCompound(wrapped)
     return cq.Workplane("XY").newObject([compound])
+
+
+def ellipse_wire(x_radius, y_radius, center=(0, 0, 0), normal=(0, 0, 1)):
+    """Create an elliptical wire.
+
+    Args:
+        x_radius: Radius along the local X axis.
+        y_radius: Radius along the local Y axis.
+        center: (x, y, z) center point.
+        normal: (x, y, z) normal vector.
+
+    Returns:
+        TopoDS_Wire
+    """
+    if x_radius <= 0 or y_radius <= 0:
+        raise ValueError("Both radii must be positive")
+
+    ax = gp_Ax2(gp_Pnt(*center), gp_Dir(*normal))
+
+    # gp_Elips requires major >= minor; swap and rotate if needed
+    if x_radius >= y_radius:
+        elips = gp_Elips(ax, float(x_radius), float(y_radius))
+    else:
+        # Rotate the X-axis 90° so the visual orientation stays correct
+        ax.Rotate(gp_Ax1(gp_Pnt(*center), gp_Dir(*normal)), math.pi / 2)
+        elips = gp_Elips(ax, float(y_radius), float(x_radius))
+
+    edge = BRepBuilderAPI_MakeEdge(elips).Edge()
+    return BRepBuilderAPI_MakeWire(edge).Wire()
+
+
+def spline_wire(points, closed=True):
+    """Create a smooth spline wire through 3D points.
+
+    Args:
+        points: List of (x, y, z) tuples (minimum 3).
+        closed: If True, close the wire.
+
+    Returns:
+        TopoDS_Wire
+    """
+    if len(points) < 3:
+        raise ValueError("spline_wire requires at least 3 points")
+
+    pts = [gp_Pnt(*p) for p in points]
+    if closed:
+        pts.append(pts[0])
+
+    arr = TColgp_Array1OfPnt(1, len(pts))
+    for i, p in enumerate(pts):
+        arr.SetValue(i + 1, p)
+
+    curve = GeomAPI_PointsToBSpline(arr).Curve()
+    edge = BRepBuilderAPI_MakeEdge(curve).Edge()
+    return BRepBuilderAPI_MakeWire(edge).Wire()
+
+
+def polygon_wire(points, closed=True):
+    """Create a wire from straight line segments between points.
+
+    Args:
+        points: List of (x, y, z) tuples (minimum 3).
+        closed: If True, close the wire.
+
+    Returns:
+        TopoDS_Wire
+    """
+    if len(points) < 3:
+        raise ValueError("polygon_wire requires at least 3 points")
+
+    pts = [gp_Pnt(*p) for p in points]
+    builder = BRepBuilderAPI_MakeWire()
+    for i in range(len(pts) - 1):
+        edge = BRepBuilderAPI_MakeEdge(pts[i], pts[i + 1]).Edge()
+        builder.Add(edge)
+    if closed:
+        edge = BRepBuilderAPI_MakeEdge(pts[-1], pts[0]).Edge()
+        builder.Add(edge)
+    return builder.Wire()
+
+
+def rounded_rect_wire(width, height, fillet_radius, center=(0, 0, 0), normal=(0, 0, 1)):
+    """Create a rectangle wire with rounded corners.
+
+    Args:
+        width: Rectangle width.
+        height: Rectangle height.
+        fillet_radius: Corner fillet radius (0 for sharp corners).
+        center: (x, y, z) center point.
+        normal: (x, y, z) normal vector.
+
+    Returns:
+        TopoDS_Wire
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    if fillet_radius < 0:
+        raise ValueError("fillet_radius must be non-negative")
+    if fillet_radius > min(width, height) / 2:
+        raise ValueError("fillet_radius must be <= min(width, height) / 2")
+
+    hw = width / 2.0
+    hh = height / 2.0
+    r = float(fillet_radius)
+
+    # Build in local XY, then transform to center/normal
+    # Corner order: bottom-right, top-right, top-left, bottom-left
+    # Each corner has a fillet start and end point
+    builder = BRepBuilderAPI_MakeWire()
+
+    if r == 0:
+        # Simple rectangle — 4 line edges
+        corners = [
+            gp_Pnt(hw, -hh, 0), gp_Pnt(hw, hh, 0),
+            gp_Pnt(-hw, hh, 0), gp_Pnt(-hw, -hh, 0),
+        ]
+        for i in range(4):
+            edge = BRepBuilderAPI_MakeEdge(corners[i], corners[(i + 1) % 4]).Edge()
+            builder.Add(edge)
+    else:
+        # 8 points where fillets meet straight edges, plus 4 arc centers
+        # Right side: x = hw, fillet from (hw, -hh+r) to (hw, hh-r)
+        # Top side: y = hh, fillet from (hw-r, hh) to (-hw+r, hh)
+        # Left side: x = -hw, fillet from (-hw, hh-r) to (-hw, -hh+r)
+        # Bottom side: y = -hh, fillet from (-hw+r, -hh) to (hw-r, -hh)
+
+        # Fillet endpoints (going clockwise from bottom-right)
+        p = [
+            gp_Pnt(hw, -hh + r, 0),   # 0: right side bottom
+            gp_Pnt(hw, hh - r, 0),    # 1: right side top
+            gp_Pnt(hw - r, hh, 0),    # 2: top side right
+            gp_Pnt(-hw + r, hh, 0),   # 3: top side left
+            gp_Pnt(-hw, hh - r, 0),   # 4: left side top
+            gp_Pnt(-hw, -hh + r, 0),  # 5: left side bottom
+            gp_Pnt(-hw + r, -hh, 0),  # 6: bottom side left
+            gp_Pnt(hw - r, -hh, 0),   # 7: bottom side right
+        ]
+
+        # Arc midpoints (on the circle at 45° from the straight edges)
+        arc_mid = [
+            gp_Pnt(hw - r + r * math.cos(math.pi / 4), hh - r + r * math.sin(math.pi / 4), 0),     # top-right
+            gp_Pnt(-hw + r - r * math.cos(math.pi / 4), hh - r + r * math.sin(math.pi / 4), 0),    # top-left
+            gp_Pnt(-hw + r - r * math.cos(math.pi / 4), -hh + r - r * math.sin(math.pi / 4), 0),   # bottom-left
+            gp_Pnt(hw - r + r * math.cos(math.pi / 4), -hh + r - r * math.sin(math.pi / 4), 0),    # bottom-right
+        ]
+
+        # Build: right line, TR arc, top line, TL arc, left line, BL arc, bottom line, BR arc
+        edges = [
+            BRepBuilderAPI_MakeEdge(p[0], p[1]).Edge(),                                    # right
+            BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(p[1], arc_mid[0], p[2]).Value()).Edge(),  # TR arc
+            BRepBuilderAPI_MakeEdge(p[2], p[3]).Edge(),                                    # top
+            BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(p[3], arc_mid[1], p[4]).Value()).Edge(),  # TL arc
+            BRepBuilderAPI_MakeEdge(p[4], p[5]).Edge(),                                    # left
+            BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(p[5], arc_mid[2], p[6]).Value()).Edge(),  # BL arc
+            BRepBuilderAPI_MakeEdge(p[6], p[7]).Edge(),                                    # bottom
+            BRepBuilderAPI_MakeEdge(GC_MakeArcOfCircle(p[7], arc_mid[3], p[0]).Value()).Edge(),  # BR arc
+        ]
+        for e in edges:
+            builder.Add(e)
+
+    wire = builder.Wire()
+
+    # Transform to target center and normal
+    cx, cy, cz = center
+    if (cx, cy, cz) != (0, 0, 0) or tuple(normal) != (0, 0, 1):
+        ax_target = gp_Ax3(gp_Pnt(*center), gp_Dir(*normal))
+        ax_origin = gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1))
+        trsf = gp_Trsf()
+        trsf.SetTransformation(ax_target, ax_origin)
+        wire = BRepBuilderAPI_Transform(wire, trsf, True).Shape()
+        wire = TopoDS.Wire_s(wire)
+
+    return wire
+
+
+def elliptical_sweep(spine, x_radii, y_radii):
+    """Loft elliptical sections along a spine with varying radii.
+
+    Args:
+        spine: List of (x, y, z) tuples defining the sweep path (minimum 2).
+        x_radii: List of floats, one X radius per spine point.
+        y_radii: List of floats, one Y radius per spine point.
+
+    Returns:
+        TopoDS_Solid
+    """
+    if len(spine) != len(x_radii) or len(spine) != len(y_radii):
+        raise ValueError("spine, x_radii, and y_radii must have the same length")
+    if len(spine) < 2:
+        raise ValueError("elliptical_sweep requires at least 2 spine points")
+
+    pts = [gp_Pnt(*p) for p in spine]
+    n = len(pts)
+    wires = []
+
+    for i in range(n):
+        # Compute local tangent from adjacent points (same as tapered_sweep)
+        if i == 0:
+            tangent = gp_Vec(pts[0], pts[1])
+        elif i == n - 1:
+            tangent = gp_Vec(pts[n - 2], pts[n - 1])
+        else:
+            tangent = gp_Vec(pts[i - 1], pts[i + 1])
+
+        tangent.Normalize()
+        direction = gp_Dir(tangent)
+        ax = gp_Ax2(pts[i], direction)
+
+        xr = float(x_radii[i])
+        yr = float(y_radii[i])
+
+        # gp_Elips requires major >= minor; swap and rotate if needed
+        if xr >= yr:
+            elips = gp_Elips(ax, xr, yr)
+        else:
+            ax.Rotate(gp_Ax1(pts[i], direction), math.pi / 2)
+            elips = gp_Elips(ax, yr, xr)
+
+        edge = BRepBuilderAPI_MakeEdge(elips).Edge()
+        wire = BRepBuilderAPI_MakeWire(edge).Wire()
+        wires.append(wire)
+
+    return loft_sections(wires)
