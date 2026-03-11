@@ -112,6 +112,26 @@ def diff(ref1, ref2):
             k: _scalar_diff(p1.get(k), p2.get(k)) for k in all_param_keys
         }
 
+    # Compare parts if present in either version
+    parts1 = {p["name"]: p for p in meta1.get("parts", [])}
+    parts2 = {p["name"]: p for p in meta2.get("parts", [])}
+    if parts1 or parts2:
+        parts_changes = {
+            "names": _compute_set_diff(parts1.keys(), parts2.keys()),
+        }
+        shared = sorted(set(parts1.keys()) & set(parts2.keys()))
+        for name in shared:
+            p1_part = parts1[name]
+            p2_part = parts2[name]
+            part_diff = {"color": _scalar_diff(p1_part.get("color"), p2_part.get("color"))}
+            m1_metrics = p1_part.get("metrics", {})
+            m2_metrics = p2_part.get("metrics", {})
+            all_mkeys = sorted(set(m1_metrics.keys()) | set(m2_metrics.keys()))
+            for k in all_mkeys:
+                part_diff[k] = _scalar_diff(m1_metrics.get(k), m2_metrics.get(k))
+            parts_changes[name] = part_diff
+        changes["parts"] = parts_changes
+
     click.echo(json.dumps({
         "command": "diff",
         "status": "success",
