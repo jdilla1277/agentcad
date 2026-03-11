@@ -128,3 +128,22 @@ def test_export_glb_multi_solid_colors_differ(tmp_path):
         for m in gltf["materials"]
     ]
     assert len(set(colors)) >= 2, f"Expected distinct colors, got {colors}"
+
+
+def test_export_glb_y_up_coordinate_system(tmp_path):
+    """GLB should use Y-up (glTF standard), not Z-up (CadQuery native)."""
+    # Tall box: 1x1x50 in CadQuery (Z-up) should become tall in Y after export
+    tall_box = cq.Workplane("XY").box(1, 1, 50).val().wrapped
+    out = tmp_path / "tall.glb"
+    export_glb(tall_box, str(out))
+    gltf = _parse_glb_json(out)
+    # Find the position accessor via the first mesh primitive
+    pos_idx = gltf["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+    accessor = gltf["accessors"][pos_idx]
+    mins = accessor["min"]
+    maxs = accessor["max"]
+    y_range = maxs[1] - mins[1]
+    z_range = maxs[2] - mins[2]
+    assert y_range > z_range, (
+        f"Expected Y extent > Z extent (Y-up), got Y={y_range}, Z={z_range}"
+    )

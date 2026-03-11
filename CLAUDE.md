@@ -24,6 +24,14 @@ The package is installed in editable mode inside that venv. If the venv doesn't 
 - **Red/Green TDD** — Always write a failing test first (red), then write the minimal code to make it pass (green). Refactor only after green.
 - **Work in branches** — Do all work in feature branches off `main`. Never commit directly to `main`.
 
+## PR Retro
+
+After each PR, ask: what would have made this easier? Consider:
+- **Guardrails** — tests, assertions, or CI checks that programmatically enforce correctness so no one has to remember it. If a rule lives only in someone's head (or a prompt), it will eventually be forgotten. Encode it in the environment instead. Example: the `test_export_glb_y_up_coordinate_system` test ensures GLBs are Y-up without anyone having to remember the CadQuery↔glTF convention mismatch.
+- Tech debt to clean up
+- Documentation gaps
+- Anything to improve the dev experience
+
 ## PRD Structure
 
 - `prd/v0_implementation_plan.md` — master milestone tracker
