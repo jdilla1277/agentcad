@@ -70,6 +70,18 @@ def test_view_step_auto_exports(runner, isolated_dir, monkeypatch):
 # --- M24: Relative path fix ---
 
 
+def test_view_html_embeds_glb_data(runner, isolated_dir, monkeypatch):
+    """Generated HTML embeds GLB as a base64 data URI (no relative file fetch)."""
+    glb_path = _make_glb(isolated_dir)
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+    runner.invoke(cli, ["view", str(glb_path)])
+    html_path = isolated_dir / ".cadtool_viewer_output.html"
+    html = html_path.read_text()
+    assert "data:application/octet-stream;base64," in html
+    # Should NOT contain a bare filename reference
+    assert "loader.load('output.glb')" not in html
+
+
 def test_view_relative_path(runner, isolated_dir, monkeypatch):
     """cadtool view should work with relative paths."""
     subdir = isolated_dir / "subdir"

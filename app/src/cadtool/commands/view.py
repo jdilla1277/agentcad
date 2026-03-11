@@ -1,6 +1,6 @@
+import base64
 import json
 import sys
-import tempfile
 import webbrowser
 from pathlib import Path
 
@@ -128,8 +128,10 @@ def view(file):
     else:
         model_path = file_path
 
-    # Write HTML viewer to a temp file next to the model
-    model_url = model_path.name
+    # Embed GLB as base64 data URI so file:// works without CORS issues
+    glb_data = model_path.read_bytes()
+    b64 = base64.b64encode(glb_data).decode("ascii")
+    model_url = f"data:application/octet-stream;base64,{b64}"
     html_content = _HTML_TEMPLATE.replace("MODEL_URL", model_url)
     html_path = model_path.parent / f".cadtool_viewer_{model_path.stem}.html"
     html_path.write_text(html_content)
