@@ -24,6 +24,14 @@ The package is installed in editable mode inside that venv. If the venv doesn't 
 - **Red/Green TDD** — Always write a failing test first (red), then write the minimal code to make it pass (green). Refactor only after green.
 - **Work in branches** — Do all work in feature branches off `main`. Never commit directly to `main`.
 
+## PR Retro
+
+After each PR, ask: what would have made this easier? Consider:
+- Tech debt to clean up
+- Guardrails that would catch errors sooner
+- Documentation gaps
+- Anything to improve the dev experience
+
 ## PRD Structure
 
 - `prd/v0_implementation_plan.md` — master milestone tracker

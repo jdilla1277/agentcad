@@ -3,6 +3,7 @@
 import math
 
 from OCP.BRep import BRep_Tool
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.Message import Message_ProgressRange
 from OCP.RWGltf import RWGltf_CafWriter
@@ -14,6 +15,7 @@ from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
+from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf
 from OCP.XCAFApp import XCAFApp_Application
 from OCP.XCAFDoc import XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
 
@@ -38,6 +40,11 @@ def export_glb(shape, output_path, linear_deflection=0.1):
     Decomposes compounds into individual solids, assigns each a distinct
     color from a palette, and writes via RWGltf_CafWriter.
     """
+    # Rotate Z-up (CadQuery/OCP) → Y-up (glTF standard)
+    trsf = gp_Trsf()
+    trsf.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), -math.pi / 2)
+    shape = BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
     BRepMesh_IncrementalMesh(shape, linear_deflection)
 
     app = XCAFApp_Application.GetApplication_s()
