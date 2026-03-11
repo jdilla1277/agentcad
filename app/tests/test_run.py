@@ -769,6 +769,7 @@ def test_run_python_version_too_new_error(runner, isolated_dir, monkeypatch):
     _init_project(runner)
     _write_script(isolated_dir)
     monkeypatch.setattr("sys.version_info", (3, 14, 0, "final", 0))
+    monkeypatch.setenv("CADTOOL_DAEMON", "1")
     result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
     assert result.exit_code == 1
     parsed = json.loads(result.output)
