@@ -4,9 +4,10 @@ import math
 
 import warnings
 
+from OCP.Bnd import Bnd_Box
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRep import BRep_Builder
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeWire,
@@ -243,3 +244,73 @@ def rotate(shape, axis, angle_deg):
     trsf = gp_Trsf()
     trsf.SetRotation(axes[axis], math.radians(angle_deg))
     return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
+
+def bbox_point(shape, x="center", y="center", z="center"):
+    """Query a point on a shape's bounding box.
+
+    Each axis takes "min", "center", or "max".
+
+    Args:
+        shape: TopoDS_Shape.
+        x, y, z: One of "min", "center", "max".
+
+    Returns:
+        Tuple (x, y, z) of floats.
+    """
+    valid = ("min", "center", "max")
+    for name, val in [("x", x), ("y", y), ("z", z)]:
+        if val not in valid:
+            raise ValueError(
+                f"Invalid value '{val}' for {name}. Must be one of: {', '.join(valid)}"
+            )
+
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box)
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+
+    def _pick(lo, hi, spec):
+        if spec == "min":
+            return lo
+        elif spec == "max":
+            return hi
+        return (lo + hi) / 2.0
+
+    return (_pick(xmin, xmax, x), _pick(ymin, ymax, y), _pick(zmin, zmax, z))
+
+
+def place_at(shape, from_pt, to_pt):
+    """Translate shape so from_pt moves to to_pt.
+
+    Args:
+        shape: TopoDS_Shape.
+        from_pt: (x, y, z) source point.
+        to_pt: (x, y, z) target point.
+
+    Returns:
+        TopoDS_Shape at the new position.
+    """
+    return translate(
+        shape,
+        to_pt[0] - from_pt[0],
+        to_pt[1] - from_pt[1],
+        to_pt[2] - from_pt[2],
+    )
+
+
+def assemble(*shapes):
+    """Combine TopoDS_Shape objects into a compound ready for show_object().
+
+    Eliminates the cq.Shape.cast / makeCompound / newObject ceremony.
+
+    Args:
+        shapes: One or more TopoDS_Shape objects.
+
+    Returns:
+        cq.Workplane containing the compound.
+    """
+    import cadquery as cq
+
+    wrapped = [cq.Shape.cast(s) for s in shapes]
+    compound = cq.Compound.makeCompound(wrapped)
+    return cq.Workplane("XY").newObject([compound])
