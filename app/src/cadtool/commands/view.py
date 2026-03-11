@@ -56,14 +56,12 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(50, 100, 50);
 scene.add(dirLight);
 
-// Grid
-const grid = new THREE.GridHelper(200, 20, 0x444466, 0x333355);
-scene.add(grid);
-
 // Load model
 const loader = new GLTFLoader();
 loader.load('MODEL_URL', (gltf) => {
   const model = gltf.scene;
+  // CadQuery uses Z-up; three.js uses Y-up — rotate to compensate
+  model.rotation.x = -Math.PI / 2;
   scene.add(model);
   // Auto-center and fit
   const box = new THREE.Box3().setFromObject(model);
