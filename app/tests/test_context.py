@@ -63,6 +63,20 @@ def test_context_includes_versions_summary(runner, isolated_dir):
     assert versions[1]["status"] == "failed"
 
 
+def test_context_versions_include_path(runner, isolated_dir):
+    runner.invoke(cli, ["init", "--name", "proj"])
+    manifest = json.loads((isolated_dir / "cadtool.json").read_text())
+    manifest["versions"] = [
+        {"version": 1, "label": "box", "status": "success", "path": "v1_box/"},
+    ]
+    manifest["current"] = "box"
+    (isolated_dir / "cadtool.json").write_text(json.dumps(manifest, indent=2))
+
+    result = runner.invoke(cli, ["context"])
+    data = json.loads(result.output)
+    assert data["versions"][0]["path"] == "v1_box/"
+
+
 def test_context_includes_tool_version(runner, isolated_dir):
     runner.invoke(cli, ["init", "--name", "proj"])
     result = runner.invoke(cli, ["context"])
