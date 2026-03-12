@@ -20,6 +20,7 @@ def context():
             "version": v["version"],
             "label": v["label"],
             "status": v["status"],
+            "path": v["path"],
         }
         for v in versions
     ]
