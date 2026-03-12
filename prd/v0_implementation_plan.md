@@ -429,7 +429,9 @@ Open friction points from all test sessions, organized as small shippable milest
 - Add to `cadtool docs helpers`.
 - ~8 tests (tooth count, module scaling, pressure angle, wire closure, valid shape).
 
-**Status:** Pending
+**Delivered:** 8 new tests. `involute_gear_profile(module, teeth, pressure_angle=20.0)` in `helpers.py` generates a closed `TopoDS_Wire` of an involute spur gear profile centered at origin in the XY plane. Involute curves sampled parametrically from the base circle, stitched with root arcs, tip arcs, and radial connectors into a closed wire. Handles `r_base > r_root` (radial segments down to dedendum) and `r_base <= r_root` (direct root arcs). Added to preamble, `cadtool docs helpers`, and `cadtool docs preamble`.
+
+**Status:** Done
 
 ---
 
