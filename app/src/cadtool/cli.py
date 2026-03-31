@@ -1,10 +1,17 @@
+import json
+import os
+import sys
+from pathlib import Path
+
 import click
 
+from cadtool.session_log import SessionLogger
 from cadtool.commands.context import context
 from cadtool.commands.daemon_cmd import daemon
 from cadtool.commands.diff import diff
 from cadtool.commands.docs import docs
 from cadtool.commands.export_cmd import export_cmd
+from cadtool.commands.feedback import feedback
 from cadtool.commands.init import init
 from cadtool.commands.inspect_cmd import inspect_cmd
 from cadtool.commands.render import render
@@ -184,7 +191,54 @@ DEBUGGING
 """
 
 
-@click.group(epilog=_BRIEFING, context_settings=dict(max_content_width=120))
+class _LoggingGroup(click.Group):
+    """Click Group that auto-logs every command invocation to session.jsonl."""
+
+    def invoke(self, ctx):
+        captured = []
+        original_echo = click.echo
+
+        def _capturing_echo(message=None, **kwargs):
+            if message is not None:
+                captured.append(str(message))
+            original_echo(message, **kwargs)
+
+        click.echo = _capturing_echo
+        try:
+            return super().invoke(ctx)
+        finally:
+            click.echo = original_echo
+            self._log_session(ctx, captured)
+
+    def _log_session(self, ctx, captured):
+        if os.environ.get("CADTOOL_NO_LOG"):
+            return
+        # Find the subcommand name and args
+        cmd_name = ctx.invoked_subcommand
+        if not cmd_name or cmd_name == "feedback":
+            return
+        # Parse the last JSON output (commands may echo multiple things)
+        result = {}
+        for line in reversed(captured):
+            try:
+                result = json.loads(line)
+                break
+            except (json.JSONDecodeError, TypeError):
+                continue
+        # Collect the raw args from sys.argv
+        args = sys.argv[2:] if len(sys.argv) > 2 else []
+        try:
+            logger = SessionLogger(Path.cwd())
+            logger.log(cmd_name, {"argv": args}, result)
+        except Exception:
+            pass  # Never let logging break the CLI
+
+
+@click.group(
+    cls=_LoggingGroup,
+    epilog=_BRIEFING,
+    context_settings=dict(max_content_width=120),
+)
 def cli():
     """cadtool — CLI CAD tool for AI agents. All output is JSON."""
 
@@ -194,6 +248,7 @@ cli.add_command(daemon)
 cli.add_command(diff)
 cli.add_command(docs)
 cli.add_command(export_cmd)
+cli.add_command(feedback)
 cli.add_command(init)
 cli.add_command(inspect_cmd)
 cli.add_command(render)
