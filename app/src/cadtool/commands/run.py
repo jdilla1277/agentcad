@@ -39,6 +39,17 @@ def _parse_params(raw):
     return params
 
 
+def _enrich_error(msg):
+    """Add actionable context to common OCC error messages."""
+    if "BRep_API: command not done" in msg:
+        msg += (
+            " — this usually means a wire is not closed. "
+            "Check that all edge endpoints connect within tolerance (~1e-7mm). "
+            "Common cause: floating-point drift across many rotated/translated points."
+        )
+    return msg
+
+
 def _record_failure(manifest, script_path, label, version_num, error_msg):
     """Record a script failure on disk and in the manifest."""
     dir_name = f"v{version_num}_{label}_failed"
@@ -216,11 +227,11 @@ def run(script, output, render, export, preview, params, dry_run):
         sys.exit(1)
     except Exception as e:
         _record_failure(manifest, script_path, label, version_num,
-                        f"Script execution failed: {e}")
+                        _enrich_error(f"Script execution failed: {e}"))
 
     if not build_result.success:
         _record_failure(manifest, script_path, label, version_num,
-                        f"Script execution failed: {build_result.exception}")
+                        _enrich_error(f"Script execution failed: {build_result.exception}"))
 
     if not build_result.results:
         _record_failure(manifest, script_path, label, version_num,
@@ -229,7 +240,7 @@ def run(script, output, render, export, preview, params, dry_run):
     # Extract shape(s) — auto-compound if multiple show_object() calls
     import cadquery as cq
 
-    warning = None
+    warnings = []
     if len(build_result.results) == 1:
         shape = build_result.results[0].shape
     else:
@@ -241,7 +252,7 @@ def run(script, output, render, export, preview, params, dry_run):
             else:
                 shapes.append(cq.Shape.cast(s))
         shape = cq.Workplane("XY").newObject([cq.Compound.makeCompound(shapes)])
-        warning = (
+        warnings.append(
             f"{len(build_result.results)} show_object() calls detected, "
             "results combined into a single compound. "
             "Consider using cq.Compound.makeCompound() in your script instead."
@@ -253,6 +264,15 @@ def run(script, output, render, export, preview, params, dry_run):
     topo_shape_for_metrics = shape.val().wrapped
     metrics = compute_metrics(topo_shape_for_metrics)
 
+    # Surface validity issues as top-level warnings
+    if not metrics.get("is_valid", True):
+        warnings.append(
+            "Invalid geometry detected (is_valid: false). "
+            "Run 'cadtool inspect' on the STEP file for diagnostic details."
+        )
+    if metrics.get("warnings"):
+        warnings.extend(metrics["warnings"])
+
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:
         output_json = {
@@ -260,8 +280,8 @@ def run(script, output, render, export, preview, params, dry_run):
             "status": "success",
             "metrics": metrics,
         }
-        if warning:
-            output_json["warning"] = warning
+        if warnings:
+            output_json["warnings"] = warnings
         click.echo(json.dumps(output_json))
         return
 
@@ -347,8 +367,8 @@ def run(script, output, render, export, preview, params, dry_run):
     meta["metrics"] = metrics
     if parsed_params:
         meta["params"] = parsed_params
-    if warning:
-        meta["warning"] = warning
+    if warnings:
+        meta["warnings"] = warnings
     if preview_meta:
         meta["preview"] = preview_meta
     if renders_meta:
@@ -382,8 +402,8 @@ def run(script, output, render, export, preview, params, dry_run):
     output_json["metrics"] = metrics
     if parsed_params:
         output_json["params"] = parsed_params
-    if warning:
-        output_json["warning"] = warning
+    if warnings:
+        output_json["warnings"] = warnings
     if preview_meta:
         output_json["preview"] = preview_meta
     if renders_meta:

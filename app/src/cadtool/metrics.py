@@ -96,7 +96,8 @@ def compute_metrics(topo_shape):
     if volume < 0:
         warnings.append(
             "Negative volume detected — shape may have inverted normals. "
-            "Check face orientation or try reversing the shape."
+            "If you built a wire manually, check winding order (CCW in XY → +Z normal). "
+            "Try reversing the wire or using subtractive construction (cut from a blank)."
         )
     if warnings:
         result["warnings"] = warnings
