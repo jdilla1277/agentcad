@@ -9,13 +9,14 @@ from OCP.Bnd import Bnd_Box
 from OCP.TopAbs import TopAbs_FACE, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
-from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt
+from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
 
 from cadtool.helpers import (
     assemble,
     bbox_point,
     ellipse_wire,
     elliptical_sweep,
+    involute_gear_profile,
     loft_sections,
     mirror_fuse,
     naca_wire,
@@ -575,3 +576,59 @@ class TestEllipticalSweep:
     def test_elliptical_sweep_minimum_two_points(self):
         with pytest.raises(ValueError):
             elliptical_sweep([(0, 0, 0)], [5], [3])
+
+
+# ── involute_gear_profile tests ─────────────────────────────
+
+
+class TestInvoluteGearProfile:
+    def test_produces_wire(self):
+        wire = involute_gear_profile(module=2, teeth=20)
+        assert not wire.IsNull()
+        TopoDS.Wire_s(wire)  # downcast should not raise
+
+    def test_is_closed(self):
+        wire = involute_gear_profile(module=2, teeth=20)
+        assert wire.Closed()
+
+    def test_module_scaling(self):
+        small = involute_gear_profile(module=1, teeth=20)
+        large = involute_gear_profile(module=3, teeth=20)
+        bb_s = _bounding_box(small)
+        bb_l = _bounding_box(large)
+        assert (bb_l[3] - bb_l[0]) > (bb_s[3] - bb_s[0])
+
+    def test_tooth_count_affects_size(self):
+        few = involute_gear_profile(module=2, teeth=10)
+        many = involute_gear_profile(module=2, teeth=30)
+        bb_f = _bounding_box(few)
+        bb_m = _bounding_box(many)
+        assert (bb_m[3] - bb_m[0]) > (bb_f[3] - bb_f[0])
+
+    def test_pressure_angle_varies_profile(self):
+        w1 = involute_gear_profile(module=2, teeth=20, pressure_angle=14.5)
+        w2 = involute_gear_profile(module=2, teeth=20, pressure_angle=25.0)
+        bb1 = _bounding_box(w1)
+        bb2 = _bounding_box(w2)
+        assert bb1 != bb2
+
+    def test_bbox_matches_outer_diameter(self):
+        m, z = 2, 20
+        wire = involute_gear_profile(module=m, teeth=z)
+        bb = _bounding_box(wire)
+        expected_od = m * z + 2 * m  # pitch + 2*addendum
+        actual_span = bb[3] - bb[0]
+        assert abs(actual_span - expected_od) / expected_od < 0.05
+
+    def test_minimum_teeth_error(self):
+        with pytest.raises(ValueError, match="teeth must be >= 6"):
+            involute_gear_profile(module=2, teeth=4)
+
+    def test_can_extrude_to_solid(self):
+        """Usability: wire should be extrudable into a gear solid."""
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+        wire = involute_gear_profile(module=2, teeth=20)
+        face = BRepBuilderAPI_MakeFace(wire).Face()
+        solid = BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, 10)).Shape()
+        assert not solid.IsNull()
