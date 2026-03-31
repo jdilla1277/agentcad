@@ -47,17 +47,20 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M33 | Per-part design workflow (named parts, per-part metrics/renders) | L | Done |
 | M34 | Assembly positioning helpers (`bbox_point`, `place_at`, `assemble`) | S | Done |
 | M35 | Wire helpers & `elliptical_sweep` | S | Done |
+| M36 | Validity warnings & diagnostics | S | Pending |
+| M37 | Wire helper robustness (point dedup) | S | Pending |
+| M38 | Complex profile patterns in docs | S | Pending |
 | | | | |
 | | **v0.3 — Distribution & Agent Ecosystem** | | |
-| M36 | Openness & licensing strategy | S | Pending |
-| M37 | Publish to PyPI | S | Pending |
-| M38 | MCP server | M | Pending |
-| M39 | ClawHub skill (OpenClaw) | XS | Pending |
-| M40 | Claude Code skill/plugin | XS | Pending |
-| M41 | Homepage | M | Pending |
-| M42 | Public GitHub repo | S | Pending |
-| M43 | Alpha users (5–10 testers, collect feedback) | M | Pending |
-| M44 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
+| M39 | Openness & licensing strategy | S | Pending |
+| M40 | Publish to PyPI | S | Pending |
+| M41 | MCP server | M | Pending |
+| M42 | ClawHub skill (OpenClaw) | XS | Pending |
+| M43 | Claude Code skill/plugin | XS | Pending |
+| M44 | Homepage | M | Pending |
+| M45 | Public GitHub repo | S | Pending |
+| M46 | Alpha users (5–10 testers, collect feedback) | M | Pending |
+| M47 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
 
 ---
 
@@ -65,7 +68,7 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **v0.1 (Core Pipeline):** Done. cadtool can execute CadQuery scripts, render PNGs, export to STEP/GLB/STL/OBJ, diff versions, and show docs. 368 tests, 10 commands.
 
-**v0.2 (Fast Loop & Friction Fixes):** Done. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers — all shipped.
+**v0.2 (Fast Loop & Friction Fixes):** In progress. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers shipped. Remaining: validity warnings (M36), wire helper robustness (M37), complex profile docs (M38) — driven by spur gear friction log.
 
 **v0.3 (Distribution & Agent Ecosystem):** Not started. Make cadtool installable by anyone and discoverable by every major AI agent platform.
 
@@ -193,6 +196,7 @@ Driven by agent friction testing across 6+ real model sessions.
 - Golden Gate Bridge (2026-03-08)
 - Desk lamp
 - Eiffel Tower (2026-03-10)
+- Spur gear (2026-03-31)
 
 ---
 
@@ -358,17 +362,63 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
+### M36: Validity Warnings & Diagnostics
+
+**Goal:** Make geometry failures loud and actionable instead of buried in metrics JSON.
+
+**Scope:**
+- Surface `is_valid: false` as a top-level `warning` in `cadtool run` output JSON (not just in `metrics`).
+- Improve negative volume warning: include "check wire winding order" guidance instead of generic "shape may have inverted normals."
+- Catch `BRep_API: command not done` and add context about wire closure / endpoint tolerance.
+
+**Motivation:** Spur gear friction log — agent got `status: success` with broken geometry across 5 versions because `is_valid` was only in the metrics sub-object.
+
+**Status:** Pending
+
+---
+
+### M37: Wire Helper Robustness (Point Dedup)
+
+**Goal:** Prevent `Knots interval values too close` and `BSplCLib::Interpolate` errors in wire helpers.
+
+**Scope:**
+- Add point deduplication within tolerance (e.g., 1e-6mm) to `spline_wire` before passing points to `GeomAPI_PointsToBSpline`.
+- Same dedup for `polygon_wire` before building line edges.
+- Tests: near-duplicate points at segment boundaries should be silently collapsed.
+
+**Motivation:** Spur gear friction log — involute-to-arc transition points are theoretically coincident but numerically distinct, causing OCC interpolation failures.
+
+**Status:** Pending
+
+---
+
+### M38: Complex Profile Patterns in Docs
+
+**Goal:** Document construction strategies that avoid the most common BRep footguns for complex profiles.
+
+**Scope:**
+- "Cut from blank" pattern: subtractive construction (cut gaps from a cylinder) vs. additive (build teeth up). Explain why subtraction inherits correct normals and avoids self-intersection.
+- Wire winding direction: right-hand rule, how CW vs. CCW affects face normals, how to diagnose via negative volume.
+- Mixed edge type wires: combining line edges, circular arcs, and BSplines into a single `BRepBuilderAPI_MakeWire`.
+- Add to `cadtool docs patterns`.
+
+**Motivation:** Spur gear friction log — the key insight that unlocked a valid gear was inverting construction from additive to subtractive.
+
+**Status:** Pending
+
+---
+
 ## v0.3 — Distribution & Agent Ecosystem
 
 **Goal:** Make cadtool installable by anyone and discoverable by every major AI agent platform.
 
 **Reference implementations:** [Stripe Projects](https://projects.dev/) (CLI-first, agent-friendly provisioning), [RAMP CLI](https://github.com/ramp-public/ramp-cli) (`--agent` flag, `ramp skills` command, separate MCP server).
 
-**Suggested order:** M41 (public repo) → M36 (PyPI) → M37 (MCP) → M39 (Claude skill) → M38 (ClawHub) → M40 (homepage)
+**Suggested order:** M45 (public repo) → M40 (PyPI) → M41 (MCP) → M43 (Claude skill) → M42 (ClawHub) → M44 (homepage)
 
 ---
 
-### M36: Openness & Licensing Strategy
+### M39: Openness & Licensing Strategy
 
 **Goal:** Decide how open cadtool will be — public vs. private repo, open-source vs. source-available vs. proprietary, license choice — and document the rationale.
 
@@ -377,13 +427,13 @@ Driven by agent friction testing across 6+ real model sessions.
 - Choose a license (MIT, Apache 2.0, BSL, proprietary, etc.) or explicitly defer.
 - Consider implications for each distribution channel (PyPI, MCP, ClawHub, skills).
 - Document the decision and reasoning in this roadmap or a dedicated doc.
-- Gates M42 (public repo) — can't open the repo without deciding what "open" means.
+- Gates M45 (public repo) — can't open the repo without deciding what "open" means.
 
 **Status:** Pending
 
 ---
 
-### M37: Publish to PyPI
+### M40: Publish to PyPI
 
 **Goal:** `pip install cadtool` (or `pipx install cadtool`) works for anyone.
 
@@ -398,7 +448,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M38: MCP Server
+### M41: MCP Server
 
 **Goal:** A Model Context Protocol server that exposes cadtool commands as native agent tools. Works with Claude Code, Cursor, Windsurf, VS Code Copilot, and any MCP-compatible agent.
 
@@ -415,7 +465,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M39: ClawHub Skill (OpenClaw)
+### M42: ClawHub Skill (OpenClaw)
 
 **Goal:** Publish a cadtool skill to ClawHub so OpenClaw agents can discover and use cadtool.
 
@@ -429,7 +479,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M40: Claude Code Skill/Plugin
+### M43: Claude Code Skill/Plugin
 
 **Goal:** Claude Code users can install cadtool agent instructions with one command.
 
@@ -443,7 +493,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M41: Homepage
+### M44: Homepage
 
 **Goal:** A public website (e.g., cadtool.dev) that explains what cadtool is, shows examples, and links to install instructions for every agent platform.
 
@@ -457,7 +507,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M42: Public GitHub Repo
+### M45: Public GitHub Repo
 
 **Goal:** Make the repository public and ready for external visitors.
 
@@ -465,20 +515,20 @@ Driven by agent friction testing across 6+ real model sessions.
 - Audit repo for secrets, credentials, internal paths.
 - Write a public-facing README: what it is, install, agent setup, examples.
 - Add contributing guidelines (even if minimal — "issues welcome, no PRs yet").
-- License per M36 decision.
+- License per M39 decision.
 - Set up GitHub Actions CI (tests on push).
 
 **Status:** Pending
 
 ---
 
-### M43: Alpha Users
+### M46: Alpha Users
 
 **Goal:** Get cadtool into the hands of 5–10 real users and collect structured feedback before a public launch.
 
 **Scope:**
 - Identify alpha testers: AI engineers, CAD hobbyists, agent-tool builders.
-- Provide install instructions (PyPI or private repo access depending on M36).
+- Provide install instructions (PyPI or private repo access depending on M39).
 - Give each tester a concrete task (e.g., "design a spur gear" or "model an enclosure").
 - Collect friction logs: what confused them, what broke, what they wished existed.
 - Prioritize feedback into v0.3 or v0.4 milestones.
@@ -487,7 +537,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M44: Launch — Product Hunt, Hacker News, Community Posts
+### M47: Launch — Product Hunt, Hacker News, Community Posts
 
 **Goal:** Public announcement to drive awareness and early adoption.
 
