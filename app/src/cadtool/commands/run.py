@@ -153,7 +153,7 @@ def run(script, output, render, export, preview, params, dry_run):
     from cadtool.validate import validate_script
 
     raw_source = script_path.read_text()
-    PREAMBLE = "import cadquery as cq; from cadtool.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse, translate, rotate, bbox_point, place_at, assemble, ellipse_wire, spline_wire, polygon_wire, rounded_rect_wire, elliptical_sweep\n"
+    PREAMBLE = "import cadquery as cq; from cadtool.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse, translate, rotate, bbox_point, place_at, assemble, ellipse_wire, spline_wire, polygon_wire, rounded_rect_wire, elliptical_sweep, involute_gear_profile\n"
     script_source = PREAMBLE + raw_source
 
     validation_errors = validate_script(script_source)

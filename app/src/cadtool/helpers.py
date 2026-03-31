@@ -317,6 +317,186 @@ def assemble(*shapes):
     return cq.Workplane("XY").newObject([compound])
 
 
+def involute_gear_profile(module, teeth, pressure_angle=20.0):
+    """Generate a closed involute spur gear profile wire in the XY plane.
+
+    Args:
+        module: Gear module (pitch diameter / teeth). Controls tooth size.
+        teeth: Number of teeth (minimum 6).
+        pressure_angle: Pressure angle in degrees (default 20.0).
+
+    Returns:
+        TopoDS_Wire (closed) — full gear profile centered at origin in XY plane.
+    """
+    if teeth < 6:
+        raise ValueError("teeth must be >= 6")
+
+    m = float(module)
+    z = int(teeth)
+    alpha = math.radians(pressure_angle)
+
+    # Derived radii
+    r_pitch = m * z / 2.0
+    r_base = r_pitch * math.cos(alpha)
+    r_tip = r_pitch + m
+    r_root = r_pitch - 1.25 * m
+
+    # Involute curve: parametric from base circle
+    # x(t) = r_base * (cos(t) + t*sin(t))
+    # y(t) = r_base * (sin(t) - t*cos(t))
+    # Find t_max where the involute reaches r_tip
+    # r(t) = r_base * sqrt(1 + t^2), so t_max = sqrt((r_tip/r_base)^2 - 1)
+    t_max = math.sqrt((r_tip / r_base) ** 2 - 1)
+
+    n_inv = 20  # points per involute curve
+
+    def involute_pts(t_max, n_pts):
+        """Sample involute curve starting at base circle."""
+        pts = []
+        for i in range(n_pts + 1):
+            t = t_max * i / n_pts
+            x = r_base * (math.cos(t) + t * math.sin(t))
+            y = r_base * (math.sin(t) - t * math.cos(t))
+            pts.append((x, y))
+        return pts
+
+    # Generate one involute flank (right side of tooth)
+    inv_pts = involute_pts(t_max, n_inv)
+
+    # Angular tooth thickness at pitch circle
+    # Tooth thickness at pitch = pi*m/2
+    # Involute angle at pitch: inv(alpha) = tan(alpha) - alpha
+    inv_alpha = math.tan(alpha) - alpha
+    # Angular half-tooth thickness at pitch circle
+    half_tooth_angle = math.pi / (2 * z) + inv_alpha
+
+    # The involute starts at angle 0 on the base circle.
+    # At the pitch circle, the involute point is at angle inv_alpha from base.
+    # We need to rotate the involute so the tooth is centered.
+
+    # Build right flank: rotate involute by +half_tooth_angle
+    # Build left flank: mirror about tooth centerline (reflect y), rotate by -half_tooth_angle
+    # Actually: mirror the involute (negate y), giving the left flank
+
+    def rotate_pt(x, y, angle):
+        c, s = math.cos(angle), math.sin(angle)
+        return (c * x - s * y, s * x + c * y)
+
+    builder = BRepBuilderAPI_MakeWire()
+    tooth_angle = 2 * math.pi / z
+
+    for i in range(z):
+        base_angle = i * tooth_angle
+
+        # Right involute flank (rotated by half_tooth_angle + base_angle)
+        right_pts = []
+        for px, py in inv_pts:
+            rx, ry = rotate_pt(px, py, half_tooth_angle + base_angle)
+            right_pts.append(gp_Pnt(rx, ry, 0))
+
+        # Left involute flank (mirror y then rotate by -half_tooth_angle + base_angle)
+        left_pts = []
+        for px, py in inv_pts:
+            mx, my = rotate_pt(px, -py, -half_tooth_angle + base_angle)
+            left_pts.append(gp_Pnt(mx, my, 0))
+
+        # Root arc: from end of previous left flank to start of this right flank
+        # The root circle point at the start of right involute
+        right_start = right_pts[0]
+        left_start = left_pts[0]
+
+        # If base circle > root circle, we need a radial line down to root,
+        # then a root arc, then a radial line back up.
+        # If base circle <= root circle, involute starts at/above root.
+        if r_base > r_root:
+            # Radial segment from root to base at right flank start angle
+            right_angle = math.atan2(right_start.Y(), right_start.X())
+            root_right = gp_Pnt(r_root * math.cos(right_angle), r_root * math.sin(right_angle), 0)
+
+            # Previous tooth's left flank end (at root)
+            prev_left_end_angle = math.atan2(left_start.Y(), left_start.X())
+            # The previous tooth's left involute base point
+            if i == 0:
+                # For the first tooth, the previous is the last tooth
+                prev_base_angle = (z - 1) * tooth_angle
+                prev_left_pts_start = inv_pts[0]
+                pmx, pmy = rotate_pt(prev_left_pts_start[0], -prev_left_pts_start[1], -half_tooth_angle + prev_base_angle)
+                prev_left_base = gp_Pnt(pmx, pmy, 0)
+            else:
+                prev_base_angle = (i - 1) * tooth_angle
+                prev_left_pts_start = inv_pts[0]
+                pmx, pmy = rotate_pt(prev_left_pts_start[0], -prev_left_pts_start[1], -half_tooth_angle + prev_base_angle)
+                prev_left_base = gp_Pnt(pmx, pmy, 0)
+
+            prev_left_angle = math.atan2(prev_left_base.Y(), prev_left_base.X())
+            root_prev_left = gp_Pnt(r_root * math.cos(prev_left_angle), r_root * math.sin(prev_left_angle), 0)
+
+            # Radial line: previous left base → root
+            edge_down = BRepBuilderAPI_MakeEdge(prev_left_base, root_prev_left).Edge()
+            builder.Add(edge_down)
+
+            # Root arc from prev_left_root to right_root
+            mid_angle = (prev_left_angle + right_angle) / 2
+            # Handle angle wrapping for first tooth
+            if i == 0 and prev_left_angle > right_angle:
+                mid_angle = (prev_left_angle + right_angle + 2 * math.pi) / 2
+            root_mid = gp_Pnt(r_root * math.cos(mid_angle), r_root * math.sin(mid_angle), 0)
+            arc = GC_MakeArcOfCircle(root_prev_left, root_mid, root_right)
+            edge_root = BRepBuilderAPI_MakeEdge(arc.Value()).Edge()
+            builder.Add(edge_root)
+
+            # Radial line: root → right base
+            edge_up = BRepBuilderAPI_MakeEdge(root_right, right_start).Edge()
+            builder.Add(edge_up)
+        else:
+            # Base circle is inside root circle — involute starts above root
+            # Just connect previous left to this right with a root arc
+            if i == 0:
+                prev_base_angle = (z - 1) * tooth_angle
+            else:
+                prev_base_angle = (i - 1) * tooth_angle
+            prev_left_pts_start = inv_pts[0]
+            pmx, pmy = rotate_pt(prev_left_pts_start[0], -prev_left_pts_start[1], -half_tooth_angle + prev_base_angle)
+            prev_left_base = gp_Pnt(pmx, pmy, 0)
+
+            mid_angle = (math.atan2(prev_left_base.Y(), prev_left_base.X()) + math.atan2(right_start.Y(), right_start.X())) / 2
+            if i == 0 and math.atan2(prev_left_base.Y(), prev_left_base.X()) > math.atan2(right_start.Y(), right_start.X()):
+                mid_angle = (math.atan2(prev_left_base.Y(), prev_left_base.X()) + math.atan2(right_start.Y(), right_start.X()) + 2 * math.pi) / 2
+            root_mid = gp_Pnt(r_root * math.cos(mid_angle), r_root * math.sin(mid_angle), 0)
+            arc = GC_MakeArcOfCircle(prev_left_base, root_mid, right_start)
+            edge_root = BRepBuilderAPI_MakeEdge(arc.Value()).Edge()
+            builder.Add(edge_root)
+
+        # Right involute flank (spline, base→tip)
+        arr_r = TColgp_Array1OfPnt(1, len(right_pts))
+        for j, pt in enumerate(right_pts):
+            arr_r.SetValue(j + 1, pt)
+        curve_r = GeomAPI_PointsToBSpline(arr_r).Curve()
+        edge_r = BRepBuilderAPI_MakeEdge(curve_r).Edge()
+        builder.Add(edge_r)
+
+        # Tip arc: from right tip to left tip
+        right_tip = right_pts[-1]
+        left_tip = left_pts[-1]
+        tip_mid_angle = (math.atan2(right_tip.Y(), right_tip.X()) + math.atan2(left_tip.Y(), left_tip.X())) / 2
+        tip_mid = gp_Pnt(r_tip * math.cos(tip_mid_angle), r_tip * math.sin(tip_mid_angle), 0)
+        arc_tip = GC_MakeArcOfCircle(right_tip, tip_mid, left_tip)
+        edge_tip = BRepBuilderAPI_MakeEdge(arc_tip.Value()).Edge()
+        builder.Add(edge_tip)
+
+        # Left involute flank (spline, tip→base — reversed)
+        left_pts_rev = list(reversed(left_pts))
+        arr_l = TColgp_Array1OfPnt(1, len(left_pts_rev))
+        for j, pt in enumerate(left_pts_rev):
+            arr_l.SetValue(j + 1, pt)
+        curve_l = GeomAPI_PointsToBSpline(arr_l).Curve()
+        edge_l = BRepBuilderAPI_MakeEdge(curve_l).Edge()
+        builder.Add(edge_l)
+
+    wire = builder.Wire()
+    return wire
+
+
 def ellipse_wire(x_radius, y_radius, center=(0, 0, 0), normal=(0, 0, 1)):
     """Create an elliptical wire.
 
