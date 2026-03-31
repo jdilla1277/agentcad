@@ -152,3 +152,11 @@ class TestNegativeVolumeWarning:
         assert m["volume"] < 0
         assert "warnings" in m
         assert any("negative volume" in w.lower() for w in m["warnings"])
+
+    def test_negative_volume_warning_mentions_winding(self):
+        """Negative volume warning should mention wire winding order."""
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+        box = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
+        reversed_shape = box.Reversed()
+        m = compute_metrics(reversed_shape)
+        assert any("winding" in w.lower() for w in m["warnings"])

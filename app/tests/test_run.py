@@ -515,8 +515,8 @@ def test_run_multiple_show_object_warning_in_json(runner, isolated_dir):
     _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
     result = runner.invoke(cli, ["run", "script.py", "--output", "multi"])
     parsed = json.loads(result.output)
-    assert "warning" in parsed
-    assert "show_object()" in parsed["warning"]
+    assert "warnings" in parsed
+    assert any("show_object()" in w for w in parsed["warnings"])
 
 
 def test_run_multiple_show_object_warning_in_meta(runner, isolated_dir):
@@ -524,7 +524,7 @@ def test_run_multiple_show_object_warning_in_meta(runner, isolated_dir):
     _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
     runner.invoke(cli, ["run", "script.py", "--output", "multi"])
     meta = json.loads((isolated_dir / "v1_multi" / "meta.json").read_text())
-    assert "warning" in meta
+    assert "warnings" in meta
 
 
 def test_run_multiple_show_object_metrics_cover_both(runner, isolated_dir):
@@ -543,7 +543,7 @@ def test_run_single_show_object_no_warning(runner, isolated_dir):
     _write_script(isolated_dir)
     result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
     parsed = json.loads(result.output)
-    assert "warning" not in parsed
+    assert "warnings" not in parsed
 
 
 def test_run_multiple_show_object_with_render(runner, isolated_dir):
@@ -868,3 +868,113 @@ def test_run_direct_no_via_field(runner, isolated_dir):
     assert result.exit_code == 0
     parsed = json.loads(result.output)
     assert "via" not in parsed
+
+
+# --- M36: Validity warnings & diagnostics ---
+
+def _fake_metrics_invalid(real_compute):
+    """Wrap compute_metrics to force is_valid=False."""
+    def wrapper(topo_shape):
+        m = real_compute(topo_shape)
+        m["is_valid"] = False
+        m["validity_errors"] = ["BRepCheck_InvalidToleranceValue"]
+        return m
+    return wrapper
+
+
+def test_run_invalid_shape_has_warnings_in_output(runner, isolated_dir, monkeypatch):
+    """is_valid: false in metrics should produce top-level warnings."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    from cadtool import metrics
+    monkeypatch.setattr(
+        "cadtool.metrics.compute_metrics",
+        _fake_metrics_invalid(metrics.compute_metrics),
+    )
+    result = runner.invoke(cli, ["run", "script.py", "--output", "inv"])
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "success"
+    assert "warnings" in parsed
+    assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+
+
+def test_run_invalid_shape_warnings_in_meta(runner, isolated_dir, monkeypatch):
+    """is_valid: false should also appear in meta.json warnings."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    from cadtool import metrics
+    monkeypatch.setattr(
+        "cadtool.metrics.compute_metrics",
+        _fake_metrics_invalid(metrics.compute_metrics),
+    )
+    runner.invoke(cli, ["run", "script.py", "--output", "inv"])
+    meta = json.loads((isolated_dir / "v1_inv" / "meta.json").read_text())
+    assert "warnings" in meta
+    assert any("invalid geometry" in w.lower() for w in meta["warnings"])
+
+
+def test_run_invalid_shape_dry_run_has_warnings(runner, isolated_dir, monkeypatch):
+    """Dry-run should also surface validity warnings."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    from cadtool import metrics
+    monkeypatch.setattr(
+        "cadtool.metrics.compute_metrics",
+        _fake_metrics_invalid(metrics.compute_metrics),
+    )
+    result = runner.invoke(cli, ["run", "script.py", "--output", "inv", "--dry-run"])
+    parsed = json.loads(result.output)
+    assert "warnings" in parsed
+    assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+
+
+def test_run_valid_shape_no_warnings(runner, isolated_dir):
+    """Valid shapes should not produce warnings."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+    parsed = json.loads(result.output)
+    assert "warnings" not in parsed
+
+
+def test_run_negative_volume_warning_surfaces(runner, isolated_dir, monkeypatch):
+    """Negative volume warning from metrics should appear in top-level warnings."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    from cadtool import metrics
+    real = metrics.compute_metrics
+    def fake(topo_shape):
+        m = real(topo_shape)
+        m["volume"] = -1000.0
+        m["warnings"] = ["Negative volume detected — check winding order."]
+        return m
+    monkeypatch.setattr("cadtool.metrics.compute_metrics", fake)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "neg"])
+    parsed = json.loads(result.output)
+    assert "warnings" in parsed
+    assert any("negative volume" in w.lower() for w in parsed["warnings"])
+
+
+def test_run_multiple_show_object_uses_warnings_list(runner, isolated_dir):
+    """Multi show_object warning should use 'warnings' list, not 'warning' string."""
+    _init_project(runner)
+    _write_script(isolated_dir, content=MULTI_SHOW_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "multi"])
+    parsed = json.loads(result.output)
+    assert "warnings" in parsed
+    assert isinstance(parsed["warnings"], list)
+    assert any("show_object()" in w for w in parsed["warnings"])
+
+
+def test_run_brep_api_error_enriched(runner, isolated_dir, monkeypatch):
+    """BRep_API errors should include wire closure guidance."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    from cadquery import cqgi
+    def fake_build(self, **kwargs):
+        raise RuntimeError("BRep_API: command not done")
+    monkeypatch.setattr(cqgi.CQModel, "build", fake_build)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "brep"])
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "failed"
+    assert "wire" in parsed["error"].lower()
