@@ -47,7 +47,7 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M33 | Per-part design workflow (named parts, per-part metrics/renders) | L | Done |
 | M34 | Assembly positioning helpers (`bbox_point`, `place_at`, `assemble`) | S | Done |
 | M35 | Wire helpers & `elliptical_sweep` | S | Done |
-| M36 | Validity warnings & diagnostics | S | Pending |
+| M36 | Validity warnings & diagnostics | S | Done |
 | M37 | Wire helper robustness (point dedup) | S | Pending |
 | M38 | Complex profile patterns in docs | S | Pending |
 | | | | |
@@ -68,7 +68,7 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **v0.1 (Core Pipeline):** Done. cadtool can execute CadQuery scripts, render PNGs, export to STEP/GLB/STL/OBJ, diff versions, and show docs. 368 tests, 10 commands.
 
-**v0.2 (Fast Loop & Friction Fixes):** In progress. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers shipped. Remaining: validity warnings (M36), wire helper robustness (M37), complex profile docs (M38) — driven by spur gear friction log.
+**v0.2 (Fast Loop & Friction Fixes):** In progress. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers, validity warnings shipped. Remaining: wire helper robustness (M37), complex profile docs (M38).
 
 **v0.3 (Distribution & Agent Ecosystem):** Not started. Make cadtool installable by anyone and discoverable by every major AI agent platform.
 
@@ -362,18 +362,11 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M36: Validity Warnings & Diagnostics
+### M36: Validity Warnings & Diagnostics ✓
 
 **Goal:** Make geometry failures loud and actionable instead of buried in metrics JSON.
 
-**Scope:**
-- Surface `is_valid: false` as a top-level `warning` in `cadtool run` output JSON (not just in `metrics`).
-- Improve negative volume warning: include "check wire winding order" guidance instead of generic "shape may have inverted normals."
-- Catch `BRep_API: command not done` and add context about wire closure / endpoint tolerance.
-
-**Motivation:** Spur gear friction log — agent got `status: success` with broken geometry across 5 versions because `is_valid` was only in the metrics sub-object.
-
-**Status:** Pending
+**Delivered:** 387 tests. `is_valid: false` and metrics warnings (negative volume) promoted to top-level `warnings` list in output JSON and meta.json. `warning` (singular string) → `warnings` (list). Negative volume warning includes wire winding guidance. `BRep_API: command not done` enriched with wire closure context.
 
 ---
 
