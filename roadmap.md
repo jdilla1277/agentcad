@@ -36,8 +36,8 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M22 | Friction fixes — Python version check, rotate docs, dry-run | S | Done |
 | M23 | Persistent worker / daemon mode | M | Done |
 | M24 | Friction fixes — `cadtool inspect`, render quality, bug fixes | M | Done |
-| M25 | `--help` operational briefing & README | S | In Progress |
-| M26 | Performance warnings in docs | XS | Pending |
+| M25 | `--help` operational briefing & README | S | Done |
+| M26 | Performance warnings in docs | XS | Done |
 | M27 | Friendlier `cadtool init` when project exists | XS | Done |
 | M28 | Better Python version / import error diagnostics | S | Done |
 | M29 | Progress indicator for long `cadtool run` | M | Done |
@@ -49,12 +49,15 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M35 | Wire helpers & `elliptical_sweep` | S | Done |
 | | | | |
 | | **v0.3 — Distribution & Agent Ecosystem** | | |
-| M36 | Publish to PyPI | S | Pending |
-| M37 | MCP server | M | Pending |
-| M38 | ClawHub skill (OpenClaw) | XS | Pending |
-| M39 | Claude Code skill/plugin | XS | Pending |
-| M40 | Homepage | M | Pending |
-| M41 | Public GitHub repo | S | Pending |
+| M36 | Openness & licensing strategy | S | Pending |
+| M37 | Publish to PyPI | S | Pending |
+| M38 | MCP server | M | Pending |
+| M39 | ClawHub skill (OpenClaw) | XS | Pending |
+| M40 | Claude Code skill/plugin | XS | Pending |
+| M41 | Homepage | M | Pending |
+| M42 | Public GitHub repo | S | Pending |
+| M43 | Alpha users (5–10 testers, collect feedback) | M | Pending |
+| M44 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
 
 ---
 
@@ -62,7 +65,7 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **v0.1 (Core Pipeline):** Done. cadtool can execute CadQuery scripts, render PNGs, export to STEP/GLB/STL/OBJ, diff versions, and show docs. 368 tests, 10 commands.
 
-**v0.2 (Fast Loop & Friction Fixes):** Nearly done. M25 in progress (PR #15), M26 pending. Everything else shipped — metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers.
+**v0.2 (Fast Loop & Friction Fixes):** Done. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers — all shipped.
 
 **v0.3 (Distribution & Agent Ecosystem):** Not started. Make cadtool installable by anyone and discoverable by every major AI agent platform.
 
@@ -365,7 +368,22 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M36: Publish to PyPI
+### M36: Openness & Licensing Strategy
+
+**Goal:** Decide how open cadtool will be — public vs. private repo, open-source vs. source-available vs. proprietary, license choice — and document the rationale.
+
+**Scope:**
+- Decide: public GitHub repo or private with pip-installable distribution only?
+- Choose a license (MIT, Apache 2.0, BSL, proprietary, etc.) or explicitly defer.
+- Consider implications for each distribution channel (PyPI, MCP, ClawHub, skills).
+- Document the decision and reasoning in this roadmap or a dedicated doc.
+- Gates M42 (public repo) — can't open the repo without deciding what "open" means.
+
+**Status:** Pending
+
+---
+
+### M37: Publish to PyPI
 
 **Goal:** `pip install cadtool` (or `pipx install cadtool`) works for anyone.
 
@@ -380,7 +398,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M37: MCP Server
+### M38: MCP Server
 
 **Goal:** A Model Context Protocol server that exposes cadtool commands as native agent tools. Works with Claude Code, Cursor, Windsurf, VS Code Copilot, and any MCP-compatible agent.
 
@@ -397,7 +415,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M38: ClawHub Skill (OpenClaw)
+### M39: ClawHub Skill (OpenClaw)
 
 **Goal:** Publish a cadtool skill to ClawHub so OpenClaw agents can discover and use cadtool.
 
@@ -411,7 +429,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M39: Claude Code Skill/Plugin
+### M40: Claude Code Skill/Plugin
 
 **Goal:** Claude Code users can install cadtool agent instructions with one command.
 
@@ -425,7 +443,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M40: Homepage
+### M41: Homepage
 
 **Goal:** A public website (e.g., cadtool.dev) that explains what cadtool is, shows examples, and links to install instructions for every agent platform.
 
@@ -439,7 +457,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M41: Public GitHub Repo
+### M42: Public GitHub Repo
 
 **Goal:** Make the repository public and ready for external visitors.
 
@@ -447,7 +465,38 @@ Driven by agent friction testing across 6+ real model sessions.
 - Audit repo for secrets, credentials, internal paths.
 - Write a public-facing README: what it is, install, agent setup, examples.
 - Add contributing guidelines (even if minimal — "issues welcome, no PRs yet").
-- No license initially (all rights reserved). Can add later.
+- License per M36 decision.
 - Set up GitHub Actions CI (tests on push).
+
+**Status:** Pending
+
+---
+
+### M43: Alpha Users
+
+**Goal:** Get cadtool into the hands of 5–10 real users and collect structured feedback before a public launch.
+
+**Scope:**
+- Identify alpha testers: AI engineers, CAD hobbyists, agent-tool builders.
+- Provide install instructions (PyPI or private repo access depending on M36).
+- Give each tester a concrete task (e.g., "design a spur gear" or "model an enclosure").
+- Collect friction logs: what confused them, what broke, what they wished existed.
+- Prioritize feedback into v0.3 or v0.4 milestones.
+
+**Status:** Pending
+
+---
+
+### M44: Launch — Product Hunt, Hacker News, Community Posts
+
+**Goal:** Public announcement to drive awareness and early adoption.
+
+**Scope:**
+- Product Hunt launch: listing, tagline, screenshots/GIF, maker comment.
+- Hacker News Show HN post.
+- Reddit: r/cad, r/3Dprinting, r/MachineLearning, r/LocalLLaMA.
+- Twitter/X thread with demo video.
+- Relevant Discord/Slack communities (CadQuery, AI agent builders).
+- Blog post or homepage write-up explaining the "CAD tool for agents" angle.
 
 **Status:** Pending
