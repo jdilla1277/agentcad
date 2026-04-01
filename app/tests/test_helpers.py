@@ -488,6 +488,24 @@ class TestSplineWire:
         with pytest.raises(ValueError):
             spline_wire([(0, 0, 0), (1, 1, 1)])
 
+    def test_spline_wire_near_duplicate_points(self):
+        """Near-duplicate points at segment boundaries should be collapsed."""
+        pts = [
+            (10, 0, 0),
+            (0, 10, 0),
+            (0, 10, 1e-8),  # near-duplicate of previous
+            (-10, 0, 0),
+            (0, -10, 0),
+        ]
+        wire = spline_wire(pts, closed=True)
+        assert not wire.IsNull()
+
+    def test_spline_wire_all_duplicates_raises(self):
+        """If dedup leaves fewer than 3 points, should still raise."""
+        pts = [(1, 0, 0), (1, 0, 1e-9), (1, 0, 2e-9)]
+        with pytest.raises(ValueError):
+            spline_wire(pts)
+
 
 # ── polygon_wire tests ───────────────────────────────────────
 
@@ -508,6 +526,23 @@ class TestPolygonWire:
     def test_polygon_wire_too_few_points(self):
         with pytest.raises(ValueError):
             polygon_wire([(0, 0, 0), (1, 1, 1)])
+
+    def test_polygon_wire_near_duplicate_points(self):
+        """Near-duplicate consecutive points should be collapsed."""
+        pts = [
+            (0, 0, 0),
+            (10, 0, 0),
+            (10, 0, 1e-8),  # near-duplicate of previous
+            (5, 10, 0),
+        ]
+        wire = polygon_wire(pts, closed=True)
+        assert not wire.IsNull()
+
+    def test_polygon_wire_all_duplicates_raises(self):
+        """If dedup leaves fewer than 3 points, should still raise."""
+        pts = [(5, 5, 0), (5, 5, 1e-9), (5, 5, 2e-9)]
+        with pytest.raises(ValueError):
+            polygon_wire(pts)
 
 
 # ── rounded_rect_wire tests ──────────────────────────────────

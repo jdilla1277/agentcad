@@ -526,16 +526,33 @@ def ellipse_wire(x_radius, y_radius, center=(0, 0, 0), normal=(0, 0, 1)):
     return BRepBuilderAPI_MakeWire(edge).Wire()
 
 
+def _dedup_points(points, tol=1e-6):
+    """Remove consecutive near-duplicate points within tolerance."""
+    if not points:
+        return points
+    result = [points[0]]
+    for p in points[1:]:
+        prev = result[-1]
+        dist = sum((a - b) ** 2 for a, b in zip(p, prev)) ** 0.5
+        if dist > tol:
+            result.append(p)
+    return result
+
+
 def spline_wire(points, closed=True):
     """Create a smooth spline wire through 3D points.
 
+    Near-duplicate consecutive points (within 1e-6mm) are automatically
+    collapsed to prevent OCC ``Knots interval values too close`` errors.
+
     Args:
-        points: List of (x, y, z) tuples (minimum 3).
+        points: List of (x, y, z) tuples (minimum 3 after dedup).
         closed: If True, close the wire.
 
     Returns:
         TopoDS_Wire
     """
+    points = _dedup_points(points)
     if len(points) < 3:
         raise ValueError("spline_wire requires at least 3 points")
 
@@ -555,13 +572,17 @@ def spline_wire(points, closed=True):
 def polygon_wire(points, closed=True):
     """Create a wire from straight line segments between points.
 
+    Near-duplicate consecutive points (within 1e-6mm) are automatically
+    collapsed to prevent zero-length edges.
+
     Args:
-        points: List of (x, y, z) tuples (minimum 3).
+        points: List of (x, y, z) tuples (minimum 3 after dedup).
         closed: If True, close the wire.
 
     Returns:
         TopoDS_Wire
     """
+    points = _dedup_points(points)
     if len(points) < 3:
         raise ValueError("polygon_wire requires at least 3 points")
 
