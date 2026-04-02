@@ -351,3 +351,34 @@ def test_docs_preamble_mentions_wire_helpers(runner):
     content = data["content"]
     assert "ellipse_wire" in content
     assert "elliptical_sweep" in content
+
+
+# --- M38: Complex profile patterns ---
+
+
+def test_docs_patterns_subtractive_construction(runner):
+    """Patterns should document cut-from-blank strategy."""
+    result = runner.invoke(cli, ["docs", "patterns"])
+    assert result.exit_code == 0
+    content = json.loads(result.output)["content"].lower()
+    assert "subtractive" in content or "cut from" in content
+    assert "boolean" in content or "brepalgoapiapi_cut" in content or "cut" in content
+
+
+def test_docs_patterns_wire_winding(runner):
+    """Patterns should document wire winding direction and normals."""
+    result = runner.invoke(cli, ["docs", "patterns"])
+    assert result.exit_code == 0
+    content = json.loads(result.output)["content"].lower()
+    assert "winding" in content
+    assert "ccw" in content or "counter-clockwise" in content
+    assert "normal" in content
+
+
+def test_docs_patterns_mixed_edge_wire(runner):
+    """Patterns should document building wires from mixed edge types."""
+    result = runner.invoke(cli, ["docs", "patterns"])
+    assert result.exit_code == 0
+    content = json.loads(result.output)["content"]
+    assert "BRepBuilderAPI_MakeWire" in content
+    assert "BRepBuilderAPI_MakeEdge" in content
