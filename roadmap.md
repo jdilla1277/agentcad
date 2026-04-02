@@ -422,7 +422,9 @@ Driven by agent friction testing across 6+ real model sessions.
 - Document the decision and reasoning in this roadmap or a dedicated doc.
 - Gates M45 (public repo) — can't open the repo without deciding what "open" means.
 
-**Status:** Pending
+**Decision:** BSL 1.1 — public repo, source-available, free for all use except offering cadtool as a competing hosted service. Converts to Apache 2.0 after 4 years per release. Full rationale in `prd/m39_licensing_strategy.md`.
+
+**Status:** Done
 
 ---
 
@@ -500,16 +502,25 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M45: Public GitHub Repo
+### M45: Prepare for Public — Repo Split & Public Launch
 
-**Goal:** Make the repository public and ready for external visitors.
+**Goal:** Split the codebase into a public CLI repo and a private internal repo, then make the public repo ready for external visitors.
 
 **Scope:**
-- Audit repo for secrets, credentials, internal paths.
-- Write a public-facing README: what it is, install, agent setup, examples.
+
+**Repo split:**
+- Create new public repo (e.g., `cadtool` or `cadtool-cli`) with `app/` contents promoted to root.
+- This repo (`mountain-climber`) stays private — PRDs, roadmap, friction logs, strategy docs, internal CLAUDE.md.
+- Decide linking strategy: git submodule, subtree, or independent side-by-side clones.
+
+**Public repo preparation:**
+- Add BSL 1.1 LICENSE file (per M39 decision).
+- Write public-facing README: what it is, install, agent setup, examples.
+- Write public CLAUDE.md: development setup, contribution norms, TDD process. Strip internal strategy content.
 - Add contributing guidelines (even if minimal — "issues welcome, no PRs yet").
-- License per M39 decision.
+- Audit for secrets, credentials, internal paths, references to `mountain-climber`.
 - Set up GitHub Actions CI (tests on push).
+- Verify `pip install` works from the new repo URL.
 
 **Status:** Pending
 
