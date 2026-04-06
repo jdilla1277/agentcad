@@ -7,7 +7,7 @@
 
 ## Decision
 
-cadtool will be **public and source-available** under the **Business Source License (BSL 1.1)**.
+agentcad will be **public and source-available** under the **Business Source License (BSL 1.1)**.
 
 ---
 
@@ -15,8 +15,8 @@ cadtool will be **public and source-available** under the **Business Source Lice
 
 | Parameter | Value |
 |-----------|-------|
-| **Licensor** | cadtool authors |
-| **Licensed work** | cadtool (all versions) |
+| **Licensor** | agentcad authors |
+| **Licensed work** | agentcad (all versions) |
 | **Use grant** | Non-production use is permitted. Production use by individuals and organizations is permitted. |
 | **Additional use grant** | You may use the Licensed Work in production, provided you do not offer the Licensed Work as a hosted or managed service to third parties. |
 | **Change license** | Apache 2.0 |
@@ -31,12 +31,12 @@ cadtool will be **public and source-available** under the **Business Source Lice
 - Agent tools live or die by adoption. Agents need to `pip install` frictionlessly.
 - Public source builds trust — users and enterprises can audit what they're running.
 - Enables community contributions, issue reports, and ecosystem integrations.
-- `cadtool context` and `cadtool docs` are designed for discoverability; hiding the source contradicts that philosophy.
+- `agentcad context` and `agentcad docs` are designed for discoverability; hiding the source contradicts that philosophy.
 
 ### Why BSL, not MIT/Apache?
 
 - **The slop fork problem.** In the AI ecosystem, permissive licenses invite low-effort forks that wrap a thin API layer and compete on price before the original author has launched their own commercial offering.
-- cadtool's monetization path is a **hosted service** (background jobs, accounts, cloud rendering). BSL protects this by preventing third parties from offering cadtool-as-a-service while allowing all other use.
+- agentcad's monetization path is a **hosted service** (background jobs, accounts, cloud rendering). BSL protects this by preventing third parties from offering agentcad-as-a-service while allowing all other use.
 - The CLI tool remains free for local use — install it anywhere, use it with any agent, no restrictions.
 
 ### Why not proprietary?
@@ -63,11 +63,11 @@ cadtool will be **public and source-available** under the **Business Source Lice
 
 | Use case | Allowed? |
 |----------|----------|
-| Developer installs cadtool locally, uses with Claude Code | Yes |
-| Company installs cadtool for internal engineering team | Yes |
+| Developer installs agentcad locally, uses with Claude Code | Yes |
+| Company installs agentcad for internal engineering team | Yes |
 | Someone reads source, submits PRs, builds plugins | Yes |
-| Someone forks cadtool and offers "cadtool cloud" as a competing service | **No** |
-| Someone embeds cadtool in a product they sell (not as a CAD service) | Yes |
+| Someone forks agentcad and offers "agentcad cloud" as a competing service | **No** |
+| Someone embeds agentcad in a product they sell (not as a CAD service) | Yes |
 
 ---
 
@@ -84,7 +84,7 @@ cadtool will be **public and source-available** under the **Business Source Lice
 
 The current `mountain-climber` repo blends internal business documents (PRDs, roadmap, friction logs, strategy docs) with the CLI application code. Going public requires splitting into two repositories:
 
-- **Public repo** — the cadtool CLI. Contains `app/` contents (promoted to root), LICENSE (BSL), public README, CI, public CLAUDE.md.
+- **Public repo** — the agentcad CLI. Contains `app/` contents (promoted to root), LICENSE (BSL), public README, CI, public CLAUDE.md.
 - **Private repo** (`mountain-climber`) — internal command center. PRDs, roadmap, friction logs, strategy docs, internal CLAUDE.md.
 
 This split is handled in M45 (Prepare for Public).
