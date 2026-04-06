@@ -4,7 +4,7 @@ import cadquery as cq
 
 import pytest
 
-from cadtool.render import (
+from agentcad.render import (
     render_shape,
     render_shape_custom,
     render_views,

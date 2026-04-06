@@ -2,7 +2,7 @@ import json
 
 import click
 
-from cadtool.daemon import (
+from agentcad.daemon import (
     _default_pid_path,
     _default_socket_path,
     daemon_status,
@@ -21,7 +21,7 @@ def _pid_path():
 
 @click.group()
 def daemon():
-    """Manage the cadtool background daemon."""
+    """Manage the agentcad background daemon."""
 
 
 @daemon.command()

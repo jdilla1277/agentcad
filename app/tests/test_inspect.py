@@ -3,7 +3,7 @@ import json
 import cadquery as cq
 from cadquery import exporters
 
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 def _make_step(directory, name="output.step"):

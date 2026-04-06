@@ -1,7 +1,7 @@
 import json
 
-from cadtool.cli import cli
-from cadtool.manifest import MANIFEST_FILE
+from agentcad.cli import cli
+from agentcad.manifest import MANIFEST_FILE
 
 
 def _init_project(runner):
@@ -91,7 +91,7 @@ def test_preamble_rotate_available(runner, isolated_dir):
 
 
 def test_docs_preamble_section(runner):
-    """cadtool docs preamble lists available pre-injected names."""
+    """agentcad docs preamble lists available pre-injected names."""
     result = runner.invoke(cli, ["docs", "preamble"])
     assert result.exit_code == 0
     data = json.loads(result.output)

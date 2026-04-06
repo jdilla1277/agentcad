@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from cadtool.cli import cli
-from cadtool.manifest import MANIFEST_FILE
-from cadtool.validate import validate_script
+from agentcad.cli import cli
+from agentcad.manifest import MANIFEST_FILE
+from agentcad.validate import validate_script
 
 
 def _init_project(runner):
@@ -156,7 +156,7 @@ def test_valid_script_passes_and_runs(runner, isolated_dir):
 
 
 def test_docs_validation_section(runner):
-    """cadtool docs validation describes available checks."""
+    """agentcad docs validation describes available checks."""
     result = runner.invoke(cli, ["docs", "validation"])
     assert result.exit_code == 0
     data = json.loads(result.output)

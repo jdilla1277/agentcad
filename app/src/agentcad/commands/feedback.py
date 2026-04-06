@@ -1,4 +1,4 @@
-"""cadtool feedback — submit agent feedback with session context."""
+"""agentcad feedback — submit agent feedback with session context."""
 
 import json
 from datetime import datetime, timezone
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 
-from cadtool.session_log import SessionLogger
+from agentcad.session_log import SessionLogger
 
 
 @click.command()
@@ -21,7 +21,7 @@ def feedback(message, max_entries):
     """Submit feedback with session log context.
 
     Bundles your MESSAGE with the session log, friction signals, and
-    environment info.  The bundle is written to .cadtool/feedback/ and
+    environment info.  The bundle is written to .agentcad/feedback/ and
     printed as JSON so an agent can attach it to a GitHub issue.
     """
     project_dir = Path.cwd()
@@ -29,7 +29,7 @@ def feedback(message, max_entries):
     bundle = logger.get_session_bundle(message, max_entries=max_entries)
 
     # Write bundle to file
-    feedback_dir = project_dir / ".cadtool" / "feedback"
+    feedback_dir = project_dir / ".agentcad" / "feedback"
     feedback_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     bundle_file = feedback_dir / f"{ts}.json"

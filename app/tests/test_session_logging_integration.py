@@ -4,14 +4,14 @@ import json
 from pathlib import Path
 
 from click.testing import CliRunner
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 def test_init_command_is_logged(runner, isolated_dir):
     result = runner.invoke(cli, ["init", "--name", "testproj"])
     assert result.exit_code == 0
 
-    log_file = isolated_dir / ".cadtool" / "session.jsonl"
+    log_file = isolated_dir / ".agentcad" / "session.jsonl"
     assert log_file.exists()
 
     entries = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
@@ -25,7 +25,7 @@ def test_context_command_is_logged(runner, isolated_dir):
     result = runner.invoke(cli, ["context"])
     assert result.exit_code == 0
 
-    log_file = isolated_dir / ".cadtool" / "session.jsonl"
+    log_file = isolated_dir / ".agentcad" / "session.jsonl"
     entries = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
     assert len(entries) == 2
     assert entries[1]["command"] == "context"
@@ -35,7 +35,7 @@ def test_feedback_command_is_not_logged(runner, isolated_dir):
     """The feedback command itself should not be logged to prevent recursion."""
     runner.invoke(cli, ["feedback", "test message"])
 
-    log_file = isolated_dir / ".cadtool" / "session.jsonl"
+    log_file = isolated_dir / ".agentcad" / "session.jsonl"
     if log_file.exists():
         entries = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
         assert not any(e["command"] == "feedback" for e in entries)
@@ -44,7 +44,7 @@ def test_feedback_command_is_not_logged(runner, isolated_dir):
 def test_logged_entry_has_args(runner, isolated_dir):
     runner.invoke(cli, ["init", "--name", "myproj"])
 
-    log_file = isolated_dir / ".cadtool" / "session.jsonl"
+    log_file = isolated_dir / ".agentcad" / "session.jsonl"
     entries = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
     assert entries[0]["args"]["argv"] is not None
 

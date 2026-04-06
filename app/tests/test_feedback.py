@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from click.testing import CliRunner
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 def test_feedback_subcommand_registered(runner):
@@ -18,8 +18,8 @@ def test_feedback_requires_message(runner, isolated_dir):
 
 def test_feedback_outputs_bundle_json(runner, isolated_dir):
     # Create a session log first
-    (isolated_dir / ".cadtool").mkdir()
-    log_file = isolated_dir / ".cadtool" / "session.jsonl"
+    (isolated_dir / ".agentcad").mkdir()
+    log_file = isolated_dir / ".agentcad" / "session.jsonl"
     entry = json.dumps({
         "timestamp": "2026-03-31T00:00:00+00:00",
         "command": "run",
@@ -68,14 +68,14 @@ def test_feedback_bundle_includes_environment(runner, isolated_dir):
     output = json.loads(result.output)
     env = output["bundle"]["environment"]
     assert "python_version" in env
-    assert "cadtool_version" in env
+    assert "agentcad_version" in env
     assert "platform" in env
 
 
 def test_feedback_max_entries_flag(runner, isolated_dir):
     """--max-entries controls how many session log entries are included."""
-    (isolated_dir / ".cadtool").mkdir()
-    log_file = isolated_dir / ".cadtool" / "session.jsonl"
+    (isolated_dir / ".agentcad").mkdir()
+    log_file = isolated_dir / ".agentcad" / "session.jsonl"
     lines = []
     for i in range(20):
         lines.append(json.dumps({

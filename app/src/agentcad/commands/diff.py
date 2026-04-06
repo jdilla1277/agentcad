@@ -4,7 +4,7 @@ from pathlib import Path
 
 import click
 
-from cadtool.manifest import load_manifest
+from agentcad.manifest import load_manifest
 
 
 def _resolve_version(manifest, ref):

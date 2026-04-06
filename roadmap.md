@@ -1,4 +1,4 @@
-# cadtool — Roadmap
+# agentcad — Roadmap (formerly cadtool)
 
 Single source of truth for all milestones. For per-milestone detailed plans, see `prd/m{N}_plan.md`.
 
@@ -9,19 +9,19 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | # | Milestone | Size | Status |
 |---|-----------|------|--------|
 | | **v0.1 — Core Pipeline** | | |
-| M1 | Project scaffolding & `cadtool init` | S | Done |
+| M1 | Project scaffolding & `agentcad init` | S | Done |
 | M2 | 2D geometry primitives | S | Done |
 | M3 | Geometry enrichment | S | Done |
-| M4 | `cadtool run` — script execution & STEP export | L | Done |
+| M4 | `agentcad run` — script execution & STEP export | L | Done |
 | M5 | Error handling & failed versions | S | Done |
 | M6 | PNG rendering | M | Done |
 | M7 | GLB & STL export | M | Done |
-| M8 | `cadtool render` (custom views, `--zoom`) | M | Done |
+| M8 | `agentcad render` (custom views, `--zoom`) | M | Done |
 | ~~M9~~ | ~~2D primitive cleanup~~ (absorbed into M4) | — | Done |
-| M9b | `--focus` for `cadtool render` | S | Done |
-| M10 | `cadtool context`, `cadtool docs` & `cadtool diff` | M | Done |
+| M9b | `--focus` for `agentcad render` | S | Done |
+| M10 | `agentcad context`, `agentcad docs` & `agentcad diff` | M | Done |
 | M11 | Geometry helpers (`loft_sections`, `tapered_sweep`, `naca_wire`, `mirror_fuse`) | M | Done |
-| M12 | `cadtool export` command | S | Done |
+| M12 | `agentcad export` command | S | Done |
 | M13 | OBJ export & end-to-end verification | S | Done |
 | | | | |
 | | **v0.2 — Fast Loop & Friction Fixes** | | |
@@ -31,19 +31,19 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M17 | Friction fixes — auto-compound, docs improvements | S | Done |
 | M18 | Quick preview mode (`--preview`) | S | Done |
 | M19 | Multi-solid colored GLB export | S | Done |
-| M20 | Patterns docs, positioning helpers & `cadtool view` | M | Done |
+| M20 | Patterns docs, positioning helpers & `agentcad view` | M | Done |
 | M21 | Parametric scripts (`--params`) | M | Done |
 | M22 | Friction fixes — Python version check, rotate docs, dry-run | S | Done |
 | M23 | Persistent worker / daemon mode | M | Done |
-| M24 | Friction fixes — `cadtool inspect`, render quality, bug fixes | M | Done |
+| M24 | Friction fixes — `agentcad inspect`, render quality, bug fixes | M | Done |
 | M25 | `--help` operational briefing & README | S | Done |
 | M26 | Performance warnings in docs | XS | Done |
-| M27 | Friendlier `cadtool init` when project exists | XS | Done |
+| M27 | Friendlier `agentcad init` when project exists | XS | Done |
 | M28 | Better Python version / import error diagnostics | S | Done |
-| M29 | Progress indicator for long `cadtool run` | M | Done |
+| M29 | Progress indicator for long `agentcad run` | M | Done |
 | M30 | `involute_gear_profile` helper | M | Done |
 | M31 | User-specified part colors in GLB export | S | Done |
-| M32 | File paths in `cadtool context` | XS | Done |
+| M32 | File paths in `agentcad context` | XS | Done |
 | M33 | Per-part design workflow (named parts, per-part metrics/renders) | L | Done |
 | M34 | Assembly positioning helpers (`bbox_point`, `place_at`, `assemble`) | S | Done |
 | M35 | Wire helpers & `elliptical_sweep` | S | Done |
@@ -52,35 +52,37 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M38 | Complex profile patterns in docs | S | Pending |
 | | | | |
 | | **v0.3 — Distribution & Agent Ecosystem** | | |
-| M39 | Openness & licensing strategy | S | Pending |
-| M40 | Publish to PyPI | S | Pending |
-| M41 | MCP server | M | Pending |
-| M42 | ClawHub skill (OpenClaw) | XS | Pending |
-| M43 | Claude Code skill/plugin | XS | Pending |
-| M44 | Homepage | M | Pending |
-| M45 | Public GitHub repo | S | Pending |
-| M46 | Alpha users (5–10 testers, collect feedback) | M | Pending |
-| M47 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
+| M39 | Openness & licensing strategy | S | Done |
+| M40 | Rename to agentcad | M | Done |
+| M41 | Publish to PyPI | S | Pending |
+| M42 | MCP server | M | Pending |
+| M43 | ClawHub skill (OpenClaw) | XS | Pending |
+| M44 | Claude Code skill/plugin | XS | Pending |
+| M45 | Homepage | M | Pending |
+| M46 | Public GitHub repo | S | Pending |
+| M47 | Session logging & feedback | S | Pending |
+| M48 | Alpha users (5–10 testers, collect feedback) | M | Pending |
+| M49 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
 
 ---
 
 ## Where we are
 
-**v0.1 (Core Pipeline):** Done. cadtool can execute CadQuery scripts, render PNGs, export to STEP/GLB/STL/OBJ, diff versions, and show docs. 368 tests, 10 commands.
+**v0.1 (Core Pipeline):** Done. agentcad can execute CadQuery scripts, render PNGs, export to STEP/GLB/STL/OBJ, diff versions, and show docs. 368 tests, 10 commands.
 
 **v0.2 (Fast Loop & Friction Fixes):** In progress. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers, validity warnings shipped. Remaining: wire helper robustness (M37), complex profile docs (M38).
 
-**v0.3 (Distribution & Agent Ecosystem):** Not started. Make cadtool installable by anyone and discoverable by every major AI agent platform.
+**v0.3 (Distribution & Agent Ecosystem):** In progress. Licensing decided (BSL 1.1), renamed to agentcad (M40). Next: PyPI publish (M41).
 
 ---
 
 ## v0.1 — Core Pipeline
 
-### M1: Project Scaffolding & `cadtool init` ✓
+### M1: Project Scaffolding & `agentcad init` ✓
 
-**Goal:** A pip-installable CLI that runs `cadtool init` and produces correct project structure.
+**Goal:** A pip-installable CLI that runs `agentcad init` and produces correct project structure.
 
-**Delivered:** 12 tests, `cadtool init` command with JSON output, Click CLI, pytest suite.
+**Delivered:** 12 tests, `agentcad init` command with JSON output, Click CLI, pytest suite.
 
 ---
 
@@ -100,7 +102,7 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 ---
 
-### M4: `cadtool run` — Script Execution & STEP Export ✓
+### M4: `agentcad run` — Script Execution & STEP Export ✓
 
 **Goal:** Execute a CadQuery script and produce a versioned STEP file.
 
@@ -120,7 +122,7 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **Goal:** Produce PNG renders from CadQuery results for agent visual inspection.
 
-**Delivered:** 43 tests. OCP offscreen rendering via `V3d_View.ToPixMap`. `--render` option on `cadtool run` accepts comma-separated views. 7 views available; `all` expands to front, right, top, iso.
+**Delivered:** 43 tests. OCP offscreen rendering via `V3d_View.ToPixMap`. `--render` option on `agentcad run` accepts comma-separated views. 7 views available; `all` expands to front, right, top, iso.
 
 ---
 
@@ -128,15 +130,15 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **Goal:** Mesh exports for web viewers, 3D printing, and agent interop.
 
-**Delivered:** 53 tests. `--export stl,glb` option on `cadtool run`. STL via CadQuery exporters. GLB via OCP `RWGltf_CafWriter`.
+**Delivered:** 53 tests. `--export stl,glb` option on `agentcad run`. STL via CadQuery exporters. GLB via OCP `RWGltf_CafWriter`.
 
 ---
 
-### M8: `cadtool render` ✓
+### M8: `agentcad render` ✓
 
 **Goal:** Render additional views of an existing STEP file without creating a new version.
 
-**Delivered:** 74 tests, 3 commands. `cadtool render <step_path> --view <spec>` with named views, custom angles, `--zoom`, `--name`.
+**Delivered:** 74 tests, 3 commands. `agentcad render <step_path> --view <spec>` with named views, custom angles, `--zoom`, `--name`.
 
 ---
 
@@ -144,19 +146,19 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 ---
 
-### M9b: `--focus` for `cadtool render` ✓
+### M9b: `--focus` for `agentcad render` ✓
 
-**Goal:** Make `cadtool render` zoom usable for detail inspection.
+**Goal:** Make `agentcad render` zoom usable for detail inspection.
 
 **Delivered:** 84 tests. `--focus x,y,z` sets camera target. `--no-fit` skips `FitAll()`. `_apply_camera()` helper extracted.
 
 ---
 
-### M10: `cadtool context`, `cadtool docs` & `cadtool diff` ✓
+### M10: `agentcad context`, `agentcad docs` & `agentcad diff` ✓
 
 **Goal:** Agent discoverability and version comparison commands.
 
-**Delivered:** 111 tests, 6 commands. `cadtool context` returns project state. `cadtool docs [section]` returns hardcoded documentation. `cadtool diff <ref1> <ref2>` compares versions.
+**Delivered:** 111 tests, 6 commands. `agentcad context` returns project state. `agentcad docs [section]` returns hardcoded documentation. `agentcad diff <ref1> <ref2>` compares versions.
 
 ---
 
@@ -164,15 +166,15 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **Goal:** Reusable organic geometry primitives for CadQuery scripts.
 
-**Delivered:** `cadtool.helpers` module with `loft_sections`, `tapered_sweep`, `naca_wire`, `mirror_fuse`.
+**Delivered:** `agentcad.helpers` module with `loft_sections`, `tapered_sweep`, `naca_wire`, `mirror_fuse`.
 
 ---
 
-### M12: `cadtool export` Command ✓
+### M12: `agentcad export` Command ✓
 
 **Goal:** Post-hoc mesh export from existing STEP files without re-running scripts.
 
-**Delivered:** 141 tests, 7 commands. `cadtool export <step_file> --format stl,glb`.
+**Delivered:** 141 tests, 7 commands. `agentcad export <step_file> --format stl,glb`.
 
 ---
 
@@ -202,7 +204,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ### M14: Geometric Metrics in Build Output ✓
 
-**Goal:** Every successful `cadtool run` returns geometric metrics (bbox, volume, area, face/edge counts, validity) so agents can verify shape correctness without rendering.
+**Goal:** Every successful `agentcad run` returns geometric metrics (bbox, volume, area, face/edge counts, validity) so agents can verify shape correctness without rendering.
 
 ---
 
@@ -228,7 +230,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ### M18: Quick Preview Mode ✓
 
-**Goal:** `--preview` flag on `cadtool run` produces a fast 256x256 iso PNG for shape verification during iteration.
+**Goal:** `--preview` flag on `agentcad run` produces a fast 256x256 iso PNG for shape verification during iteration.
 
 **Delivered:** 210 tests. Preview path in output JSON and meta.json. Coexists with `--render`.
 
@@ -242,19 +244,19 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M20: Patterns Docs, Positioning Helpers & `cadtool view` ✓
+### M20: Patterns Docs, Positioning Helpers & `agentcad view` ✓
 
 **Goal:** Eliminate positioning footguns, make GLB viewable, allow mixed view specs.
 
-**Delivered:** 234 tests, 8 commands. `cadtool docs patterns`, `translate()` + `rotate()` helpers, `cadtool view <file>`, mixed view specs (`front,right,45:15`).
+**Delivered:** 234 tests, 8 commands. `agentcad docs patterns`, `translate()` + `rotate()` helpers, `agentcad view <file>`, mixed view specs (`front,right,45:15`).
 
 ---
 
 ### M21: Parametric Scripts ✓
 
-**Goal:** `--params key=val,key=val` on `cadtool run` passes parameter overrides to CQGI.
+**Goal:** `--params key=val,key=val` on `agentcad run` passes parameter overrides to CQGI.
 
-**Delivered:** 247 tests. Type coercion, unknown param detection, params in output JSON, `cadtool diff` shows param changes.
+**Delivered:** 247 tests. Type coercion, unknown param detection, params in output JSON, `agentcad diff` shows param changes.
 
 ---
 
@@ -270,7 +272,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 **Goal:** Background process keeps CadQuery/OCP loaded in memory, eliminating 3-5s cold start.
 
-**Delivered:** ~282 tests, 9 commands. `cadtool daemon start/stop/status`. Unix domain socket IPC, eager module warm-up, auto-routing from `cadtool run`.
+**Delivered:** ~282 tests, 9 commands. `agentcad daemon start/stop/status`. Unix domain socket IPC, eager module warm-up, auto-routing from `agentcad run`.
 
 ---
 
@@ -278,13 +280,13 @@ Driven by agent friction testing across 6+ real model sessions.
 
 **Goal:** Fix geometry debugging gaps from helical gear friction test.
 
-**Delivered:** ~304 tests, 10 commands. `cadtool inspect`, validity diagnostics, negative volume warning, brighter renders, relative path support, version dir collision fix, custom angles in `--render`.
+**Delivered:** ~304 tests, 10 commands. `agentcad inspect`, validity diagnostics, negative volume warning, brighter renders, relative path support, version dir collision fix, custom angles in `--render`.
 
 ---
 
 ### M25: `--help` Operational Briefing & README
 
-**Goal:** Make `cadtool --help` a complete operational briefing so an agent can be productive on first contact.
+**Goal:** Make `agentcad --help` a complete operational briefing so an agent can be productive on first contact.
 
 **Status:** In Progress (PR #15)
 
@@ -294,15 +296,15 @@ Driven by agent friction testing across 6+ real model sessions.
 
 **Goal:** Document the twistExtrude + spline performance cliff so agents don't burn timeouts.
 
-**Scope:** Add warning to `cadtool docs patterns`. 1 test, 1 docs string edit.
+**Scope:** Add warning to `agentcad docs patterns`. 1 test, 1 docs string edit.
 
 **Status:** Pending
 
 ---
 
-### M27: Friendlier `cadtool init` Error ✓
+### M27: Friendlier `agentcad init` Error ✓
 
-**Goal:** When project already initialized, tell the agent to run `cadtool context`.
+**Goal:** When project already initialized, tell the agent to run `agentcad context`.
 
 ---
 
@@ -314,7 +316,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ### M29: Progress Indicator for Long Runs ✓
 
-**Goal:** Periodic progress heartbeats to stderr during long `cadtool run` executions.
+**Goal:** Periodic progress heartbeats to stderr during long `agentcad run` executions.
 
 ---
 
@@ -332,9 +334,9 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M32: File Paths in `cadtool context` ✓
+### M32: File Paths in `agentcad context` ✓
 
-**Goal:** Each version in `cadtool context` output includes its file paths.
+**Goal:** Each version in `agentcad context` output includes its file paths.
 
 ---
 
@@ -393,7 +395,7 @@ Driven by agent friction testing across 6+ real model sessions.
 - "Cut from blank" pattern: subtractive construction (cut gaps from a cylinder) vs. additive (build teeth up). Explain why subtraction inherits correct normals and avoids self-intersection.
 - Wire winding direction: right-hand rule, how CW vs. CCW affects face normals, how to diagnose via negative volume.
 - Mixed edge type wires: combining line edges, circular arcs, and BSplines into a single `BRepBuilderAPI_MakeWire`.
-- Add to `cadtool docs patterns`.
+- Add to `agentcad docs patterns`.
 
 **Motivation:** Spur gear friction log — the key insight that unlocked a valid gear was inverting construction from additive to subtractive.
 
@@ -403,37 +405,45 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ## v0.3 — Distribution & Agent Ecosystem
 
-**Goal:** Make cadtool installable by anyone and discoverable by every major AI agent platform.
+**Goal:** Make agentcad installable by anyone and discoverable by every major AI agent platform.
 
 **Reference implementations:** [Stripe Projects](https://projects.dev/) (CLI-first, agent-friendly provisioning), [RAMP CLI](https://github.com/ramp-public/ramp-cli) (`--agent` flag, `ramp skills` command, separate MCP server).
 
-**Suggested order:** M45 (public repo) → M40 (PyPI) → M41 (MCP) → M43 (Claude skill) → M42 (ClawHub) → M44 (homepage)
+**Suggested order:** M41 (PyPI) → M42 (MCP) → M44 (Claude skill) → M43 (ClawHub) → M45 (homepage) → M46 (public repo)
 
 ---
 
 ### M39: Openness & Licensing Strategy
 
-**Goal:** Decide how open cadtool will be — public vs. private repo, open-source vs. source-available vs. proprietary, license choice — and document the rationale.
+**Goal:** Decide how open agentcad will be — public vs. private repo, open-source vs. source-available vs. proprietary, license choice — and document the rationale.
 
 **Scope:**
 - Decide: public GitHub repo or private with pip-installable distribution only?
 - Choose a license (MIT, Apache 2.0, BSL, proprietary, etc.) or explicitly defer.
 - Consider implications for each distribution channel (PyPI, MCP, ClawHub, skills).
 - Document the decision and reasoning in this roadmap or a dedicated doc.
-- Gates M45 (public repo) — can't open the repo without deciding what "open" means.
+- Gates M46 (public repo) — can't open the repo without deciding what "open" means.
 
-**Decision:** BSL 1.1 — public repo, source-available, free for all use except offering cadtool as a competing hosted service. Converts to Apache 2.0 after 4 years per release. Full rationale in `prd/m39_licensing_strategy.md`.
+**Decision:** BSL 1.1 — public repo, source-available, free for all use except offering agentcad as a competing hosted service. Converts to Apache 2.0 after 4 years per release. Full rationale in `prd/m39_licensing_strategy.md`.
 
 **Status:** Done
 
 ---
 
-### M40: Publish to PyPI
+### M40: Rename to agentcad ✓
 
-**Goal:** `pip install cadtool` (or `pipx install cadtool`) works for anyone.
+**Goal:** Rename the package, CLI, and all references from `cadtool` to `agentcad` before first public release.
+
+**Delivered:** Package directory renamed, all imports/env vars/socket paths/manifest filename/CLI entry point/docs updated. 394 tests passing. `agentcad` CLI works.
+
+---
+
+### M41: Publish to PyPI
+
+**Goal:** `pip install agentcad` (or `pipx install agentcad`) works for anyone.
 
 **Scope:**
-- Register "cadtool" on PyPI (or alternative name if taken).
+- Register "agentcad" on PyPI (or alternative name if taken).
 - Add metadata to `pyproject.toml`: description, authors, readme, urls, classifiers.
 - Test publish on TestPyPI first.
 - Set up GitHub Actions for automated publishing via PyPI Trusted Publishers (OIDC, no API tokens).
@@ -443,16 +453,16 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M41: MCP Server
+### M42: MCP Server
 
-**Goal:** A Model Context Protocol server that exposes cadtool commands as native agent tools. Works with Claude Code, Cursor, Windsurf, VS Code Copilot, and any MCP-compatible agent.
+**Goal:** A Model Context Protocol server that exposes agentcad commands as native agent tools. Works with Claude Code, Cursor, Windsurf, VS Code Copilot, and any MCP-compatible agent.
 
 **Scope:**
-- New module `cadtool/mcp_server.py` using the `mcp` Python SDK (`FastMCP`).
+- New module `agentcad/mcp_server.py` using the `mcp` Python SDK (`FastMCP`).
 - Expose tools: `run`, `render`, `export`, `inspect`, `docs`, `context`, `diff`, `view`.
 - stdio transport (client spawns the process).
-- Users configure via `.mcp.json`: `{"cadtool": {"command": "python", "args": ["-m", "cadtool.mcp"]}}`.
-- Structured JSON responses (cadtool already returns these — thin wrapper).
+- Users configure via `.mcp.json`: `{"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}`.
+- Structured JSON responses (agentcad already returns these — thin wrapper).
 - Add `mcp` to optional dependencies in `pyproject.toml`.
 - Tests for tool registration and response format.
 
@@ -460,12 +470,12 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M42: ClawHub Skill (OpenClaw)
+### M43: ClawHub Skill (OpenClaw)
 
-**Goal:** Publish a cadtool skill to ClawHub so OpenClaw agents can discover and use cadtool.
+**Goal:** Publish an agentcad skill to ClawHub so OpenClaw agents can discover and use agentcad.
 
 **Scope:**
-- Write `SKILL.md` with frontmatter: name, description, `requires.bins: ["cadtool"]`.
+- Write `SKILL.md` with frontmatter: name, description, `requires.bins: ["agentcad"]`.
 - Cover all commands, helpers, and workflow in the skill body.
 - Publish via `clawhub publish`.
 - Verify discoverability via `clawhub search "CAD"`.
@@ -474,23 +484,23 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M43: Claude Code Skill/Plugin
+### M44: Claude Code Skill/Plugin
 
-**Goal:** Claude Code users can install cadtool agent instructions with one command.
+**Goal:** Claude Code users can install agentcad agent instructions with one command.
 
 **Scope:**
-- Create `.claude/skills/cadtool/SKILL.md` in the repo (auto-discovered for anyone who clones).
+- Create `.claude/skills/agentcad/SKILL.md` in the repo (auto-discovered for anyone who clones).
 - Optionally: package as a Claude Code plugin for `/plugin install` distribution.
 - Skill covers: commands, helpers, preamble, workflow, common patterns.
-- `allowed-tools: Bash(cadtool *)` for auto-approval.
+- `allowed-tools: Bash(agentcad *)` for auto-approval.
 
 **Status:** Pending
 
 ---
 
-### M44: Homepage
+### M45: Homepage
 
-**Goal:** A public website (e.g., cadtool.dev) that explains what cadtool is, shows examples, and links to install instructions for every agent platform.
+**Goal:** A public website (e.g., agentcad.dev) that explains what agentcad is, shows examples, and links to install instructions for every agent platform.
 
 **Scope:**
 - Landing page: hero, value prop, install snippet, demo GIF/video.
@@ -502,14 +512,14 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M45: Prepare for Public — Repo Split & Public Launch
+### M46: Prepare for Public — Repo Split & Public Launch
 
 **Goal:** Split the codebase into a public CLI repo and a private internal repo, then make the public repo ready for external visitors.
 
 **Scope:**
 
 **Repo split:**
-- Create new public repo (e.g., `cadtool` or `cadtool-cli`) with `app/` contents promoted to root.
+- Create new public repo (e.g., `agentcad` or `agentcad-cli`) with `app/` contents promoted to root.
 - This repo (`mountain-climber`) stays private — PRDs, roadmap, friction logs, strategy docs, internal CLAUDE.md.
 - Decide linking strategy: git submodule, subtree, or independent side-by-side clones.
 
@@ -526,13 +536,28 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M46: Alpha Users
+### M47: Session Logging & Feedback
 
-**Goal:** Get cadtool into the hands of 5–10 real users and collect structured feedback before a public launch.
+**Goal:** Capture agent interaction patterns and friction signals for analysis.
+
+**Scope:**
+- Session logger: auto-log every CLI command to `.agentcad/session.jsonl` (timestamp, args, result).
+- `agentcad feedback` command: bundles user message with session history, friction metrics, and environment info.
+- Friction signal detection: error counts, retry sequences, success rates.
+- `AGENTCAD_NO_LOG` env var to disable logging.
+- Defensive logging: failures never break the CLI.
+
+**Status:** Pending (PR #39)
+
+---
+
+### M48: Alpha Users
+
+**Goal:** Get agentcad into the hands of 5–10 real users and collect structured feedback before a public launch.
 
 **Scope:**
 - Identify alpha testers: AI engineers, CAD hobbyists, agent-tool builders.
-- Provide install instructions (PyPI or private repo access depending on M39).
+- Provide install instructions via PyPI.
 - Give each tester a concrete task (e.g., "design a spur gear" or "model an enclosure").
 - Collect friction logs: what confused them, what broke, what they wished existed.
 - Prioritize feedback into v0.3 or v0.4 milestones.
@@ -541,7 +566,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M47: Launch — Product Hunt, Hacker News, Community Posts
+### M49: Launch — Product Hunt, Hacker News, Community Posts
 
 **Goal:** Public announcement to drive awareness and early adoption.
 

@@ -2,7 +2,7 @@ import json
 
 import click
 
-from cadtool.manifest import load_manifest
+from agentcad.manifest import load_manifest
 
 TOOL_VERSION = "0.1.0"
 

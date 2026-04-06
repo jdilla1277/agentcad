@@ -4,7 +4,7 @@ from pathlib import Path
 
 import cadquery as cq
 
-from cadtool.export import export_glb, export_obj
+from agentcad.export import export_glb, export_obj
 
 
 def _make_box():

@@ -11,7 +11,7 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
 
-from cadtool.helpers import (
+from agentcad.helpers import (
     assemble,
     bbox_point,
     ellipse_wire,

@@ -2,14 +2,14 @@ import json
 import time
 from pathlib import Path
 
-from cadtool.session_log import SessionLogger
+from agentcad.session_log import SessionLogger
 
 
 def test_log_entry_written_to_file(tmp_path):
     logger = SessionLogger(tmp_path)
     logger.log("run", {"script": "box.py", "--output": "v1"}, {"command": "run", "status": "success", "version": 1})
 
-    log_file = tmp_path / ".cadtool" / "session.jsonl"
+    log_file = tmp_path / ".agentcad" / "session.jsonl"
     assert log_file.exists()
 
     entries = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
@@ -26,17 +26,17 @@ def test_multiple_entries_appended(tmp_path):
     logger.log("init", {}, {"command": "init", "status": "success"})
     logger.log("run", {"script": "a.py"}, {"command": "run", "status": "failed", "error": "syntax"})
 
-    log_file = tmp_path / ".cadtool" / "session.jsonl"
+    log_file = tmp_path / ".agentcad" / "session.jsonl"
     entries = [json.loads(line) for line in log_file.read_text().strip().splitlines()]
     assert len(entries) == 2
     assert entries[0]["command"] == "init"
     assert entries[1]["command"] == "run"
 
 
-def test_creates_dotcadtool_dir(tmp_path):
+def test_creates_dot_agentcad_dir(tmp_path):
     logger = SessionLogger(tmp_path)
     logger.log("init", {}, {"command": "init", "status": "success"})
-    assert (tmp_path / ".cadtool").is_dir()
+    assert (tmp_path / ".agentcad").is_dir()
 
 
 def test_get_recent_returns_last_n(tmp_path):
@@ -119,4 +119,4 @@ def test_get_session_bundle(tmp_path):
     assert len(bundle["session_log"]) == 2
     assert bundle["friction_signals"]["total_commands"] == 2
     assert "python_version" in bundle["environment"]
-    assert "cadtool_version" in bundle["environment"]
+    assert "agentcad_version" in bundle["environment"]

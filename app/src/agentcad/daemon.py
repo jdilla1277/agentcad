@@ -1,6 +1,6 @@
-"""Persistent worker daemon for cadtool.
+"""Persistent worker daemon for agentcad.
 
-Keeps CadQuery/OCP loaded in memory so subsequent `cadtool run` invocations
+Keeps CadQuery/OCP loaded in memory so subsequent `agentcad run` invocations
 skip the 3-5s cold import. IPC via Unix domain socket with length-prefixed JSON.
 """
 
@@ -14,11 +14,11 @@ import time
 
 
 def _default_socket_path():
-    return f"/tmp/cadtool-daemon-{os.getuid()}.sock"
+    return f"/tmp/agentcad-daemon-{os.getuid()}.sock"
 
 
 def _default_pid_path():
-    return f"/tmp/cadtool-daemon-{os.getuid()}.pid"
+    return f"/tmp/agentcad-daemon-{os.getuid()}.pid"
 
 
 # ---------- Protocol ----------
@@ -66,15 +66,15 @@ class DaemonServer:
             return {"type": "error", "message": f"Unknown request type: {req_type}"}
 
     def _handle_run(self, request):
-        """Execute a cadtool run command via CliRunner."""
+        """Execute a agentcad run command via CliRunner."""
         from click.testing import CliRunner
-        from cadtool.cli import cli
+        from agentcad.cli import cli
 
         cwd = request.get("cwd")
         argv = request.get("argv", [])
         original_cwd = os.getcwd()
         # Set env var to prevent recursive daemon routing
-        os.environ["CADTOOL_DAEMON"] = "1"
+        os.environ["AGENTCAD_DAEMON"] = "1"
         try:
             if cwd:
                 os.chdir(cwd)
@@ -87,7 +87,7 @@ class DaemonServer:
             }
         finally:
             os.chdir(original_cwd)
-            os.environ.pop("CADTOOL_DAEMON", None)
+            os.environ.pop("AGENTCAD_DAEMON", None)
 
     def serve(self):
         """Start the server loop, listening on the Unix domain socket."""
@@ -239,7 +239,7 @@ def start_daemon(socket_path=None, pid_path=None):
 
     # Launch daemon subprocess
     proc = subprocess.Popen(
-        [sys.executable, "-m", "cadtool.daemon",
+        [sys.executable, "-m", "agentcad.daemon",
          "--socket", socket_path, "--pid", pid_path],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
@@ -289,7 +289,7 @@ def _main():
     # Eager imports — warm up all expensive modules
     import cadquery  # noqa: F401
     from cadquery import cqgi, exporters  # noqa: F401
-    from cadtool import helpers, metrics, render, export  # noqa: F401
+    from agentcad import helpers, metrics, render, export  # noqa: F401
 
     server = DaemonServer(
         socket_path=args.socket,

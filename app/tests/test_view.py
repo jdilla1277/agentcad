@@ -3,8 +3,8 @@ from pathlib import Path
 
 import cadquery as cq
 
-from cadtool.cli import cli
-from cadtool.export import export_glb
+from agentcad.cli import cli
+from agentcad.export import export_glb
 
 
 def _make_glb(directory):
@@ -75,7 +75,7 @@ def test_view_html_embeds_glb_data(runner, isolated_dir, monkeypatch):
     glb_path = _make_glb(isolated_dir)
     monkeypatch.setattr("webbrowser.open", lambda url: None)
     runner.invoke(cli, ["view", str(glb_path)])
-    html_path = isolated_dir / ".cadtool_viewer_output.html"
+    html_path = isolated_dir / ".agentcad_viewer_output.html"
     html = html_path.read_text()
     assert "data:application/octet-stream;base64," in html
     # Should NOT contain a bare filename reference
@@ -83,7 +83,7 @@ def test_view_html_embeds_glb_data(runner, isolated_dir, monkeypatch):
 
 
 def test_view_relative_path(runner, isolated_dir, monkeypatch):
-    """cadtool view should work with relative paths."""
+    """agentcad view should work with relative paths."""
     subdir = isolated_dir / "subdir"
     subdir.mkdir()
     glb_path = _make_glb(subdir)

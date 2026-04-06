@@ -1,7 +1,7 @@
-"""Tests for the cadtool --help operational briefing."""
+"""Tests for the agentcad --help operational briefing."""
 import json
 
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 def test_help_mentions_json_output(runner):
@@ -15,8 +15,8 @@ def test_help_mentions_json_output(runner):
 def test_help_includes_quickstart_workflow(runner):
     result = runner.invoke(cli, ["--help"])
     output = result.output
-    assert "cadtool init" in output
-    assert "cadtool run" in output
+    assert "agentcad init" in output
+    assert "agentcad run" in output
     assert "show_object" in output
 
 
@@ -96,10 +96,10 @@ def test_help_mentions_patterns(runner):
 
 
 def test_help_mentions_docs_command(runner):
-    """Agent should know cadtool docs exists for deep-dive."""
+    """Agent should know agentcad docs exists for deep-dive."""
     result = runner.invoke(cli, ["--help"])
     output = result.output
-    assert "cadtool docs" in output
+    assert "agentcad docs" in output
 
 
 def test_help_shows_example_json_output(runner):

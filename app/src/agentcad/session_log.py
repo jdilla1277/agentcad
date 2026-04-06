@@ -1,4 +1,4 @@
-"""Session logging for cadtool — captures every command invocation."""
+"""Session logging for agentcad — captures every command invocation."""
 
 import json
 import platform
@@ -12,7 +12,7 @@ _ERROR_STATUSES = {"failed", "error", "validation_error"}
 
 class SessionLogger:
     def __init__(self, project_dir: Path):
-        self._dir = project_dir / ".cadtool"
+        self._dir = project_dir / ".agentcad"
         self._log_file = self._dir / "session.jsonl"
 
     def log(self, command: str, args: dict, result: dict) -> None:
@@ -75,13 +75,13 @@ class SessionLogger:
 
 def _environment_info() -> dict:
     try:
-        from cadtool import __version__
+        from agentcad import __version__
         version = __version__
     except (ImportError, AttributeError):
         version = "unknown"
 
     return {
         "python_version": sys.version,
-        "cadtool_version": version,
+        "agentcad_version": version,
         "platform": platform.platform(),
     }
