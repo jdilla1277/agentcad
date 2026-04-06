@@ -1,4 +1,4 @@
-# cadtool.helpers — Organic geometry primitives for agent scripts
+# agentcad.helpers — Organic geometry primitives for agent scripts
 
 import math
 

@@ -1,7 +1,7 @@
 import json
 
 from click.testing import CliRunner
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 def test_context_no_manifest_error(runner, isolated_dir):
@@ -26,13 +26,13 @@ def test_context_empty_project(runner, isolated_dir):
 def test_context_with_versions(runner, isolated_dir):
     runner.invoke(cli, ["init", "--name", "proj"])
     # Write manifest with 2 versions
-    manifest = json.loads((isolated_dir / "cadtool.json").read_text())
+    manifest = json.loads((isolated_dir / "agentcad.json").read_text())
     manifest["versions"] = [
         {"version": 1, "label": "box", "status": "success", "path": "v1_box/"},
         {"version": 2, "label": "cyl", "status": "success", "path": "v2_cyl/"},
     ]
     manifest["current"] = "cyl"
-    (isolated_dir / "cadtool.json").write_text(json.dumps(manifest, indent=2))
+    (isolated_dir / "agentcad.json").write_text(json.dumps(manifest, indent=2))
 
     result = runner.invoke(cli, ["context"])
     assert result.exit_code == 0
@@ -43,13 +43,13 @@ def test_context_with_versions(runner, isolated_dir):
 
 def test_context_includes_versions_summary(runner, isolated_dir):
     runner.invoke(cli, ["init", "--name", "proj"])
-    manifest = json.loads((isolated_dir / "cadtool.json").read_text())
+    manifest = json.loads((isolated_dir / "agentcad.json").read_text())
     manifest["versions"] = [
         {"version": 1, "label": "box", "status": "success", "path": "v1_box/"},
         {"version": 2, "label": "cyl", "status": "failed", "path": "v2_cyl_failed/"},
     ]
     manifest["current"] = "box"
-    (isolated_dir / "cadtool.json").write_text(json.dumps(manifest, indent=2))
+    (isolated_dir / "agentcad.json").write_text(json.dumps(manifest, indent=2))
 
     result = runner.invoke(cli, ["context"])
     data = json.loads(result.output)
@@ -65,12 +65,12 @@ def test_context_includes_versions_summary(runner, isolated_dir):
 
 def test_context_versions_include_path(runner, isolated_dir):
     runner.invoke(cli, ["init", "--name", "proj"])
-    manifest = json.loads((isolated_dir / "cadtool.json").read_text())
+    manifest = json.loads((isolated_dir / "agentcad.json").read_text())
     manifest["versions"] = [
         {"version": 1, "label": "box", "status": "success", "path": "v1_box/"},
     ]
     manifest["current"] = "box"
-    (isolated_dir / "cadtool.json").write_text(json.dumps(manifest, indent=2))
+    (isolated_dir / "agentcad.json").write_text(json.dumps(manifest, indent=2))
 
     result = runner.invoke(cli, ["context"])
     data = json.loads(result.output)

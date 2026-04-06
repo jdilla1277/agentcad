@@ -1,27 +1,27 @@
 import click
 
-from cadtool.commands.context import context
-from cadtool.commands.daemon_cmd import daemon
-from cadtool.commands.diff import diff
-from cadtool.commands.docs import docs
-from cadtool.commands.export_cmd import export_cmd
-from cadtool.commands.init import init
-from cadtool.commands.inspect_cmd import inspect_cmd
-from cadtool.commands.render import render
-from cadtool.commands.run import run
-from cadtool.commands.view import view
+from agentcad.commands.context import context
+from agentcad.commands.daemon_cmd import daemon
+from agentcad.commands.diff import diff
+from agentcad.commands.docs import docs
+from agentcad.commands.export_cmd import export_cmd
+from agentcad.commands.init import init
+from agentcad.commands.inspect_cmd import inspect_cmd
+from agentcad.commands.render import render
+from agentcad.commands.run import run
+from agentcad.commands.view import view
 
 
 _BRIEFING = """\b
 EXAMPLE SESSION
-  $ cadtool init --name myproject
+  $ agentcad init --name myproject
   {"command": "init", "status": "success", "project": "myproject"}
 \b
   Write a script — no imports needed, cq and show_object are pre-injected:
     box = cq.Workplane('XY').box(10, 20, 5)
     show_object(box)
 \b
-  $ cadtool run box.py --output first --render iso --preview
+  $ agentcad run box.py --output first --render iso --preview
   {"command": "run", "status": "success", "version": 1, "label": "first",
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
    "metrics": {"dimensions": {"x": 10.0, "y": 20.0, "z": 5.0},
@@ -42,10 +42,10 @@ EXAMPLE SESSION
 
 \b
 WRITING SCRIPTS
-  show_object(result) is required — it tells cadtool what geometry to output.
+  show_object(result) is required — it tells agentcad what geometry to output.
   These names are pre-injected (no import needed):
     cq             cadquery module
-    show_object    surfaces geometry to cadtool (required — at least one call)
+    show_object    surfaces geometry to agentcad (required — at least one call)
     translate      translate(shape, x, y, z)
     rotate         rotate(shape, axis, angle_deg) — axis: 'X'/'Y'/'Z'
                    Right-hand rule: positive = counterclockwise from + axis
@@ -66,7 +66,7 @@ WRITING SCRIPTS
     Helpers return TopoDS_Shape. To pass back to show_object:
       shape = cq.Shape.cast(topo_shape)
       show_object(cq.Workplane('XY').newObject([shape]))
-    Or use multiple show_object() calls — cadtool auto-compounds them.
+    Or use multiple show_object() calls — agentcad auto-compounds them.
 
 \b
   Explicit imports still work (adding 'import cadquery as cq' is harmless).
@@ -74,11 +74,11 @@ WRITING SCRIPTS
 
 \b
 COMMANDS
-  cadtool init [--name NAME]
-    Initialize project. Creates cadtool.json manifest.
+  agentcad init [--name NAME]
+    Initialize project. Creates agentcad.json manifest.
 
 \b
-  cadtool run SCRIPT --output LABEL [flags]
+  agentcad run SCRIPT --output LABEL [flags]
     Execute script, produce versioned STEP + metrics.
     --render VIEWS   PNG views: front,back,left,right,top,bottom,iso,
                      'all', custom angle az:el (e.g. 45:30),
@@ -89,26 +89,26 @@ COMMANDS
     --dry-run        Metrics only — no version consumed, no disk artifacts.
 
 \b
-  cadtool render STEP --view SPEC [--zoom N] [--focus x,y,z] [--no-fit] [--name LABEL]
+  agentcad render STEP --view SPEC [--zoom N] [--focus x,y,z] [--no-fit] [--name LABEL]
     Render PNG views of an existing STEP file. Same view spec as --render.
     Use this for post-hoc rendering with camera control (zoom, focus).
 
 \b
-  cadtool export STEP --format stl,glb,obj
+  agentcad export STEP --format stl,glb,obj
     Export STEP to mesh formats. GLB auto-colors individual solids.
 
 \b
-  cadtool inspect STEP
+  agentcad inspect STEP
     Topology report: solid_count, shell_count, shells (open/closed + face
     count per shell), face_count, face_orientations (forward/reversed),
     edge_count, free_edge_count, is_valid.
 
 \b
-  cadtool diff REF1 REF2        Compare versions (by number or label).
-  cadtool context               Project state: versions, current, tool_version.
-  cadtool view FILE             Open GLB/STEP in browser (three.js). STEP auto-converts.
-  cadtool daemon start|stop|status   Background worker — eliminates 3-5s cold start.
-  cadtool docs [SECTION]        Deep-dive docs (15 sections).
+  agentcad diff REF1 REF2        Compare versions (by number or label).
+  agentcad context               Project state: versions, current, tool_version.
+  agentcad view FILE             Open GLB/STEP in browser (three.js). STEP auto-converts.
+  agentcad daemon start|stop|status   Background worker — eliminates 3-5s cold start.
+  agentcad docs [SECTION]        Deep-dive docs (15 sections).
 
 \b
 RESPONSE SCHEMA
@@ -130,7 +130,7 @@ METRICS (in every successful run response)
   edge_count     int              unique edges
   is_valid       bool             BRepCheck shape validity
   Tip: verify geometry from metrics alone — check volume, dimensions, face_count
-  before rendering. Use 'cadtool diff' to compare metrics across versions.
+  before rendering. Use 'agentcad diff' to compare metrics across versions.
 
 \b
 PARAMETRIC SCRIPTS
@@ -139,7 +139,7 @@ PARAMETRIC SCRIPTS
     width = 20.0
     result = cq.Workplane('XY').box(length, width, 10)
     show_object(result)
-  $ cadtool run script.py --output v2 --params length=100,width=30
+  $ agentcad run script.py --output v2 --params length=100,width=30
   Types auto-coerced: bool ('true'/'false') > int > float > string.
   Unknown param name -> "error" status with available names (no version consumed).
 
@@ -174,19 +174,19 @@ CADQUERY PATTERNS
 \b
 DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
-  $ cadtool run script.py --output test --dry-run        # metrics, no disk artifacts
-  $ cadtool inspect v1_test/output.step                  # topology deep-dive
+  $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
+  $ agentcad inspect v1_test/output.step                  # topology deep-dive
     Hollow shape?     -> free_edge_count > 0, shell not closed
     Inverted normals? -> face_orientations imbalanced
     Invalid?          -> is_valid: false
-  $ cadtool render v1_test/output.step --view all        # visual from 4 angles
+  $ agentcad render v1_test/output.step --view all        # visual from 4 angles
   Then iterate: fix script, run with new --output label.
 """
 
 
 @click.group(epilog=_BRIEFING, context_settings=dict(max_content_width=120))
 def cli():
-    """cadtool — CLI CAD tool for AI agents. All output is JSON."""
+    """agentcad — CLI CAD tool for AI agents. All output is JSON."""
 
 
 cli.add_command(context)

@@ -1,4 +1,4 @@
-"""Mesh export functions for cadtool."""
+"""Mesh export functions for agentcad."""
 
 import math
 
@@ -139,7 +139,7 @@ def export_obj(shape, output_path, linear_deflection=0.1):
         explorer.Next()
 
     with open(output_path, "w") as f:
-        f.write("# cadtool OBJ export\n")
+        f.write("# agentcad OBJ export\n")
         for v in vertices:
             f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
         for n in face_normals:

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import click
 
-from cadtool.daemon import _default_socket_path, send_request
-from cadtool.manifest import MANIFEST_FILE, load_manifest, save_manifest
+from agentcad.daemon import _default_socket_path, send_request
+from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
 
 
 def _daemon_socket_path():
@@ -105,7 +105,7 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 def run(script, output, render, export, preview, params, dry_run):
     """Execute a CadQuery script and produce a versioned STEP file."""
     # Try routing through daemon if available (skip if already inside daemon)
-    if not os.environ.get("CADTOOL_DAEMON"):
+    if not os.environ.get("AGENTCAD_DAEMON"):
         argv = ["run", script, "--output", output]
         if render:
             argv.extend(["--render", render])
@@ -144,7 +144,7 @@ def run(script, output, render, export, preview, params, dry_run):
             "command": "run",
             "status": "error",
             "message": (
-                f"cadtool requires Python 3.10-3.12 "
+                f"agentcad requires Python 3.10-3.12 "
                 f"(found {sys.version_info[0]}.{sys.version_info[1]}). "
                 f"CadQuery/OCP bindings are not available on newer Python versions."
             ),
@@ -161,10 +161,10 @@ def run(script, output, render, export, preview, params, dry_run):
         sys.exit(1)
 
     # Pre-execution validation (before version allocation)
-    from cadtool.validate import validate_script
+    from agentcad.validate import validate_script
 
     raw_source = script_path.read_text()
-    PREAMBLE = "import cadquery as cq; from cadtool.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse, translate, rotate, bbox_point, place_at, assemble, ellipse_wire, spline_wire, polygon_wire, rounded_rect_wire, elliptical_sweep, involute_gear_profile\n"
+    PREAMBLE = "import cadquery as cq; from agentcad.helpers import loft_sections, tapered_sweep, naca_wire, mirror_fuse, translate, rotate, bbox_point, place_at, assemble, ellipse_wire, spline_wire, polygon_wire, rounded_rect_wire, elliptical_sweep, involute_gear_profile\n"
     script_source = PREAMBLE + raw_source
 
     validation_errors = validate_script(script_source)
@@ -259,7 +259,7 @@ def run(script, output, render, export, preview, params, dry_run):
         )
 
     # Compute geometric metrics
-    from cadtool.metrics import compute_metrics
+    from agentcad.metrics import compute_metrics
 
     topo_shape_for_metrics = shape.val().wrapped
     metrics = compute_metrics(topo_shape_for_metrics)
@@ -268,7 +268,7 @@ def run(script, output, render, export, preview, params, dry_run):
     if not metrics.get("is_valid", True):
         warnings.append(
             "Invalid geometry detected (is_valid: false). "
-            "Run 'cadtool inspect' on the STEP file for diagnostic details."
+            "Run 'agentcad inspect' on the STEP file for diagnostic details."
         )
     if metrics.get("warnings"):
         warnings.extend(metrics["warnings"])
@@ -307,13 +307,13 @@ def run(script, output, render, export, preview, params, dry_run):
                 exporters.export(shape, str(stl_path), exportType="STL")
                 exports_meta["stl"] = f"{dir_name}/output.stl"
             elif fmt == "glb":
-                from cadtool.export import export_glb
+                from agentcad.export import export_glb
 
                 glb_path = version_dir / "output.glb"
                 export_glb(topo_shape, str(glb_path))
                 exports_meta["glb"] = f"{dir_name}/output.glb"
             elif fmt == "obj":
-                from cadtool.export import export_obj
+                from agentcad.export import export_obj
 
                 obj_path = version_dir / "output.obj"
                 export_obj(topo_shape, str(obj_path))
@@ -322,7 +322,7 @@ def run(script, output, render, export, preview, params, dry_run):
     # Render views if requested
     renders_meta = {}
     if render:
-        from cadtool.render import (
+        from agentcad.render import (
             parse_view_spec, render_shape as render_shape_view,
             render_shape_custom, render_views, ALL_VIEWS,
         )
@@ -346,7 +346,7 @@ def run(script, output, render, export, preview, params, dry_run):
     # Quick preview if requested
     preview_meta = None
     if preview:
-        from cadtool.render import render_shape
+        from agentcad.render import render_shape
         preview_path = version_dir / "preview.png"
         render_shape(topo_shape_for_metrics, "iso", preview_path, width=256, height=256)
         preview_meta = f"{dir_name}/preview.png"

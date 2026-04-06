@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 SIMPLE_BOX_SCRIPT = """\
@@ -16,7 +16,7 @@ def _init_project(runner):
 
 
 def _create_step(runner, isolated_dir):
-    """Create a version directory with a STEP file via cadtool run."""
+    """Create a version directory with a STEP file via agentcad run."""
     _init_project(runner)
     path = isolated_dir / "script.py"
     path.write_text(SIMPLE_BOX_SCRIPT)

@@ -14,19 +14,19 @@ from click.testing import CliRunner
 
 def _short_sock_path(name):
     """Return a short /tmp socket path to avoid AF_UNIX length limits."""
-    return f"/tmp/cadtool-test-{name}-{os.getpid()}.sock"
+    return f"/tmp/agentcad-test-{name}-{os.getpid()}.sock"
 
 
 def _short_pid_path(name):
     """Return a short /tmp PID path matching the socket."""
-    return f"/tmp/cadtool-test-{name}-{os.getpid()}.pid"
+    return f"/tmp/agentcad-test-{name}-{os.getpid()}.pid"
 
 
 # ---------- Phase 1: Protocol ----------
 
 class TestProtocol:
     def test_encode_message(self):
-        from cadtool.daemon import encode_message
+        from agentcad.daemon import encode_message
 
         msg = {"type": "ping"}
         encoded = encode_message(msg)
@@ -35,7 +35,7 @@ class TestProtocol:
         assert encoded == struct.pack("!I", len(payload)) + payload
 
     def test_decode_message(self):
-        from cadtool.daemon import decode_message
+        from agentcad.daemon import decode_message
 
         msg = {"type": "pong"}
         payload = json.dumps(msg).encode("utf-8")
@@ -45,7 +45,7 @@ class TestProtocol:
         assert remainder == b""
 
     def test_decode_message_with_remainder(self):
-        from cadtool.daemon import decode_message
+        from agentcad.daemon import decode_message
 
         msg = {"type": "pong"}
         payload = json.dumps(msg).encode("utf-8")
@@ -56,14 +56,14 @@ class TestProtocol:
         assert remainder == extra
 
     def test_decode_message_incomplete_header(self):
-        from cadtool.daemon import decode_message
+        from agentcad.daemon import decode_message
 
         decoded, remainder = decode_message(b"\x00\x00")
         assert decoded is None
         assert remainder == b"\x00\x00"
 
     def test_decode_message_incomplete_payload(self):
-        from cadtool.daemon import decode_message
+        from agentcad.daemon import decode_message
 
         data = struct.pack("!I", 100) + b"short"
         decoded, remainder = decode_message(data)
@@ -71,7 +71,7 @@ class TestProtocol:
         assert remainder == data
 
     def test_roundtrip(self):
-        from cadtool.daemon import decode_message, encode_message
+        from agentcad.daemon import decode_message, encode_message
 
         original = {"command": "run", "args": {"script": "box.py", "output": "v1"}}
         encoded = encode_message(original)
@@ -84,14 +84,14 @@ class TestProtocol:
 
 class TestSendRequest:
     def test_send_request_returns_none_when_no_socket(self, tmp_path):
-        from cadtool.daemon import send_request
+        from agentcad.daemon import send_request
 
         sock_path = str(tmp_path / "nonexistent.sock")
         result = send_request({"type": "ping"}, socket_path=sock_path)
         assert result is None
 
     def test_send_request_returns_none_on_connection_refused(self, tmp_path):
-        from cadtool.daemon import send_request
+        from agentcad.daemon import send_request
 
         # Create a socket file but nothing is listening
         sock_path = _short_sock_path("dead")
@@ -110,14 +110,14 @@ class TestSendRequest:
 
 class TestDaemonServer:
     def test_handles_ping(self):
-        from cadtool.daemon import DaemonServer
+        from agentcad.daemon import DaemonServer
 
         server = DaemonServer.__new__(DaemonServer)
         response = server.handle_request({"type": "ping"})
         assert response["type"] == "pong"
 
     def test_handles_shutdown(self):
-        from cadtool.daemon import DaemonServer
+        from agentcad.daemon import DaemonServer
 
         server = DaemonServer.__new__(DaemonServer)
         server._running = True
@@ -126,10 +126,10 @@ class TestDaemonServer:
         assert server._running is False
 
     def test_handles_run(self, isolated_dir):
-        from cadtool.daemon import DaemonServer
+        from agentcad.daemon import DaemonServer
 
-        # Set up a cadtool project
-        from cadtool.cli import cli
+        # Set up a agentcad project
+        from agentcad.cli import cli
         runner = CliRunner()
         runner.invoke(cli, ["init", "--name", "test"])
 
@@ -149,7 +149,7 @@ class TestDaemonServer:
         assert output["label"] == "box"
 
     def test_handles_unknown_type(self):
-        from cadtool.daemon import DaemonServer
+        from agentcad.daemon import DaemonServer
 
         server = DaemonServer.__new__(DaemonServer)
         response = server.handle_request({"type": "unknown_thing"})
@@ -158,7 +158,7 @@ class TestDaemonServer:
 
     def test_run_preserves_cwd(self, isolated_dir):
         """Daemon restores original CWD after handling a run request."""
-        from cadtool.daemon import DaemonServer
+        from agentcad.daemon import DaemonServer
 
         original_cwd = os.getcwd()
         server = DaemonServer.__new__(DaemonServer)
@@ -167,7 +167,7 @@ class TestDaemonServer:
         project_dir = isolated_dir / "proj"
         project_dir.mkdir()
 
-        from cadtool.cli import cli
+        from agentcad.cli import cli
         runner = CliRunner()
         old_cwd = os.getcwd()
         os.chdir(project_dir)
@@ -193,8 +193,8 @@ def daemon_paths():
     """Provide short socket/PID paths and clean up after test."""
     import random
     tag = f"{os.getpid()}-{random.randint(0, 999999)}"
-    sock = f"/tmp/cadtool-test-{tag}.sock"
-    pid = f"/tmp/cadtool-test-{tag}.pid"
+    sock = f"/tmp/agentcad-test-{tag}.sock"
+    pid = f"/tmp/agentcad-test-{tag}.pid"
     yield sock, pid
     for p in (sock, pid):
         if os.path.exists(p):
@@ -204,7 +204,7 @@ def daemon_paths():
 class TestLifecycle:
     def test_server_creates_socket_and_pid(self, daemon_paths):
         """serve() creates socket and PID file, removed on shutdown."""
-        from cadtool.daemon import DaemonServer, send_request
+        from agentcad.daemon import DaemonServer, send_request
 
         sock_path, pid_path = daemon_paths
         server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
@@ -241,7 +241,7 @@ class TestLifecycle:
         assert not os.path.exists(pid_path)
 
     def test_daemon_status_running(self, daemon_paths):
-        from cadtool.daemon import DaemonServer, daemon_status, send_request
+        from agentcad.daemon import DaemonServer, daemon_status, send_request
 
         sock_path, pid_path = daemon_paths
         server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
@@ -260,7 +260,7 @@ class TestLifecycle:
         t.join(timeout=5)
 
     def test_daemon_status_not_running(self, daemon_paths):
-        from cadtool.daemon import daemon_status
+        from agentcad.daemon import daemon_status
 
         sock_path, pid_path = daemon_paths
         status = daemon_status(socket_path=sock_path, pid_path=pid_path)
@@ -268,7 +268,7 @@ class TestLifecycle:
 
     def test_stale_socket_cleanup(self, daemon_paths):
         """If PID file exists but process is dead, start_daemon cleans up."""
-        from cadtool.daemon import daemon_status
+        from agentcad.daemon import daemon_status
 
         sock_path, pid_path = daemon_paths
 
@@ -284,7 +284,7 @@ class TestLifecycle:
         assert status["running"] is False
 
     def test_stop_daemon_sends_shutdown(self, daemon_paths):
-        from cadtool.daemon import DaemonServer, send_request, stop_daemon
+        from agentcad.daemon import DaemonServer, send_request, stop_daemon
 
         sock_path, pid_path = daemon_paths
         server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
@@ -301,14 +301,14 @@ class TestLifecycle:
         assert not t.is_alive()
 
     def test_stop_daemon_not_running(self, daemon_paths):
-        from cadtool.daemon import stop_daemon
+        from agentcad.daemon import stop_daemon
 
         sock_path, pid_path = daemon_paths
         result = stop_daemon(socket_path=sock_path, pid_path=pid_path)
         assert result["stopped"] is False
 
     def test_start_daemon_creates_process(self, daemon_paths):
-        from cadtool.daemon import start_daemon, stop_daemon, send_request
+        from agentcad.daemon import start_daemon, stop_daemon, send_request
 
         sock_path, pid_path = daemon_paths
         result = start_daemon(socket_path=sock_path, pid_path=pid_path)
@@ -333,7 +333,7 @@ class TestLifecycle:
             time.sleep(0.1)
 
     def test_start_daemon_already_running(self, daemon_paths):
-        from cadtool.daemon import DaemonServer, send_request, start_daemon
+        from agentcad.daemon import DaemonServer, send_request, start_daemon
 
         sock_path, pid_path = daemon_paths
         server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
@@ -357,12 +357,12 @@ class TestLifecycle:
 
 class TestDaemonCLI:
     def test_daemon_status_cli_not_running(self, runner, monkeypatch):
-        from cadtool.cli import cli
+        from agentcad.cli import cli
 
-        monkeypatch.setattr("cadtool.commands.daemon_cmd._socket_path",
-                            lambda: "/tmp/cadtool-test-nonexistent.sock")
-        monkeypatch.setattr("cadtool.commands.daemon_cmd._pid_path",
-                            lambda: "/tmp/cadtool-test-nonexistent.pid")
+        monkeypatch.setattr("agentcad.commands.daemon_cmd._socket_path",
+                            lambda: "/tmp/agentcad-test-nonexistent.sock")
+        monkeypatch.setattr("agentcad.commands.daemon_cmd._pid_path",
+                            lambda: "/tmp/agentcad-test-nonexistent.pid")
         result = runner.invoke(cli, ["daemon", "status"])
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -371,13 +371,13 @@ class TestDaemonCLI:
         assert output["running"] is False
 
     def test_daemon_start_cli(self, runner, daemon_paths, monkeypatch):
-        from cadtool.cli import cli
-        from cadtool.daemon import stop_daemon
+        from agentcad.cli import cli
+        from agentcad.daemon import stop_daemon
 
         sock_path, pid_path = daemon_paths
-        monkeypatch.setattr("cadtool.commands.daemon_cmd._socket_path",
+        monkeypatch.setattr("agentcad.commands.daemon_cmd._socket_path",
                             lambda: sock_path)
-        monkeypatch.setattr("cadtool.commands.daemon_cmd._pid_path",
+        monkeypatch.setattr("agentcad.commands.daemon_cmd._pid_path",
                             lambda: pid_path)
 
         result = runner.invoke(cli, ["daemon", "start"])
@@ -395,12 +395,12 @@ class TestDaemonCLI:
             time.sleep(0.1)
 
     def test_daemon_stop_cli_not_running(self, runner, monkeypatch):
-        from cadtool.cli import cli
+        from agentcad.cli import cli
 
-        monkeypatch.setattr("cadtool.commands.daemon_cmd._socket_path",
-                            lambda: "/tmp/cadtool-test-nonexistent.sock")
-        monkeypatch.setattr("cadtool.commands.daemon_cmd._pid_path",
-                            lambda: "/tmp/cadtool-test-nonexistent.pid")
+        monkeypatch.setattr("agentcad.commands.daemon_cmd._socket_path",
+                            lambda: "/tmp/agentcad-test-nonexistent.sock")
+        monkeypatch.setattr("agentcad.commands.daemon_cmd._pid_path",
+                            lambda: "/tmp/agentcad-test-nonexistent.pid")
         result = runner.invoke(cli, ["daemon", "stop"])
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -410,19 +410,19 @@ class TestDaemonCLI:
 
     def test_daemon_start_cli_fail_reports_error(self, runner, monkeypatch):
         """CLI reports status=error when daemon fails to start."""
-        from cadtool.cli import cli
+        from agentcad.cli import cli
 
         monkeypatch.setattr(
-            "cadtool.commands.daemon_cmd._socket_path",
-            lambda: "/tmp/cadtool-test-nonexistent.sock",
+            "agentcad.commands.daemon_cmd._socket_path",
+            lambda: "/tmp/agentcad-test-nonexistent.sock",
         )
         monkeypatch.setattr(
-            "cadtool.commands.daemon_cmd._pid_path",
-            lambda: "/tmp/cadtool-test-nonexistent.pid",
+            "agentcad.commands.daemon_cmd._pid_path",
+            lambda: "/tmp/agentcad-test-nonexistent.pid",
         )
         # Monkeypatch start_daemon to simulate failure
         monkeypatch.setattr(
-            "cadtool.commands.daemon_cmd.start_daemon",
+            "agentcad.commands.daemon_cmd.start_daemon",
             lambda **kw: {"started": False, "message": "Daemon failed to start: ImportError"},
         )
         result = runner.invoke(cli, ["daemon", "start"])
@@ -435,18 +435,18 @@ class TestDaemonCLI:
 
     def test_daemon_start_cli_already_running_is_success(self, runner, monkeypatch):
         """CLI reports status=success when daemon is already running."""
-        from cadtool.cli import cli
+        from agentcad.cli import cli
 
         monkeypatch.setattr(
-            "cadtool.commands.daemon_cmd._socket_path",
-            lambda: "/tmp/cadtool-test-nonexistent.sock",
+            "agentcad.commands.daemon_cmd._socket_path",
+            lambda: "/tmp/agentcad-test-nonexistent.sock",
         )
         monkeypatch.setattr(
-            "cadtool.commands.daemon_cmd._pid_path",
-            lambda: "/tmp/cadtool-test-nonexistent.pid",
+            "agentcad.commands.daemon_cmd._pid_path",
+            lambda: "/tmp/agentcad-test-nonexistent.pid",
         )
         monkeypatch.setattr(
-            "cadtool.commands.daemon_cmd.start_daemon",
+            "agentcad.commands.daemon_cmd.start_daemon",
             lambda **kw: {"started": False, "message": "Daemon already running", "pid": 12345},
         )
         result = runner.invoke(cli, ["daemon", "start"])
@@ -461,8 +461,8 @@ class TestDaemonCLI:
 class TestRunRouting:
     def test_run_via_daemon_returns_same_output(self, isolated_dir, daemon_paths):
         """Run via daemon produces the same output as direct run."""
-        from cadtool.cli import cli
-        from cadtool.daemon import DaemonServer, send_request
+        from agentcad.cli import cli
+        from agentcad.daemon import DaemonServer, send_request
 
         # Set up project
         runner = CliRunner()
@@ -499,8 +499,8 @@ class TestRunRouting:
         t.join(timeout=5)
 
     def test_run_fallback_when_daemon_not_running(self, runner, isolated_dir):
-        """cadtool run still works when daemon is not running."""
-        from cadtool.cli import cli
+        """agentcad run still works when daemon is not running."""
+        from agentcad.cli import cli
 
         runner.invoke(cli, ["init", "--name", "test"])
         script = isolated_dir / "box.py"
@@ -512,9 +512,9 @@ class TestRunRouting:
         assert output["status"] == "success"
 
     def test_run_routing_uses_daemon_when_available(self, isolated_dir, daemon_paths, monkeypatch):
-        """cadtool run routes through daemon when it is running."""
-        from cadtool.cli import cli
-        from cadtool.daemon import DaemonServer, send_request
+        """agentcad run routes through daemon when it is running."""
+        from agentcad.cli import cli
+        from agentcad.daemon import DaemonServer, send_request
 
         sock_path, pid_path = daemon_paths
 
@@ -534,7 +534,7 @@ class TestRunRouting:
             time.sleep(0.05)
 
         # Monkeypatch the socket path in run.py
-        monkeypatch.setattr("cadtool.commands.run._daemon_socket_path",
+        monkeypatch.setattr("agentcad.commands.run._daemon_socket_path",
                             lambda: sock_path)
 
         result = runner.invoke(cli, ["run", str(script), "--output", "box"])
@@ -548,8 +548,8 @@ class TestRunRouting:
 
     def test_run_via_daemon_correct_cwd(self, isolated_dir, daemon_paths):
         """Daemon respects CWD in the request."""
-        from cadtool.cli import cli
-        from cadtool.daemon import DaemonServer, send_request
+        from agentcad.cli import cli
+        from agentcad.daemon import DaemonServer, send_request
 
         # Create project in a subdirectory
         project_dir = isolated_dir / "proj"

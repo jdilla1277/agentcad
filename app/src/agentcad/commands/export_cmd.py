@@ -55,10 +55,10 @@ def export_cmd(step_file, formats):
         if fmt == "stl":
             exporters.export(wp, str(out_path), exportType="STL")
         elif fmt == "glb":
-            from cadtool.export import export_glb
+            from agentcad.export import export_glb
             export_glb(topo_shape, str(out_path))
         elif fmt == "obj":
-            from cadtool.export import export_obj
+            from agentcad.export import export_obj
             export_obj(topo_shape, str(out_path))
         outputs[fmt] = str(out_path)
 

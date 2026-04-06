@@ -9,7 +9,7 @@ A CLI-based CAD tool designed for AI agents. The goal is to build the best CAD t
 
 ## Setup
 
-Before running `cadtool` or `pytest`, activate the virtual environment:
+Before running `agentcad` or `pytest`, activate the virtual environment:
 
     source app/.venv/bin/activate
 
@@ -36,21 +36,21 @@ After each PR, ask: what would have made this easier? Consider:
 
 - `prd/v0_implementation_plan.md` — master milestone tracker
 - `prd/m{N}_plan.md` — per-milestone detailed plans
-- `prd/cadtool_scope.md` — v0 scope document
+- `prd/agentcad_scope.md` — v0 scope document
 
 ## Agent Friction Testing
 
-To test cadtool as an agent would actually experience it (no repo access, no source code), install from pip in a fresh directory:
+To test agentcad as an agent would actually experience it (no repo access, no source code), install from pip in a fresh directory:
 
-    mkdir /tmp/cadtool-test && cd /tmp/cadtool-test
+    mkdir /tmp/agentcad-test && cd /tmp/agentcad-test
     python3.12 -m venv .venv && source .venv/bin/activate
     pip install git+https://github.com/jdilla1277/mountain-climber.git#subdirectory=app
 
-Then start Claude Code (or any agent) in that directory. The agent only has the `cadtool` CLI — no source, tests, or PRDs to read.
+Then start Claude Code (or any agent) in that directory. The agent only has the `agentcad` CLI — no source, tests, or PRDs to read.
 
 ## Friction Log Philosophy
 
-Every friction point in the stack is our problem. If an agent hits a CadQuery footgun, a confusing OCP API, or an unintuitive workplane behavior — that's a cadtool problem. We own the experience end-to-end. Fix it with better docs, helpers, wrappers, or guardrails. There is no "upstream issue, not our bug."
+Every friction point in the stack is our problem. If an agent hits a CadQuery footgun, a confusing OCP API, or an unintuitive workplane behavior — that's a agentcad problem. We own the experience end-to-end. Fix it with better docs, helpers, wrappers, or guardrails. There is no "upstream issue, not our bug."
 
 ## Notes
 

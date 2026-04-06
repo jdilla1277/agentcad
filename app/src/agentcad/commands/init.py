@@ -5,13 +5,13 @@ from pathlib import Path
 
 import click
 
-from cadtool.manifest import MANIFEST_FILE
+from agentcad.manifest import MANIFEST_FILE
 
 
 @click.command()
 @click.option("--name", default=None, help="Project name (defaults to directory name).")
 def init(name):
-    """Initialize a new cadtool project."""
+    """Initialize a new agentcad project."""
     manifest_path = Path.cwd() / MANIFEST_FILE
 
     if manifest_path.exists():

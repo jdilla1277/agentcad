@@ -1,7 +1,7 @@
 import json
 
 from click.testing import CliRunner
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 def test_docs_returns_full_documentation(runner):
@@ -121,7 +121,7 @@ def test_docs_unknown_section_error(runner):
 
 
 def test_docs_works_without_project(runner, isolated_dir):
-    # No cadtool.json in isolated_dir
+    # No agentcad.json in isolated_dir
     result = runner.invoke(cli, ["docs"])
     assert result.exit_code == 0
     data = json.loads(result.output)

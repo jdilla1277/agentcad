@@ -3,8 +3,8 @@ import shutil
 import struct
 from pathlib import Path
 
-from cadtool.cli import cli
-from cadtool.manifest import MANIFEST_FILE
+from agentcad.cli import cli
+from agentcad.manifest import MANIFEST_FILE
 
 
 SIMPLE_BOX_SCRIPT = """\
@@ -46,7 +46,7 @@ def test_run_no_manifest_error(runner, isolated_dir):
     parsed = json.loads(result.output)
     assert parsed["command"] == "run"
     assert parsed["status"] == "error"
-    assert "cadtool.json" in parsed["message"]
+    assert "agentcad.json" in parsed["message"]
 
 
 def test_run_script_not_found_error(runner, isolated_dir):
@@ -244,7 +244,7 @@ result = cq.Workplane("XY").box(10, 10, 10)
 
 
 def test_run_render_custom_angle(runner, isolated_dir):
-    """cadtool run --render 45:30 should produce a custom-angle render."""
+    """agentcad run --render 45:30 should produce a custom-angle render."""
     _init_project(runner)
     _write_script(isolated_dir)
     result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "45:30"])
@@ -255,7 +255,7 @@ def test_run_render_custom_angle(runner, isolated_dir):
 
 
 def test_run_render_mixed_named_and_angle(runner, isolated_dir):
-    """cadtool run --render front,45:30 should render both."""
+    """agentcad run --render front,45:30 should render both."""
     _init_project(runner)
     _write_script(isolated_dir)
     result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--render", "front,45:30"])
@@ -817,9 +817,9 @@ def test_run_dry_run_no_disk_artifacts(runner, isolated_dir):
     _init_project(runner)
     _write_script(isolated_dir)
     runner.invoke(cli, ["run", "script.py", "--output", "v1", "--dry-run"])
-    # Only cadtool.json and script.py should exist
+    # Only agentcad.json and script.py should exist
     files = [f.name for f in isolated_dir.iterdir()]
-    assert "cadtool.json" in files
+    assert "agentcad.json" in files
     assert "script.py" in files
     assert not any(f.startswith("v1") for f in files)
 
@@ -847,11 +847,11 @@ def test_run_via_daemon_field_in_output(runner, isolated_dir, monkeypatch):
     _init_project(runner)
     _write_script(isolated_dir)
     # Enable daemon routing (undo the autouse _no_daemon fixture)
-    monkeypatch.delenv("CADTOOL_DAEMON", raising=False)
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
     # Simulate daemon returning a successful result
     daemon_output = json.dumps({"command": "run", "status": "success", "version": 1})
     monkeypatch.setattr(
-        "cadtool.commands.run.send_request",
+        "agentcad.commands.run.send_request",
         lambda *a, **kw: {"type": "result", "exit_code": 0, "output": daemon_output},
     )
     result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
@@ -886,9 +886,9 @@ def test_run_invalid_shape_has_warnings_in_output(runner, isolated_dir, monkeypa
     """is_valid: false in metrics should produce top-level warnings."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from cadtool import metrics
+    from agentcad import metrics
     monkeypatch.setattr(
-        "cadtool.metrics.compute_metrics",
+        "agentcad.metrics.compute_metrics",
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv"])
@@ -902,9 +902,9 @@ def test_run_invalid_shape_warnings_in_meta(runner, isolated_dir, monkeypatch):
     """is_valid: false should also appear in meta.json warnings."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from cadtool import metrics
+    from agentcad import metrics
     monkeypatch.setattr(
-        "cadtool.metrics.compute_metrics",
+        "agentcad.metrics.compute_metrics",
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     runner.invoke(cli, ["run", "script.py", "--output", "inv"])
@@ -917,9 +917,9 @@ def test_run_invalid_shape_dry_run_has_warnings(runner, isolated_dir, monkeypatc
     """Dry-run should also surface validity warnings."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from cadtool import metrics
+    from agentcad import metrics
     monkeypatch.setattr(
-        "cadtool.metrics.compute_metrics",
+        "agentcad.metrics.compute_metrics",
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv", "--dry-run"])
@@ -941,14 +941,14 @@ def test_run_negative_volume_warning_surfaces(runner, isolated_dir, monkeypatch)
     """Negative volume warning from metrics should appear in top-level warnings."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from cadtool import metrics
+    from agentcad import metrics
     real = metrics.compute_metrics
     def fake(topo_shape):
         m = real(topo_shape)
         m["volume"] = -1000.0
         m["warnings"] = ["Negative volume detected — check winding order."]
         return m
-    monkeypatch.setattr("cadtool.metrics.compute_metrics", fake)
+    monkeypatch.setattr("agentcad.metrics.compute_metrics", fake)
     result = runner.invoke(cli, ["run", "script.py", "--output", "neg"])
     parsed = json.loads(result.output)
     assert "warnings" in parsed

@@ -1,7 +1,7 @@
 import json
 
 from click.testing import CliRunner
-from cadtool.cli import cli
+from agentcad.cli import cli
 
 
 def _setup_two_versions(isolated_dir):
@@ -43,7 +43,7 @@ def _setup_two_versions(isolated_dir):
             {"version": 2, "label": "cyl", "status": "success", "path": "v2_cyl/"},
         ],
     }
-    (isolated_dir / "cadtool.json").write_text(json.dumps(manifest, indent=2))
+    (isolated_dir / "agentcad.json").write_text(json.dumps(manifest, indent=2))
 
 
 def test_diff_no_manifest_error(runner, isolated_dir):

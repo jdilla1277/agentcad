@@ -1,8 +1,8 @@
 import json
 from datetime import datetime
 
-from cadtool.cli import cli
-from cadtool.commands.init import MANIFEST_FILE
+from agentcad.cli import cli
+from agentcad.commands.init import MANIFEST_FILE
 
 
 def test_init_creates_manifest_file(runner, isolated_dir):

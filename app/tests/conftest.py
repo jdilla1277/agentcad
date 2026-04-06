@@ -16,4 +16,4 @@ def isolated_dir(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_daemon(monkeypatch):
     """Prevent tests from routing through a running daemon process."""
-    monkeypatch.setenv("CADTOOL_DAEMON", "1")
+    monkeypatch.setenv("AGENTCAD_DAEMON", "1")

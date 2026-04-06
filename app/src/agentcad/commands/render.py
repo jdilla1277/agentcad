@@ -40,7 +40,7 @@ def render(step_file, view, zoom, name, focus, no_fit):
     """Render PNG views of an existing STEP file."""
     from cadquery import importers
 
-    from cadtool.render import parse_view_spec, render_shape, render_shape_custom
+    from agentcad.render import parse_view_spec, render_shape, render_shape_custom
 
     step_path = Path(step_file)
     if not step_path.exists():

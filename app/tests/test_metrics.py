@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from cadtool.metrics import compute_metrics
+from agentcad.metrics import compute_metrics
 
 
 def _make_box(dx=10, dy=10, dz=10):

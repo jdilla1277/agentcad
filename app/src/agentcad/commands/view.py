@@ -12,7 +12,7 @@ _HTML_TEMPLATE = """\
 <html>
 <head>
 <meta charset="utf-8">
-<title>cadtool viewer</title>
+<title>agentcad viewer</title>
 <style>
   body { margin: 0; overflow: hidden; background: #1a1a2e; }
   #info {
@@ -22,7 +22,7 @@ _HTML_TEMPLATE = """\
 </style>
 </head>
 <body>
-<div id="info">cadtool viewer — drag to orbit, scroll to zoom</div>
+<div id="info">agentcad viewer — drag to orbit, scroll to zoom</div>
 <script type="importmap">
 {
   "imports": {
@@ -115,7 +115,7 @@ def view(file):
     # If STEP, auto-export to GLB first
     if suffix in (".step", ".stp"):
         from cadquery import importers
-        from cadtool.export import export_glb
+        from agentcad.export import export_glb
 
         shape = importers.importStep(str(file_path)).val().wrapped
         glb_path = file_path.with_suffix(".glb")
@@ -129,7 +129,7 @@ def view(file):
     b64 = base64.b64encode(glb_data).decode("ascii")
     model_url = f"data:application/octet-stream;base64,{b64}"
     html_content = _HTML_TEMPLATE.replace("MODEL_URL", model_url)
-    html_path = model_path.parent / f".cadtool_viewer_{model_path.stem}.html"
+    html_path = model_path.parent / f".agentcad_viewer_{model_path.stem}.html"
     html_path.write_text(html_content)
 
     url = html_path.as_uri()
