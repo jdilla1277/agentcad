@@ -114,3 +114,10 @@ def test_run_tool_missing_script_error(tmp_path, monkeypatch):
 def test_inspect_tool_missing_file_error():
     result = _invoke(["inspect", "/tmp/nonexistent.step"])
     assert result["_exit_code"] != 0
+
+
+def test_docs_mcp_section():
+    result = _invoke(["docs", "mcp"])
+    assert result["status"] == "success"
+    assert ".mcp.json" in result["content"]
+    assert "agentcad.mcp" in result["content"]

@@ -441,6 +441,36 @@ SECTIONS = {
         "  6. agentcad context — review project state.\n"
         "  7. agentcad diff 1 2 — compare versions.\n"
     ),
+    "mcp": (
+        "MCP integration — native agent tools:\n"
+        "  agentcad ships with an MCP (Model Context Protocol) server so agents\n"
+        "  can call commands as native tools instead of shelling out to the CLI.\n"
+        "\n"
+        "  Setup:\n"
+        "    1. Install the MCP extra:\n"
+        "       pip install agentcad[mcp]\n"
+        "\n"
+        "    2. Add to your .mcp.json (Claude Code, Cursor, Windsurf, etc.):\n"
+        '       {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}\n'
+        "\n"
+        "  Available tools:\n"
+        "    run       Execute a CadQuery script, produce STEP + metrics\n"
+        "    render    Render PNG views of a STEP file\n"
+        "    export    Export STEP to mesh formats (stl, glb, obj)\n"
+        "    inspect   Topology report (solids, shells, faces, validity)\n"
+        "    docs      Show documentation (this command)\n"
+        "    context   Project state (versions, current)\n"
+        "    diff      Compare two versions\n"
+        "    view      Open GLB/STEP in browser\n"
+        "\n"
+        "  All tools accept a 'cwd' parameter pointing to the project directory.\n"
+        "  Responses are the same JSON as the CLI — same schema, same fields.\n"
+        "\n"
+        "  Why MCP over CLI?\n"
+        "    - No shell parsing — structured parameters in, structured JSON out.\n"
+        "    - Persistent process — CadQuery stays loaded, no 3-5s cold start.\n"
+        "    - Native tool UI — agents see typed parameters, not raw argv.\n"
+    ),
 }
 
 
