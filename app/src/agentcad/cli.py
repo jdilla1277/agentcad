@@ -16,6 +16,7 @@ from agentcad.commands.init import init
 from agentcad.commands.inspect_cmd import inspect_cmd
 from agentcad.commands.render import render
 from agentcad.commands.run import run
+from agentcad.commands.skill import skill
 from agentcad.commands.view import view
 
 
@@ -253,4 +254,5 @@ cli.add_command(init)
 cli.add_command(inspect_cmd)
 cli.add_command(render)
 cli.add_command(run)
+cli.add_command(skill)
 cli.add_command(view)
