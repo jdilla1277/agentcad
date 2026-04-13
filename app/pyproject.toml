@@ -5,8 +5,27 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentcad"
 version = "0.1.0"
-requires-python = ">=3.10"
+description = "CLI CAD tool for AI agents. Write CadQuery scripts, get STEP files, renders, and metrics."
+requires-python = ">=3.10,<3.13"
+license = {text = "BSL-1.1"}
+authors = [{name = "James Dillard"}]
+keywords = ["cad", "agent", "cadquery", "3d", "geometry", "ai", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Computer Aided Design (CAD)",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = ["click>=8.0", "cadquery>=2.0"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0"]
+
+[project.urls]
+Repository = "https://github.com/jdilla1277/agentcad"
 
 [project.scripts]
 agentcad = "agentcad.cli:cli"
