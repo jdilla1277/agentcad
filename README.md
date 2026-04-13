@@ -22,6 +22,22 @@ CadQuery Python scripts.
 Once you've done that, please build me:
 ```
 
+## MCP Integration
+
+For native tool integration (Claude Code, Cursor, Windsurf, or any MCP client):
+
+```bash
+pip install agentcad[mcp]
+```
+
+Add to your `.mcp.json`:
+
+```json
+{"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
+```
+
+This exposes `run`, `render`, `export`, `inspect`, `docs`, `context`, `diff`, and `view` as native agent tools — no CLI parsing needed.
+
 ## For Agents
 
 agentcad is a CLI CAD tool. Start here:
@@ -32,11 +48,13 @@ agentcad --help
 
 That output is your complete operational briefing — commands, script-writing patterns, response schema, metrics, and debugging. Everything you need is in there.
 
+For MCP setup, run `agentcad docs mcp`.
+
 ## Development
 
 ```bash
 /opt/homebrew/bin/python3.12 -m venv app/.venv
 source app/.venv/bin/activate
-pip install -e app/ pytest
+pip install -e "app/[mcp]" pytest
 pytest app/tests/ -v
 ```
