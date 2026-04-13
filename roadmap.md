@@ -54,20 +54,21 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | | **v0.3 — Distribution & Agent Ecosystem** | | |
 | M39 | Openness & licensing strategy | S | Done |
 | M40 | Rename to agentcad | M | Done |
-| M41 | Publish to PyPI | S | Pending |
+| M41 | Publish to PyPI | S | Done |
 | M42 | MCP server | M | Done |
 | M43 | `agentcad skill install` (replaces M43/M44) | S | Done |
 | M44 | Homepage | M | Pending |
 | M45 | Session logging & feedback | S | Done |
-| M46 | Alpha users (5–10 testers, collect feedback) | M | Pending |
-| M47 | Skill marketplace publishing (ClawHub, Claude) | S | Pending |
-| M48 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
+| M46 | Remote feedback (`agentcad feedback` → you) | S | Pending |
+| M47 | Alpha users (10–100 testers, collect feedback) | M | Pending |
+| M48 | Skill marketplace publishing (ClawHub, Claude) | S | Pending |
+| M49 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
 | | | | |
 | | **v0.4 — Multi-Part Assembly & Tooling** | | |
-| M49 | Inter-part constraints (mate, align, coaxial) | L | Pending |
-| M50 | Part instancing & patterns (linear, circular array) | M | Pending |
-| M51 | Tolerance / fit helpers (clearance, interference) | S | Pending |
-| M52 | Assembly validation (interference detection) | M | Pending |
+| M50 | Inter-part constraints (mate, align, coaxial) | L | Pending |
+| M51 | Part instancing & patterns (linear, circular array) | M | Pending |
+| M52 | Tolerance / fit helpers (clearance, interference) | S | Pending |
+| M53 | Assembly validation (interference detection) | M | Pending |
 
 ---
 
@@ -492,22 +493,36 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M46: Alpha Users
+### M46: Remote Feedback
 
-**Goal:** Get agentcad into the hands of 5–10 real users and collect structured feedback before a public launch.
+**Goal:** `agentcad feedback` sends friction bundles directly to you, no manual file sharing. Designed for 10–100 testers.
+
+**Scope:**
+- Agent runs `agentcad feedback "message"` → bundle is POSTed to a remote endpoint (webhook, API, or GitHub issue on a public feedback repo).
+- Tester doesn't need repo access, GitHub account, or any manual steps.
+- Bundle includes session log, friction signals, environment info (already built in M45).
+- Design the receiving side: where bundles land, how you triage them.
+
+**Status:** Pending
+
+---
+
+### M47: Alpha Users
+
+**Goal:** Get agentcad into the hands of 10–100 real users and collect structured feedback.
 
 **Scope:**
 - Identify alpha testers: AI engineers, CAD hobbyists, agent-tool builders.
 - Provide install instructions via PyPI.
-- Give each tester a concrete task (e.g., "design a spur gear" or "model an enclosure").
-- Collect friction logs: what confused them, what broke, what they wished existed.
+- Give each tester a concrete task (e.g., "design a phone stand" or "model an enclosure").
+- Collect friction logs via `agentcad feedback` (M46).
 - Prioritize feedback into v0.3 or v0.4 milestones.
 
 **Status:** Pending
 
 ---
 
-### M47: Skill Marketplace Publishing
+### M48: Skill Marketplace Publishing
 
 **Goal:** Publish agentcad skill to ClawHub and Claude skill marketplace for broader discovery.
 
@@ -520,7 +535,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M48: Launch — Product Hunt, Hacker News, Community Posts
+### M49: Launch — Product Hunt, Hacker News, Community Posts
 
 **Goal:** Public announcement to drive awareness and early adoption.
 
@@ -542,7 +557,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M49: Inter-Part Constraints
+### M50: Inter-Part Constraints
 
 **Goal:** Declarative constraints between parts (mate, align, coaxial) so agents don't manually compute coordinates.
 
@@ -556,7 +571,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M50: Part Instancing & Patterns
+### M51: Part Instancing & Patterns
 
 **Goal:** Create arrays of identical parts without manual repetition.
 
@@ -569,7 +584,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M51: Tolerance / Fit Helpers
+### M52: Tolerance / Fit Helpers
 
 **Goal:** Helpers for common mechanical fit calculations.
 
@@ -582,7 +597,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M52: Assembly Validation
+### M53: Assembly Validation
 
 **Goal:** Detect interference between parts before export.
 
