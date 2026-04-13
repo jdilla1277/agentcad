@@ -48,21 +48,26 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M34 | Assembly positioning helpers (`bbox_point`, `place_at`, `assemble`) | S | Done |
 | M35 | Wire helpers & `elliptical_sweep` | S | Done |
 | M36 | Validity warnings & diagnostics | S | Done |
-| M37 | Wire helper robustness (point dedup) | S | Pending |
-| M38 | Complex profile patterns in docs | S | Pending |
+| M37 | Wire helper robustness (point dedup) | S | Done |
+| M38 | Complex profile patterns in docs | S | Done |
 | | | | |
 | | **v0.3 — Distribution & Agent Ecosystem** | | |
 | M39 | Openness & licensing strategy | S | Done |
 | M40 | Rename to agentcad | M | Done |
 | M41 | Publish to PyPI | S | Pending |
-| M42 | MCP server | M | Pending |
-| M43 | ClawHub skill (OpenClaw) | XS | Pending |
-| M44 | Claude Code skill/plugin | XS | Pending |
-| M45 | Homepage | M | Pending |
-| M46 | Public GitHub repo | S | Pending |
-| M47 | Session logging & feedback | S | Pending |
-| M48 | Alpha users (5–10 testers, collect feedback) | M | Pending |
-| M49 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
+| M42 | MCP server | M | Done |
+| M43 | `agentcad skill install` (replaces M43/M44) | S | Done |
+| M44 | Homepage | M | Pending |
+| M45 | Session logging & feedback | S | Done |
+| M46 | Alpha users (5–10 testers, collect feedback) | M | Pending |
+| M47 | Skill marketplace publishing (ClawHub, Claude) | S | Pending |
+| M48 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
+| | | | |
+| | **v0.4 — Multi-Part Assembly & Tooling** | | |
+| M49 | Inter-part constraints (mate, align, coaxial) | L | Pending |
+| M50 | Part instancing & patterns (linear, circular array) | M | Pending |
+| M51 | Tolerance / fit helpers (clearance, interference) | S | Pending |
+| M52 | Assembly validation (interference detection) | M | Pending |
 
 ---
 
@@ -70,9 +75,11 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **v0.1 (Core Pipeline):** Done. agentcad can execute CadQuery scripts, render PNGs, export to STEP/GLB/STL/OBJ, diff versions, and show docs. 368 tests, 10 commands.
 
-**v0.2 (Fast Loop & Friction Fixes):** In progress. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers, validity warnings shipped. Remaining: wire helper robustness (M37), complex profile docs (M38).
+**v0.2 (Fast Loop & Friction Fixes):** Done. 38 milestones shipped: metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers, validity warnings, wire dedup, complex profile docs.
 
-**v0.3 (Distribution & Agent Ecosystem):** In progress. Licensing decided (BSL 1.1), renamed to agentcad (M40). Next: PyPI publish (M41).
+**v0.3 (Distribution & Agent Ecosystem):** In progress. Licensing (M39), rename (M40), MCP server (M42), skill install (M43), session logging (M45) done. Next: PyPI publish (M41).
+
+**v0.4 (Multi-Part Assembly & Tooling):** Not started. Inter-part constraints, part instancing, tolerance helpers, interference detection.
 
 ---
 
@@ -372,34 +379,19 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M37: Wire Helper Robustness (Point Dedup)
+### M37: Wire Helper Robustness (Point Dedup) ✓
 
 **Goal:** Prevent `Knots interval values too close` and `BSplCLib::Interpolate` errors in wire helpers.
 
-**Scope:**
-- Add point deduplication within tolerance (e.g., 1e-6mm) to `spline_wire` before passing points to `GeomAPI_PointsToBSpline`.
-- Same dedup for `polygon_wire` before building line edges.
-- Tests: near-duplicate points at segment boundaries should be silently collapsed.
-
-**Motivation:** Spur gear friction log — involute-to-arc transition points are theoretically coincident but numerically distinct, causing OCC interpolation failures.
-
-**Status:** Pending
+**Delivered:** 391 tests. `_dedup_points(points, tol=1e-6)` shared helper. `spline_wire` and `polygon_wire` both deduplicate before passing to OCC. ValueError if dedup reduces below 3 points.
 
 ---
 
-### M38: Complex Profile Patterns in Docs
+### M38: Complex Profile Patterns in Docs ✓
 
 **Goal:** Document construction strategies that avoid the most common BRep footguns for complex profiles.
 
-**Scope:**
-- "Cut from blank" pattern: subtractive construction (cut gaps from a cylinder) vs. additive (build teeth up). Explain why subtraction inherits correct normals and avoids self-intersection.
-- Wire winding direction: right-hand rule, how CW vs. CCW affects face normals, how to diagnose via negative volume.
-- Mixed edge type wires: combining line edges, circular arcs, and BSplines into a single `BRepBuilderAPI_MakeWire`.
-- Add to `agentcad docs patterns`.
-
-**Motivation:** Spur gear friction log — the key insight that unlocked a valid gear was inverting construction from additive to subtractive.
-
-**Status:** Pending
+**Delivered:** 394 tests. Three new sections in `agentcad docs patterns`: subtractive construction (cut from blank), wire winding direction (CCW/CW + normals), mixed edge type wires (`BRepBuilderAPI_MakeWire`).
 
 ---
 
@@ -470,88 +462,37 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M43: ClawHub Skill (OpenClaw)
+### M43: `agentcad skill install` ✓
 
-**Goal:** Publish an agentcad skill to ClawHub so OpenClaw agents can discover and use agentcad.
+**Goal:** Self-installing agent skill bundled with the package.
 
-**Scope:**
-- Write `SKILL.md` with frontmatter: name, description, `requires.bins: ["agentcad"]`.
-- Cover all commands, helpers, and workflow in the skill body.
-- Publish via `clawhub publish`.
-- Verify discoverability via `clawhub search "CAD"`.
-
-**Status:** Pending
+**Delivered:** 424 tests. `agentcad skill install` writes SKILL.md to `.claude/skills/agentcad/` for Claude Code auto-discovery. `agentcad skill show` prints content as JSON. Skill covers full workflow, script rules, debugging playbook, patterns. Follows Agent Skills spec. Replaces separate ClawHub (old M43) and Claude Code skill (old M44) milestones.
 
 ---
 
-### M44: Claude Code Skill/Plugin
-
-**Goal:** Claude Code users can install agentcad agent instructions with one command.
-
-**Scope:**
-- Create `.claude/skills/agentcad/SKILL.md` in the repo (auto-discovered for anyone who clones).
-- Optionally: package as a Claude Code plugin for `/plugin install` distribution.
-- Skill covers: commands, helpers, preamble, workflow, common patterns.
-- `allowed-tools: Bash(agentcad *)` for auto-approval.
-
-**Status:** Pending
-
----
-
-### M45: Homepage
+### M44: Homepage
 
 **Goal:** A public website (e.g., agentcad.dev) that explains what agentcad is, shows examples, and links to install instructions for every agent platform.
 
 **Scope:**
 - Landing page: hero, value prop, install snippet, demo GIF/video.
 - Per-platform setup guides: Claude Code, Cursor, Windsurf, OpenClaw, Codex.
-- Link to GitHub, PyPI, ClawHub.
+- Link to PyPI.
 - Static site (GitHub Pages, Vercel, or Cloudflare Pages).
 
 **Status:** Pending
 
 ---
 
-### M46: Prepare for Public — Repo Split & Public Launch
-
-**Goal:** Split the codebase into a public CLI repo and a private internal repo, then make the public repo ready for external visitors.
-
-**Scope:**
-
-**Repo split:**
-- Create new public repo (e.g., `agentcad` or `agentcad-cli`) with `app/` contents promoted to root.
-- This repo (`mountain-climber`) stays private — PRDs, roadmap, friction logs, strategy docs, internal CLAUDE.md.
-- Decide linking strategy: git submodule, subtree, or independent side-by-side clones.
-
-**Public repo preparation:**
-- Add BSL 1.1 LICENSE file (per M39 decision).
-- Write public-facing README: what it is, install, agent setup, examples.
-- Write public CLAUDE.md: development setup, contribution norms, TDD process. Strip internal strategy content.
-- Add contributing guidelines (even if minimal — "issues welcome, no PRs yet").
-- Audit for secrets, credentials, internal paths, references to `mountain-climber`.
-- Set up GitHub Actions CI (tests on push).
-- Verify `pip install` works from the new repo URL.
-
-**Status:** Pending
-
----
-
-### M47: Session Logging & Feedback
+### M45: Session Logging & Feedback ✓
 
 **Goal:** Capture agent interaction patterns and friction signals for analysis.
 
-**Scope:**
-- Session logger: auto-log every CLI command to `.agentcad/session.jsonl` (timestamp, args, result).
-- `agentcad feedback` command: bundles user message with session history, friction metrics, and environment info.
-- Friction signal detection: error counts, retry sequences, success rates.
-- `AGENTCAD_NO_LOG` env var to disable logging.
-- Defensive logging: failures never break the CLI.
-
-**Status:** Pending (PR #39)
+**Delivered:** `SessionLogger` auto-logs every command to `.agentcad/session.jsonl`. `agentcad feedback` bundles message with session history, friction signals, and environment info. `AGENTCAD_NO_LOG` env var to disable. Defensive logging — failures never break the CLI.
 
 ---
 
-### M48: Alpha Users
+### M46: Alpha Users
 
 **Goal:** Get agentcad into the hands of 5–10 real users and collect structured feedback before a public launch.
 
@@ -566,7 +507,20 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M49: Launch — Product Hunt, Hacker News, Community Posts
+### M47: Skill Marketplace Publishing
+
+**Goal:** Publish agentcad skill to ClawHub and Claude skill marketplace for broader discovery.
+
+**Scope:**
+- Publish to ClawHub via `clawhub publish`. Verify via `clawhub search "CAD"`.
+- Publish to Claude skill marketplace (when available).
+- Skill content is already built (M43) — this is distribution only.
+
+**Status:** Pending
+
+---
+
+### M48: Launch — Product Hunt, Hacker News, Community Posts
 
 **Goal:** Public announcement to drive awareness and early adoption.
 
@@ -577,5 +531,64 @@ Driven by agent friction testing across 6+ real model sessions.
 - Twitter/X thread with demo video.
 - Relevant Discord/Slack communities (CadQuery, AI agent builders).
 - Blog post or homepage write-up explaining the "CAD tool for agents" angle.
+
+**Status:** Pending
+
+---
+
+## v0.4 — Multi-Part Assembly & Tooling
+
+**Goal:** Make multi-part assemblies as smooth as single-part design. Driven by assembly friction in real agent workflows.
+
+---
+
+### M49: Inter-Part Constraints
+
+**Goal:** Declarative constraints between parts (mate, align, coaxial) so agents don't manually compute coordinates.
+
+**Scope:**
+- `mate(part_a, face_a, part_b, face_b)` — align faces flush.
+- `align(part, axis, target_axis)` — align part axis to target.
+- `coaxial(part_a, part_b)` — align cylindrical axes.
+- Returns positioned `TopoDS_Shape`, composable with existing helpers.
+
+**Status:** Pending
+
+---
+
+### M50: Part Instancing & Patterns
+
+**Goal:** Create arrays of identical parts without manual repetition.
+
+**Scope:**
+- `linear_pattern(shape, direction, count, spacing)` — linear array.
+- `circular_pattern(shape, axis, count)` — rotational array.
+- Returns compound of instances.
+
+**Status:** Pending
+
+---
+
+### M51: Tolerance / Fit Helpers
+
+**Goal:** Helpers for common mechanical fit calculations.
+
+**Scope:**
+- `clearance_fit(bore_d, shaft_d)` — verify clearance is positive.
+- `press_fit(bore_d, shaft_d)` — verify interference is within range.
+- Integrated with `compute_metrics` — report fit analysis when parts are named.
+
+**Status:** Pending
+
+---
+
+### M52: Assembly Validation
+
+**Goal:** Detect interference between parts before export.
+
+**Scope:**
+- `check_interference(compound)` — pairwise `BRepAlgoAPI_Common` between solids.
+- Report overlapping pairs with volume of interference.
+- Surface as warning in `agentcad run` output (like `is_valid` warnings).
 
 **Status:** Pending

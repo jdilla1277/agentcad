@@ -189,6 +189,19 @@ DEBUGGING
     Invalid?          -> is_valid: false
   $ agentcad render v1_test/output.step --view all        # visual from 4 angles
   Then iterate: fix script, run with new --output label.
+
+\b
+MCP INTEGRATION
+  For native tool integration with Claude Code, Cursor, Windsurf, or any
+  MCP-compatible agent, install the MCP extra and add to your .mcp.json:
+
+  pip install agentcad[mcp]
+
+  .mcp.json:
+    {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
+
+  This exposes all agentcad commands as native agent tools — no CLI
+  parsing needed. The agent calls run(), inspect(), docs() etc. directly.
 """
 
 

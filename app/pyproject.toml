@@ -27,6 +27,7 @@ mcp = ["mcp>=1.0.0"]
 [project.urls]
 Repository = "https://github.com/jdilla1277/agentcad"
 
+
 [project.scripts]
 agentcad = "agentcad.cli:cli"
 
