@@ -48,8 +48,8 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M34 | Assembly positioning helpers (`bbox_point`, `place_at`, `assemble`) | S | Done |
 | M35 | Wire helpers & `elliptical_sweep` | S | Done |
 | M36 | Validity warnings & diagnostics | S | Done |
-| M37 | Wire helper robustness (point dedup) | S | Pending |
-| M38 | Complex profile patterns in docs | S | Pending |
+| M37 | Wire helper robustness (point dedup) | S | Done |
+| M38 | Complex profile patterns in docs | S | Done |
 | | | | |
 | | **v0.3 — Distribution & Agent Ecosystem** | | |
 | M39 | Openness & licensing strategy | S | Done |
@@ -60,7 +60,7 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M44 | Claude Code skill/plugin | XS | Pending |
 | M45 | Homepage | M | Pending |
 | M46 | Public GitHub repo | S | Pending |
-| M47 | Session logging & feedback | S | Pending |
+| M47 | Session logging & feedback | S | Done |
 | M48 | Alpha users (5–10 testers, collect feedback) | M | Pending |
 | M49 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
 
@@ -70,9 +70,9 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 
 **v0.1 (Core Pipeline):** Done. agentcad can execute CadQuery scripts, render PNGs, export to STEP/GLB/STL/OBJ, diff versions, and show docs. 368 tests, 10 commands.
 
-**v0.2 (Fast Loop & Friction Fixes):** In progress. Metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers, validity warnings shipped. Remaining: wire helper robustness (M37), complex profile docs (M38).
+**v0.2 (Fast Loop & Friction Fixes):** Done. 38 milestones shipped: metrics, preamble, validation, daemon, parametric scripts, inspect, per-part workflow, assembly helpers, wire helpers, validity warnings, wire dedup, complex profile docs.
 
-**v0.3 (Distribution & Agent Ecosystem):** In progress. Licensing decided (BSL 1.1), renamed to agentcad (M40). Next: PyPI publish (M41).
+**v0.3 (Distribution & Agent Ecosystem):** In progress. Licensing decided (BSL 1.1, M39), renamed to agentcad (M40), session logging shipped (M47). Next: PyPI publish (M41).
 
 ---
 
@@ -372,34 +372,19 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M37: Wire Helper Robustness (Point Dedup)
+### M37: Wire Helper Robustness (Point Dedup) ✓
 
 **Goal:** Prevent `Knots interval values too close` and `BSplCLib::Interpolate` errors in wire helpers.
 
-**Scope:**
-- Add point deduplication within tolerance (e.g., 1e-6mm) to `spline_wire` before passing points to `GeomAPI_PointsToBSpline`.
-- Same dedup for `polygon_wire` before building line edges.
-- Tests: near-duplicate points at segment boundaries should be silently collapsed.
-
-**Motivation:** Spur gear friction log — involute-to-arc transition points are theoretically coincident but numerically distinct, causing OCC interpolation failures.
-
-**Status:** Pending
+**Delivered:** 391 tests. `_dedup_points(points, tol=1e-6)` shared helper. `spline_wire` and `polygon_wire` both deduplicate before passing to OCC. ValueError if dedup reduces below 3 points.
 
 ---
 
-### M38: Complex Profile Patterns in Docs
+### M38: Complex Profile Patterns in Docs ✓
 
 **Goal:** Document construction strategies that avoid the most common BRep footguns for complex profiles.
 
-**Scope:**
-- "Cut from blank" pattern: subtractive construction (cut gaps from a cylinder) vs. additive (build teeth up). Explain why subtraction inherits correct normals and avoids self-intersection.
-- Wire winding direction: right-hand rule, how CW vs. CCW affects face normals, how to diagnose via negative volume.
-- Mixed edge type wires: combining line edges, circular arcs, and BSplines into a single `BRepBuilderAPI_MakeWire`.
-- Add to `agentcad docs patterns`.
-
-**Motivation:** Spur gear friction log — the key insight that unlocked a valid gear was inverting construction from additive to subtractive.
-
-**Status:** Pending
+**Delivered:** 394 tests. Three new sections in `agentcad docs patterns`: subtractive construction (cut from blank), wire winding direction (CCW/CW + normals), mixed edge type wires (`BRepBuilderAPI_MakeWire`).
 
 ---
 
@@ -536,18 +521,11 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M47: Session Logging & Feedback
+### M47: Session Logging & Feedback ✓
 
 **Goal:** Capture agent interaction patterns and friction signals for analysis.
 
-**Scope:**
-- Session logger: auto-log every CLI command to `.agentcad/session.jsonl` (timestamp, args, result).
-- `agentcad feedback` command: bundles user message with session history, friction metrics, and environment info.
-- Friction signal detection: error counts, retry sequences, success rates.
-- `AGENTCAD_NO_LOG` env var to disable logging.
-- Defensive logging: failures never break the CLI.
-
-**Status:** Pending (PR #39)
+**Delivered:** 417 tests. `SessionLogger` auto-logs every command to `.agentcad/session.jsonl`. `agentcad feedback` bundles message with session history, friction signals, and environment info. `AGENTCAD_NO_LOG` env var to disable. Defensive logging — failures never break the CLI.
 
 ---
 
