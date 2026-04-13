@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "agentcad"
 version = "0.1.0"
 description = "CLI CAD tool for AI agents. Write CadQuery scripts, get STEP files, renders, and metrics."
+readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = {text = "BSL-1.1"}
 authors = [{name = "James Dillard"}]
