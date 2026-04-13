@@ -48,8 +48,8 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M34 | Assembly positioning helpers (`bbox_point`, `place_at`, `assemble`) | S | Done |
 | M35 | Wire helpers & `elliptical_sweep` | S | Done |
 | M36 | Validity warnings & diagnostics | S | Done |
-| M37 | Wire helper robustness (point dedup) | S | Pending |
-| M38 | Complex profile patterns in docs | S | Pending |
+| M37 | Wire helper robustness (point dedup) | S | Done |
+| M38 | Complex profile patterns in docs | S | Done |
 | | | | |
 | | **v0.3 — Distribution & Agent Ecosystem** | | |
 | M39 | Openness & licensing strategy | S | Done |
@@ -379,34 +379,19 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M37: Wire Helper Robustness (Point Dedup)
+### M37: Wire Helper Robustness (Point Dedup) ✓
 
 **Goal:** Prevent `Knots interval values too close` and `BSplCLib::Interpolate` errors in wire helpers.
 
-**Scope:**
-- Add point deduplication within tolerance (e.g., 1e-6mm) to `spline_wire` before passing points to `GeomAPI_PointsToBSpline`.
-- Same dedup for `polygon_wire` before building line edges.
-- Tests: near-duplicate points at segment boundaries should be silently collapsed.
-
-**Motivation:** Spur gear friction log — involute-to-arc transition points are theoretically coincident but numerically distinct, causing OCC interpolation failures.
-
-**Status:** Pending
+**Delivered:** 391 tests. `_dedup_points(points, tol=1e-6)` shared helper. `spline_wire` and `polygon_wire` both deduplicate before passing to OCC. ValueError if dedup reduces below 3 points.
 
 ---
 
-### M38: Complex Profile Patterns in Docs
+### M38: Complex Profile Patterns in Docs ✓
 
 **Goal:** Document construction strategies that avoid the most common BRep footguns for complex profiles.
 
-**Scope:**
-- "Cut from blank" pattern: subtractive construction (cut gaps from a cylinder) vs. additive (build teeth up). Explain why subtraction inherits correct normals and avoids self-intersection.
-- Wire winding direction: right-hand rule, how CW vs. CCW affects face normals, how to diagnose via negative volume.
-- Mixed edge type wires: combining line edges, circular arcs, and BSplines into a single `BRepBuilderAPI_MakeWire`.
-- Add to `agentcad docs patterns`.
-
-**Motivation:** Spur gear friction log — the key insight that unlocked a valid gear was inverting construction from additive to subtractive.
-
-**Status:** Pending
+**Delivered:** 394 tests. Three new sections in `agentcad docs patterns`: subtractive construction (cut from blank), wire winding direction (CCW/CW + normals), mixed edge type wires (`BRepBuilderAPI_MakeWire`).
 
 ---
 
