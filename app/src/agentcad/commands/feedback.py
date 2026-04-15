@@ -11,7 +11,7 @@ import click
 from agentcad.session_log import SessionLogger
 
 
-_FEEDBACK_URL = "https://agentcad-site.vercel.app/api/feedback"
+_FEEDBACK_URL = "https://agentcad-site-five.vercel.app/api/feedback"
 
 
 def _send_remote(bundle: dict) -> str | None:
