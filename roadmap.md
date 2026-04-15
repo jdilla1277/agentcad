@@ -57,18 +57,19 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M41 | Publish to PyPI | S | Done |
 | M42 | MCP server | M | Done |
 | M43 | `agentcad skill install` (replaces M43/M44) | S | Done |
-| M44 | Homepage | M | Pending |
+| M44 | Homepage (agentcad.dev) | M | In Progress |
 | M45 | Session logging & feedback | S | Done |
-| M46 | Remote feedback (`agentcad feedback` → you) | S | Pending |
+| M46 | Remote feedback (`agentcad feedback` → you) | S | Done |
 | M47 | Alpha users (10–100 testers, collect feedback) | M | Pending |
-| M48 | Skill marketplace publishing (ClawHub, Claude) | S | Pending |
-| M49 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
+| M48 | Audience research (Reddit, hobbyists, communities) | S | Pending |
+| M49 | Skill marketplace publishing (ClawHub, Claude) | S | Pending |
+| M50 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
 | | | | |
 | | **v0.4 — Multi-Part Assembly & Tooling** | | |
-| M50 | Inter-part constraints (mate, align, coaxial) | L | Pending |
-| M51 | Part instancing & patterns (linear, circular array) | M | Pending |
-| M52 | Tolerance / fit helpers (clearance, interference) | S | Pending |
-| M53 | Assembly validation (interference detection) | M | Pending |
+| M51 | Inter-part constraints (mate, align, coaxial) | L | Pending |
+| M52 | Part instancing & patterns (linear, circular array) | M | Pending |
+| M53 | Tolerance / fit helpers (clearance, interference) | S | Pending |
+| M54 | Assembly validation (interference detection) | M | Pending |
 
 ---
 
