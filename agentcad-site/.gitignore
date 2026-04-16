@@ -1,0 +1,12 @@
+.projects/
+.agents/
+.claude/
+.cursor/
+.cursorignore
+AGENTS.md
+CLAUDE.md
+.env
+.env*.local
+.vercel
+.next
+node_modules
