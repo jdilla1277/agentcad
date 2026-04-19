@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Isometric cube — agentcad -->
+  <!-- Top face -->
+  <path d="M16 4 L28 11 L16 18 L4 11 Z" fill="#a0a0a0" />
+  <!-- Left face -->
+  <path d="M4 11 L16 18 L16 28 L4 21 Z" fill="#606060" />
+  <!-- Right face -->
+  <path d="M28 11 L16 18 L16 28 L28 21 Z" fill="#808080" />
+</svg>
