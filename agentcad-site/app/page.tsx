@@ -23,6 +23,56 @@ function CopyPrompt({ text }: { text: string }) {
   );
 }
 
+function CopyableBlock({
+  text,
+  label,
+  className,
+}: {
+  text: string;
+  label?: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  return (
+    <div className="relative group">
+      <pre
+        className={
+          className ??
+          "bg-gray-900 border border-gray-800 rounded-lg p-6 text-sm overflow-x-auto whitespace-pre-wrap"
+        }
+        aria-label={label}
+      >
+        {text}
+      </pre>
+      <button
+        onClick={() => {
+          navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+        className="absolute top-3 right-3 text-xs text-gray-500 hover:text-gray-200 bg-gray-800 border border-gray-700 rounded px-2 py-1 opacity-80 hover:opacity-100 transition"
+        aria-label="Copy to clipboard"
+      >
+        {copied ? "Copied!" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+const TRY_IT_PROMPT = `Create a Python 3.12 virtual environment, then:
+
+pip install agentcad[mcp]
+agentcad skill install
+agentcad --help
+
+Read the --help output — it's your operational briefing.
+
+Then design me a phone stand: a simple angled cradle
+that holds a phone at 60 degrees. About 80mm wide,
+50mm deep, with a 5mm lip at the bottom to keep the
+phone from sliding. Show me a preview when you're done.`;
+
 const gallery = [
   {
     image: "/gallery-enclosure.png",
@@ -38,9 +88,9 @@ const gallery = [
   },
   {
     image: "/gallery-rook.png",
-    alt: "3D render of a chess rook with circular base, tapered cylindrical shaft, and flat-topped crown, light gray top face on dark background, approximately 24x24x42mm",
+    alt: "3D render of a chess rook with a stepped circular base, hourglass-tapered shaft, and crenellated crown with four battlements, light gray on dark background, approximately 30x30x64mm",
     prompt: "Model a chess rook. Lathe-revolved profile with a wide base, tapered shaft, and a crown with battlements.",
-    metrics: "13 faces, 20 edges, 11.6cm\u00b3 volume",
+    metrics: "59 faces, 140 edges, 19.2cm\u00b3 volume, valid geometry",
   },
   {
     image: "/gallery-stand.png",
@@ -149,23 +199,10 @@ export default function Home() {
             <strong className="text-gray-300">Cursor</strong>, or any coding
             agent:
           </p>
-          <pre
-            className="bg-gray-900 border border-gray-800 rounded-lg p-6 text-sm overflow-x-auto whitespace-pre-wrap"
-            aria-label="Onboarding prompt for AI agents"
-          >
-{`Create a Python 3.12 virtual environment, then:
-
-pip install agentcad[mcp]
-agentcad skill install
-agentcad --help
-
-Read the --help output — it's your operational briefing.
-
-Then design me a phone stand: a simple angled cradle
-that holds a phone at 60 degrees. About 80mm wide,
-50mm deep, with a 5mm lip at the bottom to keep the
-phone from sliding. Show me a preview when you're done.`}
-          </pre>
+          <CopyableBlock
+            text={TRY_IT_PROMPT}
+            label="Onboarding prompt for AI agents"
+          />
         </section>
 
         {/* No boilerplate */}
