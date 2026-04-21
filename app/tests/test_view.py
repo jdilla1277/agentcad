@@ -75,7 +75,7 @@ def test_view_html_embeds_glb_data(runner, isolated_dir, monkeypatch):
     glb_path = _make_glb(isolated_dir)
     monkeypatch.setattr("webbrowser.open", lambda url: None)
     runner.invoke(cli, ["view", str(glb_path)])
-    html_path = isolated_dir / ".agentcad_viewer_output.html"
+    html_path = isolated_dir / "output_viewer.html"
     html = html_path.read_text()
     assert "data:application/octet-stream;base64," in html
     # Should NOT contain a bare filename reference

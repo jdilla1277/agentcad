@@ -98,7 +98,7 @@ def _record_failure(manifest, script_path, label, version_num, error_msg):
 @click.argument("script")
 @click.option("--output", required=True, help="Label for this version.")
 @click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
-@click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb).")
+@click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb, obj).")
 @click.option("--preview", is_flag=True, default=False, help="Render a quick 256x256 iso preview.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")

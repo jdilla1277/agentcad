@@ -229,7 +229,7 @@ def view(file):
     b64 = base64.b64encode(glb_data).decode("ascii")
     model_url = f"data:application/octet-stream;base64,{b64}"
     html_content = _HTML_TEMPLATE.replace("MODEL_URL", model_url)
-    html_path = model_path.parent / f".agentcad_viewer_{model_path.stem}.html"
+    html_path = model_path.parent / f"{model_path.stem}_viewer.html"
     html_path.write_text(html_content)
 
     url = html_path.as_uri()

@@ -100,6 +100,18 @@ Small items surfaced from real use that haven't earned a milestone slot yet. Gra
 
 ---
 
+## Incoming friction — TV2 UAS log (2026-04-20)
+
+<!-- TODO: fold these bullets into the "## Friction queue" section once PR #59 (feat/skill-marketplace-site) merges. Kept as a separate section here only to avoid a merge conflict with that PR. -->
+
+From `feedback/2026-04-20/friction-log-tv2-uas.md`. Items in priority-ish order; first two were fixed in the same PR that added this section.
+
+- **Top-view render asymmetric on a mirror-symmetric model** — top view came out asymmetric for a model that was symmetric about XZ (`is_valid: true`, bbox symmetric on Y); front/iso looked correct. Likely a camera up-vector or projection quirk specific to the top view in `render.py`. Blocked on a repro STEP from the reporter before we can estimate.
+- **`elliptical_sweep` minimum radius is undocumented** — reporter used 3.0 mm defensively at spine ends; smaller might work, smaller might blow up, docs don't say. Fix: sweep empirically to find the threshold, document it in the helper docstring + `agentcad docs helpers`. Optional guardrail: validate radii below the safe minimum in `elliptical_sweep` itself.
+- **Overlay mode for `agentcad view`** — `agentcad diff` is metrics-only; users can't see what actually moved between versions. Load two STEPs into one viewer HTML tinted red/green (with opacity + a toggle). Larger than the other two — likely graduates to its own milestone.
+
+---
+
 ## v0.1 — Core Pipeline
 
 ### M1: Project Scaffolding & `agentcad init` ✓
