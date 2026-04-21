@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+import agentcad
+
 
 def _default_socket_path():
     return f"/tmp/agentcad-daemon-{os.getuid()}.sock"
@@ -51,9 +53,31 @@ class DaemonServer:
         self._socket_path = socket_path or _default_socket_path()
         self._pid_path = pid_path or _default_pid_path()
         self._running = False
+        # Snapshot the agentcad version at daemon startup. After a pip upgrade,
+        # this still reflects the OLD imported code; client requests carry the
+        # new version and we surface the mismatch instead of erroring opaquely.
+        self._version = agentcad.__version__
+
+    def _version_mismatch_response(self, client_version):
+        """Build a canonical mismatch response for stale-daemon scenarios."""
+        client_str = client_version if client_version else "unknown"
+        message = (
+            f"Daemon version mismatch: daemon running v{self._version}, "
+            f"client is v{client_str}. Run 'agentcad daemon stop && "
+            f"agentcad daemon start' to refresh the daemon with the new code."
+        )
+        payload = {"command": "run", "status": "error", "message": message}
+        return {"output": json.dumps(payload), "exit_code": 1}
 
     def handle_request(self, request):
         """Dispatch a request and return a response dict."""
+        # Version gate: every request must carry a client_version matching the
+        # daemon's startup version. Missing field is treated as a mismatch so
+        # older clients can't silently talk to a newer daemon (or vice versa).
+        client_version = request.get("client_version")
+        if client_version != self._version:
+            return self._version_mismatch_response(client_version)
+
         req_type = request.get("type")
         if req_type == "ping":
             return {"type": "pong"}
@@ -145,6 +169,12 @@ def send_request(msg, socket_path=None):
         sock.connect(socket_path)
     except (FileNotFoundError, ConnectionRefusedError, OSError):
         return None
+
+    # Stamp every outbound request with the client's agentcad version so the
+    # daemon can detect stale imports after a pip upgrade. Callers may override
+    # by passing client_version explicitly (used in tests).
+    msg = dict(msg)
+    msg.setdefault("client_version", agentcad.__version__)
 
     try:
         sock.sendall(encode_message(msg))

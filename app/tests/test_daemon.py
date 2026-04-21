@@ -108,26 +108,40 @@ class TestSendRequest:
 
 # ---------- Phase 2: Server handlers ----------
 
+def _bare_server():
+    """Build a DaemonServer without invoking __init__, but with _version stamped
+    to the currently-imported agentcad version so handle_request's version
+    check lets matching client requests through."""
+    import agentcad
+    from agentcad.daemon import DaemonServer
+
+    server = DaemonServer.__new__(DaemonServer)
+    server._version = agentcad.__version__
+    return server
+
+
+def _req(**kwargs):
+    """Build a request dict auto-stamped with the current agentcad version."""
+    import agentcad
+
+    kwargs.setdefault("client_version", agentcad.__version__)
+    return kwargs
+
+
 class TestDaemonServer:
     def test_handles_ping(self):
-        from agentcad.daemon import DaemonServer
-
-        server = DaemonServer.__new__(DaemonServer)
-        response = server.handle_request({"type": "ping"})
+        server = _bare_server()
+        response = server.handle_request(_req(type="ping"))
         assert response["type"] == "pong"
 
     def test_handles_shutdown(self):
-        from agentcad.daemon import DaemonServer
-
-        server = DaemonServer.__new__(DaemonServer)
+        server = _bare_server()
         server._running = True
-        response = server.handle_request({"type": "shutdown"})
+        response = server.handle_request(_req(type="shutdown"))
         assert response["type"] == "ack"
         assert server._running is False
 
     def test_handles_run(self, isolated_dir):
-        from agentcad.daemon import DaemonServer
-
         # Set up a agentcad project
         from agentcad.cli import cli
         runner = CliRunner()
@@ -137,31 +151,27 @@ class TestDaemonServer:
         script = isolated_dir / "box.py"
         script.write_text("result = cq.Workplane('XY').box(10, 20, 5)\nshow_object(result)\n")
 
-        server = DaemonServer.__new__(DaemonServer)
-        response = server.handle_request({
-            "type": "run",
-            "cwd": str(isolated_dir),
-            "argv": ["run", str(script), "--output", "box"],
-        })
+        server = _bare_server()
+        response = server.handle_request(_req(
+            type="run",
+            cwd=str(isolated_dir),
+            argv=["run", str(script), "--output", "box"],
+        ))
         assert response["exit_code"] == 0
         output = json.loads(response["output"])
         assert output["status"] == "success"
         assert output["label"] == "box"
 
     def test_handles_unknown_type(self):
-        from agentcad.daemon import DaemonServer
-
-        server = DaemonServer.__new__(DaemonServer)
-        response = server.handle_request({"type": "unknown_thing"})
+        server = _bare_server()
+        response = server.handle_request(_req(type="unknown_thing"))
         assert response["type"] == "error"
         assert "unknown" in response["message"].lower()
 
     def test_run_preserves_cwd(self, isolated_dir):
         """Daemon restores original CWD after handling a run request."""
-        from agentcad.daemon import DaemonServer
-
         original_cwd = os.getcwd()
-        server = DaemonServer.__new__(DaemonServer)
+        server = _bare_server()
 
         # Set up project in a subdirectory
         project_dir = isolated_dir / "proj"
@@ -177,11 +187,11 @@ class TestDaemonServer:
         script = project_dir / "box.py"
         script.write_text("result = cq.Workplane('XY').box(10, 20, 5)\nshow_object(result)\n")
 
-        server.handle_request({
-            "type": "run",
-            "cwd": str(project_dir),
-            "argv": ["run", str(script), "--output", "box"],
-        })
+        server.handle_request(_req(
+            type="run",
+            cwd=str(project_dir),
+            argv=["run", str(project_dir / "box.py"), "--output", "box"],
+        ))
         # CWD should be restored
         assert os.getcwd() == old_cwd
 
@@ -583,5 +593,120 @@ class TestRunRouting:
         # Version dir should be in project_dir
         assert (project_dir / "v1_box").exists()
 
+        send_request({"type": "shutdown"}, socket_path=sock_path)
+        t.join(timeout=5)
+
+
+# ---------- Phase 6: Version check ----------
+
+class TestVersionCheck:
+    def test_daemon_version_match_ok(self, daemon_paths):
+        """Matching client and daemon versions round-trip a normal ping."""
+        import agentcad
+        from agentcad.daemon import DaemonServer, send_request
+
+        sock_path, pid_path = daemon_paths
+        server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
+        t = threading.Thread(target=server.serve)
+        t.start()
+        for _ in range(50):
+            if os.path.exists(sock_path):
+                break
+            time.sleep(0.05)
+
+        # send_request auto-stamps the current agentcad version, which matches
+        # what the server snapshotted at __init__.
+        assert server._version == agentcad.__version__
+        resp = send_request({"type": "ping"}, socket_path=sock_path)
+        assert resp == {"type": "pong"}
+
+        send_request({"type": "shutdown"}, socket_path=sock_path)
+        t.join(timeout=5)
+
+    def test_daemon_version_mismatch_errors(self, daemon_paths, monkeypatch):
+        """Stale daemon (older version) rejects requests from a newer client."""
+        import agentcad
+        from agentcad.daemon import DaemonServer, send_request
+
+        sock_path, pid_path = daemon_paths
+        server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
+        # Simulate a daemon started before a pip upgrade — still running the
+        # "old" agentcad version in memory.
+        server._version = "0.0.0-stale"
+        t = threading.Thread(target=server.serve)
+        t.start()
+        for _ in range(50):
+            if os.path.exists(sock_path):
+                break
+            time.sleep(0.05)
+
+        # Client sends with its current (newer) version via send_request.
+        resp = send_request({"type": "ping"}, socket_path=sock_path)
+        assert resp is not None
+        assert resp.get("exit_code") == 1
+        payload = json.loads(resp["output"])
+        assert payload["command"] == "run"
+        assert payload["status"] == "error"
+        assert "Daemon version mismatch" in payload["message"]
+        assert "0.0.0-stale" in payload["message"]
+        assert agentcad.__version__ in payload["message"]
+        assert "agentcad daemon stop && agentcad daemon start" in payload["message"]
+
+        # Shutdown must also carry a matching version — the daemon refuses
+        # shutdowns from a mismatched client (same safety gate). Bypass the
+        # gate by temporarily matching the daemon's stale version.
+        send_request(
+            {"type": "shutdown", "client_version": "0.0.0-stale"},
+            socket_path=sock_path,
+        )
+        t.join(timeout=5)
+
+    def test_daemon_missing_client_version_errors(self, daemon_paths):
+        """Request without a client_version field is treated as a mismatch."""
+        from agentcad.daemon import (
+            DaemonServer,
+            decode_message,
+            encode_message,
+        )
+
+        sock_path, pid_path = daemon_paths
+        server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
+        t = threading.Thread(target=server.serve)
+        t.start()
+        for _ in range(50):
+            if os.path.exists(sock_path):
+                break
+            time.sleep(0.05)
+
+        # Bypass send_request (which auto-stamps) by talking to the socket
+        # directly with a raw payload that omits client_version.
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        sock.connect(sock_path)
+        try:
+            sock.sendall(encode_message({"type": "ping"}))
+            buf = b""
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                resp, _ = decode_message(buf)
+                if resp is not None:
+                    break
+        finally:
+            sock.close()
+
+        assert resp is not None
+        assert resp.get("exit_code") == 1
+        payload = json.loads(resp["output"])
+        assert payload["status"] == "error"
+        assert "Daemon version mismatch" in payload["message"]
+        # Missing version surfaces as "unknown" in the error for visibility.
+        assert "v unknown" in payload["message"] or "v unknown" in payload["message"].lower() \
+            or "unknown" in payload["message"]
+
+        # Shut down through the normal (version-stamped) path.
+        from agentcad.daemon import send_request
         send_request({"type": "shutdown"}, socket_path=sock_path)
         t.join(timeout=5)
