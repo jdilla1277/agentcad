@@ -57,19 +57,34 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M41 | Publish to PyPI | S | Done |
 | M42 | MCP server | M | Done |
 | M43 | `agentcad skill install` (replaces M43/M44) | S | Done |
-| M44 | Homepage (agentcad.dev) | M | In Progress |
+| M44 | Homepage (agentcad.dev) | M | Done |
 | M45 | Session logging & feedback | S | Done |
 | M46 | Remote feedback (`agentcad feedback` → you) | S | Done |
-| M47 | Alpha users (10–100 testers, collect feedback) | M | Pending |
-| M48 | Audience research (Reddit, hobbyists, communities) | S | Pending |
-| M49 | Skill marketplace publishing (ClawHub, Claude) | S | Pending |
-| M50 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
+| M47 | Skill marketplace publishing (ClawHub + skills.sh) | S | Pending |
+| M48 | Email updates signup (CLI + website) | S | Pending |
+| M49 | Alpha users (10–100 testers, collect feedback) | M | Pending |
+| M50 | Audience research (Reddit, hobbyists, communities) | S | Pending |
+| M51 | Launch — Product Hunt, Hacker News, community posts | S | Pending |
 | | | | |
 | | **v0.4 — Multi-Part Assembly & Tooling** | | |
-| M51 | Inter-part constraints (mate, align, coaxial) | L | Pending |
-| M52 | Part instancing & patterns (linear, circular array) | M | Pending |
-| M53 | Tolerance / fit helpers (clearance, interference) | S | Pending |
-| M54 | Assembly validation (interference detection) | M | Pending |
+| M52 | Inter-part constraints (mate, align, coaxial) | L | Pending |
+| M53 | Part instancing & patterns (linear, circular array) | M | Pending |
+| M54 | Tolerance / fit helpers (clearance, interference) | S | Pending |
+| M55 | Assembly validation (interference detection) | M | Pending |
+
+---
+
+## Repo visibility
+
+**`jdilla1277/agentcad` is private** and stays private for now. PyPI package is public; skill manifest (`jdilla1277/agentcad-skill`, M47) is public. Going fully open-source is intentionally deferred — revisit after M49 alpha feedback. See `prd/m39_licensing_strategy.md` (BSL-1.1) and `prd/future-ideas/analytics.md`.
+
+---
+
+## Friction queue
+
+Small items surfaced from real use that haven't earned a milestone slot yet. Graduate to a milestone when picked up.
+
+- **Skill: default viewer prompt** (2026-04-20) — the SKILL.md workflow should instruct the agent to run `agentcad view <path>.glb` after a successful run so the user gets a browser preview automatically. Currently the user has to ask explicitly. Fix: add an explicit step to the "Core workflow" in `SKILL_CONTENT` (`skill.py`) and have the sync workflow propagate it to the public manifest.
 
 ---
 
@@ -472,17 +487,11 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M44: Homepage
+### M44: Homepage ✓
 
 **Goal:** A public website (e.g., agentcad.dev) that explains what agentcad is, shows examples, and links to install instructions for every agent platform.
 
-**Scope:**
-- Landing page: hero, value prop, install snippet, demo GIF/video.
-- Per-platform setup guides: Claude Code, Cursor, Windsurf, OpenClaw, Codex.
-- Link to PyPI.
-- Static site (GitHub Pages, Vercel, or Cloudflare Pages).
-
-**Status:** Pending
+**Delivered:** agentcad.dev live on Vercel. Landing page with hero, value prop, gallery of four agent-designed models (enclosure, vase, rook, phone stand), copyable onboarding prompt, install snippet, MCP `.mcp.json` example, and agent-friendly copy. SEO-ready with sitemap, robots.txt, and an isometric-cube favicon. Feedback wiring goes through remote endpoint + Discord.
 
 ---
 
@@ -508,35 +517,71 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M47: Alpha Users
+### M47: Skill Marketplace Publishing
 
-**Goal:** Get agentcad into the hands of 10–100 real users and collect structured feedback.
-
-**Scope:**
-- Identify alpha testers: AI engineers, CAD hobbyists, agent-tool builders.
-- Provide install instructions via PyPI.
-- Give each tester a concrete task (e.g., "design a phone stand" or "model an enclosure").
-- Collect friction logs via `agentcad feedback` (M46).
-- Prioritize feedback into v0.3 or v0.4 milestones.
-
-**Status:** Pending
-
----
-
-### M48: Skill Marketplace Publishing
-
-**Goal:** Publish agentcad skill to ClawHub and Claude skill marketplace for broader discovery.
+**Goal:** Publish the agentcad skill to ClawHub (OpenClaw) and skills.sh (Vercel) for broader agent-ecosystem discovery. Pulled up ahead of Alpha Users so testers get a one-command install flow.
 
 **Scope:**
-- Publish to ClawHub via `clawhub publish`. Verify via `clawhub search "CAD"`.
-- Publish to Claude skill marketplace (when available).
+- New public repo `jdilla1277/agentcad-skill` (Apache-2.0) with `SKILL.md` + README + LICENSE. **Main `jdilla1277/agentcad` repo stays private** — only the skill manifest is public. The skill content is already shipped to every user who runs `agentcad skill install`, so there's nothing new being exposed.
+- Unified `SKILL.md` frontmatter that satisfies both marketplaces:
+  - `name`, `description`, `version` (skills.sh required fields)
+  - `metadata.openclaw.requires.bins` and `anyBins` for Python 3.10–3.12 (ClawHub runtime checks)
+  - Body is the runtime agent briefing (same content shipped by `agentcad skill install`).
+- ClawHub: `clawhub package publish jdilla1277/agentcad-skill`. Expect VirusTotal scan delay since the Jan 2026 malware sweep.
+- skills.sh: no submit step — showing up is driven by `npx skills add jdilla1277/agentcad-skill` install telemetry. Add the install line to the site's Try it section.
+- Sync workflow in the private repo: on `release: published`, extract `SKILL_CONTENT` from `skill.py` and push `SKILL.md` to the public mirror. One source of truth.
 - Skill content is already built (M43) — this is distribution only.
 
 **Status:** Pending
 
 ---
 
-### M49: Launch — Product Hunt, Hacker News, Community Posts
+### M48: Email Updates Signup
+
+**Goal:** Let users opt in to email updates from both the CLI and the website so we can reach alphas, ship release notes, and build a reachable audience ahead of M51 Launch.
+
+**Scope:**
+- **Backend / list provider** — pick one (Buttondown, Beehiiv, ConvertKit, or self-host on the existing Neon + Resend stack that powers remote feedback). Lowest-friction: Buttondown free tier or a new table on our existing Neon DB.
+- **Website signup** — a small form on agentcad.dev (footer + a dedicated `/subscribe` page). Honor `noindex` for privacy pages, clear opt-in language, unsubscribe link baked into every send.
+- **CLI signup** — `agentcad subscribe <email>` or a one-time prompt shown after the first successful `agentcad run` (respects `AGENTCAD_NO_LOG` opt-out convention from M45). Local flag file so we never prompt twice. POSTs to the same remote endpoint used for feedback with a `kind: "subscribe"` field.
+- **Confirmation** — double opt-in (CAN-SPAM / GDPR friendly) via the list provider.
+- **Privacy** — the only data captured is the email + source (`cli` vs `web`). No implicit subscription on install.
+- **Needed for:** M49 (alphas get release notes), M50 (audience research can inform initial content), M51 (launch — warm list matters).
+
+**Status:** Pending
+
+---
+
+### M49: Alpha Users
+
+**Goal:** Get agentcad into the hands of 10–100 real users and collect structured feedback.
+
+**Scope:**
+- Identify alpha testers: AI engineers, CAD hobbyists, agent-tool builders.
+- Provide install instructions via PyPI and `npx skills add` (once M47 ships).
+- Give each tester a concrete task (e.g., "design a phone stand" or "model an enclosure").
+- Collect friction logs via `agentcad feedback` (M46).
+- Invite to the email list (M48) for release notes.
+- Prioritize feedback into v0.3 or v0.4 milestones.
+
+**Status:** Pending
+
+---
+
+### M50: Audience Research
+
+**Goal:** Identify the communities most likely to adopt agentcad and map the channels for reaching them ahead of M51 Launch.
+
+**Scope:**
+- Reddit subs: r/cad, r/3Dprinting, r/cadquery, r/MachineLearning, r/LocalLLaMA.
+- CAD hobbyist forums, CadQuery Discord, AI-agent-builder communities.
+- Output: a one-page audience map in `prd/` with size estimates and "first post" ideas per channel.
+
+**Status:** Pending
+
+---
+
+### M51: Launch — Product Hunt, Hacker News, Community Posts
 
 **Goal:** Public announcement to drive awareness and early adoption.
 
@@ -558,7 +603,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M50: Inter-Part Constraints
+### M52: Inter-Part Constraints
 
 **Goal:** Declarative constraints between parts (mate, align, coaxial) so agents don't manually compute coordinates.
 
@@ -572,7 +617,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M51: Part Instancing & Patterns
+### M53: Part Instancing & Patterns
 
 **Goal:** Create arrays of identical parts without manual repetition.
 
@@ -585,7 +630,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M52: Tolerance / Fit Helpers
+### M54: Tolerance / Fit Helpers
 
 **Goal:** Helpers for common mechanical fit calculations.
 
@@ -598,7 +643,7 @@ Driven by agent friction testing across 6+ real model sessions.
 
 ---
 
-### M53: Assembly Validation
+### M55: Assembly Validation
 
 **Goal:** Detect interference between parts before export.
 

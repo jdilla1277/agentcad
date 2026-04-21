@@ -256,6 +256,55 @@ show_object(box)`}
           </pre>
         </section>
 
+        {/* Agent skill */}
+        <section className="mb-16" aria-label="Agent skill marketplaces">
+          <h2 className="text-2xl font-semibold mb-4">Agent skill</h2>
+          <p className="text-gray-400 mb-4">
+            agentcad is an installable agent skill on{" "}
+            <a
+              href="https://skills.sh"
+              className="underline hover:text-white"
+            >
+              skills.sh
+            </a>{" "}
+            (Vercel) and{" "}
+            <a
+              href="https://clawhub.ai"
+              className="underline hover:text-white"
+            >
+              ClawHub
+            </a>{" "}
+            (OpenClaw):
+          </p>
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-gray-500 mb-1 font-mono">
+                skills.sh (Vercel)
+              </p>
+              <pre className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm overflow-x-auto">
+                npx skills add jdilla1277/agentcad-skill
+              </pre>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-1 font-mono">
+                ClawHub (OpenClaw)
+              </p>
+              <pre className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm overflow-x-auto">
+                clawhub package install jdilla1277/agentcad-skill
+              </pre>
+            </div>
+          </div>
+          <p className="text-gray-400 text-sm mt-4">
+            Skill manifest:{" "}
+            <a
+              href="https://github.com/jdilla1277/agentcad-skill"
+              className="underline hover:text-white"
+            >
+              github.com/jdilla1277/agentcad-skill
+            </a>
+          </p>
+        </section>
+
         {/* Footer */}
         <footer className="border-t border-gray-800 pt-8 text-gray-500 text-sm flex items-center gap-4">
           <span>
@@ -270,6 +319,13 @@ show_object(box)`}
             className="hover:text-white"
           >
             PyPI
+          </a>
+          <span className="text-gray-700">&middot;</span>
+          <a
+            href="https://github.com/jdilla1277/agentcad-skill"
+            className="hover:text-white"
+          >
+            Skill
           </a>
         </footer>
       </div>
