@@ -290,12 +290,20 @@ show_object(box)`}
                 ClawHub (OpenClaw)
               </p>
               <pre className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-sm overflow-x-auto">
-                clawhub package install jdilla1277/agentcad-skill
+                clawhub install jdilla1277/agentcad
               </pre>
             </div>
           </div>
           <p className="text-gray-400 text-sm mt-4">
-            Skill manifest:{" "}
+            Listing:{" "}
+            <a
+              href="https://clawhub.ai/jdilla1277/agentcad"
+              className="underline hover:text-white"
+            >
+              clawhub.ai/jdilla1277/agentcad
+            </a>
+            {" · "}
+            Manifest:{" "}
             <a
               href="https://github.com/jdilla1277/agentcad-skill"
               className="underline hover:text-white"
