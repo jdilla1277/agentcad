@@ -4,7 +4,7 @@ The CLI stays a single ``agentcad run`` command. Dispatch is invisible
 to users: a script that writes ``import cadquery as cq`` gets the
 CadQuery runner, one that writes ``from build123d import Box`` gets
 the build123d runner, and a script that imports neither falls back to
-the project's default runtime (or ``cadquery`` if no project mode is
+the project's default runtime (or ``build123d`` if no project mode is
 set), preserving every existing agentcad script on disk.
 
 Scripts that somehow import *both* are rejected — silently guessing
@@ -15,7 +15,7 @@ Precedence (highest to lowest):
   1. ``--runtime`` CLI flag (one-off override)
   2. Explicit script imports (``import cadquery`` / ``from build123d ...``)
   3. Project mode (``runtime`` field in ``agentcad.json``)
-  4. Global default (``cadquery``)
+  4. Global default (``build123d``)
 """
 
 from __future__ import annotations
