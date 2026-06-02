@@ -1,0 +1,50 @@
+name: Sync SKILL.md to public skill repo
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/agentcad/commands/skill.py"
+      - "pyproject.toml"
+      - "scripts/generate_skill_md.py"
+      - ".github/workflows/sync-skill.yml"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Generate SKILL.md
+        run: python scripts/generate_skill_md.py > /tmp/SKILL.md
+
+      - name: Checkout public skill repo
+        uses: actions/checkout@v4
+        with:
+          repository: jdilla1277/agentcad-skill
+          token: ${{ secrets.SKILL_SYNC_TOKEN }}
+          path: public-skill
+
+      - name: Commit and push if changed
+        working-directory: public-skill
+        run: |
+          cp /tmp/SKILL.md SKILL.md
+          git config user.name "agentcad-sync[bot]"
+          git config user.email "agentcad-sync@users.noreply.github.com"
+          if git diff --quiet -- SKILL.md; then
+            echo "SKILL.md is already up to date."
+            exit 0
+          fi
+          git add SKILL.md
+          git commit -m "Sync SKILL.md from jdilla1277/agentcad@${GITHUB_SHA}"
+          git push

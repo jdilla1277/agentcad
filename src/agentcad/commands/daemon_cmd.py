@@ -1,4 +1,5 @@
 import json
+import platform
 
 import click
 
@@ -6,6 +7,7 @@ from agentcad.daemon import (
     _default_pid_path,
     _default_socket_path,
     daemon_status,
+    daemon_supported,
     restart_daemon,
     start_daemon,
     stop_daemon,
@@ -18,6 +20,22 @@ def _socket_path():
 
 def _pid_path():
     return _default_pid_path()
+
+
+def _emit_unsupported(subcommand: str) -> None:
+    """Emit clean JSON when the daemon cannot run on this platform."""
+    click.echo(json.dumps({
+        "command": "daemon",
+        "subcommand": subcommand,
+        "status": "unsupported",
+        "platform": platform.system(),
+        "message": (
+            "The agentcad daemon requires POSIX primitives (os.fork, AF_UNIX, "
+            "os.getuid) and is disabled on this platform. Commands still run "
+            "directly, but each invocation pays the full OCP import cost "
+            "instead of routing through a warm worker."
+        ),
+    }))
 
 
 @click.group(hidden=True)
@@ -35,6 +53,9 @@ def daemon():
 @daemon.command()
 def start():
     """Start the daemon worker."""
+    if not daemon_supported():
+        _emit_unsupported("start")
+        return
     result = start_daemon(
         socket_path=_socket_path(),
         pid_path=_pid_path(),
@@ -47,6 +68,9 @@ def start():
 @daemon.command()
 def stop():
     """Stop the daemon worker."""
+    if not daemon_supported():
+        _emit_unsupported("stop")
+        return
     result = stop_daemon(
         socket_path=_socket_path(),
         pid_path=_pid_path(),
@@ -59,6 +83,9 @@ def stop():
 @daemon.command()
 def status():
     """Check daemon status."""
+    if not daemon_supported():
+        _emit_unsupported("status")
+        return
     result = daemon_status(
         socket_path=_socket_path(),
         pid_path=_pid_path(),
@@ -75,6 +102,9 @@ def restart():
     install --upgrade agentcad``. Equivalent to ``stop`` followed by
     ``start``, but always force-kills if graceful shutdown fails.
     """
+    if not daemon_supported():
+        _emit_unsupported("restart")
+        return
     result = restart_daemon(
         socket_path=_socket_path(),
         pid_path=_pid_path(),
