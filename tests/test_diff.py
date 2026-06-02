@@ -1,0 +1,323 @@
+import json
+
+from click.testing import CliRunner
+from agentcad.cli import cli
+
+
+def _setup_two_versions(isolated_dir):
+    """Create a manifest with two versions and their meta.json files."""
+    # Create version directories
+    v1_dir = isolated_dir / "v1_box"
+    v1_dir.mkdir()
+    v1_meta = {
+        "version": 1,
+        "label": "box",
+        "status": "success",
+        "created": "2025-01-01T00:00:00+00:00",
+        "script": "v1_box/script.py",
+        "outputs": {"step": "v1_box/output.step"},
+    }
+    (v1_dir / "meta.json").write_text(json.dumps(v1_meta, indent=2))
+
+    v2_dir = isolated_dir / "v2_cyl"
+    v2_dir.mkdir()
+    v2_meta = {
+        "version": 2,
+        "label": "cyl",
+        "status": "success",
+        "created": "2025-01-02T00:00:00+00:00",
+        "script": "v2_cyl/script.py",
+        "outputs": {"step": "v2_cyl/output.step", "stl": "v2_cyl/output.stl"},
+        "renders": {"iso": "v2_cyl/renders/iso.png"},
+    }
+    (v2_dir / "meta.json").write_text(json.dumps(v2_meta, indent=2))
+
+    # Create manifest
+    manifest = {
+        "name": "proj",
+        "version": "0.1.0",
+        "created": "2025-01-01T00:00:00+00:00",
+        "current": "cyl",
+        "versions": [
+            {"version": 1, "label": "box", "status": "success", "path": "v1_box/"},
+            {"version": 2, "label": "cyl", "status": "success", "path": "v2_cyl/"},
+        ],
+    }
+    (isolated_dir / "agentcad.json").write_text(json.dumps(manifest, indent=2))
+
+
+def test_diff_no_manifest_error(runner, isolated_dir):
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    assert result.exit_code == 1
+    data = json.loads(result.stdout)
+    assert data["command"] == "diff"
+    assert data["status"] == "error"
+
+
+def test_diff_by_version_number(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert data["v1"]["version"] == 1
+    assert data["v2"]["version"] == 2
+
+
+def test_diff_by_label(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "box", "cyl"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["v1"]["label"] == "box"
+    assert data["v2"]["label"] == "cyl"
+
+
+def test_diff_mixed_number_and_label(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "cyl"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["v1"]["version"] == 1
+    assert data["v2"]["label"] == "cyl"
+
+
+def test_diff_shows_label_change(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    assert data["changes"]["label"] == {"from": "box", "to": "cyl"}
+
+
+def test_diff_shows_status_change(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    # Modify v2 to be failed
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["status"] = "failed"
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    assert data["changes"]["status"] == {"from": "success", "to": "failed"}
+
+
+def test_diff_shows_output_changes(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    outputs = data["changes"]["outputs"]
+    assert "stl" in outputs["added"]
+    assert "step" in outputs["unchanged"]
+
+
+def test_diff_shows_render_changes(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    renders = data["changes"]["renders"]
+    assert "iso" in renders["added"]
+
+
+def test_diff_same_version_no_changes(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "1"])
+    data = json.loads(result.stdout)
+    assert data["changes"]["label"] is None
+    assert data["changes"]["status"] is None
+    assert data["changes"]["outputs"]["added"] == []
+    assert data["changes"]["outputs"]["removed"] == []
+
+
+def test_diff_unknown_version_error(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "99"])
+    assert result.exit_code == 1
+    data = json.loads(result.stdout)
+    assert data["status"] == "error"
+    assert "99" in data["message"]
+
+
+def test_diff_shows_metric_changes(runner, isolated_dir):
+    """Diff shows metric differences when metrics are present."""
+    _setup_two_versions(isolated_dir)
+    # Add metrics to v1 and v2 with different values
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["metrics"] = {"volume": 1000.0, "face_count": 6}
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["metrics"] = {"volume": 1570.8, "face_count": 3}
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    assert "metrics" in data["changes"]
+    m = data["changes"]["metrics"]
+    assert m["volume"] == {"from": 1000.0, "to": 1570.8}
+    assert m["face_count"] == {"from": 6, "to": 3}
+
+
+def test_diff_metrics_same_values_are_none(runner, isolated_dir):
+    """Metrics with same values show None."""
+    _setup_two_versions(isolated_dir)
+    metrics = {"volume": 1000.0, "face_count": 6}
+    for d in ["v1_box", "v2_cyl"]:
+        meta = json.loads((isolated_dir / d / "meta.json").read_text())
+        meta["metrics"] = metrics
+        (isolated_dir / d / "meta.json").write_text(json.dumps(meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    m = data["changes"]["metrics"]
+    assert m["volume"] is None
+    assert m["face_count"] is None
+
+
+def test_diff_no_metrics_graceful(runner, isolated_dir):
+    """Diff works when neither version has metrics (pre-M14 versions)."""
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    # Should still succeed, metrics changes empty or absent
+    assert data["status"] == "success"
+
+
+def test_diff_unknown_label_error(runner, isolated_dir):
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "box", "missing"])
+    assert result.exit_code == 1
+    data = json.loads(result.stdout)
+    assert data["status"] == "error"
+    assert "missing" in data["message"]
+
+
+# --- M21: Params in diff ---
+
+
+def test_diff_shows_param_changes(runner, isolated_dir):
+    """Diff shows parameter differences when params are present."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["params"] = {"length": 50.0}
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["params"] = {"length": 100.0}
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    assert "params" in data["changes"]
+    assert data["changes"]["params"]["length"] == {"from": 50.0, "to": 100.0}
+
+
+# --- M33: Parts in diff ---
+
+
+def test_diff_shows_parts_name_changes(runner, isolated_dir):
+    """Diff shows added/unchanged part names between versions."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0}},
+    ]
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0}},
+        {"name": "pin", "color": "blue", "metrics": {"volume": 50.0}},
+    ]
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    assert "parts" in data["changes"]
+    names = data["changes"]["parts"]["names"]
+    assert "pin" in names["added"]
+    assert "deck" in names["unchanged"]
+    assert names["removed"] == []
+
+
+def test_diff_shows_per_part_metric_changes(runner, isolated_dir):
+    """Diff shows metric changes for shared parts."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0, "face_count": 6}},
+    ]
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 200.0, "face_count": 6}},
+    ]
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    deck = data["changes"]["parts"]["deck"]
+    assert deck["volume"] == {"from": 100.0, "to": 200.0}
+    assert deck["face_count"] is None  # same value
+
+
+def test_diff_no_parts_graceful(runner, isolated_dir):
+    """Diff works when neither version has parts."""
+    _setup_two_versions(isolated_dir)
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert "parts" not in data["changes"]
+
+
+def test_diff_parts_color_change(runner, isolated_dir):
+    """Diff shows color change for a shared part."""
+    _setup_two_versions(isolated_dir)
+    v1_meta = json.loads((isolated_dir / "v1_box" / "meta.json").read_text())
+    v1_meta["parts"] = [
+        {"name": "deck", "color": "gray", "metrics": {"volume": 100.0}},
+    ]
+    (isolated_dir / "v1_box" / "meta.json").write_text(json.dumps(v1_meta))
+
+    v2_meta = json.loads((isolated_dir / "v2_cyl" / "meta.json").read_text())
+    v2_meta["parts"] = [
+        {"name": "deck", "color": "blue", "metrics": {"volume": 100.0}},
+    ]
+    (isolated_dir / "v2_cyl" / "meta.json").write_text(json.dumps(v2_meta))
+
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    data = json.loads(result.stdout)
+    deck = data["changes"]["parts"]["deck"]
+    assert deck["color"] == {"from": "gray", "to": "blue"}
+
+
+# --- Daemon routing (#177) ---
+
+def test_diff_routes_through_daemon_when_available(runner, isolated_dir, monkeypatch):
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    daemon_output = json.dumps({
+        "command": "diff", "status": "success",
+        "v1": "first", "v2": "second", "changes": {},
+    })
+    monkeypatch.setattr(
+        "agentcad.daemon.send_request",
+        lambda *a, **kw: {"type": "result", "exit_code": 0, "output": daemon_output},
+    )
+    result = runner.invoke(cli, ["diff", "1", "2"])
+    assert result.exit_code == 0, result.stdout
+    parsed = json.loads(result.stdout)
+    assert parsed["via"] == "daemon"
+    assert parsed["command"] == "diff"
+
+
+def test_diff_no_daemon_flag_skips_routing(runner, isolated_dir, monkeypatch):
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    calls: list[tuple] = []
+    def _track(*a, **kw):
+        calls.append((a, kw))
+        return None
+    monkeypatch.setattr("agentcad.daemon.send_request", _track)
+    # No manifest exists, but with --no-daemon we should bypass routing
+    # entirely and hit direct execution's missing-manifest error.
+    result = runner.invoke(cli, ["diff", "1", "2", "--no-daemon"])
+    assert calls == [], f"send_request was called despite --no-daemon: {calls}"
