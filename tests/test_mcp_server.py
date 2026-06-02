@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from agentcad.mcp.server import mcp, _invoke
+from agentcad.mcp.server import mcp, _format_result, _invoke
 
 
 # --- Tool registration ---
@@ -114,6 +114,30 @@ def test_run_tool_missing_script_error(tmp_path, monkeypatch):
 def test_inspect_tool_missing_file_error():
     result = _invoke(["inspect", "/tmp/nonexistent.step"])
     assert result["_exit_code"] != 0
+
+
+def test_format_result_surfaces_exception_traceback():
+    try:
+        raise RuntimeError("kaboom on windows")
+    except RuntimeError as exc:
+        data = _format_result("", 1, exception=exc)
+
+    assert data["status"] == "error"
+    assert "kaboom on windows" in data["message"]
+    assert "RuntimeError" in data["message"]
+    assert data["_exit_code"] == 1
+
+
+def test_format_result_no_output_without_exception():
+    data = _format_result("", 1)
+    assert data["message"] == "No output"
+    assert data["_exit_code"] == 1
+
+
+def test_format_result_parses_json_output():
+    data = _format_result('{"status": "success", "command": "context"}', 0)
+    assert data["status"] == "success"
+    assert data["_exit_code"] == 0
 
 
 def test_docs_mcp_section():

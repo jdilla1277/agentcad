@@ -63,6 +63,8 @@ PARITY_MAP: dict[str, str] = {
         "cq_only:env check, runtime-agnostic CLI wiring",
     "test_end_to_end_workflow":
         "cq_only:smoke test exercising all commands; pieces covered piecewise on b3d",
+    "test_run_emits_json_error_on_unexpected_exception_after_script_start":
+        "cq_only:CLI catch-all error wrapper; monkeypatches compute_metrics — runtime-agnostic, the wrapper sits above runtime dispatch",
     "test_run_no_manifest_error":
         "cq_only:CLI error orthogonal to runtime",
     "test_run_script_not_found_error":

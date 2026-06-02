@@ -56,6 +56,22 @@ def _venv_tag():
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
 
 
+def daemon_supported():
+    """Whether this platform can host the preforked daemon.
+
+    The daemon is built on POSIX-only primitives: ``os.fork`` (prefork the
+    warm process), ``AF_UNIX`` sockets (the IPC transport), and ``os.getuid``
+    (the per-user socket/pid path). Windows has none of these, so the daemon
+    is disabled there and every command runs directly, equivalent to passing
+    ``--no-daemon`` on each call.
+    """
+    return (
+        hasattr(os, "fork")
+        and hasattr(os, "getuid")
+        and hasattr(socket, "AF_UNIX")
+    )
+
+
 def _default_socket_path():
     # Test/operator override — useful for pinning a daemon to a known path
     # in subprocess-based tests, or for running multiple daemons on a host

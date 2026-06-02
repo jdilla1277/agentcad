@@ -64,6 +64,8 @@ def maybe_route_through_daemon(argv: list[str], no_daemon: bool = False) -> None
     """Try routing through the daemon; sys.exit on success.
 
     Returns ``None`` if direct execution should proceed:
+      * the platform can't host a daemon (Windows: no ``fork``/``AF_UNIX``/
+        ``getuid``; see ``daemon.daemon_supported``),
       * caller passed ``--no-daemon``,
       * we're already inside a daemon (``AGENTCAD_DAEMON`` env set —
         would recurse),
@@ -79,7 +81,7 @@ def maybe_route_through_daemon(argv: list[str], no_daemon: bool = False) -> None
     in-memory version differs from the client's on-disk install — so the
     silent "via:daemon stamped on stale code" trap is at least visible.
     """
-    if os.environ.get("AGENTCAD_DAEMON") or no_daemon:
+    if not _daemon.daemon_supported() or os.environ.get("AGENTCAD_DAEMON") or no_daemon:
         return None
 
     result = _route_through_daemon(argv)
@@ -116,8 +118,9 @@ def maybe_route_through_daemon(argv: list[str], no_daemon: bool = False) -> None
 def maybe_spawn_daemon_for_next_run(no_daemon: bool = False) -> None:
     """Fork off the warm process as the daemon after a successful direct
     execution. Idempotent — silently no-ops if a daemon for this venv
-    is already running, or if we're inside a daemon-routed request."""
-    if no_daemon:
+    is already running, if we're inside a daemon-routed request, or if the
+    platform can't host a daemon."""
+    if no_daemon or not _daemon.daemon_supported():
         return
     _daemon.spawn_daemon_via_fork(
         socket_path=_socket_path(),

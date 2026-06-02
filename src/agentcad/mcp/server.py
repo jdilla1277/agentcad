@@ -2,6 +2,7 @@
 
 import json
 import os
+import traceback
 
 from click.testing import CliRunner
 from mcp.server.fastmcp import FastMCP
@@ -9,6 +10,28 @@ from mcp.server.fastmcp import FastMCP
 from agentcad.cli import cli
 
 mcp = FastMCP(name="agentcad")
+
+
+def _format_result(output: str, exit_code: int, exception: BaseException | None = None) -> dict:
+    """Build the MCP response dict from a Click invocation's output."""
+    try:
+        return {**json.loads(output), "_exit_code": exit_code}
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    message = output.strip() if output else ""
+    if exception is not None:
+        tb = "".join(traceback.format_exception(
+            type(exception), exception, exception.__traceback__
+        )).strip()
+        message = f"{message}\n{tb}".strip() if message else tb
+
+    return {
+        "status": "error",
+        "message": message or "No output",
+        "exit_code": exit_code,
+        "_exit_code": exit_code,
+    }
 
 
 def _invoke(args: list[str], cwd: str | None = None) -> dict:
@@ -24,17 +47,7 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     finally:
         os.chdir(old_cwd)
 
-    try:
-        data = json.loads(result.output)
-    except (json.JSONDecodeError, TypeError):
-        data = {
-            "status": "error",
-            "message": result.output.strip() if result.output else "No output",
-            "exit_code": result.exit_code,
-        }
-
-    data["_exit_code"] = result.exit_code
-    return data
+    return _format_result(result.output, result.exit_code, result.exception)
 
 
 @mcp.tool()

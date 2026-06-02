@@ -1,0 +1,49 @@
+name: Smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  collect:
+    runs-on: ubuntu-22.04
+    name: pytest --collect-only
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install agentcad + test dependencies
+        run: pip install -e .[mcp,dev]
+
+      - name: Collect tests
+        run: pytest --collect-only -q
+
+      - name: Run OCP-free guardrails
+        run: pytest tests_b3d/test_parity_guardrail.py -q
+
+  windows-platform:
+    runs-on: windows-latest
+    name: Windows platform check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install agentcad + test dependencies
+        run: pip install -e .[mcp,dev]
+
+      - name: Collect tests
+        run: pytest --collect-only -q
+
+      - name: Run Windows-relevant guardrails
+        run: pytest tests/test_daemon_platform.py tests_b3d/test_parity_guardrail.py -q
