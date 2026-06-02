@@ -162,6 +162,42 @@ class TestDaemonServer:
         assert output["status"] == "success"
         assert output["label"] == "box"
 
+    def test_run_returns_json_when_click_captures_empty_exception(self, monkeypatch):
+        """Daemon-routed failures must never surface as empty stdout.
+
+        Click can capture exceptions before a command emits its own JSON. In
+        that case the daemon still has to synthesize a parseable error payload
+        so the client/agent sees more than a nonzero exit code.
+        """
+        import click.testing
+
+        class FakeResult:
+            exit_code = 1
+            stdout = ""
+            stderr = ""
+            exception = RuntimeError("Bnd_Box is void")
+
+        monkeypatch.setattr(
+            click.testing.CliRunner,
+            "invoke",
+            lambda self, cli, argv: FakeResult(),
+        )
+
+        server = _bare_server()
+        response = server.handle_request(_req(
+            type="run",
+            argv=["run", "script.py", "--output", "boom"],
+        ))
+
+        assert response["exit_code"] == 1
+        assert response["output"].strip()
+        output = json.loads(response["output"])
+        assert output["command"] == "run"
+        assert output["status"] == "error"
+        assert "Bnd_Box is void" in (
+            output.get("message", "") + output.get("traceback", "")
+        )
+
     def test_handles_unknown_type(self):
         server = _bare_server()
         response = server.handle_request(_req(type="unknown_thing"))

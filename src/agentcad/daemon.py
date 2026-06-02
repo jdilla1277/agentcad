@@ -30,6 +30,7 @@ import struct
 import subprocess
 import sys
 import time
+import traceback
 
 import agentcad
 
@@ -166,6 +167,32 @@ class DaemonServer:
                 os.chdir(cwd)
             runner = CliRunner()
             result = runner.invoke(cli, argv)
+            output = result.stdout
+            if result.exit_code != 0 and not output.strip():
+                command = argv[0] if argv else "unknown"
+                payload = {
+                    "command": command,
+                    "status": "error",
+                    "message": "daemon-routed command failed without JSON output",
+                }
+                if result.exception is not None:
+                    payload["message"] = (
+                        "daemon-routed command failed: "
+                        f"{type(result.exception).__name__}: {result.exception}"
+                    )
+                    payload["traceback"] = "".join(
+                        traceback.format_exception(
+                            type(result.exception),
+                            result.exception,
+                            result.exception.__traceback__,
+                        )
+                    )
+                elif result.stderr.strip():
+                    payload["message"] = (
+                        "daemon-routed command failed without JSON output: "
+                        f"{result.stderr.strip().splitlines()[-1]}"
+                    )
+                output = json.dumps(payload)
             return {
                 "type": "result",
                 "exit_code": result.exit_code,
@@ -173,7 +200,7 @@ class DaemonServer:
                 # cleanly and stamp ``via: daemon``. Click 8.3's
                 # ``result.output`` merges stdout+stderr, which broke that
                 # parse historically.
-                "output": result.stdout,
+                "output": output,
                 "stderr": result.stderr,
                 # Stamp the daemon's in-memory version so the routing layer
                 # can warn when it doesn't match what the client's on-disk
