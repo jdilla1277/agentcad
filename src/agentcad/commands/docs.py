@@ -57,7 +57,7 @@ SECTIONS = {
     "commands": (
         "agentcad commands:\n"
         "  init    — Initialize a new agentcad project (creates agentcad.json).\n"
-        "  run     — Execute a build123d or CadQuery script, produce versioned STEP output.\n"
+        "  run     — Execute a CadQuery script, produce versioned STEP output.\n"
         "            Always produces: STEP, GLB, viewer.html, and (from v2) diff PNGs.\n"
         "            Options: --render, --export, --no-preview (skips only the 4-view composite)\n"
         "  render  — Render PNG views of an existing STEP file.\n"
@@ -487,7 +487,7 @@ SECTIONS = {
     "workflow": (
         "Typical workflow:\n"
         "  1. agentcad init --name myproject\n"
-        "  2. Write a build123d or CadQuery script (script.py) with show_object().\n"
+        "  2. Write a CadQuery script (script.py) with show_object().\n"
         "  3. agentcad run script.py --output label [--render iso] [--export stl,glb]\n"
         "  4. agentcad render v1_label/output.step --view front,top --zoom 1.5\n"
         "  5. agentcad export v1_label/output.step --format stl,glb\n"
@@ -507,7 +507,7 @@ SECTIONS = {
         '       {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}\n'
         "\n"
         "  Available tools:\n"
-        "    run       Execute a build123d or CadQuery script, produce STEP + metrics\n"
+        "    run       Execute a CadQuery script, produce STEP + metrics\n"
         "    render    Render PNG views of a STEP file\n"
         "    export    Export STEP to mesh formats (stl, glb, obj)\n"
         "    inspect   Topology report (solids, shells, faces, validity)\n"
@@ -544,7 +544,7 @@ SECTIONS = {
         "    build123d  Recommended for new projects. Direct primitives, Python\n"
         "               operators for booleans (-, +, &), better composition for\n"
         "               complex assemblies. The migration target.\n"
-        "    cadquery   Legacy supported runtime. Workplane-fluent API. Pick this if you're\n"
+        "    cadquery   Legacy default. Workplane-fluent API. Pick this if you're\n"
         "               porting existing scripts or already comfortable with it.\n"
         "\n"
         "  How dispatch works (highest precedence to lowest):\n"

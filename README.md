@@ -26,7 +26,7 @@ to keep the phone from sliding. Show me a preview when you're done.
 
 ## What it does
 
-- **`agentcad run script.py --output label`** — execute a build123d or CadQuery script, produce versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+- **`agentcad run script.py --output label`** — execute a CadQuery script, produce versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
 - **`agentcad run ... --preview`** — four-view PNG + turntable GIF for visual verification
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
@@ -37,14 +37,14 @@ to keep the phone from sliding. Show me a preview when you're done.
 
 ## No boilerplate
 
-Scripts need zero imports. By default, build123d primitives, `show_object`, and agentcad edit helpers are pre-injected:
+Scripts need zero imports. `cq`, `show_object`, and 16 geometry helpers are pre-injected:
 
 ```python
-box = Box(10, 20, 5)
+box = cq.Workplane('XY').box(10, 20, 5)
 show_object(box)
 ```
 
-CadQuery remains supported via `import cadquery as cq`, `agentcad init --runtime cadquery`, or `agentcad run --runtime cadquery`. Run `agentcad docs runtimes` for the dispatch rules.
+Helpers include `translate`, `rotate`, `mirror_fuse`, `loft_sections`, `tapered_sweep`, `involute_gear_profile`, and more. Run `agentcad docs helpers` for the full list.
 
 ## MCP integration
 
@@ -62,7 +62,7 @@ Add to `.mcp.json`:
 
 ## Requirements
 
-- Python 3.10–3.12 (OpenCascade bindings do not support 3.13+)
+- Python 3.10–3.12 (CadQuery/OpenCascade does not support 3.13+)
 
 ## License
 

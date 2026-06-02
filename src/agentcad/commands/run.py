@@ -120,7 +120,7 @@ def _record_failure(manifest, script_path, label, version_num, error_msg, runtim
 @click.option("--preview/--no-preview", default=True, help="4-view composite PNG + per-part previews (default on, ~2-4s). The viewer.html, GLB, and diff PNGs always generate regardless — --no-preview only skips the composite render. Use it when you don't need the agent-readable PNG this iteration.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
-@click.option("--runtime", default=None, type=click.Choice(["cadquery", "build123d"]), help="Force a runtime. Default: auto-detect from script imports, then project runtime, then build123d.")
+@click.option("--runtime", default=None, type=click.Choice(["cadquery", "build123d"]), help="Force a runtime. Default: auto-detect from the script's imports; falls back to cadquery when neither library is imported.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
 def run(ctx, script, output, render, export, preview, params, dry_run, runtime, no_daemon):

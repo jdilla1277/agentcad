@@ -50,7 +50,7 @@ CHOOSING A RUNTIME
     build123d:   box = Box(10, 20, 5); show_object(box)
 
   build123d is recommended for new projects (direct primitives, Python
-  operators for booleans). cadquery is the legacy supported runtime — pick it when
+  operators for booleans). cadquery is the legacy default — pick it when
   porting existing scripts.
 
   Dispatch order: --runtime flag > script imports (`import cadquery` /
@@ -174,7 +174,7 @@ MCP INTEGRATION
 """
 
 
-def _build_briefing(runtime: str = "build123d") -> str:
+def _build_briefing(runtime: str = "cadquery") -> str:
     return _BRIEFING_TEMPLATE.replace("__RUNTIME__", runtime)
 
 
@@ -182,8 +182,8 @@ class _LoggingGroup(click.Group):
     """Click Group that auto-logs every command invocation to session.jsonl."""
 
     def format_epilog(self, ctx, formatter):
-        # Pin EXAMPLE SESSION's runtime to the project's runtime or global
-        # default. Mirrors `agentcad docs`'s detection
+        # Pin EXAMPLE SESSION's runtime to the project's runtime (or cadquery
+        # if no project / no runtime pin). Mirrors `agentcad docs`'s detection
         # so --help and docs stay in sync from a fresh agent's perspective.
         from agentcad.runners.dispatch import project_runtime, DEFAULT_RUNTIME
         rt = project_runtime() or DEFAULT_RUNTIME

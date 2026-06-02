@@ -30,7 +30,7 @@ def test_help_points_at_docs_for_preamble(runner):
 
 
 def test_cadquery_preamble_docs_list_helpers(runner, isolated_dir):
-    """The CadQuery preamble docs must list the helpers
+    """The CadQuery preamble docs (default runtime) must list the helpers
     that --help used to enumerate directly."""
     result = runner.invoke(cli, ["docs", "preamble", "--runtime", "cadquery"])
     content = json.loads(result.stdout)["content"]
