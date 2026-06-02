@@ -15,27 +15,40 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      SKILL_SYNC_TOKEN: ${{ secrets.SKILL_SYNC_TOKEN }}
     steps:
+      - name: Skip when mirror token is unavailable
+        if: env.SKILL_SYNC_TOKEN == ''
+        run: |
+          echo "SKILL_SYNC_TOKEN is not configured; skipping public skill sync."
+
       - uses: actions/checkout@v4
+        if: env.SKILL_SYNC_TOKEN != ''
 
       - uses: actions/setup-python@v5
+        if: env.SKILL_SYNC_TOKEN != ''
         with:
           python-version: "3.12"
 
       - name: Install dependencies
+        if: env.SKILL_SYNC_TOKEN != ''
         run: pip install pyyaml
 
       - name: Generate SKILL.md
+        if: env.SKILL_SYNC_TOKEN != ''
         run: python scripts/generate_skill_md.py > /tmp/SKILL.md
 
       - name: Checkout public skill repo
+        if: env.SKILL_SYNC_TOKEN != ''
         uses: actions/checkout@v4
         with:
           repository: jdilla1277/agentcad-skill
-          token: ${{ secrets.SKILL_SYNC_TOKEN }}
+          token: ${{ env.SKILL_SYNC_TOKEN }}
           path: public-skill
 
       - name: Commit and push if changed
+        if: env.SKILL_SYNC_TOKEN != ''
         working-directory: public-skill
         run: |
           cp /tmp/SKILL.md SKILL.md
