@@ -13,7 +13,15 @@ mcp = FastMCP(name="agentcad")
 
 
 def _format_result(output: str, exit_code: int, exception: BaseException | None = None) -> dict:
-    """Build the MCP response dict from a Click invocation's output."""
+    """Build the MCP response dict from a Click invocation's output.
+
+    Normal commands print JSON, which we pass through. When Click *catches*
+    an unexpected exception (``exception`` is non-None), the output is often
+    empty — previously this collapsed to ``{"message": "No output"}``, hiding
+    the traceback and leaving callers (notably on Windows) with no way to
+    diagnose the failure. We surface the exception type, message, and
+    traceback in that case instead.
+    """
     try:
         return {**json.loads(output), "_exit_code": exit_code}
     except (json.JSONDecodeError, TypeError):

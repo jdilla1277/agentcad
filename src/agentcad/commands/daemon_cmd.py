@@ -23,7 +23,14 @@ def _pid_path():
 
 
 def _emit_unsupported(subcommand: str) -> None:
-    """Emit clean JSON when the daemon cannot run on this platform."""
+    """Emit a clean JSON response when the daemon can't run on this platform.
+
+    On Windows the daemon is disabled entirely (no ``fork``/``AF_UNIX``/
+    ``getuid``). Without this guard, every ``agentcad daemon *`` subcommand
+    crashes with ``AttributeError`` inside ``_default_socket_path()`` — the
+    exact crash ``daemon_supported()`` was added to prevent on the run path.
+    Mirroring it here keeps the diagnostic subcommands quiet and actionable
+    on Windows instead of blowing up the agent."""
     click.echo(json.dumps({
         "command": "daemon",
         "subcommand": subcommand,
@@ -32,8 +39,9 @@ def _emit_unsupported(subcommand: str) -> None:
         "message": (
             "The agentcad daemon requires POSIX primitives (os.fork, AF_UNIX, "
             "os.getuid) and is disabled on this platform. Commands still run "
-            "directly, but each invocation pays the full OCP import cost "
-            "instead of routing through a warm worker."
+            "directly — behavior is correct, but each invocation pays the "
+            "full OCP import cost instead of routing through a warm worker. "
+            "Native Windows daemon support is not implemented yet."
         ),
     }))
 

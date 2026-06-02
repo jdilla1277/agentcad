@@ -672,6 +672,62 @@ def test_run_no_preview_flag_suppresses_preview(runner, isolated_dir):
     assert not (isolated_dir / "v1_label" / "preview.png").exists()
 
 
+def test_run_no_preview_still_writes_viewer_and_glb(runner, isolated_dir):
+    """--no-preview only skips the 4-view composite PNG. The viewer.html and
+    output.glb are still produced because they are cheap (~ms / sub-second)
+    and the agent has no reason to opt out of them. This is the fix for the
+    'viewer only loads one version' problem: the viewer no longer rides
+    along with the same flag that gates the slow composite render."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--no-preview"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["viewer"] == "v1_label/viewer.html"
+    assert (isolated_dir / "v1_label" / "viewer.html").exists()
+    assert (isolated_dir / "v1_label" / "output.glb").exists()
+    meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+    assert meta["viewer"] == "v1_label/viewer.html"
+
+
+def test_run_no_preview_second_run_still_writes_diff(runner, isolated_dir):
+    """Auto-diff against the prior successful version runs regardless of
+    --preview. The diff PNGs are what the viewer uses for comparison —
+    they have to be present so 'open the viewer' always works."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "first", "--no-preview"])
+    _write_script(isolated_dir, content=(
+        'import cadquery as cq\n'
+        'result = cq.Workplane("XY").box(20, 20, 20)\n'
+        'show_object(result)\n'
+    ))
+    result = runner.invoke(cli, ["run", "script.py", "--output", "second", "--no-preview"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert "diff" in parsed
+    assert parsed["diff"]["against"] == "first"
+    assert (isolated_dir / "v2_second" / "diff_side.png").exists()
+    assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
+
+
+def test_run_no_preview_second_run_viewer_includes_prior(runner, isolated_dir):
+    """The viewer for a --no-preview run #2 still embeds the prior version's
+    GLB so side-by-side comparison works. This is the actual user-facing
+    fix: open the viewer at any version, see the previous version next to it."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, ["run", "script.py", "--output", "first", "--no-preview"])
+    _write_script(isolated_dir, content=(
+        'import cadquery as cq\n'
+        'result = cq.Workplane("XY").box(20, 20, 20)\n'
+        'show_object(result)\n'
+    ))
+    runner.invoke(cli, ["run", "script.py", "--output", "second", "--no-preview"])
+    viewer_html = (isolated_dir / "v2_second" / "viewer.html").read_text()
+    assert 'DEFAULT_MODE = "side-by-side"' in viewer_html
+
+
 def test_run_dry_run_skips_preview(runner, isolated_dir):
     """--dry-run must not produce any disk artifacts, including a preview."""
     _init_project(runner)
@@ -1019,10 +1075,12 @@ def test_run_emits_json_error_on_unexpected_exception_after_script_start(
     """Internal exceptions after the script started running must still surface
     as JSON on stdout — the docs' contract is "All output is JSON."
 
-    The bug was first surfaced by a degenerate revolve crashing
-    compute_metrics with `Bnd_Box is void`. Pre-fix: stdout was empty, exit
-    code was 1, and only stderr had any diagnostic. The agent had no JSON to
-    parse and no recovery path.
+    The bug was first surfaced in the vase side-by-side (cq-2 trial,
+    `Bnd_Box is void` from a degenerate revolve crashing compute_metrics).
+    Pre-fix: stdout was empty, exit code was 1, and only stderr had any
+    diagnostic (and only under --no-daemon — daemon-routed runs hid the
+    traceback entirely). The agent had no JSON to parse and no recovery
+    path.
     """
     _init_project(runner)
     _write_script(isolated_dir)
@@ -1370,47 +1428,21 @@ def test_render_unified_empty_parts_payload_when_none(isolated_dir):
     assert "const PARTS = [];" in html
 
 
-def test_run_writes_preview_gif(runner, isolated_dir):
+def test_run_default_does_not_auto_render_preview_gif(runner, isolated_dir):
+    """Turntable GIFs are on-demand via the viewer's Export GIF button — they
+    are not auto-rendered on every run. Cuts ~3-6s off the default preview
+    path; the viewer's client-side capture covers the social-post use case."""
     _init_project(runner)
     _write_script(isolated_dir)
     result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
     assert result.exit_code == 0, result.output
 
-    gif_path = isolated_dir / "v1" / "preview.gif"
-    assert gif_path.exists()
-    assert gif_path.stat().st_size > 0
-    assert gif_path.read_bytes()[:4] == b"GIF8"
-
-
-def test_run_preview_gif_has_expected_frame_count(runner, isolated_dir):
-    from PIL import Image
-
-    _init_project(runner)
-    _write_script(isolated_dir)
-    runner.invoke(cli, ["run", "script.py", "--output", "v1"])
-
-    gif = Image.open(isolated_dir / "v1" / "preview.gif")
-    assert gif.n_frames == 60
-
-
-def test_run_preview_gif_in_run_json_and_meta(runner, isolated_dir):
-    _init_project(runner)
-    _write_script(isolated_dir)
-    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
-    parsed = json.loads(result.stdout)
-    assert parsed.get("preview_gif") == "v1/preview.gif"
-
-    meta = json.loads((isolated_dir / "v1" / "meta.json").read_text())
-    assert meta.get("preview_gif") == "v1/preview.gif"
-
-
-def test_run_no_preview_skips_gif(runner, isolated_dir):
-    _init_project(runner)
-    _write_script(isolated_dir)
-    result = runner.invoke(cli, ["run", "script.py", "--output", "v1", "--no-preview"])
     parsed = json.loads(result.stdout)
     assert "preview_gif" not in parsed
     assert not (isolated_dir / "v1" / "preview.gif").exists()
+
+    meta = json.loads((isolated_dir / "v1" / "meta.json").read_text())
+    assert "preview_gif" not in meta
 
 
 def test_render_unified_includes_export_gif_button(isolated_dir):
@@ -1425,6 +1457,27 @@ def test_render_unified_includes_export_gif_button(isolated_dir):
     html = out.read_text()
     assert 'id="export-gif-btn"' in html
     assert "agentcad.dev" in html  # watermark text
+
+
+def test_render_unified_keeps_preserve_drawing_buffer(isolated_dir):
+    """The WebGL renderer must be constructed with `preserveDrawingBuffer: true`.
+
+    Without it, the live canvas is cleared after each render, so the Export
+    GIF button's frame-capture loop (toDataURL / drawImage on
+    renderer.domElement) produces blank frames — the GIF downloads but is
+    empty. This guardrail catches that flag being silently removed for a
+    "perf" reason later; PR #200 made client-side GIF the only path, so
+    keeping this on is load-bearing for the social-post workflow.
+    """
+    from agentcad.commands.view import _render_unified
+
+    glb = isolated_dir / "fake.glb"
+    glb.write_bytes(b"")
+    out = isolated_dir / "v.html"
+    _render_unified(out, glb_a=glb, label_a="x")
+
+    html = out.read_text()
+    assert "preserveDrawingBuffer: true" in html
 
 
 def test_run_surfaces_script_warnings_in_json(runner, isolated_dir):
@@ -1446,8 +1499,8 @@ def test_run_surfaces_script_warnings_in_json(runner, isolated_dir):
 
 def test_run_emits_progress_heartbeats_on_stderr(runner, isolated_dir):
     """Stderr heartbeats per phase let an agent distinguish 'still
-    working' from 'wedged' during long preview/GIF generation. Without
-    them, a 20+ second run looks like a hang. Issue #164."""
+    working' from 'wedged' during longer preview generation. Without
+    them, a multi-second run looks like a hang. Issue #164."""
     _init_project(runner)
     _write_script(isolated_dir)
     result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
@@ -1458,7 +1511,6 @@ def test_run_emits_progress_heartbeats_on_stderr(runner, isolated_dir):
     assert "[agentcad] running script" in stderr
     assert "[agentcad] computing metrics" in stderr
     assert "[agentcad] rendering preview" in stderr
-    assert "[agentcad] encoding preview.gif" in stderr
     # Heartbeats stay out of the JSON on stdout (Click 8.3 result.output
     # interleaves stdout + stderr; result.stdout is stdout-only).
     assert "[agentcad]" not in result.stdout
@@ -1467,14 +1519,14 @@ def test_run_emits_progress_heartbeats_on_stderr(runner, isolated_dir):
 
 
 def test_run_no_preview_skips_preview_heartbeats(runner, isolated_dir):
-    """--no-preview short-circuits the preview pipeline, so its
-    heartbeats shouldn't fire."""
+    """--no-preview short-circuits the composite render, so its
+    heartbeat shouldn't fire. (Viewer/diff/GLB still generate but
+    use their own heartbeats.)"""
     _init_project(runner)
     _write_script(isolated_dir)
     result = runner.invoke(cli, ["run", "script.py", "--output", "v1", "--no-preview"])
     assert result.exit_code == 0
     stderr = result.stderr
     assert "[agentcad] running script" in stderr
-    assert "[agentcad] rendering preview" not in stderr
-    assert "[agentcad] encoding preview.gif" not in stderr
+    assert "[agentcad] rendering preview (4-view" not in stderr
 

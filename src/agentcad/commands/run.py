@@ -117,7 +117,7 @@ def _record_failure(manifest, script_path, label, version_num, error_msg, runtim
 @click.option("--output", required=True, help="Label for this version.")
 @click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
 @click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb, obj).")
-@click.option("--preview/--no-preview", default=True, help="Visual feedback (default on): 4-view composite PNG + 60-frame turntable GIF. Adds ~6-10s per run. Pass --no-preview while iterating to keep runs sub-second.")
+@click.option("--preview/--no-preview", default=True, help="4-view composite PNG + per-part previews (default on, ~2-4s). The viewer.html, GLB, and diff PNGs always generate regardless — --no-preview only skips the composite render. Use it when you don't need the agent-readable PNG this iteration.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
 @click.option("--runtime", default=None, type=click.Choice(["cadquery", "build123d"]), help="Force a runtime. Default: auto-detect from the script's imports; falls back to cadquery when neither library is imported.")
@@ -420,19 +420,25 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 render_shape_custom(topo_shape, az, el, out_path)
                 renders_meta[name] = f"{dir_name}/renders/{name}.png"
 
-    # Visual feedback by default: 4-view composite preview + auto-diff against the
-    # most recent successful prior version (if any). Skip all of this if --no-preview.
+    # Visual feedback pipeline. Three tiers, decoupled by cost:
+    #   1. Always (cheap, agent depends on these for the viewer to work):
+    #      - GLB export
+    #      - diff PNGs against the most recent successful prior version
+    #      - unified viewer.html
+    #   2. --preview (default on, ~2-4s, agent reads these as image data):
+    #      - 4-view composite PNG
+    #      - per-part preview PNGs
+    #   3. On-demand only:
+    #      - turntable GIF — captured client-side via the viewer's Export
+    #        GIF button (three.js canvas + gif.js). Used for social posts,
+    #        not for agent iteration.
     preview_meta = None
-    preview_gif_meta = None
     diff_meta = None
     viewer_meta = None
+
+    # Tier 2: 4-view composite + per-part previews (gated by --preview)
     if preview:
-        from agentcad.render import (
-            render_composite_4view,
-            render_diff_side_by_side,
-            render_diff_overlay,
-            render_turntable_gif,
-        )
+        from agentcad.render import render_composite_4view
 
         _heartbeat("rendering preview (4-view composite)…")
         _t = time.perf_counter()
@@ -440,14 +446,6 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         render_composite_4view(topo_shape_for_metrics, preview_path, per_view_size=512)
         preview_meta = f"{dir_name}/preview.png"
         _mark("preview_ms", _t)
-
-        _heartbeat("encoding preview.gif (60 frames)…")
-        _t = time.perf_counter()
-        preview_gif_path = version_dir / "preview.gif"
-        render_turntable_gif(topo_shape_for_metrics, preview_gif_path,
-                             width=512, height=512, frames=60)
-        preview_gif_meta = f"{dir_name}/preview.gif"
-        _mark("preview_gif_ms", _t)
 
         # Per-part previews. Filename is the name when unique, else part_<id>.png
         # so duplicates never overwrite.
@@ -472,82 +470,88 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 entry["preview"] = f"{dir_name}/parts/{fname}"
             _mark("parts_preview_ms", _t)
 
-        prev = _find_prev_success(versions)
-        if prev is not None:
+    # Tier 1: GLB + diff + viewer.html — always run, regardless of --preview.
+    # These are what make the viewer experience work; they're cheap enough
+    # that there's no agent-side reason to opt out.
+    from agentcad.export import export_glb
+    from agentcad.commands.view import _render_unified
+
+    viewer_glb_path = version_dir / "output.glb"
+    if not viewer_glb_path.exists():
+        export_glb(topo_shape_for_metrics, str(viewer_glb_path))
+
+    prev = _find_prev_success(versions)
+    if prev is not None:
+        from agentcad.render import (
+            render_diff_side_by_side,
+            render_diff_overlay,
+        )
+        prev_step_path = Path.cwd() / prev["path"] / "output.step"
+        if prev_step_path.exists():
+            _t = time.perf_counter()
+            try:
+                from agentcad.step_io import load_cad_shape
+                prev_shape = load_cad_shape(prev_step_path)
+
+                side_path = version_dir / "diff_side.png"
+                overlay_path = version_dir / "diff_overlay.png"
+                render_diff_side_by_side(
+                    prev_shape, topo_shape_for_metrics,
+                    prev["label"], label, side_path,
+                    width=512, height=512,
+                )
+                render_diff_overlay(
+                    prev_shape, topo_shape_for_metrics,
+                    prev["label"], label, overlay_path,
+                    width=1024, height=1024,
+                )
+                diff_meta = {
+                    "against": prev["label"],
+                    "side_by_side": f"{dir_name}/diff_side.png",
+                    "overlay": f"{dir_name}/diff_overlay.png",
+                }
+                _mark("diff_ms", _t)
+            except Exception as e:
+                warnings.append(
+                    f"Could not render diff against v{prev['version']}_{prev['label']}: {type(e).__name__}: {e}"
+                )
+
+    # Resolve the prior version's GLB for the viewer's side-by-side / overlay
+    # modes. Decoupled from diff_meta: even if the diff PNG render failed,
+    # we still want the 3D comparison to work in the viewer.
+    prev_glb_path = None
+    if prev is not None:
+        candidate = Path.cwd() / prev["path"] / "output.glb"
+        if candidate.exists():
+            prev_glb_path = candidate
+        else:
             prev_step_path = Path.cwd() / prev["path"] / "output.step"
             if prev_step_path.exists():
-                _t = time.perf_counter()
                 try:
-                    from agentcad.step_io import load_cad_shape
-                    prev_shape = load_cad_shape(prev_step_path)
+                    from agentcad.step_io import load_cad_shape as _load
+                    prev_shape = _load(prev_step_path)
+                    export_glb(prev_shape, str(candidate))
+                    prev_glb_path = candidate
+                except Exception:
+                    prev_glb_path = None
 
-                    side_path = version_dir / "diff_side.png"
-                    overlay_path = version_dir / "diff_overlay.png"
-                    render_diff_side_by_side(
-                        prev_shape, topo_shape_for_metrics,
-                        prev["label"], label, side_path,
-                        width=512, height=512,
-                    )
-                    render_diff_overlay(
-                        prev_shape, topo_shape_for_metrics,
-                        prev["label"], label, overlay_path,
-                        width=1024, height=1024,
-                    )
-                    diff_meta = {
-                        "against": prev["label"],
-                        "side_by_side": f"{dir_name}/diff_side.png",
-                        "overlay": f"{dir_name}/diff_overlay.png",
-                    }
-                    _mark("diff_ms", _t)
-                except Exception as e:
-                    warnings.append(
-                        f"Could not render diff against v{prev['version']}_{prev['label']}: {type(e).__name__}: {e}"
-                    )
-
-        # Unified viewer HTML — embeds the current model's GLB, previous version's
-        # GLB (if any), and the agent PNGs, so humans can explore interactively.
-        # We export a GLB specifically for the viewer if --export glb wasn't set.
-        from agentcad.export import export_glb
-        from agentcad.commands.view import _render_unified
-
-        viewer_glb_path = version_dir / "output.glb"
-        if not viewer_glb_path.exists():
-            export_glb(topo_shape_for_metrics, str(viewer_glb_path))
-
-        prev_glb_path = None
-        if diff_meta is not None and prev is not None:
-            candidate = Path.cwd() / prev["path"] / "output.glb"
-            if candidate.exists():
-                prev_glb_path = candidate
-            else:
-                prev_step_path = Path.cwd() / prev["path"] / "output.step"
-                if prev_step_path.exists():
-                    try:
-                        from agentcad.step_io import load_cad_shape as _load
-                        prev_shape = _load(prev_step_path)
-                        candidate = Path.cwd() / prev["path"] / "output.glb"
-                        export_glb(prev_shape, str(candidate))
-                        prev_glb_path = candidate
-                    except Exception:
-                        prev_glb_path = None
-
-        _heartbeat("writing viewer.html…")
-        _t = time.perf_counter()
-        viewer_path = version_dir / "viewer.html"
-        _render_unified(
-            viewer_path,
-            glb_a=viewer_glb_path,
-            glb_b=prev_glb_path,
-            label_a=label,
-            label_b=prev["label"] if prev_glb_path else "",
-            default_mode="side-by-side" if prev_glb_path else "single-a",
-            preview_png=version_dir / "preview.png" if preview_meta else None,
-            diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
-            diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
-            parts=parts_output,
-        )
-        viewer_meta = f"{dir_name}/viewer.html"
-        _mark("viewer_ms", _t)
+    _heartbeat("writing viewer.html…")
+    _t = time.perf_counter()
+    viewer_path = version_dir / "viewer.html"
+    _render_unified(
+        viewer_path,
+        glb_a=viewer_glb_path,
+        glb_b=prev_glb_path,
+        label_a=label,
+        label_b=prev["label"] if prev_glb_path else "",
+        default_mode="side-by-side" if prev_glb_path else "single-a",
+        preview_png=version_dir / "preview.png" if preview_meta else None,
+        diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
+        diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
+        parts=parts_output,
+    )
+    viewer_meta = f"{dir_name}/viewer.html"
+    _mark("viewer_ms", _t)
 
     # Write meta.json
     created = datetime.now(timezone.utc).isoformat()
@@ -572,8 +576,6 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         meta["warnings"] = warnings
     if preview_meta:
         meta["preview"] = preview_meta
-    if preview_gif_meta:
-        meta["preview_gif"] = preview_gif_meta
     if diff_meta:
         meta["diff"] = diff_meta
     if viewer_meta:
@@ -626,8 +628,6 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         output_json["warnings"] = warnings
     if preview_meta:
         output_json["preview"] = preview_meta
-    if preview_gif_meta:
-        output_json["preview_gif"] = preview_gif_meta
     if diff_meta:
         output_json["diff"] = diff_meta
     if viewer_meta:

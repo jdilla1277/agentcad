@@ -62,8 +62,12 @@ def daemon_supported():
     The daemon is built on POSIX-only primitives: ``os.fork`` (prefork the
     warm process), ``AF_UNIX`` sockets (the IPC transport), and ``os.getuid``
     (the per-user socket/pid path). Windows has none of these, so the daemon
-    is disabled there and every command runs directly, equivalent to passing
+    is disabled there and every command runs directly — equivalent to passing
     ``--no-daemon`` on each call.
+
+    Centralizing the check here keeps the callers (``_daemon_routing``) from
+    crashing with ``AttributeError`` on ``os.getuid`` *before* a script runs,
+    which is what happened on Windows before this guard existed.
     """
     return (
         hasattr(os, "fork")

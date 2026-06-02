@@ -216,43 +216,60 @@ class TestPreview:
         assert width == 1024
         assert height == 1068
 
-    def test_writes_preview_gif(self, runner, isolated_dir):
+    def test_default_does_not_auto_render_preview_gif(self, runner, isolated_dir):
+        """Turntable GIFs are on-demand via the viewer's Export GIF button —
+        they are not auto-rendered on every run. b3d twin of the cq test."""
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
         r = _run(runner, "s.py", "--output", "v1")
         assert r.exit_code == 0, r.output
 
-        gif_path = isolated_dir / "v1" / "preview.gif"
-        assert gif_path.exists()
-        assert gif_path.stat().st_size > 0
-        assert gif_path.read_bytes()[:4] == b"GIF8"
-
-    def test_preview_gif_has_expected_frame_count(self, runner, isolated_dir):
-        from PIL import Image
-        _init(runner, isolated_dir)
-        _write(isolated_dir, "s.py", SIMPLE)
-        _run(runner, "s.py", "--output", "v1")
-
-        gif = Image.open(isolated_dir / "v1" / "preview.gif")
-        assert gif.n_frames == 60
-
-    def test_preview_gif_in_run_json_and_meta(self, runner, isolated_dir):
-        _init(runner, isolated_dir)
-        _write(isolated_dir, "s.py", SIMPLE)
-        r = _run(runner, "s.py", "--output", "v1")
-        parsed = json.loads(r.stdout)
-        assert parsed.get("preview_gif") == "v1/preview.gif"
-
-        meta = json.loads((isolated_dir / "v1" / "meta.json").read_text())
-        assert meta.get("preview_gif") == "v1/preview.gif"
-
-    def test_no_preview_skips_gif(self, runner, isolated_dir):
-        _init(runner, isolated_dir)
-        _write(isolated_dir, "s.py", SIMPLE)
-        r = _run(runner, "s.py", "--output", "v1", "--no-preview")
         parsed = json.loads(r.stdout)
         assert "preview_gif" not in parsed
         assert not (isolated_dir / "v1" / "preview.gif").exists()
+
+        meta = json.loads((isolated_dir / "v1" / "meta.json").read_text())
+        assert "preview_gif" not in meta
+
+    def test_no_preview_still_writes_viewer_and_glb(self, runner, isolated_dir):
+        """--no-preview only skips the 4-view composite PNG. viewer.html and
+        output.glb still ship because they are cheap and the agent needs them
+        for the comparison viewer to load. b3d twin of the cq test."""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--output", "label", "--no-preview")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+        assert parsed["viewer"] == "v1_label/viewer.html"
+        assert (isolated_dir / "v1_label" / "viewer.html").exists()
+        assert (isolated_dir / "v1_label" / "output.glb").exists()
+        meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
+        assert meta["viewer"] == "v1_label/viewer.html"
+
+    def test_no_preview_second_run_still_writes_diff(self, runner, isolated_dir):
+        """Auto-diff runs regardless of --preview. b3d twin of the cq test."""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        _run(runner, "s.py", "--output", "first", "--no-preview")
+        _write(isolated_dir, "s.py", "show_object(Box(20, 20, 20))\n")
+        r = _run(runner, "s.py", "--output", "second", "--no-preview")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+        assert "diff" in parsed
+        assert parsed["diff"]["against"] == "first"
+        assert (isolated_dir / "v2_second" / "diff_side.png").exists()
+        assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
+
+    def test_no_preview_second_run_viewer_includes_prior(self, runner, isolated_dir):
+        """Viewer on run #2 embeds the prior version's GLB so side-by-side
+        comparison works even when both runs used --no-preview. b3d twin."""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        _run(runner, "s.py", "--output", "first", "--no-preview")
+        _write(isolated_dir, "s.py", "show_object(Box(20, 20, 20))\n")
+        _run(runner, "s.py", "--output", "second", "--no-preview")
+        viewer_html = (isolated_dir / "v2_second" / "viewer.html").read_text()
+        assert 'DEFAULT_MODE = "side-by-side"' in viewer_html
 
 
 # ---------- params ----------
@@ -1178,7 +1195,6 @@ class TestProgressHeartbeats:
         assert "[agentcad] running script" in stderr
         assert "[agentcad] computing metrics" in stderr
         assert "[agentcad] rendering preview" in stderr
-        assert "[agentcad] encoding preview.gif" in stderr
         # Heartbeats stay out of the JSON on stdout (Click 8.3 r.output
         # interleaves stdout + stderr; r.stdout is stdout-only).
         assert "[agentcad]" not in r.stdout
@@ -1192,5 +1208,4 @@ class TestProgressHeartbeats:
         assert r.exit_code == 0
         stderr = r.stderr
         assert "[agentcad] running script" in stderr
-        assert "[agentcad] rendering preview" not in stderr
-        assert "[agentcad] encoding preview.gif" not in stderr
+        assert "[agentcad] rendering preview (4-view" not in stderr

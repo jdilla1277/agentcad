@@ -161,32 +161,38 @@ def test_help_debugging_section(runner):
     assert "face_orientations" in output
 
 
-def test_help_no_preview_framed_as_perf_flag(runner):
-    """--no-preview is the biggest perf lever for an iterating agent
-    (skips the 60-frame GIF + 4-view composite, ~6-10s). The --help
-    text must frame it that way, not as a cosmetic suppression switch.
-    Issue #165."""
+def test_help_no_preview_scoped_to_composite_only(runner):
+    """--no-preview now only skips the 4-view composite (and per-part
+    previews); viewer.html, GLB, and diff PNGs always generate so the
+    viewer experience stays intact. The --help text must reflect that
+    scope — the old 'skip to keep runs sub-second' framing was an active
+    invitation to drop the whole pipeline, which is what produced the
+    'viewer loads with only one version' problem."""
     result = runner.invoke(cli, ["--help"])
     output = result.output
-    # The block must mention what's actually generated and the perf cost.
+    # New framing: scope --no-preview to the composite, name what stays.
     assert "4-view composite" in output
-    assert "turntable GIF" in output or "turntable" in output
     assert "no-preview" in output
-    assert "iterating" in output or "sub-second" in output
-    # The old undersold framing should be gone.
+    assert "viewer.html" in output
+    # No more references to the removed auto-GIF or the old "sub-second"
+    # invitation — both pushed agents toward --no-preview.
+    assert "60-frame turntable GIF" not in output
+    assert "sub-second" not in output
+    # The pre-#165 cosmetic framing also stays gone.
     assert "256x256" not in output
     assert "Quick 256" not in output
 
 
-def test_run_subcommand_help_no_preview_framed_as_perf_flag(runner):
+def test_run_subcommand_help_no_preview_scoped_to_composite_only(runner):
     """Same framing reaches `agentcad run --help` directly — agents
-    discovering the flag through subcommand help also see the perf
-    framing, not the cosmetic suppression description."""
+    discovering the flag through subcommand help also see the scoped
+    description, not the old 'sub-second' invitation."""
     result = runner.invoke(cli, ["run", "--help"])
     output = result.output
     assert "no-preview" in output
     assert "4-view composite" in output
-    assert "iterating" in output or "sub-second" in output
+    # Old "iterating to keep runs sub-second" framing is gone.
+    assert "sub-second" not in output
     assert "256x256" not in output
 
 

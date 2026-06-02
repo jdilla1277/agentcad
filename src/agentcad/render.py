@@ -345,63 +345,6 @@ def render_shape_custom(shape, azimuth, elevation, output_path,
     _capture(view, output_path, width, height)
 
 
-def render_turntable_gif(shape, output_path, width=512, height=512,
-                         frames=60, duration_ms=50, elevation=20):
-    """Render a turntable rotation of a shape as an animated GIF.
-
-    A self-contained share artifact that any chat client / image viewer can
-    open — no HTML required. Frames sweep azimuth 0→360 at constant
-    elevation. FitAll runs per frame so the model stays centered. Each frame
-    gets a small agentcad.dev watermark in the bottom-right corner.
-    """
-    from PIL import Image, ImageDraw, ImageFont
-    import tempfile
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    view, _ctx = _setup_render(shape, width, height)
-    el = math.radians(elevation)
-
-    with tempfile.TemporaryDirectory() as td:
-        frame_paths = []
-        for i in range(frames):
-            azimuth = (360.0 / frames) * i
-            az = math.radians(azimuth)
-            vx = -math.sin(az) * math.cos(el)
-            vy = math.cos(az) * math.cos(el)
-            vz = -math.sin(el)
-            view.SetProj(vx, vy, vz)
-            view.SetUp(0, 0, 1)
-            view.FitAll()
-            view.Redraw()
-            frame_path = Path(td) / f"frame_{i:04d}.png"
-            _capture(view, frame_path, width, height)
-            frame_paths.append(frame_path)
-
-        font = ImageFont.load_default()
-        text = "agentcad.dev"
-        images = []
-        for p in frame_paths:
-            img = Image.open(p).convert("RGB")
-            draw = ImageDraw.Draw(img)
-            bbox = draw.textbbox((0, 0), text, font=font)
-            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            draw.text(
-                (img.width - tw - 10, img.height - th - 10),
-                text, fill=(40, 40, 40), font=font,
-            )
-            images.append(img)
-        images[0].save(
-            str(output_path),
-            save_all=True,
-            append_images=images[1:],
-            duration=duration_ms,
-            loop=0,
-            optimize=True,
-        )
-
-
 def render_views(shape, view_names, output_dir):
     """Render multiple views of a shape, returning a dict of {view_name: path_str}."""
     output_dir = Path(output_dir)

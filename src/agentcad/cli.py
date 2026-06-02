@@ -75,10 +75,13 @@ EXAMPLE SESSION
   Version directory layout:
     v1_first/
       output.step       STEP geometry
+      output.glb        GLB (always — viewer needs it)
       script.py         copy of the executed script
       meta.json         full run metadata (includes "runtime" field)
       preview.png       4-view composite (front/right/top/iso, 1024x1068)
-      preview.gif       60-frame turntable GIF
+      diff_side.png     side-by-side vs. prior version (from v2 onward)
+      diff_overlay.png  tinted overlay vs. prior version (from v2 onward)
+      viewer.html       interactive 3D viewer (always — open in a browser)
       renders/          PNG views (when --render used)
 
 \b
@@ -95,9 +98,11 @@ COMMANDS
                      or mixed (front,right,45:30).
     --export FMT     Mesh export: stl, glb (GLB auto-colors per-solid).
     --preview / --no-preview
-                     Visual feedback (default on): 4-view composite PNG +
-                     60-frame turntable GIF. Adds ~6-10s per run. Pass
-                     --no-preview while iterating to keep runs sub-second.
+                     4-view composite PNG + per-part previews (default on,
+                     ~2-4s). viewer.html, GLB, and diff PNGs always
+                     generate regardless — --no-preview only skips the
+                     composite render. Turntable GIFs are on-demand via
+                     the Export GIF button in viewer.html.
     --params K=V,..  Override top-level script constants.
     --runtime ENGINE Force cadquery or build123d (beats project default).
     --dry-run        Metrics only — no version consumed, no disk artifacts.

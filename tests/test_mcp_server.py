@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from agentcad.mcp.server import mcp, _format_result, _invoke
+from agentcad.mcp.server import mcp, _invoke, _format_result
 
 
 # --- Tool registration ---
@@ -117,6 +117,9 @@ def test_inspect_tool_missing_file_error():
 
 
 def test_format_result_surfaces_exception_traceback():
+    """When Click catches an unexpected exception, _invoke must surface the
+    exception type and message instead of collapsing to 'No output' — that
+    opacity was reported via feedback (2026-05-30) as hiding the traceback."""
     try:
         raise RuntimeError("kaboom on windows")
     except RuntimeError as exc:

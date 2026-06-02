@@ -55,6 +55,8 @@ PARITY_MAP: dict[str, str] = {
         "cq_only:unit test on view helper, runtime-agnostic",
     "test_render_unified_includes_export_gif_button":
         "cq_only:unit test on view helper, runtime-agnostic",
+    "test_render_unified_keeps_preserve_drawing_buffer":
+        "cq_only:unit test on view helper, runtime-agnostic",
     "test_run_brep_api_error_enriched":
         "cq_only:cqgi.CQModel monkeypatch — no analogous error-enrichment hook on b3d (track in a follow-up if b3d needs OCP error guidance)",
     "test_run_python_version_ok_no_error":
@@ -64,7 +66,7 @@ PARITY_MAP: dict[str, str] = {
     "test_end_to_end_workflow":
         "cq_only:smoke test exercising all commands; pieces covered piecewise on b3d",
     "test_run_emits_json_error_on_unexpected_exception_after_script_start":
-        "cq_only:CLI catch-all error wrapper; monkeypatches compute_metrics — runtime-agnostic, the wrapper sits above runtime dispatch",
+        "cq_only:CLI catch-all error wrapper (#194); monkeypatches compute_metrics — runtime-agnostic, the wrapper sits above the runtime dispatch",
     "test_run_no_manifest_error":
         "cq_only:CLI error orthogonal to runtime",
     "test_run_script_not_found_error":
