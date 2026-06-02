@@ -69,10 +69,10 @@ def run(
     params: str | None = None,
     dry_run: bool = False,
 ) -> dict:
-    """Execute a CadQuery script and produce a versioned STEP file with metrics.
+    """Execute a build123d or CadQuery script and produce a versioned STEP file with metrics.
 
     Args:
-        script: Path to the CadQuery Python script.
+        script: Path to the Python CAD script.
         output: Label for this version.
         cwd: Project directory (must contain agentcad.json).
         render: Comma-separated views to render (front,right,top,iso,all).
