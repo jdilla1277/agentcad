@@ -11,15 +11,15 @@ SKILL_CONTENT = """\
 name: agentcad
 description: >
   CAD tool for AI agents. Use when the user asks you to design, model, or build
-  a 3D object. agentcad executes CadQuery Python scripts and produces STEP files,
-  PNG renders, mesh exports (STL/GLB/OBJ), and geometric metrics.
+  a 3D object. agentcad executes build123d or CadQuery Python scripts and
+  produces STEP files, PNG renders, mesh exports (STL/GLB/OBJ), and geometric metrics.
 compatibility: Requires Python 3.10-3.12 and agentcad installed (pip install agentcad).
 allowed-tools: Bash(agentcad:*)
 ---
 
 # agentcad — CAD tool for AI agents
 
-You have access to `agentcad`, a CLI that turns CadQuery Python scripts into
+You have access to `agentcad`, a CLI that turns build123d or CadQuery Python scripts into
 3D geometry. All output is JSON. Every command returns `"command"` and `"status"` keys.
 
 ## First-time setup
@@ -31,8 +31,9 @@ agentcad --help   # Read this — it is your complete operational briefing
 
 ## Core workflow
 
-1. **Write a script.** No imports needed — `cq`, `show_object`, and all helpers
-   are pre-injected. `show_object(result)` is required.
+1. **Write a script.** No imports needed — build123d primitives,
+   `show_object`, and agentcad edit helpers are pre-injected by default.
+   `show_object(result)` is required.
 
 2. **Dry-run first** to check metrics without consuming a version:
    ```bash
@@ -73,18 +74,22 @@ agentcad --help   # Read this — it is your complete operational briefing
 ## Script writing rules
 
 - `show_object(result)` is required — at least one call.
-- These are pre-injected (no import needed):
-  `cq`, `show_object`, `translate`, `rotate`, `mirror_fuse`, `loft_sections`,
-  `tapered_sweep`, `naca_wire`, `bbox_point`, `place_at`, `assemble`,
-  `ellipse_wire`, `spline_wire`, `polygon_wire`, `rounded_rect_wire`,
-  `elliptical_sweep`, `involute_gear_profile`
-- Helpers operate on `TopoDS_Shape`. Bridge with `.val().wrapped`:
+- These are pre-injected by default (no import needed):
+  build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
+  `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
+  `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
+  and `replace_face`.
+- CadQuery remains supported. Use `import cadquery as cq`, initialize with
+  `agentcad init --runtime cadquery`, or pass `--runtime cadquery`.
+- CadQuery helper paths operate on `TopoDS_Shape`. Bridge with `.val().wrapped`:
   ```python
+  import cadquery as cq
   part = cq.Workplane('XY').box(10, 20, 5).val().wrapped
   moved = translate(part, 50, 0, 0)
   ```
 - To show helper output:
   ```python
+  import cadquery as cq
   show_object(cq.Workplane('XY').newObject([cq.Shape.cast(topo_shape)]))
   ```
 - For OCP internals (`gp_Pnt`, `BRepPrimAPI`, etc.), import manually.

@@ -57,6 +57,7 @@ class TestHelpConsistency:
             f"docs default to {other}",
             f"{other} fallback",
             f"{other} (the legacy default)",
+            f"{other} is the legacy default",
             f"> {other} fallback",  # the "Dispatch order: ... > cadquery fallback" line
             "will flip after Phase 6",
         ]
@@ -78,6 +79,7 @@ class TestHelpConsistency:
         bad_phrasings = [
             f"Fallback: {other}",
             f"Global default: {other}",
+            f"{other}   Legacy default",
             f"the legacy default; will flip after Phase 6",
             "wins if set",
         ]
