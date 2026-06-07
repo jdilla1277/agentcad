@@ -71,6 +71,14 @@ Single source of truth for all milestones. For per-milestone detailed plans, see
 | M53 | Part instancing & patterns (linear, circular array) | M | Pending |
 | M54 | Tolerance / fit helpers (clearance, interference) | S | Pending |
 | M55 | Assembly validation (interference detection) | M | Pending |
+| | | | |
+| | **v0.5 — Text-to-CAD Validation & Interop** | | |
+| M56 | Typed parameter schema & design sweeps | M | Pending |
+| M57 | Animation exports for parameters and mechanisms | M | Pending |
+| M58 | Assembly/joint metadata model | L | Pending |
+| M59 | URDF export | M | Pending |
+| M60 | Mechanism validation | L | Pending |
+| M61 | SDF / implicit modeling mode | L | Pending |
 
 ---
 
@@ -97,6 +105,8 @@ Small items surfaced from real use that haven't earned a milestone slot yet. Gra
 **v0.3 (Distribution & Agent Ecosystem):** In progress. Licensing (M39), rename (M40), MCP server (M42), skill install (M43), session logging (M45) done. Next: PyPI publish (M41).
 
 **v0.4 (Multi-Part Assembly & Tooling):** Not started. Inter-part constraints, part instancing, tolerance helpers, interference detection.
+
+**v0.5 (Text-to-CAD Validation & Interop):** Not started. Typed parameter schemas, animation exports, joint metadata, URDF export, mechanism validation, and SDF/implicit modeling.
 
 ---
 
@@ -663,5 +673,100 @@ Driven by agent friction testing across 6+ real model sessions.
 - `check_interference(compound)` — pairwise `BRepAlgoAPI_Common` between solids.
 - Report overlapping pairs with volume of interference.
 - Surface as warning in `agentcad run` output (like `is_valid` warnings).
+
+**Status:** Pending
+
+---
+
+## v0.5 — Text-to-CAD Validation & Interop
+
+**Goal:** Move from "agent generated a valid shape" to "agent generated a design that exposes intent, can be varied, can move, and can interoperate with downstream simulation/robotics tools."
+
+---
+
+### M56: Typed Parameter Schema & Design Sweeps
+
+**Goal:** Extend M21 `--params` into a first-class parameter contract that agents and UIs can inspect, validate, and sweep.
+
+**Scope:**
+- Script-declared parameter metadata: type, unit, default, bounds, step, description.
+- Persist resolved parameters in run metadata so `agentcad diff` can compare design intent alongside geometry.
+- Add sweep workflow for controlled variants: one parameter range or small Cartesian grids.
+- Return per-variant metrics, validity, output paths, and warnings as structured JSON.
+- Keep this separate from optimization; the first version is deterministic exploration, not search.
+
+**Status:** Pending
+
+---
+
+### M57: Animation Exports for Parameters and Mechanisms
+
+**Goal:** Produce visual previews for parameter changes, exploded views, and simple mechanism motion.
+
+**Scope:**
+- Render parameter sweeps to GIF or MP4 using the existing render pipeline.
+- Support exploded assembly animation from named parts once v0.4 part metadata exists.
+- Support simple joint-driven motion previews after M58.
+- Output frame metadata so agents can cite exact parameter/joint values when a visual issue appears.
+
+**Status:** Pending
+
+---
+
+### M58: Assembly/Joint Metadata Model
+
+**Goal:** Represent assemblies as named bodies plus explicit relationships so downstream validation/export features do not infer everything from raw solids.
+
+**Scope:**
+- Named links/bodies with local transforms, origins, colors, and source shapes.
+- Joint declarations: fixed, revolute, prismatic; axis, origin, limits, parent, child.
+- Validate missing links, cycles, invalid axes, impossible limits, and duplicate names.
+- Store metadata in run output alongside STEP/GLB/STL files.
+- Build on M52-M55 constraints/validation rather than replacing them.
+
+**Status:** Pending
+
+---
+
+### M59: URDF Export
+
+**Goal:** Export agentcad assemblies into robot-friendly URDF packages for simulation and robotics workflows.
+
+**Scope:**
+- Emit URDF link/joint definitions from M58 metadata.
+- Export referenced visual/collision meshes, likely STL/GLB/DAE depending on simulator compatibility.
+- Preserve units, origins, joint axes, limits, and part names.
+- Add validation for common URDF mistakes before writing files.
+- Defer SRDF until there is a concrete planning/use-case need; URDF is the first interoperability target.
+
+**Status:** Pending
+
+---
+
+### M60: Mechanism Validation
+
+**Goal:** Check whether a mechanical design can move as intended, not only whether its static solids are valid.
+
+**Scope:**
+- Run joint sweeps across declared limits and detect collisions/interference at sampled poses.
+- Report travel range, minimum clearance, collision pose, and implicated parts.
+- Add targeted checks for common mechanisms: sliders, hinges, gears, racks, simple linkages.
+- For gears, report approximate gear ratio, center-distance mismatch, and tooth-count/mesh warnings where available.
+- Return validation results as structured JSON and surface severe issues in `agentcad run`.
+
+**Status:** Pending
+
+---
+
+### M61: SDF / Implicit Modeling Mode
+
+**Goal:** Support procedural or organic geometry that is better expressed as signed distance fields than CAD B-reps.
+
+**Scope:**
+- Add an explicit mesh-oriented runtime/path for SDF or implicit models.
+- Export STL/GLB and render previews; do not promise general STEP conversion.
+- Compute mesh metrics and validity checks appropriate to triangle meshes.
+- Document when SDF mode is appropriate: lattices, organic blends, procedural fields, soft forms.
+- Keep B-rep CAD as the default for mechanical parts, tolerances, assemblies, and STEP workflows.
 
 **Status:** Pending
