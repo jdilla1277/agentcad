@@ -12,10 +12,9 @@ marketing drafts, promotional plans, feedback logs, launch notes, private
 operational context, or anything that should not be public.
 
 If the user asks for internal planning, promotion work, or website work for
-`agentcad.dev`, use the internal repo at
-`/Users/jamesdillard/Documents/mountain-climber-2/agentcad-internal`
-(`jdilla1277/agentcad-internal`) instead. Before creating any PR, run
-`git remote -v` and confirm whether the target repo is public or internal.
+`agentcad.dev`, use the internal repo (`jdilla1277/agentcad-internal`) instead.
+Before creating any PR, run `git remote -v` and confirm whether the target repo
+is public or internal.
 
 ## Development
 
