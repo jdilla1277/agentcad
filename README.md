@@ -6,6 +6,14 @@ Your agent writes CadQuery or build123d Python scripts. agentcad handles executi
 
 agentcad is open source under the Apache License 2.0. It runs locally and requires no signup.
 
+[![Featured on Product Hunt](https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1165633&theme=light)](https://www.producthunt.com/products/agentcad?utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-agentcad)
+
+## Demo
+
+[![Watch a coding agent design in agentcad](https://img.youtube.com/vi/Zsn31-IilWM/maxresdefault.jpg)](https://www.youtube.com/watch?v=Zsn31-IilWM)
+
+A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
+
 ## Quick start
 
 Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
