@@ -1,9 +1,13 @@
 import json
+from pathlib import Path
 
 import cadquery as cq
 from cadquery import exporters
 
 from agentcad.cli import cli
+
+
+_REAL_WORLD_FIXTURES = Path(__file__).parent / "fixtures" / "real_world"
 
 
 def _box_step(directory, name="box.step"):
@@ -84,6 +88,25 @@ class TestMeasureCommand:
             {"x": -10.0, "y": 0.0, "z": 0.0},
             {"x": 10.0, "y": 0.0, "z": 0.0},
         ]
+
+    def test_measure_reports_cadgenbench_101_known_diameter_buckets(self, runner):
+        step = _REAL_WORLD_FIXTURES / "cadgenbench_101_agentcad.step"
+        result = runner.invoke(cli, ["measure", str(step)])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        buckets = {
+            f["diameter_mm"]: f
+            for f in parsed["cylindrical_features"]
+        }
+
+        assert parsed["validity"]["is_valid"] is True
+        assert parsed["metrics"]["dimensions"] == {"x": 220.0, "y": 120.0, "z": 45.0}
+        assert buckets[12.0]["count"] == 10
+        assert buckets[12.0]["axis"] == "+z"
+        assert buckets[36.0]["count"] == 4
+        assert buckets[36.0]["axis"] == "+z"
+        assert buckets[50.0]["count"] == 1
+        assert buckets[50.0]["axis"] == "+z"
 
     def test_measure_features_flag_adds_full_feature_lists(self, runner, isolated_dir):
         step = _box_step(isolated_dir)
