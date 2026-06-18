@@ -186,6 +186,7 @@ def _measure_tier0(file_path: str, detection: dict, *, with_features: bool) -> N
         topo_shape = load_cad_shape(file_path)
         metrics = compute_metrics(topo_shape)
         feature_summary = topo_ids.summary_entries(topo_shape)
+        cylindrical_features = _cylindrical_features(topo_shape)
     except Exception as exc:
         _emit({
             "command": "measure", "status": "malformed",
@@ -208,6 +209,8 @@ def _measure_tier0(file_path: str, detection: dict, *, with_features: bool) -> N
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
         "metrics": metrics,
+        "validity": {"is_valid": metrics["is_valid"]},
+        "cylindrical_features": cylindrical_features,
         "feature_summary": feature_summary,
         "next_actions": [
             "read metrics.dimensions and feature_summary — use the included "
@@ -225,3 +228,113 @@ def _measure_tier0(file_path: str, detection: dict, *, with_features: bool) -> N
         }
 
     _emit(payload)
+
+
+def _cylindrical_features(topo_shape, *, precision: float = 0.1) -> list[dict]:
+    """Return neutral cylindrical feature buckets.
+
+    Split cylindrical faces on the same physical hole/boss are deduped by
+    diameter, canonical axis direction, and the axis location's perpendicular
+    offset from the origin. Slice 1 deliberately reports neutral cylinders
+    instead of claiming hole vs boss.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cylinder
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    unique: dict[
+        tuple[float, tuple[float, float, float], tuple[float, float, float]],
+        dict,
+    ] = {}
+
+    explorer = TopExp_Explorer(topo_shape, TopAbs_FACE)
+    while explorer.More():
+        face = TopoDS.Face_s(explorer.Current())
+        try:
+            adaptor = BRepAdaptor_Surface(face)
+            if adaptor.GetType() == GeomAbs_Cylinder:
+                cylinder = adaptor.Cylinder()
+                axis = cylinder.Axis()
+                direction = axis.Direction()
+                canonical_direction = _canonical_direction(direction, precision)
+                axis_point = _canonical_axis_point(
+                    axis.Location(), direction, precision
+                )
+                diameter = _round_to(cylinder.Radius() * 2.0, precision)
+                key = (diameter, canonical_direction, axis_point)
+                unique.setdefault(key, {
+                    "diameter_mm": diameter,
+                    "axis": _axis_label(canonical_direction),
+                    "direction": _tuple_xyz(canonical_direction),
+                    "center": _tuple_xyz(axis_point),
+                })
+        except Exception:
+            pass
+        explorer.Next()
+
+    buckets: dict[tuple[float, str, tuple[float, float, float]], dict] = {}
+    for item in unique.values():
+        direction_tuple = _dict_tuple(item["direction"])
+        key = (item["diameter_mm"], item["axis"], direction_tuple)
+        bucket = buckets.setdefault(key, {
+            "diameter_mm": item["diameter_mm"],
+            "count": 0,
+            "axis": item["axis"],
+            "representative_centers": [],
+        })
+        if item["axis"] == "other":
+            bucket["direction"] = item["direction"]
+        bucket["count"] += 1
+        bucket["representative_centers"].append(item["center"])
+
+    result = list(buckets.values())
+    for bucket in result:
+        bucket["representative_centers"].sort(
+            key=lambda p: (p["x"], p["y"], p["z"])
+        )
+    result.sort(key=lambda b: (b["diameter_mm"], b["axis"]))
+    return result
+
+
+def _round_to(value: float, precision: float) -> float:
+    return round(round(float(value) / precision) * precision, 6)
+
+
+def _canonical_direction(direction, precision: float) -> tuple[float, float, float]:
+    coords = [float(direction.X()), float(direction.Y()), float(direction.Z())]
+    for value in coords:
+        if abs(value) > 1e-9:
+            if value < 0:
+                coords = [-v for v in coords]
+            break
+    return tuple(_round_to(v, precision) for v in coords)
+
+
+def _canonical_axis_point(location, direction, precision: float) -> tuple[float, float, float]:
+    p = [float(location.X()), float(location.Y()), float(location.Z())]
+    d = [float(direction.X()), float(direction.Y()), float(direction.Z())]
+    dot = sum(a * b for a, b in zip(p, d))
+    perp = [p[i] - dot * d[i] for i in range(3)]
+    return tuple(_round_to(v, precision) for v in perp)
+
+
+def _axis_label(direction: tuple[float, float, float]) -> str:
+    axes = (
+        ("+x", (1.0, 0.0, 0.0)),
+        ("+y", (0.0, 1.0, 0.0)),
+        ("+z", (0.0, 0.0, 1.0)),
+    )
+    for label, axis in axes:
+        if sum(a * b for a, b in zip(direction, axis)) > 0.99:
+            return label
+    return "other"
+
+
+def _tuple_xyz(values: tuple[float, float, float]) -> dict:
+    return {"x": values[0], "y": values[1], "z": values[2]}
+
+
+def _dict_tuple(values: dict) -> tuple[float, float, float]:
+    return (values["x"], values["y"], values["z"])
