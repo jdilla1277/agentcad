@@ -68,7 +68,14 @@ agentcad --help   # Read this — it is your complete operational briefing
    agentcad inspect v1_label/output.step
    ```
 
-6. **Iterate.** Fix the script, run with a new `--output` label. Use
+6. **Measure feature sizes.** For dimensions beyond top-level metrics:
+   ```bash
+   agentcad measure v1_label/output.step
+   ```
+   Use this for hole diameters, cylindrical boss diameters, edge lengths,
+   face areas, and full per-feature measurements with `--features`.
+
+7. **Iterate.** Fix the script, run with a new `--output` label. Use
    `agentcad diff 1 2` to compare versions.
 
 ## Script writing rules
@@ -107,6 +114,7 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad run ... --params k=v,k=v` | Override script parameters |
 | `agentcad render STEP --view SPEC` | Post-hoc renders with camera control |
 | `agentcad export STEP --format stl,glb` | Post-hoc mesh export |
+| `agentcad measure STEP` | Dimensional report (overall metrics + feature sizes) |
 | `agentcad inspect STEP` | Topology report (validity, free edges) |
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
@@ -119,9 +127,10 @@ agentcad --help   # Read this — it is your complete operational briefing
 2. **Read `preview.png`** — the 4-view composite. Fastest way to spot obvious problems.
 3. **Read `diff.side_by_side`** if iterating — confirms your change did what you intended.
 4. **Negative volume?** Wire winding is backwards (CW instead of CCW).
-5. **is_valid: false?** Run `agentcad inspect` — check `free_edge_count` and shell status.
-6. **Hollow shape?** `free_edge_count > 0` means open shell.
-7. **Complex profiles (gears, splines)?** Use subtractive construction — cut from
+5. **Need a hole diameter or edge length?** Run `agentcad measure output.step`.
+6. **is_valid: false?** Run `agentcad inspect` — check `free_edge_count` and shell status.
+7. **Hollow shape?** `free_edge_count > 0` means open shell.
+8. **Complex profiles (gears, splines)?** Use subtractive construction — cut from
    a blank cylinder/box instead of building up. See `agentcad docs patterns`.
 
 ## Patterns

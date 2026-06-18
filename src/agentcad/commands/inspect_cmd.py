@@ -222,7 +222,7 @@ def _inspect_tier0(file_path: str, detection: dict, *, with_ids: bool = False, w
         "size_bytes": detection.get("size_bytes"),
         "next_actions": [
             f"agentcad view {file_path} — open in a browser to inspect or share with humans",
-            f"agentcad render {file_path} --view iso — produce a PNG snapshot for handoff",
+            f"agentcad measure {file_path} — get dimensions, edge lengths, and hole diameters",
         ],
         "more_at": "agentcad docs",
     })

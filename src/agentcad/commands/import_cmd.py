@@ -265,10 +265,10 @@ def import_cmd(file, label, init_flag, no_daemon):
         response["scaffold"] = "edit.py"
     response["next_actions"] = [
         f"agentcad run edit.py --output my_edit — modify the scaffold and re-run to produce v{version_num + 1}",
-        f"agentcad view {dir_name}/output.step — open in browser to inspect or share with humans",
+        f"agentcad measure {dir_name}/output.step — check dimensions before editing",
     ] if scaffold_written else [
         f"agentcad view {dir_name}/output.step — open in browser to inspect or share with humans",
-        f"agentcad inspect {dir_name}/output.step — see topology details before editing",
+        f"agentcad measure {dir_name}/output.step — check dimensions before editing",
     ]
     response["more_at"] = "agentcad docs"
     click.echo(json.dumps(response))

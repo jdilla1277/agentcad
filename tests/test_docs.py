@@ -25,6 +25,7 @@ def test_docs_lists_sections(runner):
     assert "schema" in sections
     assert "helpers" in sections
     assert "metrics" in sections
+    assert "measure" in sections
     assert "preamble" in sections
     assert "validation" in sections
     assert "workflow" in sections
@@ -38,7 +39,7 @@ def test_docs_commands_section(runner):
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     content = data["content"]
-    for cmd in ["init", "run", "render", "context", "docs", "diff"]:
+    for cmd in ["init", "run", "render", "measure", "context", "docs", "diff"]:
         assert cmd in content
 
 
@@ -354,6 +355,16 @@ def test_docs_commands_mentions_inspect(runner):
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     assert "inspect" in data["content"]
+
+
+def test_docs_measure_section(runner):
+    result = runner.invoke(cli, ["docs", "measure"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    content = data["content"]
+    assert "agentcad measure" in content
+    assert "diameter" in content
+    assert "--features" in content
 
 
 # --- M26: twistExtrude performance warning ---

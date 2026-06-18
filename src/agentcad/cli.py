@@ -15,6 +15,7 @@ from agentcad.commands.feedback import feedback
 from agentcad.commands.import_cmd import import_cmd
 from agentcad.commands.init import init
 from agentcad.commands.inspect_cmd import inspect_cmd
+from agentcad.commands.measure import measure
 from agentcad.commands.render import render
 from agentcad.commands.run import run
 from agentcad.commands.skill import skill
@@ -122,6 +123,11 @@ COMMANDS
     edge_count, free_edge_count, is_valid.
 
 \b
+  agentcad measure STEP [--features]
+    Dimensional report: overall metrics plus compact feature measurements
+    (edge lengths, face areas, circular/cylindrical radii and diameters).
+
+\b
   agentcad diff REF1 REF2        Compare versions (by number or label).
   agentcad context               Project state: versions, current, tool_version.
   agentcad view FILE             Open GLB/STEP in browser. STEP auto-converts.
@@ -156,6 +162,7 @@ METRICS (in every successful run response)
 DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
   $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
+  $ agentcad measure v1_test/output.step                  # dimensions + feature sizes
   $ agentcad inspect v1_test/output.step                  # topology deep-dive
     Hollow shape?     -> free_edge_count > 0, shell not closed
     Inverted normals? -> face_orientations imbalanced
@@ -252,6 +259,7 @@ cli.add_command(feedback)
 cli.add_command(import_cmd)
 cli.add_command(init)
 cli.add_command(inspect_cmd)
+cli.add_command(measure)
 cli.add_command(render)
 cli.add_command(run)
 cli.add_command(skill)

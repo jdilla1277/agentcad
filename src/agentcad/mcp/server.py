@@ -141,6 +141,21 @@ def export(step_file: str, formats: str, cwd: str) -> dict:
 
 
 @mcp.tool()
+def measure(file: str, cwd: str, features: bool = False) -> dict:
+    """Measure dimensions and feature sizes in a STEP/BREP file.
+
+    Args:
+        file: Path to the STEP/STP/BREP file.
+        cwd: Project directory.
+        features: Include full per-solid, per-face, and per-edge measurement lists.
+    """
+    args = ["measure", file]
+    if features:
+        args.append("--features")
+    return _invoke(args, cwd=cwd)
+
+
+@mcp.tool()
 def inspect(file: str, cwd: str) -> dict:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
