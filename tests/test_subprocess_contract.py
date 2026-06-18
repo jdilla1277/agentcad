@@ -75,6 +75,8 @@ def initialized_dir(tmp_path):
 _COMMANDS_TO_CHECK = [
     ("inspect",         ["inspect", "{step}"],                          False),
     ("inspect_ids",     ["inspect", "{step}", "--ids"],                 False),
+    ("measure",         ["measure", "{step}"],                          False),
+    ("measure_features", ["measure", "{step}", "--features"],           False),
     ("render",          ["render", "{step}", "--view", "iso"],          False),
     ("export_glb",      ["export", "{step}", "--format", "glb"],        False),
     ("view",            ["view", "{step}"],                             False),

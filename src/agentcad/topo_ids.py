@@ -94,11 +94,11 @@ def summary_entries(topo_shape) -> dict:
     Cluster shape:
       face_clusters: [
         {kind: "planar", axis: "+z", count, area_mean/min/max, ids: [...]},
-        {kind: "cylindrical", axis: "+z", radius: 4.0, count, ids: [...]},
+        {kind: "cylindrical", axis: "+z", radius: 4.0, diameter: 8.0, count, ids: [...]},
         {kind: "other", surface_type: "BSplineSurface", count, ids: [...]},
       ]
       edge_clusters: [
-        {kind: "circle", radius: 4.0, axis: "+z", count, ids: [...]},
+        {kind: "circle", radius: 4.0, diameter: 8.0, axis: "+z", count, ids: [...]},
         {kind: "line", axis: "+x", count, length_mean, ids: [...]},
         {kind: "other", curve_type: "BSplineCurve", count, ids: [...]},
       ]
@@ -163,7 +163,9 @@ def summary_entries(topo_shape) -> dict:
                 axis, radius = "other", None
             key = ("cylindrical", axis, radius)
             entry = face_buckets.setdefault(key, {
-                "kind": "cylindrical", "axis": axis, "radius": radius, "ids": [],
+                "kind": "cylindrical", "axis": axis, "radius": radius,
+                "diameter": _round(radius * 2) if radius is not None else None,
+                "ids": [],
             })
             entry["ids"].append(face_id)
         else:
@@ -221,7 +223,9 @@ def summary_entries(topo_shape) -> dict:
                 axis, radius = "other", None
             key = ("circle", axis, radius)
             entry = edge_buckets.setdefault(key, {
-                "kind": "circle", "axis": axis, "radius": radius, "ids": [],
+                "kind": "circle", "axis": axis, "radius": radius,
+                "diameter": _round(radius * 2) if radius is not None else None,
+                "ids": [],
             })
             entry["ids"].append(edge_id)
         else:

@@ -11,7 +11,9 @@ from agentcad.mcp.server import mcp, _invoke, _format_result
 # --- Tool registration ---
 
 
-EXPECTED_TOOLS = {"run", "render", "export", "inspect", "docs", "context", "diff", "view"}
+EXPECTED_TOOLS = {
+    "run", "render", "export", "measure", "inspect", "docs", "context", "diff", "view",
+}
 
 
 def _tool_names():
@@ -116,6 +118,12 @@ def test_inspect_tool_missing_file_error():
     assert result["_exit_code"] != 0
 
 
+def test_measure_tool_missing_file_error():
+    result = _invoke(["measure", "/tmp/nonexistent.step"])
+    assert result["_exit_code"] != 0
+    assert result["command"] == "measure"
+
+
 def test_format_result_surfaces_exception_traceback():
     """When Click catches an unexpected exception, _invoke must surface the
     exception type and message instead of collapsing to 'No output' — that
@@ -148,3 +156,4 @@ def test_docs_mcp_section():
     assert result["status"] == "success"
     assert ".mcp.json" in result["content"]
     assert "agentcad.mcp" in result["content"]
+    assert "measure" in result["content"]
