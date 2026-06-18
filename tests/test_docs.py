@@ -364,6 +364,8 @@ def test_docs_measure_section(runner):
     content = data["content"]
     assert "agentcad measure" in content
     assert "diameter" in content
+    assert "cylindrical_features" in content
+    assert "not a manufacturing tolerance" in content
     assert "--features" in content
 
 

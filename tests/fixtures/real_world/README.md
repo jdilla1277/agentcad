@@ -30,6 +30,17 @@ Used by:
   for verifying the JSON-on-stdout contract holds against real
   AP214 input, not just synthetic cadquery exports.
 
+### `cadgenbench_101_agentcad.step` (556KB, STEP)
+
+Source: CADGenBench task 101 output from internal AgentCAD run
+`20260615_091000_openai_gpt-5.5_agentcad`. 150 faces, 427 edges,
+single valid solid with measured dimensions 220 x 120 x 45 mm.
+
+Used by:
+- `tests/test_measure.py` — the M65 Slice 1 real-output acceptance
+  check that `agentcad measure` reports the known Ø12, Ø36, and Ø50
+  cylindrical feature buckets from CADGenBench 101.
+
 ## Adding new fixtures
 
 Keep them small (<1MB ideal, <5MB hard cap). Add an entry above
