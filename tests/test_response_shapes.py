@@ -141,7 +141,10 @@ def test_measure_response_shape(runner, isolated_dir):
     r = runner.invoke(cli, ["measure", str(step)])
     assert r.exit_code == 0, r.output
     parsed = json.loads(r.stdout)
-    for key in ("command", "status", "file", "metrics", "feature_summary"):
+    for key in (
+        "command", "status", "file", "metrics", "validity",
+        "cylindrical_features", "feature_summary",
+    ):
         assert key in parsed, f"`measure` missing required field: {key}"
     assert parsed["command"] == "measure"
     # measure reports data only; it produces no artifacts

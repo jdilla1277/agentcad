@@ -20,6 +20,20 @@ def _cylinder_step(directory, name="cylinder.step"):
     return path
 
 
+def _plate_with_two_holes_step(directory, name="two_holes.step"):
+    plate = cq.Workplane("XY").box(50, 20, 5)
+    cutters = (
+        cq.Workplane("XY")
+        .pushPoints([(-10, 0), (10, 0)])
+        .circle(3)
+        .extrude(10)
+    )
+    part = plate.cut(cutters)
+    path = directory / name
+    exporters.export(part, str(path))
+    return path
+
+
 class TestMeasureCommand:
     def test_measure_returns_json_metrics_and_feature_summary(self, runner, isolated_dir):
         step = _box_step(isolated_dir)
@@ -31,6 +45,8 @@ class TestMeasureCommand:
         assert parsed["metrics"]["dimensions"]["x"] == 10.0
         assert parsed["metrics"]["dimensions"]["y"] == 20.0
         assert parsed["metrics"]["dimensions"]["z"] == 5.0
+        assert parsed["validity"]["is_valid"] is True
+        assert "cylindrical_features" in parsed
         assert parsed["feature_summary"]["face_count"] == 6
         assert parsed["feature_summary"]["edge_count"] == 12
         assert "features" not in parsed
@@ -50,6 +66,24 @@ class TestMeasureCommand:
         ]
         assert any(c["radius"] == 5.0 and c["diameter"] == 10.0 for c in cyl_faces)
         assert any(c["radius"] == 5.0 and c["diameter"] == 10.0 for c in circle_edges)
+
+    def test_measure_reports_deduped_cylindrical_feature_inventory(
+        self, runner, isolated_dir
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(step)])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        features = parsed["cylindrical_features"]
+        hole_bucket = next(
+            f for f in features
+            if f["diameter_mm"] == 6.0 and f["axis"] == "+z"
+        )
+        assert hole_bucket["count"] == 2
+        assert hole_bucket["representative_centers"] == [
+            {"x": -10.0, "y": 0.0, "z": 0.0},
+            {"x": 10.0, "y": 0.0, "z": 0.0},
+        ]
 
     def test_measure_features_flag_adds_full_feature_lists(self, runner, isolated_dir):
         step = _box_step(isolated_dir)
