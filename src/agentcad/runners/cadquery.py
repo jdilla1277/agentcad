@@ -193,6 +193,7 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
             opts = r.options or {}
             parts.append({
                 "id": idx,
+                "explicit_id": opts.get("id"),
                 "name": opts.get("name"),
                 "color": opts.get("color"),
                 "topo_shape": wp.wrapped,

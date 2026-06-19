@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -108,6 +109,50 @@ def _record_failure(manifest, script_path, label, version_num, error_msg, runtim
         output_json["runtime"] = runtime
     click.echo(json.dumps(output_json))
     sys.exit(1)
+
+
+def _slugify_part_id(value):
+    """Return a lowercase, JSON/path-friendly part handle."""
+    slug = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower())
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug or None
+
+
+def _dedupe_part_id(base, used):
+    candidate = base
+    suffix = 2
+    while candidate in used:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _assign_part_identity(raw_parts):
+    """Resolve public part IDs from author intent, name, then ordinal fallback."""
+    used: set[str] = set()
+    resolved = []
+    for idx, p in enumerate(raw_parts):
+        explicit = p.get("explicit_id")
+        if explicit is not None:
+            base = _slugify_part_id(explicit)
+            if base is None:
+                base = f"part_{idx}"
+            part_id = _dedupe_part_id(base, used)
+            source = "explicit"
+        elif p.get("name"):
+            base = _slugify_part_id(p["name"])
+            if base is None:
+                base = f"part_{idx}"
+                source = "generated"
+            else:
+                source = "name"
+            part_id = _dedupe_part_id(base, used)
+        else:
+            part_id = _dedupe_part_id(f"part_{idx}", used)
+            source = "generated"
+        resolved.append((part_id, source))
+    return resolved
 
 
 
@@ -321,13 +366,9 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     # materialized and --no-preview wasn't passed.
     parts_output: list[dict] = []
     raw_parts = result.parts
-    part_name_counts: dict[str, int] = {}
-    for p in raw_parts:
-        n = p.get("name")
-        if n:
-            part_name_counts[n] = part_name_counts.get(n, 0) + 1
-    for p in raw_parts:
-        entry: dict = {"id": p["id"]}
+    part_id_sources = _assign_part_identity(raw_parts)
+    for p, (part_id, id_source) in zip(raw_parts, part_id_sources):
+        entry: dict = {"id": part_id, "id_source": id_source}
         if p.get("name") is not None:
             entry["name"] = p["name"]
         if p.get("color") is not None:
@@ -447,8 +488,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         preview_meta = f"{dir_name}/preview.png"
         _mark("preview_ms", _t)
 
-        # Per-part previews. Filename is the name when unique, else part_<id>.png
-        # so duplicates never overwrite.
+        # Per-part previews use the resolved part id, which is unique and
+        # path-safe even when display names are duplicated.
         if parts_output:
             from agentcad.render import render_shape as _render_part_iso
 
@@ -461,11 +502,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
             )
             _t = time.perf_counter()
             for entry, raw in zip(parts_output, raw_parts):
-                name = entry.get("name")
-                if name and part_name_counts.get(name) == 1:
-                    fname = f"{name}.png"
-                else:
-                    fname = f"part_{entry['id']}.png"
+                fname = f"{entry['id']}.png"
                 _render_part_iso(raw["topo_shape"], "iso", parts_dir / fname)
                 entry["preview"] = f"{dir_name}/parts/{fname}"
             _mark("parts_preview_ms", _t)
