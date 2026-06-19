@@ -30,6 +30,7 @@ def test_skill_show_content_mentions_commands(runner):
     content = parsed["content"]
     assert "agentcad run" in content
     assert "agentcad init" in content
+    assert "agentcad check-spec" in content
     assert "show_object" in content
 
 

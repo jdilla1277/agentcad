@@ -152,6 +152,33 @@ def test_measure_response_shape(runner, isolated_dir):
     assert "renders" not in parsed
 
 
+# -------- check-spec --------
+
+def test_check_spec_response_shape(runner, isolated_dir):
+    step = _make_step(runner, isolated_dir)
+    spec = isolated_dir / "spec.json"
+    spec.write_text(json.dumps({
+        "features": [
+            {"name": "bolt_holes", "type": "cylinder", "diameter_mm": 6, "count": 4}
+        ]
+    }))
+    r = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+    assert r.exit_code == 0, r.output
+    parsed = json.loads(r.stdout)
+    for key in (
+        "command", "status", "file", "spec_file", "passed",
+        "matched_features", "missing_features", "total_abs_count_error",
+        "validity", "metrics",
+    ):
+        assert key in parsed, f"`check-spec` missing required field: {key}"
+    assert parsed["command"] == "check-spec"
+    assert parsed["status"] == "success"
+    assert parsed["passed"] is False
+    # check-spec reports data only; it produces no artifacts
+    assert "outputs" not in parsed
+    assert "renders" not in parsed
+
+
 # -------- view --------
 
 def test_view_response_shape(runner, isolated_dir):

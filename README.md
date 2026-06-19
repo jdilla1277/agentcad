@@ -39,10 +39,11 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
+- **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
 - **`agentcad inspect output.step`** — topology deep-dive (shells, free edges, validity)
 - **`agentcad diff 1 2`** — compare versions (metrics, outputs, parameters)
 - **`agentcad view output.step`** — open STEP/GLB output in a browser preview viewer
-- **`agentcad docs [section]`** — 16 sections of built-in documentation
+- **`agentcad docs [section]`** — 17 sections of built-in documentation
 
 ## No boilerplate
 
