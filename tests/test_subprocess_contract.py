@@ -77,6 +77,7 @@ _COMMANDS_TO_CHECK = [
     ("inspect_ids",     ["inspect", "{step}", "--ids"],                 False),
     ("measure",         ["measure", "{step}"],                          False),
     ("measure_features", ["measure", "{step}", "--features"],           False),
+    ("check_spec",      ["check-spec", "{step}", "{spec}"],             False),
     ("render",          ["render", "{step}", "--view", "iso"],          False),
     ("export_glb",      ["export", "{step}", "--format", "glb"],        False),
     ("view",            ["view", "{step}"],                             False),
@@ -103,7 +104,16 @@ def test_malformed_step_produces_clean_json_on_stdout(
         init_result = _run("init", cwd=tmp_path)
         assert init_result.returncode == 0, init_result.stderr
 
-    argv = [a.replace("{step}", str(truncated_step)) for a in argv_template]
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({
+        "features": [
+            {"name": "holes", "type": "cylinder", "diameter_mm": 6, "count": 2}
+        ]
+    }))
+    argv = [
+        a.replace("{step}", str(truncated_step)).replace("{spec}", str(spec))
+        for a in argv_template
+    ]
     result = _run(*argv, cwd=tmp_path)
 
     # The contract: stdout is parseable JSON, full stop.

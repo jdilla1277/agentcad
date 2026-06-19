@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from agentcad.session_log import SessionLogger
+from agentcad.commands.check_spec import check_spec
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
@@ -129,6 +130,11 @@ COMMANDS
     (edge lengths, face areas, circular/cylindrical radii and diameters).
 
 \b
+  agentcad check-spec STEP SPEC.json
+    Compare measured cylindrical features against an explicit JSON spec.
+    Reports pass/fail, matched features, missing features, and count errors.
+
+\b
   agentcad parts list REF       List named/captured parts for a version.
   agentcad parts show REF ID    Show one part from that version by stable id.
                                 Uses the same meta.json snapshot as viewer.html.
@@ -167,6 +173,7 @@ DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
   $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
   $ agentcad measure v1_test/output.step                  # dimensions + feature sizes
+  $ agentcad check-spec v1_test/output.step spec.json     # compare against intended features
   $ agentcad inspect v1_test/output.step                  # topology deep-dive
     Hollow shape?     -> free_edge_count > 0, shell not closed
     Inverted normals? -> face_orientations imbalanced
@@ -255,6 +262,7 @@ def cli():
 
 
 cli.add_command(context)
+cli.add_command(check_spec)
 cli.add_command(daemon)
 cli.add_command(diff)
 cli.add_command(docs)

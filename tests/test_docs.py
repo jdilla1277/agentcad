@@ -26,6 +26,7 @@ def test_docs_lists_sections(runner):
     assert "helpers" in sections
     assert "metrics" in sections
     assert "measure" in sections
+    assert "check-spec" in sections
     assert "preamble" in sections
     assert "validation" in sections
     assert "workflow" in sections
@@ -39,7 +40,10 @@ def test_docs_commands_section(runner):
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     content = data["content"]
-    for cmd in ["init", "run", "render", "measure", "parts", "context", "docs", "diff"]:
+    for cmd in [
+        "init", "run", "render", "measure", "check-spec", "parts",
+        "context", "docs", "diff",
+    ]:
         assert cmd in content
 
 
@@ -70,6 +74,19 @@ def test_docs_workflow_section(runner):
     content = data["content"]
     assert "init" in content
     assert "run" in content
+    assert "check-spec" in content
+
+
+def test_docs_check_spec_section(runner):
+    result = runner.invoke(cli, ["docs", "check-spec"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    content = data["content"]
+    assert "spec.json" in content
+    assert "diameter_tolerance_mm" in content
+    assert "missing_features" in content
+    assert "Read passed" in content
+    assert "cylindrical_features[].axis" in content
 
 
 def test_docs_export_section(runner):

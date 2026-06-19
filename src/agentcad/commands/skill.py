@@ -75,7 +75,21 @@ agentcad --help   # Read this — it is your complete operational briefing
    Use this for hole diameters, cylindrical boss diameters, edge lengths,
    face areas, and full per-feature measurements with `--features`.
 
-7. **Iterate.** Fix the script, run with a new `--output` label. Use
+7. **Check explicit feature requirements.** If the prompt names measurable
+   holes, bores, or cylindrical bosses, write them into `spec.json` before
+   final handoff:
+   ```json
+   {"features":[{"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4}]}
+   ```
+   Then run:
+   ```bash
+   agentcad check-spec v1_label/output.step spec.json
+   ```
+   Revise the CAD if `passed` is false. `status: success` only means the
+   comparison ran; `passed` is the actual spec-check result. If you include
+   `axis`, copy it from `agentcad measure`'s `cylindrical_features[].axis`.
+
+8. **Iterate.** Fix the script, run with a new `--output` label. Use
    `agentcad diff 1 2` to compare versions.
 
 ## Script writing rules
@@ -115,12 +129,13 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad render STEP --view SPEC` | Post-hoc renders with camera control |
 | `agentcad export STEP --format stl,glb` | Post-hoc mesh export |
 | `agentcad measure STEP` | Dimensional report (overall metrics + feature sizes) |
+| `agentcad check-spec STEP spec.json` | Pass/fail checklist against intended cylindrical features |
 | `agentcad inspect STEP` | Topology report (validity, free edges) |
 | `agentcad parts list REF` | List parts captured for a version |
 | `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
-| `agentcad docs [SECTION]` | Deep-dive docs (16 sections) |
+| `agentcad docs [SECTION]` | Deep-dive docs (17 sections) |
 | `agentcad view FILE` | **Run this after every successful build** — opens GLB/STEP in the user's browser |
 
 ## Debugging playbook
@@ -130,9 +145,11 @@ agentcad --help   # Read this — it is your complete operational briefing
 3. **Read `diff.side_by_side`** if iterating — confirms your change did what you intended.
 4. **Negative volume?** Wire winding is backwards (CW instead of CCW).
 5. **Need a hole diameter or edge length?** Run `agentcad measure output.step`.
-6. **is_valid: false?** Run `agentcad inspect` — check `free_edge_count` and shell status.
-7. **Hollow shape?** `free_edge_count > 0` means open shell.
-8. **Complex profiles (gears, splines)?** Use subtractive construction — cut from
+6. **Need to verify explicit hole/bore counts?** Write `spec.json`, then run
+   `agentcad check-spec output.step spec.json`.
+7. **is_valid: false?** Run `agentcad inspect` — check `free_edge_count` and shell status.
+8. **Hollow shape?** `free_edge_count > 0` means open shell.
+9. **Complex profiles (gears, splines)?** Use subtractive construction — cut from
    a blank cylinder/box instead of building up. See `agentcad docs patterns`.
 
 ## Patterns

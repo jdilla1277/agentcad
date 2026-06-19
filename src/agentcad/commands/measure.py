@@ -179,14 +179,11 @@ def _emit_malformed(file: str, detection: dict) -> None:
 
 def _measure_tier0(file_path: str, detection: dict, *, with_features: bool) -> None:
     try:
-        from agentcad.metrics import compute_metrics
-        from agentcad.step_io import load_cad_shape
-        from agentcad import topo_ids
-
-        topo_shape = load_cad_shape(file_path)
-        metrics = compute_metrics(topo_shape)
-        feature_summary = topo_ids.summary_entries(topo_shape)
-        cylindrical_features = _cylindrical_features(topo_shape)
+        payload = measure_tier0_payload(
+            file_path,
+            detection,
+            with_features=with_features,
+        )
     except Exception as exc:
         _emit({
             "command": "measure", "status": "malformed",
@@ -200,6 +197,24 @@ def _measure_tier0(file_path: str, detection: dict, *, with_features: bool) -> N
             "suggestion": "Re-export from your CAD tool; the file may be incomplete or corrupted.",
         }, exit_code=1)
         return
+
+    _emit(payload)
+
+
+def measure_tier0_payload(
+    file_path: str,
+    detection: dict,
+    *,
+    with_features: bool = False,
+) -> dict:
+    from agentcad.metrics import compute_metrics
+    from agentcad.step_io import load_cad_shape
+    from agentcad import topo_ids
+
+    topo_shape = load_cad_shape(file_path)
+    metrics = compute_metrics(topo_shape)
+    feature_summary = topo_ids.summary_entries(topo_shape)
+    cylindrical_features = _cylindrical_features(topo_shape)
 
     payload = {
         "command": "measure",
@@ -227,7 +242,7 @@ def _measure_tier0(file_path: str, detection: dict, *, with_features: bool) -> N
             "edges": topo_ids.edge_entries(topo_shape),
         }
 
-    _emit(payload)
+    return payload
 
 
 def _cylindrical_features(topo_shape, *, precision: float = 0.1) -> list[dict]:
