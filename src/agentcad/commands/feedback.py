@@ -12,7 +12,7 @@ import click
 from agentcad.session_log import SessionLogger
 
 
-_DEFAULT_FEEDBACK_URL = "https://agentcad-site-five.vercel.app/api/feedback"
+_DEFAULT_FEEDBACK_URL = "https://agentcad.dev/api/feedback"
 
 
 def _resolve_feedback_url() -> str:
