@@ -9,6 +9,7 @@ so the address isn't added to the list until the user clicks the link.
 """
 
 import json
+import os
 import re
 import sys
 from urllib.error import URLError
@@ -19,8 +20,12 @@ import click
 from agentcad.session_log import _environment_info
 
 
-_SUBSCRIBE_URL = "https://agentcad-site-five.vercel.app/api/subscribe"
+_DEFAULT_SUBSCRIBE_URL = "https://agentcad.dev/api/subscribe"
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _resolve_subscribe_url() -> str:
+    return os.environ.get("AGENTCAD_SUBSCRIBE_URL") or _DEFAULT_SUBSCRIBE_URL
 
 
 def _send_remote(payload: dict) -> tuple[str | None, dict | None]:
@@ -31,7 +36,7 @@ def _send_remote(payload: dict) -> tuple[str | None, dict | None]:
     try:
         data = json.dumps(payload).encode("utf-8")
         req = Request(
-            _SUBSCRIBE_URL,
+            _resolve_subscribe_url(),
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -59,6 +64,10 @@ def subscribe(email):
     Submits the address to the agentcad signup endpoint. The user will
     receive a confirmation email; their address is added to the list
     only after they click the link.
+
+    \b
+    Set AGENTCAD_SUBSCRIBE_URL to point at a non-default endpoint (preview
+    deploys, self-hosted instances). Defaults to the production endpoint.
     """
     normalised = email.strip().lower()
     if not _EMAIL_RE.match(normalised) or len(normalised) > 254:
