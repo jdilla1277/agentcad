@@ -39,7 +39,7 @@ def test_docs_commands_section(runner):
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     content = data["content"]
-    for cmd in ["init", "run", "render", "measure", "context", "docs", "diff"]:
+    for cmd in ["init", "run", "render", "measure", "parts", "context", "docs", "diff"]:
         assert cmd in content
 
 

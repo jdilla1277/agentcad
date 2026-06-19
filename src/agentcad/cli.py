@@ -16,6 +16,7 @@ from agentcad.commands.import_cmd import import_cmd
 from agentcad.commands.init import init
 from agentcad.commands.inspect_cmd import inspect_cmd
 from agentcad.commands.measure import measure
+from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.run import run
 from agentcad.commands.skill import skill
@@ -128,9 +129,12 @@ COMMANDS
     (edge lengths, face areas, circular/cylindrical radii and diameters).
 
 \b
+  agentcad parts list REF       List named/captured parts for a version.
+  agentcad parts show REF ID    Show one part from that version by stable id.
+                                Uses the same meta.json snapshot as viewer.html.
+  agentcad view FILE             Open GLB/STEP in browser. STEP auto-converts.
   agentcad diff REF1 REF2        Compare versions (by number or label).
   agentcad context               Project state: versions, current, tool_version.
-  agentcad view FILE             Open GLB/STEP in browser. STEP auto-converts.
   agentcad docs [SECTION] [--runtime ENGINE]
                                  Engine-specific docs. Defaults to project runtime.
 
@@ -260,6 +264,7 @@ cli.add_command(import_cmd)
 cli.add_command(init)
 cli.add_command(inspect_cmd)
 cli.add_command(measure)
+cli.add_command(parts_cmd)
 cli.add_command(render)
 cli.add_command(run)
 cli.add_command(skill)

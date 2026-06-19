@@ -116,6 +116,8 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad export STEP --format stl,glb` | Post-hoc mesh export |
 | `agentcad measure STEP` | Dimensional report (overall metrics + feature sizes) |
 | `agentcad inspect STEP` | Topology report (validity, free edges) |
+| `agentcad parts list REF` | List parts captured for a version |
+| `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
 | `agentcad docs [SECTION]` | Deep-dive docs (16 sections) |
