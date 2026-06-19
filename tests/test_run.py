@@ -753,6 +753,28 @@ def test_run_export_glb_multi_show_object_has_materials(runner, isolated_dir):
     assert len(gltf["materials"]) >= 2
 
 
+def test_run_viewer_glb_uses_requested_part_colors(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=NAMED_PARTS_SCRIPT)
+
+    result = runner.invoke(cli, ["run", "script.py", "--output", "colored", "--no-preview"])
+    assert result.exit_code == 0, result.output
+
+    data = (isolated_dir / "v1_colored" / "output.glb").read_bytes()
+    json_length = struct.unpack("<I", data[12:16])[0]
+    gltf = json.loads(data[20:20 + json_length])
+    colors = [
+        tuple(m["pbrMetallicRoughness"]["baseColorFactor"])
+        for m in gltf["materials"]
+    ]
+    node_names = [n.get("name") for n in gltf["nodes"]]
+
+    assert set(node_names) >= {"deck", "pin", "arm"}
+    assert (0.50, 0.50, 0.50, 1.0) in colors
+    assert (0.0, 0.0, 1.0, 1.0) in colors
+    assert (1.0, 0.0, 0.0, 1.0) in colors
+
+
 def test_run_preview_is_4view_composite_1024(runner, isolated_dir):
     """Preview is now a 2x2 composite of front/right/top/iso, 512px per quadrant."""
     _init_project(runner)
@@ -1439,6 +1461,9 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert match, "PARTS const not found in viewer.html"
     parts = json.loads(match.group(1))
     assert [p.get("name") for p in parts] == ["deck", "pin", "arm"]
+    assert [p.get("color") for p in parts] == ["gray", "blue", "red"]
+    assert "className = 'swatch'" in viewer_html
+    assert "swatch.style.background = p.color" in viewer_html
 
 
 def test_render_unified_empty_parts_payload_when_none(isolated_dir):

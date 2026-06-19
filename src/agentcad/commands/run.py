@@ -377,6 +377,11 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         entry["metrics"] = compute_metrics(p["topo_shape"])
         parts_output.append(entry)
 
+    glb_parts = [
+        {**entry, "topo_shape": raw["topo_shape"]}
+        for entry, raw in zip(parts_output, raw_parts)
+    ]
+
     # Surface validity issues as top-level warnings
     if not metrics.get("is_valid", True):
         warnings.append(
@@ -428,7 +433,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 from agentcad.export import export_glb
 
                 glb_path = version_dir / "output.glb"
-                export_glb(topo_shape, str(glb_path))
+                export_glb(topo_shape, str(glb_path), parts=glb_parts)
                 exports_meta["glb"] = f"{dir_name}/output.glb"
             elif fmt == "obj":
                 from agentcad.export import export_obj
@@ -515,7 +520,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
 
     viewer_glb_path = version_dir / "output.glb"
     if not viewer_glb_path.exists():
-        export_glb(topo_shape_for_metrics, str(viewer_glb_path))
+        export_glb(topo_shape_for_metrics, str(viewer_glb_path), parts=glb_parts)
 
     prev = _find_prev_success(versions)
     if prev is not None:

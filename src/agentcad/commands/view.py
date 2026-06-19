@@ -91,7 +91,8 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   #parts-view .panel { margin: 0 auto; max-width: 600px; background: #fff; border-radius: 8px; padding: 20px 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
   #parts-view h3 { margin: 0 0 12px; font-size: 14px; color: #555; font-weight: normal; }
   #parts-view ol { margin: 0; padding-left: 24px; font-family: monospace; font-size: 13px; color: #222; }
-  #parts-view ol li { margin: 4px 0; }
+  #parts-view ol li { margin: 6px 0; }
+  #parts-view .swatch { width: 11px; height: 11px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; display: inline-block; margin-right: 8px; vertical-align: -1px; box-sizing: border-box; }
   #info {
     position: absolute; bottom: 12px; left: 16px; color: #666;
     font-size: 11px; user-select: none;
@@ -221,7 +222,14 @@ function setupModeButtons() {
     const list = document.getElementById('parts-list');
     for (const p of PARTS) {
       const li = document.createElement('li');
-      li.textContent = p.name || p.id;
+      if (p.color) {
+        const swatch = document.createElement('span');
+        swatch.className = 'swatch';
+        swatch.style.background = p.color;
+        swatch.title = p.color;
+        li.appendChild(swatch);
+      }
+      li.appendChild(document.createTextNode(p.name || p.id));
       list.appendChild(li);
     }
   }
