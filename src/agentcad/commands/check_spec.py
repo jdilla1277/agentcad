@@ -26,7 +26,15 @@ from agentcad.commands.measure import measure_tier0_payload
     help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.",
 )
 def check_spec(file, spec_file, no_daemon):
-    """Check a STEP/BREP file against a JSON feature spec."""
+    """Check a STEP/BREP file against a JSON feature spec.
+
+    SPEC_FILE example:
+
+      {"features":[{"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4}]}
+
+    A failed spec still means the command ran successfully: status remains
+    "success" and the comparison result is in passed/matched_features.
+    """
     argv = ["check-spec", file, spec_file]
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 

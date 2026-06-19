@@ -27,6 +27,13 @@ def _write_spec(directory, payload, name="spec.json"):
 
 
 class TestCheckSpecCommand:
+    def test_check_spec_help_shows_spec_example(self, runner):
+        result = runner.invoke(cli, ["check-spec", "--help"])
+        assert result.exit_code == 0
+        assert "SPEC_FILE example" in result.output
+        assert "diameter_mm" in result.output
+        assert "passed" in result.output
+
     def test_check_spec_passes_matching_cylinder_spec(self, runner, isolated_dir):
         step = _plate_with_two_holes_step(isolated_dir)
         spec = _write_spec(isolated_dir, {

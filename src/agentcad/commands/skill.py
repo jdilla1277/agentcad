@@ -85,7 +85,9 @@ agentcad --help   # Read this — it is your complete operational briefing
    ```bash
    agentcad check-spec v1_label/output.step spec.json
    ```
-   Revise the CAD if `passed` is false.
+   Revise the CAD if `passed` is false. `status: success` only means the
+   comparison ran; `passed` is the actual spec-check result. If you include
+   `axis`, copy it from `agentcad measure`'s `cylindrical_features[].axis`.
 
 8. **Iterate.** Fix the script, run with a new `--output` label. Use
    `agentcad diff 1 2` to compare versions.

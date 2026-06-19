@@ -85,6 +85,8 @@ def test_docs_check_spec_section(runner):
     assert "spec.json" in content
     assert "diameter_tolerance_mm" in content
     assert "missing_features" in content
+    assert "Read passed" in content
+    assert "cylindrical_features[].axis" in content
 
 
 def test_docs_export_section(runner):
