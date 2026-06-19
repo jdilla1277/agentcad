@@ -42,3 +42,8 @@ def test_docs_subcommand_registered(runner):
 def test_diff_subcommand_registered(runner):
     result = runner.invoke(cli, ["diff", "--help"])
     assert result.exit_code == 0
+
+
+def test_parts_subcommand_registered(runner):
+    result = runner.invoke(cli, ["parts", "--help"])
+    assert result.exit_code == 0

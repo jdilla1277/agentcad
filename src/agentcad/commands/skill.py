@@ -129,6 +129,8 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad measure STEP` | Dimensional report (overall metrics + feature sizes) |
 | `agentcad check-spec STEP spec.json` | Pass/fail checklist against intended cylindrical features |
 | `agentcad inspect STEP` | Topology report (validity, free edges) |
+| `agentcad parts list REF` | List parts captured for a version |
+| `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
 | `agentcad docs [SECTION]` | Deep-dive docs (17 sections) |

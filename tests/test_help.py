@@ -45,8 +45,8 @@ def test_help_documents_all_commands(runner):
     `test_help_does_not_advertise_daemon` below."""
     result = runner.invoke(cli, ["--help"])
     output = result.output
-    for cmd in ["init", "run", "render", "export", "measure", "check-spec", "inspect",
-                "diff", "context", "view", "docs"]:
+    for cmd in ["init", "run", "render", "export", "measure", "check-spec",
+                "inspect", "parts", "diff", "context", "view", "docs"]:
         assert cmd in output
 
 

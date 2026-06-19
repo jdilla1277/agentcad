@@ -35,6 +35,19 @@ pytest
 - Keep error messages concise and actionable for coding agents.
 - Prefer local, deterministic workflows over hosted dependencies.
 
+## Validation
+
+For changes to agent-facing contracts, CLI workflows, docs/help output, viewer
+behavior, or app-like user flows, run a narrow sub-agent friction check before
+opening or finalizing the PR. Ask the sub-agent to behave like a fresh agent:
+read the docs, use the feature end-to-end in a scratch project, and report
+confusing behavior or mismatches between docs and reality.
+
+Keep friction artifacts under `.context/` unless they are intentional public
+fixtures. When validating unmerged CLI behavior, avoid stale installed code and
+stale daemons: use the current checkout (`PYTHONPATH=src` or editable install)
+and pass `--no-daemon` for command behavior checks.
+
 ## Public Repo Rules
 
 - Do not add internal PRDs, roadmap notes, marketing drafts, feedback logs, secrets, or private operational context.
