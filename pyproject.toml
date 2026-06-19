@@ -20,7 +20,16 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-dependencies = ["click>=8.0", "cadquery>=2.0", "build123d>=0.9"]
+dependencies = [
+    "click>=8.0",
+    "cadquery>=2.0",
+    # Cap below 0.11: build123d 0.11 switched to cadquery-ocp-novtk (OCP 7.9),
+    # which collides with the cadquery-ocp 7.8 that `cadquery` pins. Two OCP
+    # builds on one path means `import build123d` dies with
+    # "TopoDS has no attribute 'Vertex'", breaking the default runtime on a
+    # clean install. 0.10.x shares cadquery's cadquery-ocp 7.8 — no conflict.
+    "build123d>=0.10,<0.11",
+]
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0.0"]
