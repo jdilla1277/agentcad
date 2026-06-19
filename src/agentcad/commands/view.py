@@ -221,7 +221,7 @@ function setupModeButtons() {
     const list = document.getElementById('parts-list');
     for (const p of PARTS) {
       const li = document.createElement('li');
-      li.textContent = p.name || `part_${p.id}`;
+      li.textContent = p.name || p.id;
       list.appendChild(li);
     }
   }
@@ -677,7 +677,7 @@ def _render_unified(
     mode toggle will grey out the buttons that depend on missing data.
     """
     parts_payload = [
-        {k: p[k] for k in ("id", "name", "color") if k in p}
+        {k: p[k] for k in ("id", "id_source", "name", "color") if k in p}
         for p in (parts or [])
     ]
     replacements = {

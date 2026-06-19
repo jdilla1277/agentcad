@@ -1201,8 +1201,9 @@ def test_run_named_parts_emits_parts_array(runner, isolated_dir):
     parts = parsed["parts"]
     assert len(parts) == 3
 
-    # Sequential IDs assigned by agentcad, 0-indexed, declaration order
-    assert [p["id"] for p in parts] == [0, 1, 2]
+    # IDs are stable string handles derived from names when no explicit id is set.
+    assert [p["id"] for p in parts] == ["deck", "pin", "arm"]
+    assert [p["id_source"] for p in parts] == ["name", "name", "name"]
 
     # Names preserved in declaration order
     assert [p["name"] for p in parts] == ["deck", "pin", "arm"]
@@ -1275,7 +1276,8 @@ def test_run_partial_naming_still_emits_parts(runner, isolated_dir):
     parsed = json.loads(result.stdout)
 
     parts = parsed["parts"]
-    assert [p["id"] for p in parts] == [0, 1, 2]
+    assert [p["id"] for p in parts] == ["deck", "part_1", "arm"]
+    assert [p["id_source"] for p in parts] == ["name", "generated", "name"]
 
     # Named parts keep their name; unnamed parts have name=None (or missing)
     assert parts[0].get("name") == "deck"
@@ -1284,7 +1286,7 @@ def test_run_partial_naming_still_emits_parts(runner, isolated_dir):
 
 
 def test_run_partial_naming_preview_falls_back_to_id(runner, isolated_dir):
-    """Unnamed parts get `parts/part_<id>.png`; named parts get `parts/<name>.png`."""
+    """Preview filenames use the resolved part id."""
     _init_project(runner)
     _write_script(isolated_dir, content=PARTIAL_NAMED_PARTS_SCRIPT)
 
@@ -1307,7 +1309,8 @@ def test_run_single_show_object_has_parts_array(runner, isolated_dir):
 
     assert "parts" in parsed
     assert len(parsed["parts"]) == 1
-    assert parsed["parts"][0]["id"] == 0
+    assert parsed["parts"][0]["id"] == "part_0"
+    assert parsed["parts"][0]["id_source"] == "generated"
     assert parsed["parts"][0].get("name") is None
 
 
@@ -1345,12 +1348,35 @@ show_object(b, name="wheel")
     parsed = json.loads(result.stdout)
 
     parts = parsed["parts"]
-    assert [p["id"] for p in parts] == [0, 1]
+    assert [p["id"] for p in parts] == ["wheel", "wheel_2"]
+    assert [p["id_source"] for p in parts] == ["name", "name"]
     assert [p["name"] for p in parts] == ["wheel", "wheel"]
-    # Collision policy: both fall back to part_<id>.png to avoid overwriting
+    # Collision policy: IDs are deduped, so preview filenames do not overwrite.
     previews = [p["preview"] for p in parts]
-    assert previews[0].endswith("/parts/part_0.png")
-    assert previews[1].endswith("/parts/part_1.png")
+    assert previews[0].endswith("/parts/wheel.png")
+    assert previews[1].endswith("/parts/wheel_2.png")
+
+
+def test_run_explicit_part_id_wins_over_name(runner, isolated_dir):
+    """show_object(id=...) is the durable author-facing handle."""
+    script = """\
+import cadquery as cq
+deck = cq.Workplane("XY").box(20, 10, 2)
+pin = cq.Workplane("XY").cylinder(5, 2).translate((20, 0, 0))
+show_object(deck, id="main-deck", name="Deck")
+show_object(pin, options={"id": "pivot_pin", "name": "Pivot Pin", "color": "blue"})
+"""
+    _init_project(runner)
+    _write_script(isolated_dir, content=script)
+
+    result = runner.invoke(cli, ["run", "script.py", "--output", "explicit_parts"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+
+    parts = parsed["parts"]
+    assert [p["id"] for p in parts] == ["main_deck", "pivot_pin"]
+    assert [p["id_source"] for p in parts] == ["explicit", "explicit"]
+    assert [p["name"] for p in parts] == ["Deck", "Pivot Pin"]
 
 
 def test_run_first_run_viewer_defaults_to_single_a(runner, isolated_dir):
@@ -1529,4 +1555,3 @@ def test_run_no_preview_skips_preview_heartbeats(runner, isolated_dir):
     stderr = result.stderr
     assert "[agentcad] running script" in stderr
     assert "[agentcad] rendering preview (4-view" not in stderr
-

@@ -141,8 +141,9 @@ agentcad --help   # Read this — it is your complete operational briefing
   `.union()` for boolean fuse into one solid.
 - **Parametric scripts:** Top-level variable assignments become overridable via
   `--params`. Use this for iteration.
-- **Named parts:** `show_object(shape, name="wheel", options={"color": "red"})`
-  for per-part metrics and colored GLB export.
+- **Named parts:** `show_object(shape, id="wheel_left", name="Left wheel",
+  options={"color": "red"})` for stable part handles, per-part metrics, and
+  colored GLB export.
 """
 
 

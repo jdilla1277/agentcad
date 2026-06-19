@@ -109,10 +109,10 @@ def execute(
             )
         source = _apply_overrides(source, params)
 
-    # List of (obj, name, color) tuples in declaration order.
-    captured: list[tuple[Any, Any, Any]] = []
+    # List of (obj, explicit_id, name, color) tuples in declaration order.
+    captured: list[tuple[Any, Any, Any, Any]] = []
 
-    def show_object(obj, *_args, name=None, options=None, **_kwargs):
+    def show_object(obj, *_args, id=None, name=None, options=None, **_kwargs):
         # Boolean ops in build123d (`a - b - c`) can return a ShapeList instead
         # of a single Shape when the result is multi-piece. Auto-extract the
         # single-element case (the common one) and surface a recovery hint
@@ -139,10 +139,12 @@ def execute(
             )
         color = None
         if isinstance(options, dict):
+            if id is None:
+                id = options.get("id")
             color = options.get("color")
             if name is None:
                 name = options.get("name")
-        captured.append((obj, name, color))
+        captured.append((obj, id, name, color))
 
     import build123d as _b3d
 
@@ -259,7 +261,7 @@ def execute(
         if issubclass(w.category, UserWarning)
         and not issubclass(w.category, DeprecationWarning)
     ]
-    shapes = [obj for obj, _n, _c in captured]
+    shapes = [obj for obj, _id, _n, _c in captured]
     if len(shapes) == 1:
         native_shape = shapes[0]
     else:
@@ -270,11 +272,12 @@ def execute(
     parts = [
         {
             "id": idx,
+            "explicit_id": explicit_id,
             "name": name,
             "color": color,
             "topo_shape": obj.wrapped,
         }
-        for idx, (obj, name, color) in enumerate(captured)
+        for idx, (obj, explicit_id, name, color) in enumerate(captured)
     ]
 
     return ExecutionResult(

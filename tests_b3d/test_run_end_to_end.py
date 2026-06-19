@@ -731,7 +731,8 @@ class TestNamedParts:
         assert "parts" in parsed
         parts = parsed["parts"]
         assert len(parts) == 3
-        assert [p["id"] for p in parts] == [0, 1, 2]
+        assert [p["id"] for p in parts] == ["deck", "pin", "arm"]
+        assert [p["id_source"] for p in parts] == ["name", "name", "name"]
         assert [p["name"] for p in parts] == ["deck", "pin", "arm"]
         assert [p["color"] for p in parts] == ["gray", "blue", "red"]
         assert all(p["part_of"] is None for p in parts)
@@ -785,7 +786,8 @@ class TestNamedParts:
         parsed = json.loads(r.stdout)
 
         parts = parsed["parts"]
-        assert [p["id"] for p in parts] == [0, 1, 2]
+        assert [p["id"] for p in parts] == ["deck", "part_1", "arm"]
+        assert [p["id_source"] for p in parts] == ["name", "generated", "name"]
         assert parts[0].get("name") == "deck"
         assert parts[1].get("name") is None
         assert parts[2].get("name") == "arm"
@@ -809,7 +811,8 @@ class TestNamedParts:
 
         assert "parts" in parsed
         assert len(parsed["parts"]) == 1
-        assert parsed["parts"][0]["id"] == 0
+        assert parsed["parts"][0]["id"] == "part_0"
+        assert parsed["parts"][0]["id_source"] == "generated"
         assert parsed["parts"][0].get("name") is None
 
     def test_no_preview_skips_per_part_renders(self, runner, isolated_dir):
@@ -830,12 +833,30 @@ class TestNamedParts:
         parsed = json.loads(r.stdout)
 
         parts = parsed["parts"]
-        assert [p["id"] for p in parts] == [0, 1]
+        assert [p["id"] for p in parts] == ["wheel", "wheel_2"]
+        assert [p["id_source"] for p in parts] == ["name", "name"]
         assert [p["name"] for p in parts] == ["wheel", "wheel"]
-        # Collision policy: both fall back to part_<id>.png to avoid overwriting.
+        # Collision policy: IDs are deduped, so preview filenames do not overwrite.
         previews = [p["preview"] for p in parts]
-        assert previews[0].endswith("/parts/part_0.png")
-        assert previews[1].endswith("/parts/part_1.png")
+        assert previews[0].endswith("/parts/wheel.png")
+        assert previews[1].endswith("/parts/wheel_2.png")
+
+    def test_explicit_part_id_wins_over_name(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", """\
+deck = Box(20, 10, 2)
+pin = Cylinder(radius=2, height=5).translate((20, 0, 0))
+show_object(deck, id="main-deck", name="Deck")
+show_object(pin, options={"id": "pivot_pin", "name": "Pivot Pin", "color": "blue"})
+""")
+        r = _run(runner, "s.py", "--output", "explicit_parts")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+
+        parts = parsed["parts"]
+        assert [p["id"] for p in parts] == ["main_deck", "pivot_pin"]
+        assert [p["id_source"] for p in parts] == ["explicit", "explicit"]
+        assert [p["name"] for p in parts] == ["Deck", "Pivot Pin"]
 
     def test_viewer_parts_panel_includes_named_parts(self, runner, isolated_dir):
         _init(runner, isolated_dir)

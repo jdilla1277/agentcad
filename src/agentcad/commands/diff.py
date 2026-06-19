@@ -127,9 +127,9 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             k: _scalar_diff(p1.get(k), p2.get(k)) for k in all_param_keys
         }
 
-    # Compare parts if present in either version. Key by name when unique on
-    # BOTH sides, else fall back to id so unnamed / duplicated parts still
-    # match positionally. Names can be absent (optional field).
+    # Compare parts if present in either version. Newer parts have a string
+    # id, which is the machine reference. Legacy meta without id_source used
+    # numeric positional IDs, so retain its name-first behavior.
     parts1_list = meta1.get("parts", [])
     parts2_list = meta2.get("parts", [])
 
@@ -141,8 +141,12 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
                 counts[n] = counts.get(n, 0) + 1
         keys = []
         for p in parts:
+            if "id_source" in p and p.get("id") is not None:
+                keys.append(str(p["id"]))
+                continue
             n = p.get("name")
-            keys.append(n if (n is not None and counts.get(n) == 1) else f"part_{p['id']}")
+            fallback = f"part_{p['id']}" if p.get("id") is not None else str(len(keys))
+            keys.append(n if (n is not None and counts.get(n) == 1) else fallback)
         return keys
 
     k1 = _part_keys(parts1_list)
@@ -150,14 +154,19 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
     parts1 = dict(zip(k1, parts1_list))
     parts2 = dict(zip(k2, parts2_list))
     if parts1 or parts2:
+        id_changes = _compute_set_diff(parts1.keys(), parts2.keys())
         parts_changes = {
-            "names": _compute_set_diff(parts1.keys(), parts2.keys()),
+            "ids": id_changes,
+            "names": id_changes,  # Backward-compatible alias for older callers.
         }
         shared = sorted(set(parts1.keys()) & set(parts2.keys()))
         for key in shared:
             p1_part = parts1[key]
             p2_part = parts2[key]
-            part_diff = {"color": _scalar_diff(p1_part.get("color"), p2_part.get("color"))}
+            part_diff = {
+                "name": _scalar_diff(p1_part.get("name"), p2_part.get("name")),
+                "color": _scalar_diff(p1_part.get("color"), p2_part.get("color")),
+            }
             m1_metrics = p1_part.get("metrics", {})
             m2_metrics = p2_part.get("metrics", {})
             all_mkeys = sorted(set(m1_metrics.keys()) | set(m2_metrics.keys()))

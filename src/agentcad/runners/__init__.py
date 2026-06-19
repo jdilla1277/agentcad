@@ -45,8 +45,9 @@ class ExecutionResult:
     exception: str | None = None
     traceback: str | None = None
     # Per-part breakdown. One entry per show_object() call, declaration order.
-    # Each dict has: id (int, sequential), name (str | None), color (str | None),
-    # topo_shape (TopoDS_Shape). run.py enriches with metrics + preview path.
+    # Each dict has a raw sequential id, optional explicit_id/name/color, and
+    # topo_shape (TopoDS_Shape). run.py resolves public IDs and enriches with
+    # metrics + preview path.
     parts: list[dict[str, Any]] = field(default_factory=list)
 
     @property
