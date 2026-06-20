@@ -1464,6 +1464,8 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert [p.get("color") for p in parts] == ["gray", "blue", "red"]
     assert "className = 'swatch'" in viewer_html
     assert "swatch.style.background = p.color" in viewer_html
+    assert "attach(sceneA_single, MODEL_A_URL, {})" in viewer_html
+    assert "attach(sceneA_split, MODEL_A_URL, {})" in viewer_html
 
 
 def test_render_unified_empty_parts_payload_when_none(isolated_dir):

@@ -290,8 +290,8 @@ function buildScene() {
 }
 
 // Precreate scenes for modes that might be used
-const sceneA_single = buildScene();  // model A with normal material
-const sceneB_single = buildScene();  // model B with normal material (if B)
+const sceneA_single = buildScene();  // model A with embedded GLB materials
+const sceneB_single = buildScene();  // model B with embedded GLB materials (if B)
 const sceneA_split = buildScene();   // model A for side-by-side
 const sceneB_split = buildScene();   // model B for side-by-side
 const sceneOverlay = buildScene();   // both models with tinted materials
@@ -310,7 +310,9 @@ function attach(scene, url, { material, onMesh }) {
     if (!url) { resolve(null); return; }
     loader.load(url, gltf => {
       const model = gltf.scene;
-      model.traverse(c => { if (c.isMesh) c.material = material; });
+      if (material) {
+        model.traverse(c => { if (c.isMesh) c.material = material; });
+      }
       scene.add(model);
 
       const box = new THREE.Box3().setFromObject(model);
@@ -348,10 +350,10 @@ function fitCamera() {
 
 // Load all scenes in parallel, then fit camera
 Promise.all([
-  attach(sceneA_single, MODEL_A_URL, { material: cadMat }),
-  hasB ? attach(sceneB_single, MODEL_B_URL, { material: cadMat }) : null,
-  hasB ? attach(sceneA_split, MODEL_A_URL, { material: cadMat }) : null,
-  hasB ? attach(sceneB_split, MODEL_B_URL, { material: cadMat }) : null,
+  attach(sceneA_single, MODEL_A_URL, {}),
+  hasB ? attach(sceneB_single, MODEL_B_URL, {}) : null,
+  hasB ? attach(sceneA_split, MODEL_A_URL, {}) : null,
+  hasB ? attach(sceneB_split, MODEL_B_URL, {}) : null,
   hasB ? attach(sceneOverlay, MODEL_A_URL, { material: tintA, onMesh: m => overlayModelA = m }) : null,
   hasB ? attach(sceneOverlay, MODEL_B_URL, { material: tintB, onMesh: m => overlayModelB = m }) : null,
 ].filter(Boolean)).then(() => fitCamera());
