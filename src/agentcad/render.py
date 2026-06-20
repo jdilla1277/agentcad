@@ -25,6 +25,8 @@ from OCP.V3d import (
 )
 from OCP.gp import gp_Dir
 
+from agentcad.export import _GLB_PALETTE, _parse_color
+
 VIEWS = {
     "front": V3d_TypeOfOrientation_Zup_Front,
     "back": V3d_TypeOfOrientation_Zup_Back,
@@ -92,7 +94,7 @@ def parse_view_spec(spec):
     )
 
 
-def _setup_render(shape, width=800, height=600):
+def _setup_render(shape, width=800, height=600, parts=None):
     """Set up offscreen rendering pipeline, returning (view, context)."""
     display_connection = Aspect_DisplayConnection()
     driver = OpenGl_GraphicDriver(display_connection)
@@ -122,9 +124,26 @@ def _setup_render(shape, width=800, height=600):
     view.SetWindow(window)
 
     context = AIS_InteractiveContext(viewer)
-    ais_shape = AIS_Shape(shape)
-    ais_shape.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
-    context.Display(ais_shape, 1, -1, True)
+
+    part_items = []
+    for idx, part in enumerate(parts or []):
+        part_shape = part.get("topo_shape")
+        if part_shape is None:
+            continue
+        part_items.append((part_shape, _parse_color(part.get("color")), idx))
+
+    if part_items:
+        for part_shape, parsed_color, idx in part_items:
+            ais_shape = AIS_Shape(part_shape)
+            ais_shape.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
+            r, g, b = parsed_color or _GLB_PALETTE[idx % len(_GLB_PALETTE)]
+            ais_shape.SetColor(Quantity_Color(r, g, b, Quantity_TOC_RGB))
+            context.Display(ais_shape, 1, -1, False)
+        context.UpdateCurrentViewer()
+    else:
+        ais_shape = AIS_Shape(shape)
+        ais_shape.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
+        context.Display(ais_shape, 1, -1, True)
 
     return view, context
 
@@ -150,10 +169,10 @@ def _apply_camera(view, zoom, focus, fit):
 
 
 def render_shape(shape, view_name, output_path, width=800, height=600,
-                 zoom=1.0, focus=None, fit=True):
+                 zoom=1.0, focus=None, fit=True, parts=None):
     """Render a TopoDS_Shape to a PNG file from the given view."""
     orientation = VIEWS[view_name]
-    view, _ctx = _setup_render(shape, width, height)
+    view, _ctx = _setup_render(shape, width, height, parts=parts)
 
     view.SetProj(orientation)
     _apply_camera(view, zoom, focus, fit)
@@ -161,7 +180,7 @@ def render_shape(shape, view_name, output_path, width=800, height=600,
     _capture(view, output_path, width, height)
 
 
-def render_shape_batch(shape, view_specs, output_paths, width=512, height=512):
+def render_shape_batch(shape, view_specs, output_paths, width=512, height=512, parts=None):
     """Render multiple views of the same shape through ONE viewer setup.
 
     Shares the OpenGL context, lights, and AIS geometry upload across all views —
@@ -175,7 +194,7 @@ def render_shape_batch(shape, view_specs, output_paths, width=512, height=512):
         output_paths: Parallel iterable of output PNG paths.
         width, height: Per-view dimensions in pixels.
     """
-    view, _ctx = _setup_render(shape, width, height)
+    view, _ctx = _setup_render(shape, width, height, parts=parts)
     for spec, out_path in zip(view_specs, output_paths):
         if isinstance(spec, str):
             view.SetProj(VIEWS[spec])
@@ -206,7 +225,7 @@ _COMPOSITE_VIEWS = [
 ]
 
 
-def render_composite_4view(shape, output_path, per_view_size=512):
+def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
     """Render a 4-panel composite: top view + three iso angles spaced around the part.
 
     This is the default preview agents get after every successful run. One
@@ -221,7 +240,7 @@ def render_composite_4view(shape, output_path, per_view_size=512):
     with tempfile.TemporaryDirectory() as tmp:
         tmp_paths = [Path(tmp) / f"panel_{i}.png" for i in range(len(specs))]
         render_shape_batch(shape, specs, tmp_paths,
-                           width=per_view_size, height=per_view_size)
+                           width=per_view_size, height=per_view_size, parts=parts)
 
         imgs = [Image.open(p).convert("RGB") for p in tmp_paths]
         w, h = per_view_size, per_view_size
@@ -244,7 +263,8 @@ def render_composite_4view(shape, output_path, per_view_size=512):
 
 
 def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
-                        width=1024, height=1024, view_name="iso"):
+                        width=1024, height=1024, view_name="iso",
+                        parts_a=None, parts_b=None):
     """Render a tinted overlay of two shapes: A in green, B in red, alpha-blended.
 
     Each shape is rendered independently (necessary — OCP V3d_View can't render
@@ -260,8 +280,12 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
         a_path = Path(tmp) / "a.png"
         b_path = Path(tmp) / "b.png"
         # Same viewer setup for both since shapes differ — accept the cost
-        render_shape(shape_a, view_name, a_path, width=width, height=height)
-        render_shape(shape_b, view_name, b_path, width=width, height=height)
+        render_shape(
+            shape_a, view_name, a_path, width=width, height=height, parts=parts_a
+        )
+        render_shape(
+            shape_b, view_name, b_path, width=width, height=height, parts=parts_b
+        )
 
         a_img = Image.open(a_path).convert("RGB")
         b_img = Image.open(b_path).convert("RGB")
@@ -288,7 +312,8 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
 
 
 def render_diff_side_by_side(shape_a, shape_b, label_a, label_b, output_path,
-                             width=512, height=512, view_name="iso"):
+                             width=512, height=512, view_name="iso",
+                             parts_a=None, parts_b=None):
     """Render two shapes side-by-side as a single comparison PNG.
 
     Renders each shape independently from the same view, then composites them
@@ -303,8 +328,12 @@ def render_diff_side_by_side(shape_a, shape_b, label_a, label_b, output_path,
     with tempfile.TemporaryDirectory() as tmp:
         a_path = Path(tmp) / "a.png"
         b_path = Path(tmp) / "b.png"
-        render_shape(shape_a, view_name, a_path, width=width, height=height)
-        render_shape(shape_b, view_name, b_path, width=width, height=height)
+        render_shape(
+            shape_a, view_name, a_path, width=width, height=height, parts=parts_a
+        )
+        render_shape(
+            shape_b, view_name, b_path, width=width, height=height, parts=parts_b
+        )
 
         a_img = Image.open(a_path).convert("RGB")
         b_img = Image.open(b_path).convert("RGB")
@@ -327,7 +356,7 @@ def render_diff_side_by_side(shape_a, shape_b, label_a, label_b, output_path,
 
 
 def render_shape_custom(shape, azimuth, elevation, output_path,
-                        width=800, height=600, zoom=1.0, focus=None, fit=True):
+                        width=800, height=600, zoom=1.0, focus=None, fit=True, parts=None):
     """Render a TopoDS_Shape to a PNG file from a custom azimuth/elevation angle."""
     az = math.radians(azimuth)
     el = math.radians(elevation)
@@ -336,7 +365,7 @@ def render_shape_custom(shape, azimuth, elevation, output_path,
     vy = math.cos(az) * math.cos(el)
     vz = -math.sin(el)
 
-    view, _ctx = _setup_render(shape, width, height)
+    view, _ctx = _setup_render(shape, width, height, parts=parts)
 
     view.SetProj(vx, vy, vz)
     view.SetUp(0, 0, 1)

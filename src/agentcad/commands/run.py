@@ -457,13 +457,13 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         for spec_type, spec_value in view_specs:
             if spec_type == "named":
                 out_path = renders_dir / f"{spec_value}.png"
-                render_shape_view(topo_shape, spec_value, out_path)
+                render_shape_view(topo_shape, spec_value, out_path, parts=glb_parts)
                 renders_meta[spec_value] = f"{dir_name}/renders/{spec_value}.png"
             else:
                 az, el = spec_value
                 name = f"{int(az)}_{int(el)}"
                 out_path = renders_dir / f"{name}.png"
-                render_shape_custom(topo_shape, az, el, out_path)
+                render_shape_custom(topo_shape, az, el, out_path, parts=glb_parts)
                 renders_meta[name] = f"{dir_name}/renders/{name}.png"
 
     # Visual feedback pipeline. Three tiers, decoupled by cost:
@@ -489,7 +489,12 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         _heartbeat("rendering preview (4-view composite)…")
         _t = time.perf_counter()
         preview_path = version_dir / "preview.png"
-        render_composite_4view(topo_shape_for_metrics, preview_path, per_view_size=512)
+        render_composite_4view(
+            topo_shape_for_metrics,
+            preview_path,
+            per_view_size=512,
+            parts=glb_parts,
+        )
         preview_meta = f"{dir_name}/preview.png"
         _mark("preview_ms", _t)
 
@@ -508,7 +513,12 @@ def _run_impl(ctx, script, output, render, export, preview, params,
             _t = time.perf_counter()
             for entry, raw in zip(parts_output, raw_parts):
                 fname = f"{entry['id']}.png"
-                _render_part_iso(raw["topo_shape"], "iso", parts_dir / fname)
+                _render_part_iso(
+                    raw["topo_shape"],
+                    "iso",
+                    parts_dir / fname,
+                    parts=[{**entry, "topo_shape": raw["topo_shape"]}],
+                )
                 entry["preview"] = f"{dir_name}/parts/{fname}"
             _mark("parts_preview_ms", _t)
 
@@ -541,11 +551,13 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                     prev_shape, topo_shape_for_metrics,
                     prev["label"], label, side_path,
                     width=512, height=512,
+                    parts_b=glb_parts,
                 )
                 render_diff_overlay(
                     prev_shape, topo_shape_for_metrics,
                     prev["label"], label, overlay_path,
                     width=1024, height=1024,
+                    parts_b=glb_parts,
                 )
                 diff_meta = {
                     "against": prev["label"],

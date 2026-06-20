@@ -1467,6 +1467,17 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert "attach(sceneA_single, MODEL_A_URL, {})" in viewer_html
     assert "attach(sceneA_split, MODEL_A_URL, {})" in viewer_html
 
+    from PIL import Image
+    preview_img = Image.open(isolated_dir / "v1" / "preview.png").convert("RGB")
+    if hasattr(preview_img, "get_flattened_data"):
+        pixels = list(preview_img.get_flattened_data())
+    else:
+        pixels = list(preview_img.getdata())
+    red_pixels = sum(1 for r, g, b in pixels if r > 120 and r > g * 1.2 and r > b * 1.2)
+    blue_pixels = sum(1 for r, g, b in pixels if b > 120 and b > r * 1.2 and b > g * 1.2)
+    assert red_pixels > 100
+    assert blue_pixels > 100
+
 
 def test_render_unified_empty_parts_payload_when_none(isolated_dir):
     """No parts → embedded JSON is empty array, JS path will grey the button."""
