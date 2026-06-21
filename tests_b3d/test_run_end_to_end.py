@@ -825,6 +825,28 @@ class TestNamedParts:
         for p in parsed["parts"]:
             assert not p.get("preview")
 
+    def test_viewer_glb_uses_requested_part_colors(self, runner, isolated_dir):
+        import struct
+
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", NAMED_PARTS)
+        r = _run(runner, "s.py", "--output", "colored", "--no-preview")
+        assert r.exit_code == 0, r.output
+
+        data = (isolated_dir / "v1_colored" / "output.glb").read_bytes()
+        json_length = struct.unpack("<I", data[12:16])[0]
+        gltf = json.loads(data[20:20 + json_length])
+        colors = [
+            tuple(m["pbrMetallicRoughness"]["baseColorFactor"])
+            for m in gltf["materials"]
+        ]
+        node_names = [n.get("name") for n in gltf["nodes"]]
+
+        assert set(node_names) >= {"deck", "pin", "arm"}
+        assert (0.50, 0.50, 0.50, 1.0) in colors
+        assert (0.0, 0.0, 1.0, 1.0) in colors
+        assert (1.0, 0.0, 0.0, 1.0) in colors
+
     def test_duplicate_part_names_are_allowed(self, runner, isolated_dir):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", DUPLICATE_NAMES)
