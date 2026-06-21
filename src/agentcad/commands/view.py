@@ -390,6 +390,7 @@ function makeReviewRow({ label, status, badge, summary, bucket, missing }) {
   row.querySelector(".title span").textContent = label;
   row.querySelector(".badge").textContent = badge;
   row.querySelector(".sub").textContent = summary;
+  row._reviewStatus = status || "info";
   row._reviewBucket = bucket || null;
   row._reviewMissing = missing || null;
   row.addEventListener("click", () => selectReviewRow(row));
@@ -475,23 +476,78 @@ function clearReviewMarkers() {
   reviewMarkerGroup.clear();
 }
 
+function cadAxisKey(axis) {
+  const value = String(axis || "+z").toLowerCase();
+  return value.endsWith("x") ? "x" : value.endsWith("y") ? "y" : "z";
+}
+
+function viewerAxisKey(axis) {
+  const key = cadAxisKey(axis);
+  if (key === "z") return "y";
+  if (key === "y") return "z";
+  return "x";
+}
+
 function orientMarker(marker, axis) {
-  if (axis === "+x") marker.rotation.y = Math.PI / 2;
-  if (axis === "+y") marker.rotation.x = Math.PI / 2;
+  const key = viewerAxisKey(axis);
+  marker.rotation.set(0, 0, 0);
+  if (key === "x") marker.rotation.y = Math.PI / 2;
+  if (key === "y") marker.rotation.x = -Math.PI / 2;
+}
+
+function cadPointToViewer(point) {
+  return new THREE.Vector3(Number(point.x), Number(point.z), -Number(point.y));
+}
+
+function reviewMetrics() {
+  return (REVIEW.check_spec && REVIEW.check_spec.metrics) || (REVIEW.measure && REVIEW.measure.metrics) || {};
+}
+
+function viewerBoundingBox() {
+  const bbox = reviewMetrics().bounding_box || {};
+  const x = bbox.x || null;
+  const y = bbox.y || null;
+  const z = bbox.z || null;
+  return {
+    x,
+    y: z,
+    z: Array.isArray(y) && y.length === 2 ? [-Number(y[1]), -Number(y[0])] : null,
+  };
+}
+
+function markerSurfacePosition(center, diameter, axis) {
+  const pos = cadPointToViewer(center);
+  const key = viewerAxisKey(axis);
+  const bbox = viewerBoundingBox();
+  const range = bbox[key] || null;
+  if (Array.isArray(range) && range.length === 2) {
+    const min = Number(range[0]);
+    const max = Number(range[1]);
+    if (Number.isFinite(min) && Number.isFinite(max)) {
+      const midpoint = (min + max) / 2;
+      const cameraCoord = camera.position[key];
+      const outward = cameraCoord >= midpoint ? 1 : -1;
+      const face = outward > 0 ? max : min;
+      const markerDiameter = Number(diameter);
+      const offset = Number.isFinite(markerDiameter) ? Math.max(markerDiameter * 0.02, 0.06) : 0.06;
+      pos[key] = face + outward * offset;
+    }
+  }
+  return pos;
 }
 
 function addRingMarker(center, diameter, axis, color, missing=false) {
   const radius = Math.max(Number(diameter) / 2, 0.5);
-  const tube = Math.max(radius * 0.08, 0.25);
+  const tube = Math.max(radius * 0.018, 0.045);
   const geom = new THREE.TorusGeometry(radius, tube, 12, 64);
   const mat = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
-    opacity: missing ? 0.55 : 0.9,
+    opacity: missing ? 0.55 : 0.78,
     depthTest: false,
   });
   const ring = new THREE.Mesh(geom, mat);
-  ring.position.set(Number(center.x), Number(center.y), Number(center.z));
+  ring.position.copy(markerSurfacePosition(center, diameter, axis));
   orientMarker(ring, axis);
   reviewMarkerGroup.add(ring);
 }
@@ -501,8 +557,9 @@ function selectReviewRow(row) {
   clearReviewMarkers();
   const bucket = row._reviewBucket;
   if (bucket && bucket.representative_centers) {
+    const color = row._reviewStatus === "fail" ? 0xc24a43 : 0x3f8b62;
     for (const center of bucket.representative_centers) {
-      addRingMarker(center, bucket.diameter_mm, bucket.axis, 0x1b75bb, false);
+      addRingMarker(center, bucket.diameter_mm, bucket.axis, color, false);
     }
   }
   const missing = row._reviewMissing;
