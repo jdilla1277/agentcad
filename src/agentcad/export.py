@@ -9,6 +9,7 @@ from OCP.Message import Message_ProgressRange
 from OCP.RWGltf import RWGltf_CafWriter
 from OCP.TColStd import TColStd_IndexedDataMapOfStringString
 from OCP.TCollection import TCollection_AsciiString, TCollection_ExtendedString
+from OCP.TDataStd import TDataStd_Name
 from OCP.TDocStd import TDocStd_Document
 from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
 from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
@@ -34,16 +35,72 @@ _GLB_PALETTE = [
 ]
 
 
-def export_glb(shape, output_path, linear_deflection=0.1):
-    """Export an OCP TopoDS_Shape to binary glTF (.glb).
+_NAMED_COLORS = {
+    "red": (1.0, 0.0, 0.0),
+    "green": (0.0, 0.50, 0.0),
+    "blue": (0.0, 0.0, 1.0),
+    "yellow": (1.0, 1.0, 0.0),
+    "orange": (1.0, 0.55, 0.0),
+    "purple": (0.50, 0.0, 0.50),
+    "gray": (0.50, 0.50, 0.50),
+    "grey": (0.50, 0.50, 0.50),
+    "white": (1.0, 1.0, 1.0),
+    "black": (0.0, 0.0, 0.0),
+    "brown": (0.55, 0.27, 0.07),
+    "pink": (1.0, 0.41, 0.71),
+    "teal": (0.0, 0.50, 0.50),
+    "gold": (1.0, 0.84, 0.0),
+    "silver": (0.75, 0.75, 0.75),
+    "cyan": (0.0, 1.0, 1.0),
+    # Common agent/CSS names used in examples and friction runs.
+    "steelblue": (0.27, 0.51, 0.71),
+    "coral": (1.0, 0.50, 0.31),
+    "forestgreen": (0.13, 0.55, 0.13),
+}
 
-    Decomposes compounds into individual solids, assigns each a distinct
-    color from a palette, and writes via RWGltf_CafWriter.
-    """
-    # Rotate Z-up (CadQuery/OCP) → Y-up (glTF standard)
+
+def _parse_color(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in _NAMED_COLORS:
+            return _NAMED_COLORS[raw]
+        if raw.startswith("#") and len(raw) == 7:
+            try:
+                return tuple(int(raw[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+            except ValueError:
+                return None
+    if isinstance(value, (list, tuple)) and len(value) == 3:
+        try:
+            rgb = tuple(float(c) for c in value)
+        except (TypeError, ValueError):
+            return None
+        if all(0.0 <= c <= 1.0 for c in rgb):
+            return rgb
+    return None
+
+
+def _transform_y_up(shape):
     trsf = gp_Trsf()
     trsf.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), -math.pi / 2)
-    shape = BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
+
+def _set_label_name(label, name):
+    if name:
+        TDataStd_Name.Set_s(label, TCollection_ExtendedString(str(name)))
+
+
+def export_glb(shape, output_path, linear_deflection=0.1, parts=None):
+    """Export an OCP TopoDS_Shape to binary glTF (.glb).
+
+    When `parts` is provided, each part's `topo_shape`, id/name, and requested
+    color drive the GLB nodes/materials. Otherwise compounds are decomposed into
+    individual solids and assigned fallback palette colors.
+    """
+    # Rotate Z-up (CadQuery/OCP) → Y-up (glTF standard).
+    shape = _transform_y_up(shape)
 
     BRepMesh_IncrementalMesh(shape, linear_deflection)
 
@@ -53,22 +110,44 @@ def export_glb(shape, output_path, linear_deflection=0.1):
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
     color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
 
-    # Extract individual solids for per-part coloring
-    solids = []
-    explorer = TopExp_Explorer(shape, TopAbs_SOLID)
-    while explorer.More():
-        solids.append(TopoDS.Solid_s(explorer.Current()))
-        explorer.Next()
+    part_items = []
+    if parts:
+        for idx, part in enumerate(parts):
+            part_shape = part.get("topo_shape")
+            if part_shape is None:
+                continue
+            transformed = _transform_y_up(part_shape)
+            BRepMesh_IncrementalMesh(transformed, linear_deflection)
+            part_items.append({
+                "shape": transformed,
+                "name": part.get("id") or part.get("name") or f"part_{idx}",
+                "color": _parse_color(part.get("color")),
+            })
 
-    if not solids:
-        # No solids (e.g. shell/face) — add shape as-is, no color
-        shape_tool.AddShape(shape)
-    else:
-        for i, solid in enumerate(solids):
-            label = shape_tool.AddShape(solid)
-            r, g, b = _GLB_PALETTE[i % len(_GLB_PALETTE)]
+    if part_items:
+        for i, item in enumerate(part_items):
+            label = shape_tool.AddShape(item["shape"])
+            _set_label_name(label, item["name"])
+            r, g, b = item["color"] or _GLB_PALETTE[i % len(_GLB_PALETTE)]
             color = Quantity_Color(r, g, b, Quantity_TOC_RGB)
             color_tool.SetColor(label, color, XCAFDoc_ColorSurf)
+    else:
+        # Extract individual solids for fallback per-solid coloring.
+        solids = []
+        explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+        while explorer.More():
+            solids.append(TopoDS.Solid_s(explorer.Current()))
+            explorer.Next()
+
+        if not solids:
+            # No solids (e.g. shell/face) — add shape as-is, no color.
+            shape_tool.AddShape(shape)
+        else:
+            for i, solid in enumerate(solids):
+                label = shape_tool.AddShape(solid)
+                r, g, b = _GLB_PALETTE[i % len(_GLB_PALETTE)]
+                color = Quantity_Color(r, g, b, Quantity_TOC_RGB)
+                color_tool.SetColor(label, color, XCAFDoc_ColorSurf)
 
     writer = RWGltf_CafWriter(TCollection_AsciiString(str(output_path)), True)
     writer.Perform(doc, TColStd_IndexedDataMapOfStringString(), Message_ProgressRange())

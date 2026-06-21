@@ -4,7 +4,7 @@ from pathlib import Path
 
 import cadquery as cq
 
-from agentcad.export import export_glb, export_obj
+from agentcad.export import _GLB_PALETTE, export_glb, export_obj
 
 
 def _make_box():
@@ -13,6 +13,13 @@ def _make_box():
 
 def _make_cylinder():
     return cq.Workplane("XY").cylinder(10, 5).val().wrapped
+
+
+def _has_color(colors, expected, tol=1e-5):
+    return any(
+        all(abs(a - b) <= tol for a, b in zip(color, expected))
+        for color in colors
+    )
 
 
 def test_export_glb_produces_file(tmp_path):
@@ -128,6 +135,50 @@ def test_export_glb_multi_solid_colors_differ(tmp_path):
         for m in gltf["materials"]
     ]
     assert len(set(colors)) >= 2, f"Expected distinct colors, got {colors}"
+
+
+def test_export_glb_parts_use_requested_colors_and_names(tmp_path):
+    out = tmp_path / "parts.glb"
+    box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    cyl = cq.Workplane("XY").cylinder(10, 5).translate((30, 0, 0)).val().wrapped
+
+    export_glb(
+        box,
+        str(out),
+        parts=[
+            {"id": "red_box", "color": "red", "topo_shape": box},
+            {"id": "blue_cyl", "color": "blue", "topo_shape": cyl},
+        ],
+    )
+
+    gltf = _parse_glb_json(out)
+    names = [n.get("name") for n in gltf["nodes"]]
+    colors = [
+        tuple(m["pbrMetallicRoughness"]["baseColorFactor"])
+        for m in gltf["materials"]
+    ]
+
+    assert names == ["red_box", "blue_cyl"]
+    assert _has_color(colors, (1.0, 0.0, 0.0, 1.0))
+    assert _has_color(colors, (0.0, 0.0, 1.0, 1.0))
+
+
+def test_export_glb_parts_fallback_palette_for_missing_color(tmp_path):
+    out = tmp_path / "parts.glb"
+    box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+
+    export_glb(
+        box,
+        str(out),
+        parts=[{"id": "uncolored_box", "topo_shape": box}],
+    )
+
+    gltf = _parse_glb_json(out)
+    colors = [
+        tuple(m["pbrMetallicRoughness"]["baseColorFactor"])
+        for m in gltf["materials"]
+    ]
+    assert _has_color(colors, (*_GLB_PALETTE[0], 1.0))
 
 
 def test_export_glb_y_up_coordinate_system(tmp_path):
