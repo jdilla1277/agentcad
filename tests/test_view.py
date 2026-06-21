@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import cadquery as cq
+from cadquery import exporters
 
 from agentcad.cli import cli
 from agentcad.export import export_glb
@@ -13,6 +14,19 @@ def _make_glb(directory):
     glb_path = directory / "output.glb"
     export_glb(box, str(glb_path))
     return glb_path
+
+
+def _make_two_hole_step(directory):
+    plate = cq.Workplane("XY").box(50, 20, 5)
+    cutters = (
+        cq.Workplane("XY")
+        .pushPoints([(-10, 0), (10, 0)])
+        .circle(3)
+        .extrude(10)
+    )
+    step_path = directory / "two_holes.step"
+    exporters.export(plate.cut(cutters), str(step_path))
+    return step_path
 
 
 def test_view_missing_file_error(runner, isolated_dir):
@@ -231,6 +245,102 @@ def test_view_single_file_still_works(runner, isolated_dir, monkeypatch):
     assert parsed["status"] == "success"
     assert "mode" not in parsed  # single-file mode doesn't set a mode key
     assert (isolated_dir / "output_viewer.html").exists()
+
+
+def test_render_unified_embeds_review_payload(isolated_dir):
+    from agentcad.commands.view import _render_unified
+
+    glb = isolated_dir / "fake.glb"
+    glb.write_bytes(b"")
+    out = isolated_dir / "v.html"
+    review = {
+        "measure": {
+            "validity": {"is_valid": True},
+            "metrics": {"dimensions": {"x": 50.0, "y": 20.0, "z": 5.0}},
+            "cylindrical_features": [
+                {
+                    "diameter_mm": 6.0,
+                    "count": 2,
+                    "axis": "+z",
+                    "representative_centers": [
+                        {"x": -10.0, "y": 0.0, "z": 0.0},
+                        {"x": 10.0, "y": 0.0, "z": 0.0},
+                    ],
+                }
+            ],
+        },
+        "check_spec": {
+            "passed": False,
+            "matched_features": [],
+            "missing_features": [],
+            "total_abs_count_error": 1,
+        },
+    }
+
+    _render_unified(out, glb_a=glb, label_a="x", default_mode="spec", review=review)
+
+    html = out.read_text()
+    assert 'id="btn-spec"' in html
+    assert 'id="spec-panel"' in html
+    assert 'const REVIEW = {"measure"' in html
+    assert '"cylindrical_features"' in html
+    assert 'DEFAULT_MODE = "spec"' in html
+
+
+def test_view_step_with_spec_opens_spec_check_mode(runner, isolated_dir, monkeypatch):
+    step = _make_two_hole_step(isolated_dir)
+    spec = isolated_dir / "spec.json"
+    spec.write_text(json.dumps({
+        "features": [
+            {
+                "name": "mounting_holes",
+                "type": "cylinder",
+                "diameter_mm": 6,
+                "count": 3,
+                "axis": "+z",
+            }
+        ]
+    }))
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+
+    result = runner.invoke(cli, ["view", str(step), "--spec", str(spec)])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["mode"] == "spec"
+    assert parsed["review"] is True
+
+    html = (isolated_dir / "two_holes_viewer.html").read_text()
+    assert 'DEFAULT_MODE = "spec"' in html
+    assert '"check_spec"' in html
+    assert '"passed": false' in html
+    assert '"count_error": -1' in html
+
+
+def test_view_review_requires_step_source(runner, isolated_dir, monkeypatch):
+    glb_path = _make_glb(isolated_dir)
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+
+    result = runner.invoke(cli, ["view", str(glb_path), "--measure"])
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "error"
+    assert "requires a STEP/STP source" in parsed["message"]
+
+
+def test_view_missing_spec_returns_json_error(runner, isolated_dir, monkeypatch):
+    step = _make_two_hole_step(isolated_dir)
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+
+    result = runner.invoke(cli, ["view", str(step), "--spec", "missing.json"])
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "view"
+    assert parsed["status"] == "error"
+    assert "Spec file" in parsed["message"]
 
 
 # --- M58: agentcad diff --visual wiring ---

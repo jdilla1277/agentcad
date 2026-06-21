@@ -138,7 +138,9 @@ COMMANDS
   agentcad parts list REF       List named/captured parts for a version.
   agentcad parts show REF ID    Show one part from that version by stable id.
                                 Uses the same meta.json snapshot as viewer.html.
-  agentcad view FILE             Open GLB/STEP in browser. STEP auto-converts.
+  agentcad view FILE [--measure] [--spec spec.json]
+                                Open GLB/STEP in browser. STEP auto-converts.
+                                Review mode needs STEP/STP source geometry.
   agentcad diff REF1 REF2        Compare versions (by number or label).
   agentcad context               Project state: versions, current, tool_version.
   agentcad docs [SECTION] [--runtime ENGINE]

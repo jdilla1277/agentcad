@@ -48,6 +48,7 @@ def test_help_documents_all_commands(runner):
     for cmd in ["init", "run", "render", "export", "measure", "check-spec",
                 "inspect", "parts", "diff", "context", "view", "docs"]:
         assert cmd in output
+    assert "--spec spec.json" in output
 
 
 def test_help_does_not_advertise_daemon(runner):

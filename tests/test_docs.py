@@ -45,6 +45,7 @@ def test_docs_commands_section(runner):
         "context", "docs", "diff",
     ]:
         assert cmd in content
+    assert "--spec spec.json" in content
 
 
 def test_docs_render_section(runner):

@@ -13,6 +13,7 @@ import click
 #   - side-by-side    → two viewports, synchronized camera
 #   - overlay         → both models tinted (green A, red B), opacity sliders
 #   - agent-view      → shows the PNGs the agent sees as <img> elements
+#   - spec            → docked measurement/spec review panel with 3D highlights
 #
 # A mode is enabled only if the data it needs was embedded. The mode toggle
 # bar hides unavailable buttons automatically.
@@ -26,6 +27,7 @@ import click
 #   __DIFF_SIDE_PNG_URL__    base64 data URI for diff_side.png, or ""
 #   __DIFF_OVERLAY_PNG_URL__ base64 data URI for diff_overlay.png, or ""
 #   __DEFAULT_MODE__         starting mode string
+#   __REVIEW_JSON__          measure/check-spec review payload, or null
 _HTML_UNIFIED = r"""<!DOCTYPE html>
 <html>
 <head>
@@ -35,6 +37,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   body { margin: 0; overflow: hidden; background: #efefef; font-family: monospace; }
   canvas { display: block; }
   #canvas { position: fixed; top: 0; left: 0; }
+  body.spec-open #canvas { right: 396px; }
   #modes {
     position: absolute; top: 10px; right: 10px;
     background: rgba(255,255,255,0.92);
@@ -50,7 +53,9 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   #modes button:last-child { border-right: none; }
   #modes button:hover { background: rgba(0,0,0,0.05); }
   #modes button.active { background: #333; color: #fff; }
+  #modes button.spec.active { background: #1b75bb; color: #fff; }
   #modes button.disabled { opacity: 0.25; cursor: not-allowed; }
+  body.spec-open #modes { right: 412px; }
   .label {
     position: absolute; top: 10px; color: #333;
     padding: 4px 10px; background: rgba(255,255,255,0.85);
@@ -92,6 +97,66 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   #parts-view h3 { margin: 0 0 12px; font-size: 14px; color: #555; font-weight: normal; }
   #parts-view ol { margin: 0; padding-left: 24px; font-family: monospace; font-size: 13px; color: #222; }
   #parts-view ol li { margin: 4px 0; }
+  #spec-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 396px;
+    background: #fff; border-left: 1px solid #d9dee7;
+    display: none; grid-template-rows: auto minmax(0, 1fr);
+    box-sizing: border-box; z-index: 25; color: #1d2430;
+  }
+  body.spec-open #spec-panel { display: grid; }
+  #spec-panel .head { padding: 14px 16px; border-bottom: 1px solid #d9dee7; background: #fbfcfd; }
+  #spec-panel .verdict { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  #spec-panel .pill {
+    display: inline-grid; place-items: center; padding: 4px 12px;
+    border-radius: 999px; font-size: 12px; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  #spec-panel .pill.pass { background: #e8f5ef; color: #1f8a5b; }
+  #spec-panel .pill.fail { background: #fae9e8; color: #c2413f; }
+  #spec-panel .pill.info { background: #e8f1fb; color: #1b75bb; }
+  #spec-panel h1 { margin: 0; font-size: 14px; line-height: 1.2; }
+  #spec-panel h1 small { display: block; margin-top: 2px; color: #667085; font-size: 11px; font-weight: normal; }
+  #spec-panel .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  #spec-panel .stat { padding: 8px; border: 1px solid #d9dee7; border-radius: 6px; background: #fff; }
+  #spec-panel .stat span { display: block; color: #667085; font-size: 10px; text-transform: uppercase; letter-spacing: .03em; }
+  #spec-panel .stat strong { display: block; margin-top: 3px; font-size: 13px; white-space: nowrap; }
+  #spec-panel .scroll { min-height: 0; overflow: auto; padding: 14px 16px 18px; }
+  #spec-panel section { margin-bottom: 20px; }
+  #spec-panel h2 { margin: 0 0 8px; color: #3b4554; font-size: 12px; text-transform: uppercase; }
+  #spec-panel .rows { display: grid; gap: 8px; }
+  #spec-panel .review-row {
+    width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px; align-items: center; text-align: left;
+    border: 1px solid #d9dee7; border-radius: 7px; background: #fff;
+    padding: 10px; cursor: pointer; font: inherit; color: inherit;
+  }
+  #spec-panel .review-row:hover, #spec-panel .review-row.active {
+    border-color: #1b75bb; box-shadow: 0 0 0 3px rgba(27,117,187,0.12);
+  }
+  #spec-panel .review-row.pass { border-left: 3px solid #1f8a5b; }
+  #spec-panel .review-row.fail { border-left: 3px solid #c2413f; }
+  #spec-panel .title { min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+  #spec-panel .title span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #spec-panel .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: #1b75bb; }
+  #spec-panel .dot.pass { background: #1f8a5b; }
+  #spec-panel .dot.fail { background: #c2413f; }
+  #spec-panel .sub { grid-column: 1 / -1; color: #667085; font-size: 12px; line-height: 1.4; }
+  #spec-panel .badge {
+    min-width: 56px; height: 24px; display: inline-grid; place-items: center;
+    padding: 0 8px; border-radius: 999px; background: #f7f8fa;
+    color: #3f4856; font-size: 11px; font-weight: 800; text-transform: uppercase;
+  }
+  #spec-panel .badge.pass { background: #e8f5ef; color: #1f8a5b; }
+  #spec-panel .badge.fail { background: #fae9e8; color: #c2413f; }
+  #spec-panel .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  #spec-panel .metric { padding: 10px 8px; border: 1px solid #d9dee7; border-radius: 6px; background: #fff; }
+  #spec-panel .metric span { display: block; font-size: 10px; color: #667085; text-transform: uppercase; }
+  #spec-panel .metric strong { display: block; margin-top: 4px; font-size: 14px; }
+  #spec-panel .cmd {
+    width: 100%; min-height: 32px; border: 1px solid #d9dee7; border-radius: 6px;
+    background: #f8fafc; padding: 7px 9px; color: #313b4b; text-align: left;
+    font-family: monospace; font-size: 11px; cursor: pointer;
+  }
   #info {
     position: absolute; bottom: 12px; left: 16px; color: #666;
     font-size: 11px; user-select: none;
@@ -104,6 +169,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     cursor: pointer; user-select: none;
   }
   #pause-btn:hover { background: rgba(0,0,0,0.6); }
+  body.spec-open #pause-btn { right: 412px; }
   #export-gif-btn {
     position: absolute; bottom: 16px; right: 56px;
     height: 32px; padding: 0 12px; border: none; border-radius: 16px;
@@ -113,6 +179,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   }
   #export-gif-btn:hover { background: rgba(0,0,0,0.6); }
   #export-gif-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  body.spec-open #export-gif-btn { right: 452px; }
   #export-progress {
     position: absolute; bottom: 56px; right: 16px;
     background: rgba(0,0,0,0.7); color: #fff;
@@ -158,6 +225,37 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <ol id="parts-list"></ol>
   </div>
 </div>
+<aside id="spec-panel">
+  <div class="head">
+    <div class="verdict">
+      <span class="pill info" id="review-pill">review</span>
+      <h1>Spec check<small id="review-subtitle">measurement review</small></h1>
+    </div>
+    <div class="stats">
+      <div class="stat"><span>Features</span><strong id="review-features">—</strong></div>
+      <div class="stat"><span>Count error</span><strong id="review-error">—</strong></div>
+      <div class="stat"><span>Validity</span><strong id="review-validity">—</strong></div>
+    </div>
+  </div>
+  <div class="scroll">
+    <section id="review-spec-section">
+      <h2>Spec checklist</h2>
+      <div class="rows" id="review-spec-rows"></div>
+    </section>
+    <section id="review-measure-section">
+      <h2>Cylindrical features</h2>
+      <div class="rows" id="review-measure-rows"></div>
+    </section>
+    <section>
+      <h2>Dimensions</h2>
+      <div class="metric-grid" id="review-dimensions"></div>
+    </section>
+    <section>
+      <h2>Next actions</h2>
+      <div class="rows" id="review-actions"></div>
+    </section>
+  </div>
+</aside>
 <div id="modes">
   <button data-mode="single-a" id="btn-single-a">A</button>
   <button data-mode="single-b" id="btn-single-b">B</button>
@@ -165,6 +263,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   <button data-mode="overlay" id="btn-overlay">Overlay</button>
   <button data-mode="agent-view" id="btn-agent">Agent view</button>
   <button data-mode="parts" id="btn-parts">Parts</button>
+  <button data-mode="spec" id="btn-spec" class="spec">Spec check</button>
 </div>
 <div id="info">drag to orbit · scroll to zoom</div>
 <button id="pause-btn" title="Pause / play rotation">&#9646;&#9646;</button>
@@ -195,10 +294,12 @@ const DIFF_SIDE_PNG_URL = "__DIFF_SIDE_PNG_URL__";
 const DIFF_OVERLAY_PNG_URL = "__DIFF_OVERLAY_PNG_URL__";
 const DEFAULT_MODE = "__DEFAULT_MODE__";
 const PARTS = __PARTS_JSON__;
+const REVIEW = __REVIEW_JSON__;
 
 const hasB = MODEL_B_URL.length > 0;
 const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0;
 const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
+const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 
 // Disable buttons that lack data
 function setupModeButtons() {
@@ -210,6 +311,7 @@ function setupModeButtons() {
   if (!hasB) { disable('btn-single-b'); disable('btn-side'); disable('btn-overlay'); }
   if (!hasAgentImgs) { disable('btn-agent'); }
   if (!hasParts) { disable('btn-parts'); }
+  if (!hasReview) { disable('btn-spec'); }
 
   // Agent-view panels: show only those with data
   if (PREVIEW_PNG_URL) { document.getElementById('panel-preview').style.display = ''; document.getElementById('img-preview').src = PREVIEW_PNG_URL; }
@@ -225,6 +327,9 @@ function setupModeButtons() {
       list.appendChild(li);
     }
   }
+  if (hasReview) {
+    setupReviewPanel();
+  }
 
   // Populate overlay control labels
   document.getElementById('ov-label-a').textContent = LABEL_A;
@@ -235,6 +340,177 @@ function setupModeButtons() {
   });
 }
 setupModeButtons();
+
+function fmtNumber(value) {
+  if (value === null || value === undefined) return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, "");
+}
+
+function findMeasuredBucket(feature) {
+  const buckets = (REVIEW.measure && REVIEW.measure.cylindrical_features) || [];
+  const measured = feature.measured || {};
+  return buckets.find(b => {
+    const diameterOk = Math.abs(Number(b.diameter_mm) - Number(measured.diameter_mm)) < 0.0001;
+    const axisOk = !measured.axis || b.axis === measured.axis;
+    return diameterOk && axisOk;
+  }) || null;
+}
+
+function rowSummary(feature, bucket) {
+  const target = feature.target || {};
+  const measured = feature.measured || {};
+  const expected = `expected Ø${fmtNumber(target.diameter_mm)} ×${fmtNumber(target.count)}`;
+  const actual = measured.diameter_mm === undefined
+    ? "measured none"
+    : `measured Ø${fmtNumber(measured.diameter_mm)} ×${fmtNumber(measured.count)}`;
+  const err = feature.count_error === undefined ? "" : ` · count_error ${feature.count_error}`;
+  const centers = bucket && bucket.representative_centers ? ` · ${bucket.representative_centers.length} centers` : "";
+  return `${expected} · ${actual}${err}${centers}`;
+}
+
+function makeReviewRow({ label, status, badge, summary, bucket, missing }) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = `review-row ${status}`;
+  row.innerHTML = `
+    <div class="title"><i class="dot ${status}"></i><span></span></div>
+    <span class="badge ${status}"></span>
+    <div class="sub"></div>
+  `;
+  row.querySelector(".title span").textContent = label;
+  row.querySelector(".badge").textContent = badge;
+  row.querySelector(".sub").textContent = summary;
+  row._reviewBucket = bucket || null;
+  row._reviewMissing = missing || null;
+  row.addEventListener("click", () => selectReviewRow(row));
+  return row;
+}
+
+function setupReviewPanel() {
+  const measure = REVIEW.measure || {};
+  const spec = REVIEW.check_spec || null;
+  const dims = (spec && spec.metrics && spec.metrics.dimensions) || (measure.metrics && measure.metrics.dimensions) || {};
+  const valid = (spec && spec.validity) || measure.validity || {};
+  const matched = spec ? (spec.matched_features || []) : [];
+  const missing = spec ? (spec.missing_features || []) : [];
+
+  const pill = document.getElementById("review-pill");
+  pill.className = "pill " + (spec ? (spec.passed ? "pass" : "fail") : "info");
+  pill.textContent = spec ? (spec.passed ? "pass" : "fail") : "measure";
+  document.getElementById("review-subtitle").textContent = spec
+    ? `${matched.length} matched · ${missing.length} missing`
+    : "measurement inventory";
+  document.getElementById("review-features").textContent = spec
+    ? `${matched.length} / ${matched.length + missing.length}`
+    : `${(measure.cylindrical_features || []).length}`;
+  document.getElementById("review-error").textContent = spec ? fmtNumber(spec.total_abs_count_error) : "—";
+  document.getElementById("review-validity").textContent = valid.is_valid === false ? "Invalid" : "Valid";
+
+  const dimGrid = document.getElementById("review-dimensions");
+  for (const axis of ["x", "y", "z"]) {
+    const metric = document.createElement("div");
+    metric.className = "metric";
+    metric.innerHTML = `<span>${axis}</span><strong>${fmtNumber(dims[axis])} mm</strong>`;
+    dimGrid.appendChild(metric);
+  }
+
+  const specRows = document.getElementById("review-spec-rows");
+  if (!spec) {
+    document.getElementById("review-spec-section").style.display = "none";
+  } else {
+    for (const feature of matched) {
+      const bucket = findMeasuredBucket(feature);
+      specRows.appendChild(makeReviewRow({
+        label: feature.name,
+        status: feature.passed ? "pass" : "fail",
+        badge: feature.passed ? "pass" : "fail",
+        summary: rowSummary(feature, bucket),
+        bucket,
+      }));
+    }
+    for (const feature of missing) {
+      specRows.appendChild(makeReviewRow({
+        label: feature.name,
+        status: "fail",
+        badge: "missing",
+        summary: rowSummary(feature, null),
+        missing: feature,
+      }));
+    }
+  }
+
+  const measureRows = document.getElementById("review-measure-rows");
+  for (const bucket of measure.cylindrical_features || []) {
+    measureRows.appendChild(makeReviewRow({
+      label: `Ø${fmtNumber(bucket.diameter_mm)} cylinders`,
+      status: "pass",
+      badge: `${bucket.count}`,
+      summary: `axis ${bucket.axis} · ${bucket.representative_centers.length} representative centers`,
+      bucket,
+    }));
+  }
+
+  const actions = document.getElementById("review-actions");
+  const nextActions = (spec && spec.next_actions) || measure.next_actions || [];
+  for (const action of nextActions.slice(0, 3)) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cmd";
+    btn.textContent = action;
+    actions.appendChild(btn);
+  }
+}
+
+function clearReviewMarkers() {
+  reviewMarkerGroup.clear();
+}
+
+function orientMarker(marker, axis) {
+  if (axis === "+x") marker.rotation.y = Math.PI / 2;
+  if (axis === "+y") marker.rotation.x = Math.PI / 2;
+}
+
+function addRingMarker(center, diameter, axis, color, missing=false) {
+  const radius = Math.max(Number(diameter) / 2, 0.5);
+  const tube = Math.max(radius * 0.08, 0.25);
+  const geom = new THREE.TorusGeometry(radius, tube, 12, 64);
+  const mat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: missing ? 0.55 : 0.9,
+    depthTest: false,
+  });
+  const ring = new THREE.Mesh(geom, mat);
+  ring.position.set(Number(center.x), Number(center.y), Number(center.z));
+  orientMarker(ring, axis);
+  reviewMarkerGroup.add(ring);
+}
+
+function selectReviewRow(row) {
+  document.querySelectorAll("#spec-panel .review-row").forEach(r => r.classList.toggle("active", r === row));
+  clearReviewMarkers();
+  const bucket = row._reviewBucket;
+  if (bucket && bucket.representative_centers) {
+    for (const center of bucket.representative_centers) {
+      addRingMarker(center, bucket.diameter_mm, bucket.axis, 0x1b75bb, false);
+    }
+  }
+  const missing = row._reviewMissing;
+  const target = missing && missing.target;
+  const centers = target && (target.representative_centers || target.centers);
+  if (centers) {
+    for (const center of centers) {
+      addRingMarker(center, target.diameter_mm, target.axis, 0xc2413f, true);
+    }
+  }
+}
+
+function selectFirstReviewRow() {
+  const row = document.querySelector("#spec-panel .review-row");
+  if (row) selectReviewRow(row);
+}
 
 // ---- Renderer + camera (shared across 3D modes) ----
 const canvas = document.getElementById('canvas');
@@ -248,9 +524,9 @@ function resize() {
   // Must NOT pass updateStyle=false here — that leaves the canvas CSS at its
   // previous size and the canvas ends up 2x the viewport on high-DPR displays,
   // pushing the model off-screen.
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  const specWidth = currentMode === "spec" && hasReview ? 396 : 0;
+  renderer.setSize(Math.max(1, window.innerWidth - specWidth), window.innerHeight);
 }
-resize();
 window.addEventListener('resize', resize);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 10000);
@@ -287,6 +563,8 @@ const sceneB_single = buildScene();  // model B with normal material (if B)
 const sceneA_split = buildScene();   // model A for side-by-side
 const sceneB_split = buildScene();   // model B for side-by-side
 const sceneOverlay = buildScene();   // both models with tinted materials
+const reviewMarkerGroup = new THREE.Group();
+sceneA_single.add(reviewMarkerGroup);
 
 // Track loaded model meshes for overlay mode so UI can toggle visibility
 let overlayModelA = null;
@@ -352,20 +630,24 @@ Promise.all([
 let currentMode = null;
 let currentScene = sceneA_single;
 let splitMode = false;
+resize();
 
 function setMode(mode) {
   // Validate
   if (!hasB && (mode === 'single-b' || mode === 'side-by-side' || mode === 'overlay')) return;
   if (!hasAgentImgs && mode === 'agent-view') return;
   if (!hasParts && mode === 'parts') return;
+  if (!hasReview && mode === 'spec') return;
 
   currentMode = mode;
+  document.body.classList.toggle('spec-open', mode === 'spec');
   document.querySelectorAll('#modes button').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === mode);
   });
 
   const agentPanel = document.getElementById('agent-view');
   const partsPanel = document.getElementById('parts-view');
+  const specPanel = document.getElementById('spec-panel');
   const canvasEl = document.getElementById('canvas');
   const divider = document.getElementById('divider');
   const labelL = document.getElementById('label-left');
@@ -380,6 +662,7 @@ function setMode(mode) {
   // explicit display value (block/flex) to show them.
   agentPanel.style.display = 'none';
   partsPanel.style.display = 'none';
+  specPanel.style.display = 'none';
   canvasEl.style.display = 'block';
   divider.style.display = 'none';
   labelL.style.display = 'none';
@@ -390,8 +673,10 @@ function setMode(mode) {
   exportBtnEl.style.display = '';
 
   splitMode = false;
+  resize();
 
   if (mode === 'agent-view') {
+    clearReviewMarkers();
     agentPanel.style.display = 'block';
     canvasEl.style.display = 'none';
     infoEl.style.display = 'none';
@@ -401,6 +686,7 @@ function setMode(mode) {
   }
 
   if (mode === 'parts') {
+    clearReviewMarkers();
     partsPanel.style.display = 'block';
     canvasEl.style.display = 'none';
     infoEl.style.display = 'none';
@@ -410,21 +696,31 @@ function setMode(mode) {
   }
 
   if (mode === 'single-a') {
+    clearReviewMarkers();
     currentScene = sceneA_single;
     labelL.textContent = LABEL_A;
     labelL.style.display = 'block';
   } else if (mode === 'single-b') {
+    clearReviewMarkers();
     currentScene = sceneB_single;
     labelL.textContent = LABEL_B;
     labelL.style.display = 'block';
   } else if (mode === 'side-by-side') {
+    clearReviewMarkers();
     splitMode = true;
     divider.style.display = 'block';
     labelL.textContent = 'A · ' + LABEL_A; labelL.style.display = 'block';
     labelR.textContent = 'B · ' + LABEL_B; labelR.style.display = 'block';
   } else if (mode === 'overlay') {
+    clearReviewMarkers();
     currentScene = sceneOverlay;
     overlayPanel.style.display = 'block';
+  } else if (mode === 'spec') {
+    currentScene = sceneA_single;
+    specPanel.style.display = 'grid';
+    labelL.textContent = LABEL_A;
+    labelL.style.display = 'block';
+    selectFirstReviewRow();
   }
 }
 
@@ -445,7 +741,8 @@ pauseBtn.addEventListener('click', () => {
 // export, so split-viewport rendering stays consistent.
 function renderFrame() {
   renderer.setScissorTest(splitMode);
-  const w = window.innerWidth, h = window.innerHeight;
+  const w = renderer.domElement.clientWidth;
+  const h = renderer.domElement.clientHeight;
   if (splitMode) {
     const halfW = Math.floor(w / 2);
     camera.aspect = halfW / h;
@@ -670,6 +967,7 @@ def _render_unified(
     diff_side_png=None,
     diff_overlay_png=None,
     parts=None,
+    review=None,
 ):
     """Write a unified viewer HTML embedding the given artifacts.
 
@@ -690,6 +988,7 @@ def _render_unified(
         "__DIFF_OVERLAY_PNG_URL__": _embed_data_uri(diff_overlay_png),
         "__DEFAULT_MODE__": default_mode,
         "__PARTS_JSON__": json.dumps(parts_payload),
+        "__REVIEW_JSON__": json.dumps(review) if review else "null",
     }
     html = _HTML_UNIFIED
     for k, v in replacements.items():
@@ -697,24 +996,25 @@ def _render_unified(
     Path(out_html_path).write_text(html)
 
 
-def _render_single(glb_path):
+def _render_single(glb_path, *, review=None):
     """Write single-model viewer HTML. Returns (html_path, url)."""
     html_path = glb_path.parent / f"{glb_path.stem}_viewer.html"
     _render_unified(
         html_path,
         glb_a=glb_path,
         label_a=glb_path.name,
-        default_mode="single-a",
+        default_mode="spec" if review else "single-a",
+        review=review,
     )
     return html_path, html_path.as_uri()
 
 
-def _render_diff(glb_a, glb_b, overlay=False, out_dir=None):
+def _render_diff(glb_a, glb_b, overlay=False, out_dir=None, review=None):
     """Write diff viewer HTML (with side-by-side or overlay as default).
 
     Returns (html_path, url, mode).
     """
-    mode = "overlay" if overlay else "side-by-side"
+    mode = "spec" if review else ("overlay" if overlay else "side-by-side")
     label_a, label_b = _diff_name_parts(glb_a, glb_b)
     target_dir = out_dir if out_dir is not None else glb_a.parent
     html_path = target_dir / f"diff_{label_a}_{label_b}.html"
@@ -725,6 +1025,7 @@ def _render_diff(glb_a, glb_b, overlay=False, out_dir=None):
         label_a=glb_a.name,
         label_b=glb_b.name,
         default_mode=mode,
+        review=review,
     )
     return html_path, html_path.as_uri(), mode
 
@@ -739,16 +1040,117 @@ def _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir):
     return png_path
 
 
+def _review_error(message):
+    return (
+        f"{message} Review mode requires a STEP/STP source model so "
+        "agentcad can measure B-rep geometry."
+    )
+
+
+def _load_spec_json(spec_file):
+    try:
+        data = json.loads(Path(spec_file).read_text())
+    except FileNotFoundError:
+        return None, f"Spec file '{spec_file}' not found"
+    except json.JSONDecodeError as exc:
+        return None, f"Spec file '{spec_file}' is not valid JSON: {exc.msg}"
+
+    from agentcad.commands.check_spec import _validate_spec
+
+    errors = _validate_spec(data)
+    if errors:
+        return None, "Spec file does not match check-spec schema: " + "; ".join(errors)
+    return data, None
+
+
+def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
+    if not include_measure and spec_file is None:
+        return None, None
+
+    file_path = Path(file_str).resolve()
+    if not file_path.exists():
+        return None, f"File '{file_str}' not found"
+    if file_path.suffix.lower() not in (".step", ".stp"):
+        return None, _review_error(f"Unsupported review input '{file_path.suffix}'.")
+
+    from agentcad import file_detect
+    from agentcad.commands.measure import measure_tier0_payload
+
+    detection = file_detect.detect_file_type(file_path)
+    if detection["category"] != file_detect.TIER0_BREP:
+        return None, _review_error(
+            f"Could not measure '{file_str}' for viewer review."
+        )
+
+    try:
+        measurement = measure_tier0_payload(
+            str(file_path),
+            detection,
+            with_features=False,
+        )
+    except Exception as exc:
+        return None, f"Could not measure '{file_str}' for viewer review: {exc}"
+
+    review = {"measure": measurement}
+
+    if spec_file is not None:
+        spec, err = _load_spec_json(spec_file)
+        if err:
+            return None, err
+
+        from agentcad.commands.check_spec import check_measurement_against_spec
+
+        check = check_measurement_against_spec(measurement, spec)
+        check.update({
+            "command": "check-spec",
+            "status": "success",
+            "file": str(file_path),
+            "spec_file": str(Path(spec_file).resolve()),
+            "validity": measurement["validity"],
+            "metrics": measurement["metrics"],
+            "next_actions": [
+                "revise the CAD so each missing or failed feature matches the spec",
+                f"agentcad check-spec {file_path} {Path(spec_file).resolve()}",
+            ] if not check["passed"] else [
+                "record this check-spec result with the completed model",
+                f"agentcad measure {file_path}",
+            ],
+        })
+        review["check_spec"] = check
+
+    return review, None
+
+
 @click.command()
 @click.argument("file")
 @click.argument("file_b", required=False)
 @click.option("--overlay", is_flag=True, default=False, help="Tinted overlay mode (single viewport, red/green).")
-def view(file, file_b, overlay):
+@click.option(
+    "--measure",
+    "with_measure",
+    is_flag=True,
+    default=False,
+    help="Embed measurement review data in the viewer's Spec check mode.",
+)
+@click.option(
+    "--spec",
+    "spec_file",
+    help="Run check-spec with this JSON spec and open the viewer in Spec check mode.",
+)
+def view(file, file_b, overlay, with_measure, spec_file):
     """Open a GLB or STEP file in the browser.
 
     With one file: single-model viewer.
     With two files: diff view (side-by-side by default, or --overlay for tinted overlay).
     """
+    review, err = _build_review_payload(
+        file,
+        include_measure=with_measure,
+        spec_file=spec_file,
+    )
+    if err:
+        _error(err)
+
     glb_a, shape_a, err = _resolve_to_glb_and_shape(file)
     if err:
         _error(err)
@@ -756,21 +1158,25 @@ def view(file, file_b, overlay):
     if file_b is None:
         if overlay:
             _error("--overlay requires two files")
-        html_path, url = _render_single(glb_a)
+        html_path, url = _render_single(glb_a, review=review)
         _open_browser(url)
-        click.echo(json.dumps({
+        response = {
             "command": "view",
             "status": "success",
             "url": url,
             "model": str(glb_a),
-        }))
+        }
+        if review:
+            response["mode"] = "spec"
+            response["review"] = True
+        click.echo(json.dumps(response))
         return
 
     glb_b, shape_b, err = _resolve_to_glb_and_shape(file_b)
     if err:
         _error(err)
 
-    html_path, url, mode = _render_diff(glb_a, glb_b, overlay=overlay)
+    html_path, url, mode = _render_diff(glb_a, glb_b, overlay=overlay, review=review)
 
     response = {
         "command": "view",
@@ -780,6 +1186,8 @@ def view(file, file_b, overlay):
         "model_a": str(glb_a),
         "model_b": str(glb_b),
     }
+    if review:
+        response["review"] = True
 
     # Agent-facing PNG composite (only when we have TopoDS shapes from STEP inputs)
     if shape_a is not None and shape_b is not None and not overlay:
