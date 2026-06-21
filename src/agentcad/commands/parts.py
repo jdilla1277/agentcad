@@ -96,6 +96,8 @@ def _base_response(manifest, version_entry, meta):
     }
     if meta.get("viewer"):
         response["viewer"] = meta["viewer"]
+    if meta.get("viewer_glb"):
+        response["viewer_glb"] = meta["viewer_glb"]
     if meta.get("script"):
         response["script"] = meta["script"]
     if meta.get("outputs"):

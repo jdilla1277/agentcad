@@ -125,6 +125,9 @@ def test_run_success_json(runner, isolated_dir):
     assert parsed["label"] == "v1"
     assert "step" in parsed["outputs"]
     assert "script" in parsed["outputs"]
+    assert "glb" not in parsed["outputs"]
+    assert parsed["viewer"] == "v1/viewer.html"
+    assert parsed["viewer_glb"] == "v1/output.glb"
 
 
 def test_run_creates_meta_json(runner, isolated_dir):
@@ -140,6 +143,9 @@ def test_run_creates_meta_json(runner, isolated_dir):
     assert "created" in meta
     assert "script" in meta
     assert "outputs" in meta
+    assert "glb" not in meta["outputs"]
+    assert meta["viewer"] == "v1/viewer.html"
+    assert meta["viewer_glb"] == "v1/output.glb"
 
 
 def test_run_updates_manifest_versions(runner, isolated_dir):
@@ -405,6 +411,7 @@ def test_run_with_export_meta_json(runner, isolated_dir):
     assert meta["outputs"]["stl"] == "v1_label/output.stl"
     assert meta["outputs"]["glb"] == "v1_label/output.glb"
     assert meta["outputs"]["step"] == "v1_label/output.step"
+    assert meta["viewer_glb"] == "v1_label/output.glb"
 
 
 def test_run_with_export_json_response(runner, isolated_dir):
@@ -415,6 +422,7 @@ def test_run_with_export_json_response(runner, isolated_dir):
     assert parsed["outputs"]["stl"] == "v1_label/output.stl"
     assert parsed["outputs"]["glb"] == "v1_label/output.glb"
     assert parsed["outputs"]["step"] == "v1_label/output.step"
+    assert parsed["viewer_glb"] == "v1_label/output.glb"
 
 
 def test_run_without_export_no_extra_outputs(runner, isolated_dir):
@@ -424,6 +432,7 @@ def test_run_without_export_no_extra_outputs(runner, isolated_dir):
     parsed = json.loads(result.stdout)
     assert "stl" not in parsed["outputs"]
     assert "glb" not in parsed["outputs"]
+    assert parsed["viewer_glb"] == "v1_label/output.glb"
     meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
     assert "stl" not in meta["outputs"]
     assert "glb" not in meta["outputs"]
@@ -684,10 +693,14 @@ def test_run_no_preview_still_writes_viewer_and_glb(runner, isolated_dir):
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
     assert parsed["viewer"] == "v1_label/viewer.html"
+    assert parsed["viewer_glb"] == "v1_label/output.glb"
     assert (isolated_dir / "v1_label" / "viewer.html").exists()
     assert (isolated_dir / "v1_label" / "output.glb").exists()
     meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
     assert meta["viewer"] == "v1_label/viewer.html"
+    assert meta["viewer_glb"] == "v1_label/output.glb"
+    assert "glb" not in parsed["outputs"]
+    assert "glb" not in meta["outputs"]
 
 
 def test_run_no_preview_second_run_still_writes_diff(runner, isolated_dir):

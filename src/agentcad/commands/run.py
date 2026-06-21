@@ -605,6 +605,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         parts=parts_output,
     )
     viewer_meta = f"{dir_name}/viewer.html"
+    viewer_glb_meta = f"{dir_name}/output.glb"
     _mark("viewer_ms", _t)
 
     # Write meta.json
@@ -634,6 +635,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         meta["diff"] = diff_meta
     if viewer_meta:
         meta["viewer"] = viewer_meta
+        meta["viewer_glb"] = viewer_glb_meta
     if renders_meta:
         meta["renders"] = renders_meta
     meta_path = version_dir / "meta.json"
@@ -686,6 +688,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         output_json["diff"] = diff_meta
     if viewer_meta:
         output_json["viewer"] = viewer_meta
+        output_json["viewer_glb"] = viewer_glb_meta
     if renders_meta:
         output_json["renders"] = renders_meta
     if hint:

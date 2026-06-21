@@ -70,6 +70,7 @@ EXAMPLE SESSION
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
    "version": 1, "label": "first",
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
+   "viewer": "v1_first/viewer.html", "viewer_glb": "v1_first/output.glb",
    "metrics": {"dimensions": {"x": 10.0, "y": 20.0, "z": 5.0},
                "volume": 1000.0, "is_valid": true, ...},
    "preview": "v1_first/preview.png"}
@@ -78,7 +79,7 @@ EXAMPLE SESSION
   Version directory layout:
     v1_first/
       output.step       STEP geometry
-      output.glb        GLB (always — viewer needs it)
+      output.glb        GLB backing viewer.html (always)
       script.py         copy of the executed script
       meta.json         full run metadata (includes "runtime" field)
       preview.png       4-view composite (front/right/top/iso, 1024x1068)
@@ -100,6 +101,8 @@ COMMANDS
                      'all', custom angle az:el (e.g. 45:30),
                      or mixed (front,right,45:30).
     --export FMT     Mesh export: stl, glb (GLB auto-colors per-solid).
+                     `outputs.glb` appears only for explicit --export glb;
+                     `viewer_glb` always points at viewer.html's GLB.
     --preview / --no-preview
                      4-view composite PNG + per-part previews (default on,
                      ~2-4s). viewer.html, GLB, and diff PNGs always
