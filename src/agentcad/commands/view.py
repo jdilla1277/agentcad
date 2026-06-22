@@ -251,10 +251,6 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
       <h2>Dimensions</h2>
       <div class="metric-grid" id="review-dimensions"></div>
     </section>
-    <section>
-      <h2>Next actions</h2>
-      <div class="rows" id="review-actions"></div>
-    </section>
   </div>
 </aside>
 <div id="modes">
@@ -304,15 +300,22 @@ const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 
 // Disable buttons that lack data
 function setupModeButtons() {
-  const disable = (id) => {
+  const disable = (id, reason) => {
     const b = document.getElementById(id);
     b.classList.add('disabled');
     b.disabled = true;
+    b.title = reason;
   };
-  if (!hasB) { disable('btn-single-b'); disable('btn-side'); disable('btn-overlay'); }
-  if (!hasAgentImgs) { disable('btn-agent'); }
-  if (!hasParts) { disable('btn-parts'); }
-  if (!hasReview) { disable('btn-spec'); }
+  if (!hasB) {
+    disable('btn-single-b', 'Open a second model to compare B.');
+    disable('btn-side', 'Open two models to use side-by-side comparison.');
+    disable('btn-overlay', 'Open two models to use overlay comparison.');
+  }
+  if (!hasAgentImgs) {
+    disable('btn-agent', 'Agent view is available for run viewers with embedded preview or diff images.');
+  }
+  if (!hasParts) { disable('btn-parts', 'No named parts were embedded in this viewer.'); }
+  if (!hasReview) { disable('btn-spec', 'Run view with --measure or --spec to enable Spec check.'); }
 
   // Agent-view panels: show only those with data
   if (PREVIEW_PNG_URL) { document.getElementById('panel-preview').style.display = ''; document.getElementById('img-preview').src = PREVIEW_PNG_URL; }
@@ -393,7 +396,7 @@ function makeReviewRow({ label, status, badge, summary, bucket, missing }) {
   row._reviewStatus = status || "info";
   row._reviewBucket = bucket || null;
   row._reviewMissing = missing || null;
-  row.addEventListener("click", () => selectReviewRow(row));
+  row.addEventListener("click", () => selectReviewRow(row, { focus: true }));
   return row;
 }
 
@@ -459,16 +462,6 @@ function setupReviewPanel() {
       summary: `axis ${bucket.axis} · ${bucket.representative_centers.length} representative centers`,
       bucket,
     }));
-  }
-
-  const actions = document.getElementById("review-actions");
-  const nextActions = (spec && spec.next_actions) || measure.next_actions || [];
-  for (const action of nextActions.slice(0, 3)) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "cmd";
-    btn.textContent = action;
-    actions.appendChild(btn);
   }
 }
 
@@ -538,21 +531,73 @@ function markerSurfacePosition(center, diameter, axis) {
 
 function addRingMarker(center, diameter, axis, color, missing=false) {
   const radius = Math.max(Number(diameter) / 2, 0.5);
-  const tube = Math.max(radius * 0.018, 0.045);
+  const tube = Math.max(radius * 0.04, 0.11);
   const geom = new THREE.TorusGeometry(radius, tube, 12, 64);
   const mat = new THREE.MeshBasicMaterial({
     color,
     transparent: true,
-    opacity: missing ? 0.55 : 0.78,
+    opacity: missing ? 0.58 : 0.92,
     depthTest: false,
   });
   const ring = new THREE.Mesh(geom, mat);
   ring.position.copy(markerSurfacePosition(center, diameter, axis));
   orientMarker(ring, axis);
   reviewMarkerGroup.add(ring);
+
+  const haloGeom = new THREE.TorusGeometry(radius * 1.08, Math.max(tube * 1.6, 0.18), 12, 64);
+  const haloMat = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: missing ? 0.16 : 0.22,
+    depthTest: false,
+  });
+  const halo = new THREE.Mesh(haloGeom, haloMat);
+  halo.position.copy(ring.position);
+  halo.rotation.copy(ring.rotation);
+  reviewMarkerGroup.add(halo);
 }
 
-function selectReviewRow(row) {
+function reviewCentersForRow(row) {
+  const points = [];
+  const bucket = row._reviewBucket;
+  if (bucket && bucket.representative_centers) {
+    for (const center of bucket.representative_centers) {
+      points.push({ center, diameter: bucket.diameter_mm, axis: bucket.axis });
+    }
+  }
+  const missing = row._reviewMissing;
+  const target = missing && missing.target;
+  const centers = target && (target.representative_centers || target.centers);
+  if (centers) {
+    for (const center of centers) {
+      points.push({ center, diameter: target.diameter_mm, axis: target.axis });
+    }
+  }
+  return points;
+}
+
+function focusReviewRow(row) {
+  const points = reviewCentersForRow(row);
+  if (!points.length) return;
+  const viewerPoints = points.map(p => cadPointToViewer(p.center));
+  const focusBox = new THREE.Box3().setFromPoints(viewerPoints);
+  const center = focusBox.getCenter(new THREE.Vector3());
+  const span = focusBox.getSize(new THREE.Vector3());
+  const largestDiameter = Math.max(...points.map(p => Number(p.diameter) || 0), 1);
+  const featureSize = Math.max(span.x, span.y, span.z, largestDiameter);
+  const distance = Math.max(featureSize * 4.5, largestDiameter * 7, 12);
+  const direction = camera.position.clone().sub(controls.target);
+  if (direction.lengthSq() < 1e-6) direction.set(1, 0.7, 1);
+  direction.normalize();
+  controls.target.copy(center);
+  camera.position.copy(center).add(direction.multiplyScalar(distance));
+  camera.near = Math.max(distance * 0.001, 0.01);
+  camera.far = Math.max(distance * 100, 1000);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+function selectReviewRow(row, options={}) {
   document.querySelectorAll("#spec-panel .review-row").forEach(r => r.classList.toggle("active", r === row));
   clearReviewMarkers();
   const bucket = row._reviewBucket;
@@ -570,11 +615,12 @@ function selectReviewRow(row) {
       addRingMarker(center, target.diameter_mm, target.axis, 0xc2413f, true);
     }
   }
+  if (options.focus) focusReviewRow(row);
 }
 
 function selectFirstReviewRow() {
   const row = document.querySelector("#spec-panel .review-row");
-  if (row) selectReviewRow(row);
+  if (row) selectReviewRow(row, { focus: false });
 }
 
 // ---- Renderer + camera (shared across 3D modes) ----
