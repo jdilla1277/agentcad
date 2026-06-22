@@ -281,4 +281,4 @@ def test_feedback_url_honors_env_override(monkeypatch):
     assert _resolve_feedback_url() == "https://preview-xyz.vercel.app/api/feedback"
 
     monkeypatch.delenv("AGENTCAD_FEEDBACK_URL", raising=False)
-    assert _resolve_feedback_url() == "https://agentcad-site-five.vercel.app/api/feedback"
+    assert _resolve_feedback_url() == "https://agentcad.dev/api/feedback"

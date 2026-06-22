@@ -67,6 +67,7 @@ SECTIONS = {
         "          — Compare measured cylindrical features against an explicit JSON spec.\n"
         "  parts   — List/show parts captured for a version snapshot.\n"
         "  view    — Open a GLB or STEP file in the browser (three.js viewer).\n"
+        "            Use --measure or --spec spec.json for read-only measurement review.\n"
         "  context — Show the current project state (versions, current label).\n"
         "  docs    — Show this documentation.\n"
         "  diff    — Compare two versions of a model.\n"
