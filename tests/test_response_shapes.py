@@ -1,7 +1,8 @@
 """Contract tests for the JSON response shape of every agentcad command.
 
 The convention is documented in `agentcad docs schema`:
-    outputs — dict of 3D model artifacts (step, script, stl, glb, obj)
+    outputs — dict of explicit 3D model artifacts (step, script, stl, glb, obj)
+    viewer_glb — always-written GLB that backs viewer.html
     renders — dict of 2D PNG renders (named view or custom angle key)
 
 These tests pin the convention. If a command's response shape drifts
@@ -53,13 +54,18 @@ def test_run_response_shape(runner, isolated_dir):
     assert r.exit_code == 0, r.output
     parsed = json.loads(r.stdout)
     # required fields
-    for key in ("command", "status", "runtime", "version", "label", "outputs", "metrics", "timings"):
+    for key in (
+        "command", "status", "runtime", "version", "label",
+        "outputs", "metrics", "viewer", "viewer_glb", "timings",
+    ):
         assert key in parsed, f"`run` missing required field: {key}"
     assert parsed["command"] == "run"
     assert parsed["status"] == "success"
     # outputs keys must all be 3D-artifact names
     extra = set(parsed["outputs"].keys()) - THREE_D_KEYS
     assert not extra, f"`run.outputs` contains non-3D keys: {extra}"
+    assert parsed["viewer_glb"] == "v1_v/output.glb"
+    assert "glb" not in parsed["outputs"]
     # no renders without --render
     assert "renders" not in parsed
 

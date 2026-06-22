@@ -13,6 +13,7 @@ def _write_project(root, *, current="assembly", parts=None, version=1, label="as
         "script": f"v{version}_{label}/script.py",
         "outputs": {"step": f"v{version}_{label}/output.step"},
         "viewer": f"v{version}_{label}/viewer.html",
+        "viewer_glb": f"v{version}_{label}/output.glb",
         "parts": parts or [],
     }))
     (root / "agentcad.json").write_text(json.dumps({
@@ -55,6 +56,7 @@ def test_parts_list_reads_version_snapshot(runner, isolated_dir):
     assert data["version"] == 1
     assert data["label"] == "assembly"
     assert data["viewer"] == "v1_assembly/viewer.html"
+    assert data["viewer_glb"] == "v1_assembly/output.glb"
     assert data["script"] == "v1_assembly/script.py"
     assert data["part_count"] == 2
     assert [p["id"] for p in data["parts"]] == ["base_plate", "axle_shaft"]
@@ -71,6 +73,7 @@ def test_parts_show_returns_one_part_by_id(runner, isolated_dir):
     data = json.loads(result.stdout)
 
     assert data["command"] == "parts show"
+    assert data["viewer_glb"] == "v1_assembly/output.glb"
     assert data["part"]["id"] == "base_plate"
     assert data["part"]["name"] == "Base Plate"
 

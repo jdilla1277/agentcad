@@ -241,10 +241,14 @@ class TestPreview:
         assert r.exit_code == 0, r.output
         parsed = json.loads(r.stdout)
         assert parsed["viewer"] == "v1_label/viewer.html"
+        assert parsed["viewer_glb"] == "v1_label/output.glb"
+        assert "glb" not in parsed["outputs"]
         assert (isolated_dir / "v1_label" / "viewer.html").exists()
         assert (isolated_dir / "v1_label" / "output.glb").exists()
         meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
         assert meta["viewer"] == "v1_label/viewer.html"
+        assert meta["viewer_glb"] == "v1_label/output.glb"
+        assert "glb" not in meta["outputs"]
 
     def test_no_preview_second_run_still_writes_diff(self, runner, isolated_dir):
         """Auto-diff runs regardless of --preview. b3d twin of the cq test."""
@@ -522,6 +526,7 @@ class TestExportFlag:
         assert meta["outputs"]["stl"] == "v1_label/output.stl"
         assert meta["outputs"]["glb"] == "v1_label/output.glb"
         assert meta["outputs"]["step"] == "v1_label/output.step"
+        assert meta["viewer_glb"] == "v1_label/output.glb"
 
     def test_export_json_response_paths(self, runner, isolated_dir):
         _init(runner, isolated_dir)
@@ -532,6 +537,7 @@ class TestExportFlag:
         assert parsed["outputs"]["stl"] == "v1_label/output.stl"
         assert parsed["outputs"]["glb"] == "v1_label/output.glb"
         assert parsed["outputs"]["step"] == "v1_label/output.step"
+        assert parsed["viewer_glb"] == "v1_label/output.glb"
 
     def test_without_export_no_extra_outputs(self, runner, isolated_dir):
         _init(runner, isolated_dir)

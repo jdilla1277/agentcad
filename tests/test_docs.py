@@ -66,6 +66,8 @@ def test_docs_schema_section(runner):
     assert "success" in content
     assert "failed" in content
     assert "error" in content
+    assert "viewer_glb" in content
+    assert "outputs.glb appears only when --export glb" in content
 
 
 def test_docs_workflow_section(runner):
