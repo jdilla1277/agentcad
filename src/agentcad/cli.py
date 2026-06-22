@@ -174,6 +174,15 @@ METRICS (in every successful run response)
   before rendering. Use 'agentcad diff' to compare metrics across versions.
 
 \b
+SPEC AND MEASUREMENT CHECKS
+  Visual renders are not enough for dimensional work. When the prompt has
+  explicit holes, bores, diameters, counts, or overall dimensions:
+    1. Run normally and inspect the generated STEP.
+    2. Use `agentcad measure` to read dimensions and feature buckets from CAD.
+    3. Use `agentcad check-spec` when you have an explicit JSON checklist.
+    4. Revise before marking the model done if measurements or spec rows fail.
+
+\b
 DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
   $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts

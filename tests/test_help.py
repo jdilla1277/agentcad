@@ -83,6 +83,16 @@ def test_help_mentions_metrics(runner):
     assert "volume" in output
 
 
+def test_help_mentions_spec_and_measurement_checks(runner):
+    result = runner.invoke(cli, ["--help"])
+    output = result.output
+    assert "SPEC AND MEASUREMENT CHECKS" in output
+    assert "explicit holes, bores, diameters, counts" in output
+    assert "agentcad measure" in output
+    assert "agentcad check-spec" in output
+    assert "Revise before marking the model done" in output
+
+
 def test_help_mentions_parametric(runner):
     result = runner.invoke(cli, ["--help"])
     output = result.output
