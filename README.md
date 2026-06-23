@@ -14,7 +14,6 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-> [!NOTE]
 > **New: specs and measurements**
 > - `agentcad measure` reads the actual STEP geometry: dimensions, cylindrical feature buckets, diameters, and counts.
 > - `agentcad check-spec` compares the model against explicit feature requirements before the agent says it is done.
