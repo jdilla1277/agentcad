@@ -48,6 +48,7 @@ def test_help_documents_all_commands(runner):
     for cmd in ["init", "run", "render", "export", "measure", "check-spec",
                 "inspect", "parts", "diff", "context", "view", "docs"]:
         assert cmd in output
+    assert "parts view" in output
     assert "--spec spec.json" in output
 
 
@@ -65,6 +66,14 @@ def test_help_shows_run_example(runner):
     output = result.output
     assert "--output" in output
     assert "--render" in output
+
+
+def test_help_mentions_part_review_views(runner):
+    result = runner.invoke(cli, ["--help"])
+    output = result.output
+    assert "agentcad parts view" in output
+    assert "--isolate ID" in output
+    assert "--ghost-rest" in output
 
 
 def test_help_documents_status_values(runner):

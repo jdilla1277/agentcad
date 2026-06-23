@@ -6,6 +6,7 @@ from agentcad.cli import cli
 def _write_project(root, *, current="assembly", parts=None, version=1, label="assembly"):
     version_dir = root / f"v{version}_{label}"
     version_dir.mkdir()
+    (version_dir / "output.glb").write_bytes(b"glb-test")
     (version_dir / "meta.json").write_text(json.dumps({
         "version": version,
         "label": label,
@@ -124,15 +125,20 @@ def test_parts_show_accepts_legacy_numeric_alias(runner, isolated_dir):
 def test_parts_nested_help_documents_refs_and_legacy_ids(runner):
     list_result = runner.invoke(cli, ["parts", "list", "--help"])
     show_result = runner.invoke(cli, ["parts", "show", "--help"])
+    view_result = runner.invoke(cli, ["parts", "view", "--help"])
 
     assert list_result.exit_code == 0
     assert show_result.exit_code == 0
+    assert view_result.exit_code == 0
     assert "current" in list_result.output
     assert "latest" in list_result.output
     assert "part_count" in list_result.output
     assert "legacy_id" in list_result.output
     assert "PART_ID" in show_result.output
     assert "numeric alias" in show_result.output
+    assert "--isolate" in view_result.output
+    assert "--ghost-rest" in view_result.output
+    assert "--focus" in view_result.output
 
 
 def test_parts_list_missing_version_errors(runner, isolated_dir):
@@ -157,6 +163,89 @@ def test_parts_show_missing_part_errors_with_available_ids(runner, isolated_dir)
 
     assert data["status"] == "error"
     assert data["available_ids"] == ["base_plate"]
+
+
+def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
+    _write_project(isolated_dir, parts=[
+        {
+            "id": "base_plate",
+            "id_source": "explicit",
+            "name": "Base Plate",
+            "color": "gray",
+        },
+        {
+            "id": "axle_shaft",
+            "id_source": "name",
+            "name": "Axle Shaft",
+            "color": "steelblue",
+        },
+    ])
+
+    result = runner.invoke(cli, [
+        "parts", "view", "assembly",
+        "--isolate", "axle_shaft",
+        "--hide", "base_plate",
+        "--ghost-rest",
+        "--focus", "axle_shaft",
+        "--no-open",
+    ])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+
+    assert data["command"] == "parts view"
+    assert data["status"] == "success"
+    assert data["viewer_glb"] == "v1_assembly/output.glb"
+    assert data["review_viewer"].startswith("v1_assembly/parts_review_")
+    assert data["part_review"] == {
+        "mode": "part-review",
+        "source": "agentcad parts view",
+        "version": 1,
+        "label": "assembly",
+        "selected": "axle_shaft",
+        "focus": "axle_shaft",
+        "isolated": ["axle_shaft"],
+        "hidden": ["base_plate"],
+        "ghost_rest": True,
+    }
+
+    html = (isolated_dir / data["review_viewer"]).read_text()
+    assert "const PART_REVIEW = " in html
+    assert '"mode": "part-review"' in html
+    assert '"isolated": ["axle_shaft"]' in html
+    assert "Part controls" in html
+    assert "Ghost rest" in html
+
+
+def test_parts_view_rejects_unknown_part_ids(runner, isolated_dir):
+    _write_project(isolated_dir, parts=[
+        {"id": "base_plate", "id_source": "explicit", "name": "Base Plate"},
+    ])
+
+    result = runner.invoke(cli, [
+        "parts", "view", "1", "--isolate", "wheel", "--no-open",
+    ])
+    assert result.exit_code == 1
+    data = json.loads(result.stdout)
+
+    assert data["status"] == "error"
+    assert data["missing_ids"] == ["wheel"]
+    assert data["available_ids"] == ["base_plate"]
+
+
+def test_parts_view_requires_viewer_glb_file(runner, isolated_dir):
+    version_dir = _write_project(isolated_dir, parts=[
+        {"id": "base_plate", "id_source": "explicit", "name": "Base Plate"},
+    ])
+    (version_dir / "output.glb").unlink()
+
+    result = runner.invoke(cli, [
+        "parts", "view", "1", "--isolate", "base_plate", "--no-open",
+    ])
+    assert result.exit_code == 1
+    data = json.loads(result.stdout)
+
+    assert data["status"] == "error"
+    assert "viewer_glb not found" in data["message"]
 
 
 def test_parts_no_manifest_errors(runner, isolated_dir):
