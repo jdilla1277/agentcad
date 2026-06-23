@@ -1477,7 +1477,11 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert [p.get("color") for p in parts] == ["gray", "blue", "red"]
     assert "className = 'swatch'" in viewer_html
     assert "swatch.style.background = p.color" in viewer_html
-    assert "attach(sceneA_single, MODEL_A_URL, {})" in viewer_html
+    assert "registerPartMeshes(m)" in viewer_html
+    assert "attach(sceneA_single, MODEL_A_URL, { onMesh:" in viewer_html
+    assert "partMatchesNameExact" in viewer_html
+    assert "Longest IDs first avoids" in viewer_html
+    assert "&& !partState.ghostRest" in viewer_html
     assert "attach(sceneA_split, MODEL_A_URL, {})" in viewer_html
 
     from PIL import Image

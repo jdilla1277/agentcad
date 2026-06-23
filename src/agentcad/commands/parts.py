@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -105,6 +106,29 @@ def _base_response(manifest, version_entry, meta):
     return response
 
 
+def _slugify_review_name(values):
+    raw = "_".join(str(v) for v in values if v)
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "_", raw).strip("._-")
+    return slug[:80] or "all"
+
+
+def _validate_part_ids(parts, ids):
+    available = {str(p.get("id")) for p in parts}
+    missing = [part_id for part_id in ids if part_id not in available]
+    return missing, sorted(available)
+
+
+def _dedupe_preserve_order(values):
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
 @click.group(name="parts")
 def parts_cmd():
     """List and inspect parts captured for version snapshots.
@@ -181,3 +205,123 @@ def show_part(ref, part_id):
         part_id=part_id,
         available_ids=[p.get("id") for p in parts],
     )
+
+
+@parts_cmd.command(name="view")
+@click.argument("ref")
+@click.option(
+    "--isolate",
+    "isolate_ids",
+    multiple=True,
+    help="Part id to isolate in the generated review viewer. Repeat for multiple parts.",
+)
+@click.option(
+    "--hide",
+    "hide_ids",
+    multiple=True,
+    help="Part id to hide in the generated review viewer. Repeat for multiple parts.",
+)
+@click.option("--ghost-rest", is_flag=True, default=False, help="Make non-selected parts transparent.")
+@click.option("--focus", "focus_id", default=None, help="Part id to focus the camera on.")
+@click.option("--open/--no-open", "open_browser", default=True, help="Open the generated viewer in a browser.")
+def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
+    """Generate a reproducible part review viewer for agents and humans.
+
+    REF accepts the same forms as `parts list`. The generated HTML embeds the
+    version's viewer GLB plus a review state for hide/isolate/ghost/focus.
+    """
+    manifest = load_manifest(command="parts")
+    version_entry = _resolve_version(manifest, ref)
+    if version_entry is None:
+        _emit_error(f"Version '{ref}' not found.", ref=ref)
+
+    meta = _load_version_meta(version_entry)
+    parts = _parts_from_meta(meta)
+    if not parts:
+        _emit_error(
+            f"Version '{ref}' has no parts snapshot.",
+            ref=ref,
+            version=meta.get("version", version_entry.get("version")),
+            label=meta.get("label", version_entry.get("label")),
+        )
+
+    isolate_ids = _dedupe_preserve_order(isolate_ids)
+    hide_ids = _dedupe_preserve_order(hide_ids)
+    requested_ids = [*isolate_ids, *hide_ids]
+    if focus_id:
+        requested_ids.append(focus_id)
+    missing, available_ids = _validate_part_ids(parts, requested_ids)
+    if missing:
+        _emit_error(
+            "Unknown part id requested for review viewer.",
+            ref=ref,
+            missing_ids=missing,
+            available_ids=available_ids,
+        )
+
+    viewer_glb = meta.get("viewer_glb")
+    if not viewer_glb:
+        _emit_error(
+            f"Version '{ref}' has no viewer_glb artifact.",
+            ref=ref,
+            version=meta.get("version", version_entry.get("version")),
+            label=meta.get("label", version_entry.get("label")),
+        )
+    glb_path = Path.cwd() / viewer_glb
+    if not glb_path.exists():
+        _emit_error(
+            f"viewer_glb not found for version '{ref}'.",
+            ref=ref,
+            viewer_glb=viewer_glb,
+            path=str(glb_path),
+        )
+
+    selected = focus_id or (isolate_ids[0] if isolate_ids else None)
+    review_state = {
+        "mode": "part-review",
+        "source": "agentcad parts view",
+        "version": meta.get("version", version_entry.get("version")),
+        "label": meta.get("label", version_entry.get("label")),
+        "selected": selected,
+        "focus": focus_id,
+        "isolated": isolate_ids,
+        "hidden": hide_ids,
+        "ghost_rest": ghost_rest,
+    }
+
+    from agentcad.commands.view import _open_browser, _render_unified
+
+    version_dir = Path.cwd() / version_entry["path"]
+    name_parts = ["parts_review"]
+    if isolate_ids:
+        name_parts.extend(["isolate", *isolate_ids])
+    if hide_ids:
+        name_parts.extend(["hide", *hide_ids])
+    if focus_id:
+        name_parts.extend(["focus", focus_id])
+    if ghost_rest:
+        name_parts.append("ghost")
+    html_path = version_dir / f"{_slugify_review_name(name_parts)}.html"
+    _render_unified(
+        html_path,
+        glb_a=glb_path,
+        label_a=f"{meta.get('label', version_entry.get('label'))} parts",
+        default_mode="single-a",
+        parts=parts,
+        part_review=review_state,
+    )
+
+    url = html_path.as_uri()
+    if open_browser:
+        _open_browser(url)
+
+    rel_html = html_path.relative_to(Path.cwd()).as_posix()
+    response = {
+        "command": "parts view",
+        "status": "success",
+        **_base_response(manifest, version_entry, meta),
+        "review_viewer": rel_html,
+        "url": url,
+        "part_review": review_state,
+    }
+    click.echo(json.dumps(response))

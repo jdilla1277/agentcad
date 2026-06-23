@@ -45,6 +45,7 @@ def test_docs_commands_section(runner):
         "context", "docs", "diff",
     ]:
         assert cmd in content
+    assert "part review viewers" in content
     assert "--spec spec.json" in content
 
 
@@ -141,6 +142,17 @@ def test_docs_unknown_section_error(runner):
     data = json.loads(result.stdout)
     assert data["status"] == "error"
     assert "nonexistent" in data["message"]
+
+
+def test_docs_parts_mentions_review_viewers(runner):
+    result = runner.invoke(cli, ["docs", "parts", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+
+    assert "agentcad parts view" in content
+    assert "--isolate main_deck" in content
+    assert "--ghost-rest" in content
+    assert "viewer_glb" in content
 
 
 def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
