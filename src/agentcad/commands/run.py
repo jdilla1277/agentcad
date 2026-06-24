@@ -1,8 +1,10 @@
 import json
 import os
 import re
+import signal
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +16,194 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
+
+
+_DEFAULT_RUN_TIMEOUT_S = 115.0
+_RUN_TIMEOUT_ENV = "AGENTCAD_RUN_TIMEOUT_S"
+_ACTIVE_PHASE_TRACKER = None
+_PREVIOUS_ALARM_HANDLER = None
+_RUN_TIMEOUT_INSTALLED = False
+
+
+class _RunTimeout(BaseException):
+    """Raised by the SIGALRM watchdog so broad script catches don't swallow it."""
+
+    def __init__(self, payload):
+        super().__init__(payload.get("message", "agentcad run timed out"))
+        self.payload = payload
+
+
+class _PhaseTracker:
+    def __init__(self, timings):
+        self.timings = timings
+        self.completed = []
+        self.active_phase = None
+        self.active_started_at = None
+        self.next_phase = None
+
+    def start(self, phase):
+        self.active_phase = phase
+        self.next_phase = phase
+        self.active_started_at = time.perf_counter()
+
+    def complete(self, phase):
+        if phase not in self.completed:
+            self.completed.append(phase)
+        if self.active_phase == phase:
+            self.active_phase = None
+            self.active_started_at = None
+        self.next_phase = None
+
+    def timeout_payload(self, timeout_s):
+        phase = self.active_phase or self.next_phase or "unknown"
+        payload = {
+            "command": "run",
+            "status": "failed",
+            "error_kind": "timeout",
+            "timeout_s": timeout_s,
+            "timeout_phase": phase,
+            "completed_phases": list(self.completed),
+            "phase_timings": dict(self.timings),
+            "timings": dict(self.timings),
+            "message": (
+                f"agentcad run timed out after {timeout_s:g}s"
+                f"{f' during {phase}' if phase != 'unknown' else ''}"
+            ),
+            "suggestion": _timeout_suggestion(phase, self.completed),
+        }
+        if self.active_started_at is not None:
+            payload["active_phase_elapsed_ms"] = round(
+                (time.perf_counter() - self.active_started_at) * 1000
+            )
+        if self.completed:
+            payload["last_completed_phase"] = self.completed[-1]
+        return payload
+
+
+def _timeout_suggestion(phase, completed):
+    suggestions = {
+        "validation": (
+            "Static validation or runtime detection timed out; check for very large "
+            "source files or slow imports during runtime selection."
+        ),
+        "script_exec": (
+            "The script timed out before producing exportable geometry; simplify "
+            "the algorithm, avoid expensive search loops, or avoid slow STEP import "
+            "inside the script."
+        ),
+        "metrics": (
+            "The script executed but geometry metrics timed out; inspect whether "
+            "the resulting shape is extremely complex or invalid."
+        ),
+        "export_step": (
+            "The script executed but STEP export timed out; avoid wrapping a large "
+            "or invalid imported STEP as a high-level part, or export a simpler "
+            "compound/assembly."
+        ),
+        "export_mesh": (
+            "Mesh export timed out; try skipping optional mesh exports or reducing "
+            "geometry complexity."
+        ),
+        "render_views": (
+            "Requested view rendering timed out; rerun without --render while "
+            "iterating on geometry."
+        ),
+        "preview": (
+            "Preview rendering timed out; rerun with --no-preview if metrics and "
+            "STEP output are enough for this iteration."
+        ),
+        "parts_preview": (
+            "Per-part preview rendering timed out; rerun with --no-preview or "
+            "reduce the number/complexity of shown parts."
+        ),
+        "export_viewer_glb": (
+            "Viewer GLB export timed out; inspect shape validity and consider "
+            "simplifying the model before generating viewer assets."
+        ),
+        "diff": (
+            "Diff rendering against the previous version timed out; continue from "
+            "the latest STEP and skip visual comparison for this iteration."
+        ),
+        "viewer": (
+            "The geometry exported, but viewer generation timed out; use the STEP "
+            "and metrics artifacts directly for this iteration."
+        ),
+    }
+    if phase in suggestions:
+        return suggestions[phase]
+    if completed:
+        return (
+            f"Timeout happened after {completed[-1]}; inspect the next artifact "
+            "phase or rerun with optional previews/renders disabled."
+        )
+    return "Timeout phase is unknown; rerun with --no-preview and fewer optional exports."
+
+
+def _run_timeout_seconds():
+    raw = os.environ.get(_RUN_TIMEOUT_ENV)
+    if raw in (None, ""):
+        return _DEFAULT_RUN_TIMEOUT_S
+    try:
+        timeout_s = float(raw)
+    except ValueError:
+        return _DEFAULT_RUN_TIMEOUT_S
+    if timeout_s <= 0:
+        return None
+    return timeout_s
+
+
+def _handle_run_timeout(_signum, _frame):
+    tracker = _ACTIVE_PHASE_TRACKER
+    timeout_s = _run_timeout_seconds() or 0
+    payload = (
+        tracker.timeout_payload(timeout_s)
+        if tracker is not None
+        else {
+            "command": "run",
+            "status": "failed",
+            "error_kind": "timeout",
+            "timeout_s": timeout_s,
+            "timeout_phase": "unknown",
+            "completed_phases": [],
+            "phase_timings": {},
+            "timings": {},
+            "message": f"agentcad run timed out after {timeout_s:g}s",
+            "suggestion": _timeout_suggestion("unknown", []),
+        }
+    )
+    raise _RunTimeout(payload)
+
+
+def _install_run_timeout(phase_tracker):
+    global _ACTIVE_PHASE_TRACKER, _PREVIOUS_ALARM_HANDLER, _RUN_TIMEOUT_INSTALLED
+    timeout_s = _run_timeout_seconds()
+    if timeout_s is None:
+        return
+    if threading.current_thread() is not threading.main_thread():
+        return
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        return
+    _ACTIVE_PHASE_TRACKER = phase_tracker
+    _PREVIOUS_ALARM_HANDLER = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _handle_run_timeout)
+    signal.setitimer(signal.ITIMER_REAL, timeout_s)
+    _RUN_TIMEOUT_INSTALLED = True
+
+
+def _clear_run_timeout():
+    global _ACTIVE_PHASE_TRACKER, _PREVIOUS_ALARM_HANDLER, _RUN_TIMEOUT_INSTALLED
+    if (
+        _RUN_TIMEOUT_INSTALLED
+        and threading.current_thread() is threading.main_thread()
+        and hasattr(signal, "SIGALRM")
+        and hasattr(signal, "setitimer")
+    ):
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        if _PREVIOUS_ALARM_HANDLER is not None:
+            signal.signal(signal.SIGALRM, _PREVIOUS_ALARM_HANDLER)
+    _ACTIVE_PHASE_TRACKER = None
+    _PREVIOUS_ALARM_HANDLER = None
+    _RUN_TIMEOUT_INSTALLED = False
 
 
 def _parse_params(raw):
@@ -201,6 +391,9 @@ def run(ctx, script, output, render, export, preview, params, dry_run, runtime, 
         # Explicit sys.exit() calls inside _run_impl are intentional —
         # they already emitted the proper JSON. Pass through.
         raise
+    except _RunTimeout as e:
+        click.echo(json.dumps(e.payload))
+        sys.exit(1)
     except Exception as e:
         import traceback as _tb
         click.echo(json.dumps({
@@ -210,14 +403,27 @@ def run(ctx, script, output, render, export, preview, params, dry_run, runtime, 
             "traceback": _tb.format_exc(),
         }))
         sys.exit(1)
+    finally:
+        _clear_run_timeout()
 
 
 def _run_impl(ctx, script, output, render, export, preview, params,
               dry_run, runtime, no_daemon):
     _t_total_start = time.perf_counter()
     _timings = {}
+    _phase_tracker = _PhaseTracker(_timings)
+    _install_run_timeout(_phase_tracker)
+
     def _mark(key, start):
         _timings[key] = round((time.perf_counter() - start) * 1000)
+
+    def _start_phase(phase):
+        _phase_tracker.start(phase)
+        return time.perf_counter()
+
+    def _finish_phase(phase, start, key=None):
+        _mark(key or f"{phase}_ms", start)
+        _phase_tracker.complete(phase)
 
     def _heartbeat(message):
         # Stderr progress line so callers can distinguish "still working"
@@ -244,6 +450,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     # Fallback: direct execution
+    _t = _start_phase("validation")
     manifest = load_manifest(command="run")
 
     # Python version check (before CadQuery imports)
@@ -311,6 +518,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 "message": str(e),
             }))
             sys.exit(1)
+    _finish_phase("validation", _t, "validation_ms")
 
     # Spawn the daemon NOW — after the runner module is imported (so OCP is
     # in memory) but BEFORE the script executes. The script may use boolean
@@ -322,7 +530,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
 
     # Execute via the runner — returns a runtime-agnostic ExecutionResult.
     _heartbeat(f"running script ({runtime_name})…")
-    _t = time.perf_counter()
+    _t = _start_phase("script_exec")
     result = runner.execute(raw_source, parsed_params)
 
     # Param validation errors (unknown names, CQGI InvalidParameterError) —
@@ -349,16 +557,15 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     shape = result.native_shape
     warnings = list(result.warnings)
 
-    _mark("script_exec_ms", _t)
+    _finish_phase("script_exec", _t, "script_exec_ms")
 
     # Compute geometric metrics
     _heartbeat("computing metrics…")
-    _t = time.perf_counter()
+    _t = _start_phase("metrics")
     from agentcad.metrics import compute_metrics
 
     topo_shape_for_metrics = result.topo_shape
     metrics = compute_metrics(topo_shape_for_metrics)
-    _mark("metrics_ms", _t)
 
     # Per-part breakdown (feedback #190): one entry per show_object() call.
     # Metrics computed now so --dry-run also surfaces them; per-part previews
@@ -376,6 +583,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         entry["part_of"] = None
         entry["metrics"] = compute_metrics(p["topo_shape"])
         parts_output.append(entry)
+    _finish_phase("metrics", _t, "metrics_ms")
 
     glb_parts = [
         {**entry, "topo_shape": raw["topo_shape"]}
@@ -405,6 +613,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
             output_json["warnings"] = warnings
         _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
         output_json["timings"] = _timings
+        output_json["completed_phases"] = list(_phase_tracker.completed)
+        output_json["phase_timings"] = dict(_timings)
         click.echo(json.dumps(output_json))
         return
 
@@ -417,11 +627,16 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
 
     # Export STEP file via the runner (each engine has its own writer)
+    _heartbeat("exporting STEP…")
+    _t = _start_phase("export_step")
     runner.export_step(shape, str(version_dir / "output.step"))
+    _finish_phase("export_step", _t, "export_step_ms")
 
     # Export mesh formats if requested
     exports_meta = {}
     if export:
+        _heartbeat("exporting requested mesh formats…")
+        _t = _start_phase("export_mesh")
         formats = [f.strip() for f in export.split(",")]
         topo_shape = result.topo_shape
         for fmt in formats:
@@ -441,10 +656,13 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 obj_path = version_dir / "output.obj"
                 export_obj(topo_shape, str(obj_path))
                 exports_meta["obj"] = f"{dir_name}/output.obj"
+        _finish_phase("export_mesh", _t, "export_mesh_ms")
 
     # Render views if requested
     renders_meta = {}
     if render:
+        _heartbeat("rendering requested views…")
+        _t = _start_phase("render_views")
         from agentcad.render import (
             parse_view_spec, render_shape as render_shape_view,
             render_shape_custom, render_views, ALL_VIEWS,
@@ -465,6 +683,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 out_path = renders_dir / f"{name}.png"
                 render_shape_custom(topo_shape, az, el, out_path, parts=glb_parts)
                 renders_meta[name] = f"{dir_name}/renders/{name}.png"
+        _finish_phase("render_views", _t, "render_views_ms")
 
     # Visual feedback pipeline. Three tiers, decoupled by cost:
     #   1. Always (cheap, agent depends on these for the viewer to work):
@@ -487,7 +706,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         from agentcad.render import render_composite_4view
 
         _heartbeat("rendering preview (4-view composite)…")
-        _t = time.perf_counter()
+        _t = _start_phase("preview")
         preview_path = version_dir / "preview.png"
         render_composite_4view(
             topo_shape_for_metrics,
@@ -496,7 +715,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
             parts=glb_parts,
         )
         preview_meta = f"{dir_name}/preview.png"
-        _mark("preview_ms", _t)
+        _finish_phase("preview", _t, "preview_ms")
 
         # Per-part previews use the resolved part id, which is unique and
         # path-safe even when display names are duplicated.
@@ -510,7 +729,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 f"rendering per-part previews ({_n_parts} part"
                 f"{'s' if _n_parts != 1 else ''})…"
             )
-            _t = time.perf_counter()
+            _t = _start_phase("parts_preview")
             for entry, raw in zip(parts_output, raw_parts):
                 fname = f"{entry['id']}.png"
                 _render_part_iso(
@@ -520,7 +739,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                     parts=[{**entry, "topo_shape": raw["topo_shape"]}],
                 )
                 entry["preview"] = f"{dir_name}/parts/{fname}"
-            _mark("parts_preview_ms", _t)
+            _finish_phase("parts_preview", _t, "parts_preview_ms")
 
     # Tier 1: GLB + diff + viewer.html — always run, regardless of --preview.
     # These are what make the viewer experience work; they're cheap enough
@@ -530,7 +749,10 @@ def _run_impl(ctx, script, output, render, export, preview, params,
 
     viewer_glb_path = version_dir / "output.glb"
     if not viewer_glb_path.exists():
+        _heartbeat("exporting viewer GLB…")
+        _t = _start_phase("export_viewer_glb")
         export_glb(topo_shape_for_metrics, str(viewer_glb_path), parts=glb_parts)
+        _finish_phase("export_viewer_glb", _t, "export_viewer_glb_ms")
 
     prev = _find_prev_success(versions)
     if prev is not None:
@@ -540,7 +762,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         )
         prev_step_path = Path.cwd() / prev["path"] / "output.step"
         if prev_step_path.exists():
-            _t = time.perf_counter()
+            _heartbeat("rendering diff against previous version…")
+            _t = _start_phase("diff")
             try:
                 from agentcad.step_io import load_cad_shape
                 prev_shape = load_cad_shape(prev_step_path)
@@ -564,11 +787,12 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                     "side_by_side": f"{dir_name}/diff_side.png",
                     "overlay": f"{dir_name}/diff_overlay.png",
                 }
-                _mark("diff_ms", _t)
             except Exception as e:
                 warnings.append(
                     f"Could not render diff against v{prev['version']}_{prev['label']}: {type(e).__name__}: {e}"
                 )
+            finally:
+                _finish_phase("diff", _t, "diff_ms")
 
     # Resolve the prior version's GLB for the viewer's side-by-side / overlay
     # modes. Decoupled from diff_meta: even if the diff PNG render failed,
@@ -590,7 +814,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                     prev_glb_path = None
 
     _heartbeat("writing viewer.html…")
-    _t = time.perf_counter()
+    _t = _start_phase("viewer")
     viewer_path = version_dir / "viewer.html"
     _render_unified(
         viewer_path,
@@ -606,7 +830,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     )
     viewer_meta = f"{dir_name}/viewer.html"
     viewer_glb_meta = f"{dir_name}/output.glb"
-    _mark("viewer_ms", _t)
+    _finish_phase("viewer", _t, "viewer_ms")
 
     # Write meta.json
     created = datetime.now(timezone.utc).isoformat()
@@ -638,6 +862,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         meta["viewer_glb"] = viewer_glb_meta
     if renders_meta:
         meta["renders"] = renders_meta
+    meta["completed_phases"] = list(_phase_tracker.completed)
+    meta["phase_timings"] = dict(_timings)
     meta_path = version_dir / "meta.json"
     meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
@@ -695,4 +921,6 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         output_json["hint"] = hint
     _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
     output_json["timings"] = _timings
+    output_json["completed_phases"] = list(_phase_tracker.completed)
+    output_json["phase_timings"] = dict(_timings)
     click.echo(json.dumps(output_json))

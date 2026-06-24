@@ -1,6 +1,7 @@
 import json
 import shutil
 import struct
+import time
 from pathlib import Path
 
 from agentcad.cli import cli
@@ -254,6 +255,72 @@ show_object(result)
     meta = json.loads((failed_dir / "meta.json").read_text())
     assert meta["status"] == "failed"
     assert "something went wrong" in meta["error"]
+
+
+def test_run_timeout_during_script_execution_reports_phase(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    from agentcad.runners import cadquery as cq_runner
+
+    def slow_execute(*_args, **_kwargs):
+        time.sleep(1)
+
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    monkeypatch.setattr(cq_runner, "validate", lambda _source: [])
+    monkeypatch.setattr(cq_runner, "execute", slow_execute)
+
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "slow", "--no-preview", "--no-daemon"]
+    )
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "failed"
+    assert parsed["error_kind"] == "timeout"
+    assert parsed["timeout_phase"] == "script_exec"
+    assert parsed["completed_phases"] == ["validation"]
+    assert "validation_ms" in parsed["phase_timings"]
+    assert "script" in parsed["suggestion"].lower()
+
+
+def test_run_timeout_during_step_export_reports_completed_phases(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    # Warm the CAD imports and first version with the watchdog disabled so the
+    # short test timeout below is only exercising the post-script export phase.
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
+    warmup = runner.invoke(
+        cli, ["run", "script.py", "--output", "warmup", "--no-preview", "--no-daemon"]
+    )
+    assert warmup.exit_code == 0, warmup.output
+
+    from agentcad.runners import cadquery as cq_runner
+
+    def slow_export_step(*_args, **_kwargs):
+        time.sleep(1)
+
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    monkeypatch.setattr(cq_runner, "export_step", slow_export_step)
+
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "slow_export", "--no-preview", "--no-daemon"]
+    )
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "failed"
+    assert parsed["error_kind"] == "timeout"
+    assert parsed["timeout_phase"] == "export_step"
+    assert parsed["completed_phases"][-2:] == ["script_exec", "metrics"]
+    assert "script_exec_ms" in parsed["phase_timings"]
+    assert "metrics_ms" in parsed["phase_timings"]
+    assert "export" in parsed["suggestion"].lower()
 
 
 def test_run_no_show_object_caught_by_validation(runner, isolated_dir):
