@@ -181,6 +181,33 @@ result = ShapeList([Box(10, 10, 10), Box(5, 5, 5)])
 show_object(result)
 """
 
+_ASSEMBLY_SHAPELIST_SCRIPT = """\
+from build123d import Box, ShapeList
+result = ShapeList([
+    Box(10, 10, 10),
+    Box(5, 5, 5).translate((20, 0, 0)),
+])
+show_assembly(result, name="fallback_proxy")
+"""
+
+_COMPOUND_ALIAS_SCRIPT = """\
+from build123d import Box, ShapeList
+result = ShapeList([
+    Box(10, 10, 10),
+    Box(5, 5, 5).translate((20, 0, 0)),
+])
+show_compound(result, name="fallback_proxy")
+"""
+
+_EMPTY_ASSEMBLY_SCRIPT = """\
+show_assembly([])
+"""
+
+_BAD_ASSEMBLY_ELEMENT_SCRIPT = """\
+from build123d import Box
+show_assembly([Box(10, 10, 10), object()])
+"""
+
 _EMPTY_SHAPELIST_SCRIPT = """\
 from build123d import ShapeList
 show_object(ShapeList([]))
@@ -207,8 +234,61 @@ def test_show_object_rejects_multi_element_shapelist_with_hint():
     msg = result.exception or ""
     assert "ShapeList" in msg
     assert "show_object" in msg
+    assert "show_assembly" in msg
     # Recovery hint must point at the canonical fix.
     assert "once per" in msg or "one at a time" in msg or "each" in msg
+
+
+def test_show_assembly_accepts_multi_element_shapelist(tmp_path):
+    """Intentional multi-body output should not require callers to manually
+    construct Compound(children=list(result))."""
+    from build123d import export_step
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from agentcad.step_io import load_cad_shape
+
+    result = b3d_runner.execute(_ASSEMBLY_SHAPELIST_SCRIPT)
+    assert result.success, result.exception
+    assert result.output_type == "assembly"
+    assert result.native_shape is not None
+    assert result.topo_shape is not None
+    assert len(result.parts) == 1
+    assert result.parts[0]["name"] == "fallback_proxy"
+
+    out = tmp_path / "assembly.step"
+    export_step(result.native_shape, str(out))
+    imported = load_cad_shape(out)
+    metrics = compute_metrics(imported)
+    assert metrics["is_valid"] is True
+
+    solid_count = 0
+    explorer = TopExp_Explorer(imported, TopAbs_SOLID)
+    while explorer.More():
+        solid_count += 1
+        explorer.Next()
+    assert solid_count == 2
+
+
+def test_show_compound_alias_accepts_multi_element_shapelist():
+    result = b3d_runner.execute(_COMPOUND_ALIAS_SCRIPT)
+    assert result.success, result.exception
+    assert result.output_type == "assembly"
+    assert len(result.parts) == 1
+    assert result.parts[0]["name"] == "fallback_proxy"
+
+
+def test_show_assembly_rejects_empty_iterable():
+    result = b3d_runner.execute(_EMPTY_ASSEMBLY_SCRIPT)
+    assert not result.success
+    assert result.status == "execution_error"
+    assert "show_assembly() received no shapes" in (result.exception or "")
+
+
+def test_show_assembly_rejects_non_shape_elements():
+    result = b3d_runner.execute(_BAD_ASSEMBLY_ELEMENT_SCRIPT)
+    assert not result.success
+    assert result.status == "execution_error"
+    assert "expects only build123d Shape objects" in (result.exception or "")
 
 
 def test_show_object_rejects_empty_shapelist_with_hint():

@@ -366,6 +366,9 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     # materialized and --no-preview wasn't passed.
     parts_output: list[dict] = []
     raw_parts = result.parts
+    output_type = result.output_type or (
+        "assembly" if len(raw_parts) > 1 else "single_part"
+    )
     part_id_sources = _assign_part_identity(raw_parts)
     for p, (part_id, id_source) in zip(raw_parts, part_id_sources):
         entry: dict = {"id": part_id, "id_source": id_source}
@@ -397,6 +400,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
             "command": "run",
             "status": "success",
             "runtime": runtime_name,
+            "output_type": output_type,
             "metrics": metrics,
         }
         if parts_output:
@@ -615,6 +619,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         "label": label,
         "status": "success",
         "runtime": runtime_name,
+        "output_type": output_type,
         "created": created,
         "script": f"{dir_name}/script.py",
         "outputs": {
@@ -667,6 +672,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         "command": "run",
         "status": "success",
         "runtime": runtime_name,
+        "output_type": output_type,
         "version": version_num,
         "label": label,
         "outputs": {

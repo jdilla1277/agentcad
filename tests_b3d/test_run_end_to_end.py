@@ -84,6 +84,14 @@ a = Box(10, 10, 10)
 b = Sphere(6).translate((20, 0, 0))
 show_object(Compound(children=[a, b]))
 """
+SHAPELIST_ASSEMBLY = """\
+from build123d import Box, ShapeList
+result = ShapeList([
+    Box(10, 10, 10),
+    Box(5, 5, 5).translate((20, 0, 0)),
+])
+show_assembly(result, name="fallback_proxy")
+"""
 BROKEN = """\
 from build123d import Box
 show_object(Box(0, 0, 0))
@@ -600,7 +608,20 @@ class TestDryRun:
         parsed = json.loads(r.stdout)
         assert parsed["status"] == "success"
         assert parsed["runtime"] == "build123d"
+        assert parsed["output_type"] == "single_part"
         assert parsed["metrics"]["volume"] == 1000.0
+
+    def test_show_assembly_dry_run_reports_assembly_output(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SHAPELIST_ASSEMBLY)
+        r = _run(runner, "s.py", "--output", "assembly", "--dry-run")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["runtime"] == "build123d"
+        assert parsed["output_type"] == "assembly"
+        assert parsed["parts"][0]["name"] == "fallback_proxy"
+        assert parsed["parts"][0]["metrics"]["volume"] == 1125.0
 
 
 # ---------- failures ----------

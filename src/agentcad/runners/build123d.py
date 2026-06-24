@@ -47,7 +47,10 @@ def validate(user_source: str) -> list:
     """
     from agentcad.validate import validate_script
 
-    return list(validate_script(with_preamble(user_source)))
+    return list(validate_script(
+        with_preamble(user_source),
+        output_calls=("show_object", "show_assembly", "show_compound"),
+    ))
 
 
 _SIMPLE_LITERALS = (ast.Constant,)
@@ -111,6 +114,7 @@ def execute(
 
     # List of (obj, explicit_id, name, color) tuples in declaration order.
     captured: list[tuple[Any, Any, Any, Any]] = []
+    assembly_requested = False
 
     def show_object(obj, *_args, id=None, name=None, options=None, **_kwargs):
         # Boolean ops in build123d (`a - b - c`) can return a ShapeList instead
@@ -129,7 +133,9 @@ def execute(
             else:
                 raise TypeError(
                     f"show_object() received a ShapeList of {len(obj)} shapes. "
-                    "Call show_object() once per shape (e.g. `for s in result: "
+                    "For intentional multi-body output, call "
+                    "show_assembly(result, name=...). Otherwise call "
+                    "show_object() once per shape (e.g. `for s in result: "
                     "show_object(s)`), or fuse them first with "
                     "`Compound(children=list(result))` if you want a single part."
                 )
@@ -149,12 +155,54 @@ def execute(
                 name = options.get("name")
         captured.append((obj, id, name, color))
 
+    def show_assembly(shapes, *_args, id=None, name=None, options=None, **_kwargs):
+        """Capture an intentional multi-body build123d output.
+
+        This is the supported escape hatch for ShapeList/list/tuple outputs:
+        callers do not need to know the exact Compound(children=...) idiom.
+        """
+        nonlocal assembly_requested
+
+        if isinstance(shapes, Shape):
+            children = [shapes]
+        else:
+            try:
+                children = list(shapes)
+            except TypeError as exc:
+                raise TypeError(
+                    "show_assembly() expects a build123d Shape or an iterable "
+                    f"of Shapes, got {type(shapes).__name__}"
+                ) from exc
+
+        if not children:
+            raise TypeError("show_assembly() received no shapes.")
+
+        bad = [type(s).__name__ for s in children if not isinstance(s, Shape)]
+        if bad:
+            raise TypeError(
+                "show_assembly() expects only build123d Shape objects; "
+                f"got {', '.join(bad)}"
+            )
+
+        color = None
+        if isinstance(options, dict):
+            if id is None:
+                id = options.get("id")
+            color = options.get("color")
+            if name is None:
+                name = options.get("name")
+
+        captured.append((Compound(children=children), id, name, color))
+        assembly_requested = True
+
     import build123d as _b3d
 
     script_globals: dict[str, Any] = {
         "__name__": "__agentcad_script__",
         "__file__": filename,
         "show_object": show_object,
+        "show_assembly": show_assembly,
+        "show_compound": show_assembly,
         "build123d": _b3d,
     }
     for attr in getattr(_b3d, "__all__", dir(_b3d)):
@@ -255,7 +303,10 @@ def execute(
             status="execution_error",
             discovered_parameters=discovered,
             parameters=effective_params,
-            exception="Script produced no results. Did you call show_object()?",
+            exception=(
+                "Script produced no results. Did you call show_object() "
+                "or show_assembly()?"
+            ),
         )
 
     warnings: list[str] = [
@@ -271,6 +322,9 @@ def execute(
         native_shape = _make_topods_compound(shapes)
     else:
         native_shape = Compound(children=list(shapes))
+    output_type = (
+        "assembly" if assembly_requested or len(shapes) > 1 else "single_part"
+    )
 
     topo_shape = _topods_shape(native_shape)
 
@@ -292,6 +346,7 @@ def execute(
         parameters=effective_params,
         discovered_parameters=discovered,
         warnings=warnings,
+        output_type=output_type,
         parts=parts,
     )
 
