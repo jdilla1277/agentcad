@@ -1,6 +1,7 @@
 import json
 import shutil
 import struct
+import time
 from pathlib import Path
 
 from agentcad.cli import cli
@@ -55,6 +56,35 @@ arm = cq.Workplane("XY").box(8, 2, 1).translate((0, 5, 0))
 show_object(deck, name="deck")
 show_object(pin)
 show_object(arm, name="arm")
+"""
+
+
+GROUPED_PARTS_SCRIPT = """\
+import cadquery as cq
+base = cq.Workplane("XY").box(20, 10, 2)
+rib = cq.Workplane("XY").box(3, 14, 4).translate((0, 0, 3))
+pin = cq.Workplane("XY").circle(1).extrude(5).translate((8, 0, 0))
+show_object(base, id="base_plate", name="Base Plate", options={
+    "part_of": "frame", "group_color": "steelblue"
+})
+show_object(rib, id="center_rib", name="Center Rib", options={
+    "part_of": "frame", "group_color": "steelblue"
+})
+show_object(pin, id="locator_pin", name="Locator Pin", options={"color": "coral"})
+"""
+
+GROUP_COLOR_CONFLICTS_SCRIPT = """\
+import cadquery as cq
+base = cq.Workplane("XY").box(20, 10, 2)
+rib = cq.Workplane("XY").box(3, 14, 4).translate((0, 0, 3))
+pin = cq.Workplane("XY").circle(1).extrude(5).translate((8, 0, 0))
+show_object(base, id="base_plate", name="Base Plate", options={
+    "part_of": "frame", "group_color": "steelblue"
+})
+show_object(rib, id="center_rib", name="Center Rib", options={
+    "part_of": "frame", "group_color": "seagreen"
+})
+show_object(pin, id="locator_pin", name="Locator Pin", options={"group_color": "gold"})
 """
 
 
@@ -254,6 +284,72 @@ show_object(result)
     meta = json.loads((failed_dir / "meta.json").read_text())
     assert meta["status"] == "failed"
     assert "something went wrong" in meta["error"]
+
+
+def test_run_timeout_during_script_execution_reports_phase(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    from agentcad.runners import cadquery as cq_runner
+
+    def slow_execute(*_args, **_kwargs):
+        time.sleep(1)
+
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    monkeypatch.setattr(cq_runner, "validate", lambda _source: [])
+    monkeypatch.setattr(cq_runner, "execute", slow_execute)
+
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "slow", "--no-preview", "--no-daemon"]
+    )
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "failed"
+    assert parsed["error_kind"] == "timeout"
+    assert parsed["timeout_phase"] == "script_exec"
+    assert parsed["completed_phases"] == ["validation"]
+    assert "validation_ms" in parsed["phase_timings"]
+    assert "script" in parsed["suggestion"].lower()
+
+
+def test_run_timeout_during_step_export_reports_completed_phases(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    # Warm the CAD imports and first version with the watchdog disabled so the
+    # short test timeout below is only exercising the post-script export phase.
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
+    warmup = runner.invoke(
+        cli, ["run", "script.py", "--output", "warmup", "--no-preview", "--no-daemon"]
+    )
+    assert warmup.exit_code == 0, warmup.output
+
+    from agentcad.runners import cadquery as cq_runner
+
+    def slow_export_step(*_args, **_kwargs):
+        time.sleep(1)
+
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    monkeypatch.setattr(cq_runner, "export_step", slow_export_step)
+
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "slow_export", "--no-preview", "--no-daemon"]
+    )
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "failed"
+    assert parsed["error_kind"] == "timeout"
+    assert parsed["timeout_phase"] == "export_step"
+    assert parsed["completed_phases"][-2:] == ["script_exec", "metrics"]
+    assert "script_exec_ms" in parsed["phase_timings"]
+    assert "metrics_ms" in parsed["phase_timings"]
+    assert "export" in parsed["suggestion"].lower()
 
 
 def test_run_no_show_object_caught_by_validation(runner, isolated_dir):
@@ -1250,6 +1346,50 @@ def test_run_named_parts_emits_parts_array(runner, isolated_dir):
     assert all(p["part_of"] is None for p in parts)
 
 
+def test_run_grouped_parts_emit_groups_and_inherit_group_color(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=GROUPED_PARTS_SCRIPT)
+
+    result = runner.invoke(cli, ["run", "script.py", "--output", "grouped"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+
+    parts = parsed["parts"]
+    assert [p["id"] for p in parts] == ["base_plate", "center_rib", "locator_pin"]
+    assert [p["part_of"] for p in parts] == ["frame", "frame", None]
+    assert [p["color"] for p in parts] == ["steelblue", "steelblue", "coral"]
+
+    assert parsed["groups"] == [{
+        "id": "frame",
+        "name": "frame",
+        "part_ids": ["base_plate", "center_rib"],
+        "color": "steelblue",
+    }]
+
+    meta = json.loads((isolated_dir / "v1_grouped" / "meta.json").read_text())
+    assert meta["groups"] == parsed["groups"]
+
+
+def test_run_group_color_conflicts_warn_and_use_first_color(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=GROUP_COLOR_CONFLICTS_SCRIPT)
+
+    result = runner.invoke(cli, ["run", "script.py", "--output", "group_conflicts"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+
+    assert parsed["groups"] == [{
+        "id": "frame",
+        "name": "frame",
+        "part_ids": ["base_plate", "center_rib"],
+        "color": "steelblue",
+    }]
+    assert [p.get("color") for p in parsed["parts"]] == ["steelblue", "steelblue", None]
+    warnings = parsed.get("warnings", [])
+    assert any("conflicting group_color" in w for w in warnings)
+    assert any("group_color ignored for ungrouped part 'locator_pin'" in w for w in warnings)
+
+
 def test_run_named_parts_have_metrics(runner, isolated_dir):
     """Each part has its own metrics dict with volume, area, CoM, bbox, counts."""
     _init_project(runner)
@@ -1476,7 +1616,7 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert [p.get("name") for p in parts] == ["deck", "pin", "arm"]
     assert [p.get("color") for p in parts] == ["gray", "blue", "red"]
     assert "className = 'swatch'" in viewer_html
-    assert "swatch.style.background = p.color" in viewer_html
+    assert "swatch.style.background = part.color" in viewer_html
     assert "registerPartMeshes(m)" in viewer_html
     assert "attach(sceneA_single, MODEL_A_URL, { onMesh:" in viewer_html
     assert "partMatchesNameExact" in viewer_html
@@ -1496,6 +1636,36 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert blue_pixels > 100
 
 
+def test_run_viewer_embeds_part_groups(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir, content=GROUPED_PARTS_SCRIPT)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "grouped_viewer"])
+    assert result.exit_code == 0, result.output
+
+    viewer_html = (isolated_dir / "v1_grouped_viewer" / "viewer.html").read_text()
+    import re
+    parts_match = re.search(r"const PARTS = (\[.*?\]);", viewer_html)
+    groups_match = re.search(r"const GROUPS = (\[.*?\]);", viewer_html)
+    assert parts_match, "PARTS const not found in viewer.html"
+    assert groups_match, "GROUPS const not found in viewer.html"
+
+    parts = json.loads(parts_match.group(1))
+    groups = json.loads(groups_match.group(1))
+    assert [p.get("part_of") for p in parts] == ["frame", "frame", None]
+    assert groups == [{
+        "id": "frame",
+        "name": "frame",
+        "color": "steelblue",
+        "part_ids": ["base_plate", "center_rib"],
+    }]
+    assert 'id="parts-groups-section"' in viewer_html
+    assert "makeStaticGroupRow" in viewer_html
+    assert "part-group-tag" in viewer_html
+    assert "Parts ${PARTS.length} · Groups ${GROUPS.length}" in viewer_html
+    assert "toggleGroupHidden" in viewer_html
+    assert "toggleGroupIsolated" in viewer_html
+
+
 def test_render_unified_empty_parts_payload_when_none(isolated_dir):
     """No parts → embedded JSON is empty array, JS path will grey the button."""
     from agentcad.commands.view import _render_unified
@@ -1507,6 +1677,7 @@ def test_render_unified_empty_parts_payload_when_none(isolated_dir):
 
     html = out.read_text()
     assert "const PARTS = [];" in html
+    assert "const GROUPS = [];" in html
 
 
 def test_run_default_does_not_auto_render_preview_gif(runner, isolated_dir):

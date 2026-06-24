@@ -73,6 +73,7 @@ def test_help_mentions_part_review_views(runner):
     output = result.output
     assert "agentcad parts view" in output
     assert "--isolate ID" in output
+    assert "--isolate-group GROUP" in output
     assert "--ghost-rest" in output
 
 

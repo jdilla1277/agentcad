@@ -11,6 +11,8 @@ from agentcad.commands._daemon_routing import (
 )
 from agentcad.native_io import silence_native_stdout
 
+DEFAULT_ID_LIMIT = 100
+
 
 @click.command("inspect")
 @click.argument("file")
@@ -27,8 +29,21 @@ from agentcad.native_io import silence_native_stdout
          "alternative to --ids for parts where the per-feature payload "
          "would blow the context budget. Combine with --ids for both.",
 )
+@click.option(
+    "--limit",
+    "id_limit",
+    type=click.IntRange(min=1),
+    default=DEFAULT_ID_LIMIT,
+    show_default=True,
+    help="Maximum records per --ids list, and maximum IDs per summary cluster.",
+)
+@click.option(
+    "--no-limit",
+    is_flag=True,
+    help="Return complete --ids and summary ID lists. Can be very large.",
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def inspect_cmd(file, with_ids, with_summary, no_daemon):
+def inspect_cmd(file, with_ids, with_summary, id_limit, no_limit, no_daemon):
     """Inspect any file. STEP/BREP get a full topology report; other formats
     get a structured 'recognized but not editable here' response. Never throws."""
     # Try routing through daemon. Exits before returning if reachable.
@@ -37,6 +52,10 @@ def inspect_cmd(file, with_ids, with_summary, no_daemon):
         argv.append("--ids")
     if with_summary:
         argv.append("--summary")
+    if id_limit != DEFAULT_ID_LIMIT:
+        argv.extend(["--limit", str(id_limit)])
+    if no_limit:
+        argv.append("--no-limit")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -149,7 +168,13 @@ def inspect_cmd(file, with_ids, with_summary, no_daemon):
         return
 
     if category == file_detect.TIER0_BREP:
-        _inspect_tier0(str(file_path.absolute()), detection, with_ids=with_ids, with_summary=with_summary)
+        _inspect_tier0(
+            str(file_path.absolute()),
+            detection,
+            with_ids=with_ids,
+            with_summary=with_summary,
+            id_limit=None if no_limit else id_limit,
+        )
         # Fork off the warm process as the daemon — only the Tier 0 path
         # paid the OCP cost worth keeping around. Idempotent on its own.
         maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
@@ -195,7 +220,14 @@ def _emit_malformed(file: str, detection: dict) -> None:
     }, exit_code=1)
 
 
-def _inspect_tier0(file_path: str, detection: dict, *, with_ids: bool = False, with_summary: bool = False) -> None:
+def _inspect_tier0(
+    file_path: str,
+    detection: dict,
+    *,
+    with_ids: bool = False,
+    with_summary: bool = False,
+    id_limit: int | None = DEFAULT_ID_LIMIT,
+) -> None:
     """Full topology report for STEP/BREP files. OCCT failures are caught and
     surfaced as malformed — never as a stack trace, never as a leaked native
     diagnostic on stdout."""
@@ -233,12 +265,27 @@ def _inspect_tier0(file_path: str, detection: dict, *, with_ids: bool = False, w
 
     if with_ids or with_summary:
         from agentcad import topo_ids
+        truncations = []
         if with_ids:
-            payload["solids"] = topo_ids.solid_entries(topo_shape)
-            payload["faces"] = topo_ids.face_entries(topo_shape)
-            payload["edges"] = topo_ids.edge_entries(topo_shape)
+            counts = topo_ids.topology_counts(topo_shape)
+            payload["solids"] = topo_ids.solid_entries(topo_shape, limit=id_limit)
+            payload["faces"] = topo_ids.face_entries(topo_shape, limit=id_limit)
+            payload["edges"] = topo_ids.edge_entries(topo_shape, limit=id_limit)
+            truncations.extend(_list_truncations(
+                counts,
+                {
+                    "solids": len(payload["solids"]),
+                    "faces": len(payload["faces"]),
+                    "edges": len(payload["edges"]),
+                },
+                id_limit,
+            ))
         if with_summary:
-            payload["summary"] = topo_ids.summary_entries(topo_shape)
+            payload["summary"] = topo_ids.summary_entries(
+                topo_shape,
+                id_limit=id_limit,
+            )
+            truncations.extend(_summary_truncations(payload["summary"]))
         # When the agent has IDs (or summary IDs), the most-likely next
         # action shifts: they're here because they want to write an edit
         # script that targets specific features. Point them at the
@@ -248,6 +295,17 @@ def _inspect_tier0(file_path: str, detection: dict, *, with_ids: bool = False, w
             "use pick_face(base, ID) / pick_edge(base, ID) in your edit script — "
             "see `agentcad docs editing`",
         ]
+        if truncations:
+            payload["truncation"] = {
+                "limited": True,
+                "limit": id_limit,
+                "fields": truncations,
+                "recommended_commands": _recommended_limit_commands(
+                    file_path,
+                    with_ids=with_ids,
+                    with_summary=with_summary,
+                ),
+            }
 
     # On a high edit-risk input the generic next_actions above (view, measure,
     # or the import → pick_face flow) all assume the part is normally editable,
@@ -276,6 +334,63 @@ def _inspect_tier0(file_path: str, detection: dict, *, with_ids: bool = False, w
         payload["notes"] = notes
 
     _emit(payload, exit_code=0)
+
+
+def _list_truncations(
+    totals: dict,
+    returned: dict,
+    limit: int | None,
+) -> list[dict]:
+    if limit is None:
+        return []
+    fields = []
+    for name, total in totals.items():
+        count = returned[name]
+        if count < total:
+            fields.append({
+                "path": name,
+                "returned": count,
+                "total": total,
+                "omitted": total - count,
+            })
+    return fields
+
+
+def _summary_truncations(summary: dict) -> list[dict]:
+    id_truncation = summary.get("id_truncation")
+    if not id_truncation:
+        return []
+    fields = []
+    for field in id_truncation["fields"]:
+        fields.append({
+            "path": f"summary.{field['path']}.ids",
+            "limit_per_cluster": field["limit_per_cluster"],
+            "truncated_clusters": field["truncated_clusters"],
+            "omitted": field["omitted_ids"],
+        })
+    return fields
+
+
+def _recommended_limit_commands(
+    file_path: str,
+    *,
+    with_ids: bool,
+    with_summary: bool,
+) -> list[str]:
+    commands = []
+    if with_summary:
+        commands.extend([
+            f"agentcad inspect {file_path} --summary --limit 500",
+            f"agentcad inspect {file_path} --summary --no-limit",
+        ])
+    if with_ids:
+        commands.extend([
+            f"agentcad inspect {file_path} --ids --limit 500",
+            f"agentcad inspect {file_path} --ids --no-limit",
+        ])
+    if not with_summary:
+        commands.insert(0, f"agentcad inspect {file_path} --summary")
+    return commands
 
 
 def _compute_notes(payload: dict) -> list:

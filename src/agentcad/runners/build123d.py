@@ -47,7 +47,10 @@ def validate(user_source: str) -> list:
     """
     from agentcad.validate import validate_script
 
-    return list(validate_script(with_preamble(user_source)))
+    return list(validate_script(
+        with_preamble(user_source),
+        output_calls=("show_object", "show_assembly", "show_compound"),
+    ))
 
 
 _SIMPLE_LITERALS = (ast.Constant,)
@@ -109,10 +112,21 @@ def execute(
             )
         source = _apply_overrides(source, params)
 
-    # List of (obj, explicit_id, name, color) tuples in declaration order.
-    captured: list[tuple[Any, Any, Any, Any]] = []
+    # List of (obj, explicit_id, name, color, part_of, group_color) tuples
+    # in declaration order.
+    captured: list[tuple[Any, Any, Any, Any, Any, Any]] = []
+    assembly_requested = False
 
-    def show_object(obj, *_args, id=None, name=None, options=None, **_kwargs):
+    def show_object(
+        obj,
+        *_args,
+        id=None,
+        name=None,
+        part_of=None,
+        group_color=None,
+        options=None,
+        **_kwargs,
+    ):
         # Boolean ops in build123d (`a - b - c`) can return a ShapeList instead
         # of a single Shape when the result is multi-piece. Auto-extract the
         # single-element case (the common one) and surface a recovery hint
@@ -129,13 +143,18 @@ def execute(
             else:
                 raise TypeError(
                     f"show_object() received a ShapeList of {len(obj)} shapes. "
-                    "Call show_object() once per shape (e.g. `for s in result: "
+                    "For intentional multi-body output, call "
+                    "show_assembly(result, name=...). Otherwise call "
+                    "show_object() once per shape (e.g. `for s in result: "
                     "show_object(s)`), or fuse them first with "
                     "`Compound(children=list(result))` if you want a single part."
                 )
-        if not isinstance(obj, Shape):
+        if not isinstance(obj, Shape) and not _is_topods_shape(obj):
             raise TypeError(
-                f"show_object() expects a build123d Shape, got {type(obj).__name__}"
+                f"show_object() expects a build123d Shape or raw OCP "
+                f"TopoDS_Shape, got {type(obj).__name__}. For fragile STEP "
+                "edits, use `load_step_shape(path)`, build a raw TopoDS "
+                "feature/compound, and pass that to `show_object()`."
             )
         color = None
         if isinstance(options, dict):
@@ -144,7 +163,66 @@ def execute(
             color = options.get("color")
             if name is None:
                 name = options.get("name")
-        captured.append((obj, id, name, color))
+            if part_of is None:
+                part_of = options.get("part_of") or options.get("group")
+            if group_color is None:
+                group_color = options.get("group_color")
+        captured.append((obj, id, name, color, part_of, group_color))
+
+    def show_assembly(
+        shapes,
+        *_args,
+        id=None,
+        name=None,
+        part_of=None,
+        group_color=None,
+        options=None,
+        **_kwargs,
+    ):
+        """Capture an intentional multi-body build123d output.
+
+        This is the supported escape hatch for ShapeList/list/tuple outputs:
+        callers do not need to know the exact Compound(children=...) idiom.
+        """
+        nonlocal assembly_requested
+
+        if isinstance(shapes, Shape):
+            children = [shapes]
+        else:
+            try:
+                children = list(shapes)
+            except TypeError as exc:
+                raise TypeError(
+                    "show_assembly() expects a build123d Shape or an iterable "
+                    f"of Shapes, got {type(shapes).__name__}"
+                ) from exc
+
+        if not children:
+            raise TypeError("show_assembly() received no shapes.")
+
+        bad = [type(s).__name__ for s in children if not isinstance(s, Shape)]
+        if bad:
+            raise TypeError(
+                "show_assembly() expects only build123d Shape objects; "
+                f"got {', '.join(bad)}"
+            )
+
+        color = None
+        if isinstance(options, dict):
+            if id is None:
+                id = options.get("id")
+            color = options.get("color")
+            if name is None:
+                name = options.get("name")
+            if part_of is None:
+                part_of = options.get("part_of") or options.get("group")
+            if group_color is None:
+                group_color = options.get("group_color")
+
+        captured.append(
+            (Compound(children=children), id, name, color, part_of, group_color)
+        )
+        assembly_requested = True
 
     import build123d as _b3d
 
@@ -152,6 +230,8 @@ def execute(
         "__name__": "__agentcad_script__",
         "__file__": filename,
         "show_object": show_object,
+        "show_assembly": show_assembly,
+        "show_compound": show_assembly,
         "build123d": _b3d,
     }
     for attr in getattr(_b3d, "__all__", dir(_b3d)):
@@ -166,6 +246,7 @@ def execute(
         for attr in (
             "loft_sections", "tapered_sweep", "naca_wire", "mirror_fuse",
             "translate", "rotate", "bbox_point", "place_at",
+            "annular_boss", "raise_annulus",
             "ellipse_wire", "spline_wire", "polygon_wire", "rounded_rect_wire",
             "elliptical_sweep", "involute_gear_profile",
         ):
@@ -252,7 +333,10 @@ def execute(
             status="execution_error",
             discovered_parameters=discovered,
             parameters=effective_params,
-            exception="Script produced no results. Did you call show_object()?",
+            exception=(
+                "Script produced no results. Did you call show_object() "
+                "or show_assembly()?"
+            ),
         )
 
     warnings: list[str] = [
@@ -261,13 +345,18 @@ def execute(
         if issubclass(w.category, UserWarning)
         and not issubclass(w.category, DeprecationWarning)
     ]
-    shapes = [obj for obj, _id, _n, _c in captured]
+    shapes = [obj for obj, _id, _n, _c, _g, _gc in captured]
     if len(shapes) == 1:
         native_shape = shapes[0]
+    elif any(_is_topods_shape(s) for s in shapes):
+        native_shape = _make_topods_compound(shapes)
     else:
         native_shape = Compound(children=list(shapes))
+    output_type = (
+        "assembly" if assembly_requested or len(shapes) > 1 else "single_part"
+    )
 
-    topo_shape = native_shape.wrapped
+    topo_shape = _topods_shape(native_shape)
 
     parts = [
         {
@@ -275,9 +364,11 @@ def execute(
             "explicit_id": explicit_id,
             "name": name,
             "color": color,
-            "topo_shape": obj.wrapped,
+            "part_of": part_of,
+            "group_color": group_color,
+            "topo_shape": _topods_shape(obj),
         }
-        for idx, (obj, explicit_id, name, color) in enumerate(captured)
+        for idx, (obj, explicit_id, name, color, part_of, group_color) in enumerate(captured)
     ]
 
     return ExecutionResult(
@@ -287,6 +378,7 @@ def execute(
         parameters=effective_params,
         discovered_parameters=discovered,
         warnings=warnings,
+        output_type=output_type,
         parts=parts,
     )
 
@@ -536,15 +628,81 @@ def _faces_with_inner_loops(face_objs, face_ids: list[int]) -> list[int]:
     return flagged
 
 
+def _is_topods_shape(obj) -> bool:
+    """Return True for raw OCP TopoDS_Shape / TopoDS_Compound instances."""
+    try:
+        from OCP.TopoDS import TopoDS_Shape
+    except ImportError:
+        return False
+    return isinstance(obj, TopoDS_Shape)
+
+
+def _topods_shape(obj):
+    """Extract the raw TopoDS shape from either build123d or OCP objects."""
+    from build123d import Shape
+
+    if isinstance(obj, Shape):
+        return obj.wrapped
+    if _is_topods_shape(obj):
+        return obj
+    raise TypeError(
+        f"Expected build123d Shape or TopoDS_Shape, got {type(obj).__name__}"
+    )
+
+
+def _make_topods_compound(shapes):
+    """Build a raw OCCT compound without converting through build123d."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    for shape in shapes:
+        builder.Add(compound, _topods_shape(shape))
+    return compound
+
+
+def _export_topods_step(shape, path: str) -> None:
+    """Write a raw TopoDS shape through OCCT's STEP writer."""
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+    from agentcad.native_io import silence_native_stdout
+
+    with silence_native_stdout():
+        writer = STEPControl_Writer()
+        status = writer.Transfer(shape, STEPControl_AsIs)
+        if status != IFSelect_RetDone:
+            raise RuntimeError(f"OCCT STEP transfer failed with status {status}")
+        status = writer.Write(path)
+        if status != IFSelect_RetDone:
+            raise RuntimeError(f"OCCT STEP write failed with status {status}")
+
+
 def export_step(native_shape: Any, path: str) -> None:
-    """Write STEP using build123d's native ``export_step``."""
+    """Write STEP using build123d, or OCCT directly for raw TopoDS shapes."""
+    if _is_topods_shape(native_shape):
+        _export_topods_step(native_shape, path)
+        return
+
     from build123d import export_step as _export
 
     _export(native_shape, path)
 
 
 def export_stl(native_shape: Any, path: str) -> None:
-    """Write STL using build123d's native ``export_stl``."""
+    """Write STL using build123d, or OCCT directly for raw TopoDS shapes."""
+    if _is_topods_shape(native_shape):
+        from OCP.BRepMesh import BRepMesh_IncrementalMesh
+        from OCP.StlAPI import StlAPI_Writer
+
+        BRepMesh_IncrementalMesh(native_shape, 0.1)
+        writer = StlAPI_Writer()
+        ok = writer.Write(native_shape, path)
+        if ok is False:
+            raise RuntimeError(f"OCCT STL write failed for {path}")
+        return
+
     from build123d import export_stl as _export
 
     _export(native_shape, path)

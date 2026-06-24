@@ -27,6 +27,7 @@ import click
 #   __DIFF_SIDE_PNG_URL__    base64 data URI for diff_side.png, or ""
 #   __DIFF_OVERLAY_PNG_URL__ base64 data URI for diff_overlay.png, or ""
 #   __DEFAULT_MODE__         starting mode string
+#   __GROUPS_JSON__          part groups payload
 #   __REVIEW_JSON__          measure/check-spec review payload, or null
 #   __PART_REVIEW_JSON__     part visibility/focus state, or null
 _HTML_UNIFIED = r"""<!DOCTYPE html>
@@ -94,14 +95,29 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     padding: 60px 24px 24px; display: none;
     box-sizing: border-box;
   }
-  #parts-view .panel { margin: 0 auto; max-width: 600px; background: #fff; border-radius: 8px; padding: 20px 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  #parts-view .panel { margin: 0 auto; max-width: 720px; background: #fff; border-radius: 8px; padding: 20px 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
   #parts-view h3 { margin: 0 0 12px; font-size: 14px; color: #555; font-weight: normal; }
+  #parts-view h4 { margin: 16px 0 8px; font-size: 11px; color: #667085; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
   #parts-view ol { margin: 0; padding-left: 24px; font-family: monospace; font-size: 13px; color: #222; }
   #parts-view ol li { margin: 6px 0; }
   #parts-view .swatch { width: 11px; height: 11px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; display: inline-block; margin-right: 8px; vertical-align: -1px; box-sizing: border-box; }
+  #parts-view .group-list { display: grid; gap: 6px; margin-bottom: 10px; }
+  #parts-view .group-row {
+    display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
+    align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid rgba(0,0,0,0.08); border-radius: 6px;
+    background: #f8fafc; font-family: monospace; font-size: 13px;
+  }
+  #parts-view .group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #222; }
+  #parts-view .meta { color: #667085; font-size: 11px; white-space: nowrap; }
+  #parts-view .part-group-tag {
+    display: inline-block; margin-left: 8px; padding: 1px 5px;
+    border: 1px solid rgba(0,0,0,0.12); border-radius: 999px;
+    color: #3f4856; background: #f8fafc; font-size: 11px;
+  }
   #part-controls {
     position: absolute; top: 60px; left: 12px; z-index: 20;
-    width: 310px; max-height: calc(100vh - 126px); overflow: auto;
+    width: 340px; max-height: calc(100vh - 126px); overflow: auto;
     background: rgba(255,255,255,0.94); border: 1px solid rgba(0,0,0,0.10);
     border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,0.12);
     color: #1f2933; display: none; user-select: none;
@@ -112,6 +128,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   }
   #part-controls h3 { margin: 0; font-size: 13px; font-weight: 700; }
   #part-controls .actions { display: flex; gap: 6px; align-items: center; }
+  #part-controls .actions button { white-space: nowrap; }
   #part-controls button {
     border: 1px solid rgba(0,0,0,0.14); background: #fff; color: #27313f;
     border-radius: 5px; padding: 5px 7px; font-family: monospace; font-size: 11px;
@@ -120,6 +137,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   #part-controls button:hover { background: #f2f5f8; }
   #part-controls button.active { background: #27313f; color: #fff; border-color: #27313f; }
   #part-controls .rows { display: grid; gap: 6px; padding: 10px; }
+  #part-controls .section-title { padding: 8px 10px 0; color: #667085; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   #part-controls .part-row {
     display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
     align-items: center; gap: 8px; padding: 7px; border: 1px solid rgba(0,0,0,0.08);
@@ -127,6 +145,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   }
   #part-controls .part-row.selected { border-color: #1b75bb; box-shadow: 0 0 0 3px rgba(27,117,187,0.12); }
   #part-controls .part-row.hidden { opacity: 0.48; }
+  #part-controls .group-row { background: rgba(248,250,252,0.95); border-style: solid; }
   #part-controls .swatch { width: 12px; height: 12px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; box-sizing: border-box; }
   #part-controls .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   #part-controls .sub { color: #667085; font-size: 10px; margin-top: 2px; }
@@ -257,6 +276,11 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
 <div id="parts-view">
   <div class="panel">
     <h3 id="parts-heading">Parts</h3>
+    <div id="parts-groups-section" style="display:none;">
+      <h4>Groups</h4>
+      <div class="group-list" id="parts-groups"></div>
+    </div>
+    <h4 id="parts-list-heading" style="display:none;">Parts</h4>
     <ol id="parts-list"></ol>
   </div>
 </div>
@@ -336,21 +360,30 @@ const DIFF_SIDE_PNG_URL = "__DIFF_SIDE_PNG_URL__";
 const DIFF_OVERLAY_PNG_URL = "__DIFF_OVERLAY_PNG_URL__";
 const DEFAULT_MODE = "__DEFAULT_MODE__";
 const PARTS = __PARTS_JSON__;
+const GROUPS = __GROUPS_JSON__;
 const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
 
 const hasB = MODEL_B_URL.length > 0;
 const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0;
 const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
+const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
 const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 const partObjects = new Map();
 const partRows = new Map();
+const groupRows = new Map();
+let currentMode = null;
+let viewerReady = false;
 let partState = {
   selected: (PART_REVIEW && (PART_REVIEW.selected || PART_REVIEW.focus)) || null,
   focus: (PART_REVIEW && PART_REVIEW.focus) || null,
   hidden: new Set((PART_REVIEW && PART_REVIEW.hidden) || []),
   isolated: new Set((PART_REVIEW && PART_REVIEW.isolated) || []),
   ghostRest: Boolean(PART_REVIEW && PART_REVIEW.ghost_rest),
+};
+window.agentcadViewer = {
+  debugState: viewerDebugState,
+  lastState: null,
 };
 
 // Disable buttons that lack data
@@ -378,20 +411,7 @@ function setupModeButtons() {
   if (DIFF_OVERLAY_PNG_URL) { document.getElementById('panel-diff-overlay').style.display = ''; document.getElementById('img-diff-overlay').src = DIFF_OVERLAY_PNG_URL; }
 
   if (hasParts) {
-    document.getElementById('parts-heading').textContent = `Parts (${PARTS.length})`;
-    const list = document.getElementById('parts-list');
-    for (const p of PARTS) {
-      const li = document.createElement('li');
-      if (p.color) {
-        const swatch = document.createElement('span');
-        swatch.className = 'swatch';
-        swatch.style.background = p.color;
-        swatch.title = p.color;
-        li.appendChild(swatch);
-      }
-      li.appendChild(document.createTextNode(p.name || p.id));
-      list.appendChild(li);
-    }
+    setupStaticPartsPanel();
     setupPartControls();
   }
   if (hasReview) {
@@ -412,54 +432,111 @@ function partLabel(part) {
   return part.name || part.id;
 }
 
+function groupLabel(group) {
+  return group.name || group.id;
+}
+
+function groupPartIds(groupId) {
+  const group = GROUPS.find(g => g.id === groupId);
+  return group ? (group.part_ids || []) : [];
+}
+
+function setupStaticPartsPanel() {
+  document.getElementById('parts-heading').textContent = hasGroups
+    ? `Parts ${PARTS.length} · Groups ${GROUPS.length}`
+    : `Parts (${PARTS.length})`;
+  document.getElementById('parts-list-heading').style.display = hasGroups ? 'block' : 'none';
+
+  const groupsSection = document.getElementById('parts-groups-section');
+  const groupsList = document.getElementById('parts-groups');
+  groupsList.innerHTML = '';
+  groupsSection.style.display = hasGroups ? 'block' : 'none';
+  if (hasGroups) {
+    for (const g of GROUPS) groupsList.appendChild(makeStaticGroupRow(g));
+  }
+
+  const list = document.getElementById('parts-list');
+  list.innerHTML = '';
+  for (const p of PARTS) list.appendChild(makeStaticPartRow(p));
+}
+
+function makeStaticGroupRow(group) {
+  const row = document.createElement('div');
+  row.className = 'group-row';
+  row.dataset.groupId = group.id;
+
+  const swatch = document.createElement('span');
+  swatch.className = 'swatch';
+  swatch.style.background = group.color || '#c0c0c0';
+  swatch.title = group.color || 'group';
+  row.appendChild(swatch);
+
+  const name = document.createElement('span');
+  name.className = 'group-name';
+  name.textContent = groupLabel(group);
+  row.appendChild(name);
+
+  const count = document.createElement('span');
+  count.className = 'meta';
+  const partCount = (group.part_ids || []).length;
+  count.textContent = `${group.id} · ${partCount} ${partCount === 1 ? 'part' : 'parts'}`;
+  row.appendChild(count);
+  return row;
+}
+
+function makeStaticPartRow(part) {
+  const li = document.createElement('li');
+  li.dataset.partId = part.id;
+  if (part.color) {
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = part.color;
+    swatch.title = part.color;
+    li.appendChild(swatch);
+  }
+  li.appendChild(document.createTextNode(partLabel(part)));
+  if (part.part_of) {
+    const tag = document.createElement('span');
+    tag.className = 'part-group-tag';
+    tag.textContent = part.part_of;
+    li.appendChild(tag);
+  }
+  return li;
+}
+
 function setupPartControls() {
   const rows = document.getElementById('part-control-rows');
   rows.innerHTML = '';
-  document.getElementById('part-controls-heading').textContent = `Part controls (${PARTS.length})`;
+  document.getElementById('part-controls-heading').textContent = hasGroups
+    ? `Parts ${PARTS.length} · Groups ${GROUPS.length}`
+    : `Part controls (${PARTS.length})`;
+  if (hasGroups) {
+    const heading = document.createElement('div');
+    heading.className = 'section-title';
+    heading.textContent = 'Groups';
+    rows.appendChild(heading);
+    for (const g of GROUPS) {
+      rows.appendChild(makeControlRow({
+        id: g.id,
+        label: groupLabel(g),
+        sub: `${g.id} · ${(g.part_ids || []).length} parts`,
+        color: g.color,
+        isGroup: true,
+      }));
+    }
+    const partsHeading = document.createElement('div');
+    partsHeading.className = 'section-title';
+    partsHeading.textContent = 'Parts';
+    rows.appendChild(partsHeading);
+  }
   for (const p of PARTS) {
-    const row = document.createElement('div');
-    row.className = 'part-row';
-    row.dataset.partId = p.id;
-
-    const swatch = document.createElement('span');
-    swatch.className = 'swatch';
-    swatch.style.background = p.color || '#c0c0c0';
-    row.appendChild(swatch);
-
-    const name = document.createElement('button');
-    name.type = 'button';
-    name.className = 'name';
-    name.title = `Focus ${p.id}`;
-    name.textContent = partLabel(p);
-    name.addEventListener('click', () => selectPart(p.id, { focus: true }));
-    const textWrap = document.createElement('div');
-    textWrap.appendChild(name);
-    const sub = document.createElement('div');
-    sub.className = 'sub';
-    sub.textContent = p.id;
-    textWrap.appendChild(sub);
-    row.appendChild(textWrap);
-
-    const actions = document.createElement('div');
-    actions.className = 'row-actions';
-    const hide = document.createElement('button');
-    hide.type = 'button';
-    hide.dataset.action = 'hide';
-    hide.textContent = 'Hide';
-    hide.title = `Hide or show ${p.id}`;
-    hide.addEventListener('click', () => togglePartHidden(p.id));
-    const isolate = document.createElement('button');
-    isolate.type = 'button';
-    isolate.dataset.action = 'isolate';
-    isolate.textContent = 'Iso';
-    isolate.title = `Isolate ${p.id}`;
-    isolate.addEventListener('click', () => togglePartIsolated(p.id));
-    actions.appendChild(hide);
-    actions.appendChild(isolate);
-    row.appendChild(actions);
-
-    rows.appendChild(row);
-    partRows.set(p.id, row);
+    rows.appendChild(makeControlRow({
+      id: p.id,
+      label: partLabel(p),
+      sub: p.part_of ? `${p.id} · ${p.part_of}` : p.id,
+      color: p.color,
+      isGroup: false,
+    }));
   }
   document.getElementById('ghost-rest-btn').addEventListener('click', () => {
     partState.ghostRest = !partState.ghostRest;
@@ -472,6 +549,61 @@ function setupPartControls() {
     applyPartState();
   });
   applyPartState();
+}
+
+function makeControlRow({ id, label, sub, color, isGroup }) {
+    const row = document.createElement('div');
+    row.className = isGroup ? 'part-row group-row' : 'part-row';
+    row.dataset[isGroup ? 'groupId' : 'partId'] = id;
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = color || '#c0c0c0';
+    row.appendChild(swatch);
+
+    const name = document.createElement('button');
+    name.type = 'button';
+    name.className = 'name';
+    name.title = `Focus ${id}`;
+    name.textContent = label;
+    name.addEventListener('click', () => {
+      if (isGroup) selectGroup(id, { focus: true });
+      else selectPart(id, { focus: true });
+    });
+    const textWrap = document.createElement('div');
+    textWrap.appendChild(name);
+    const subEl = document.createElement('div');
+    subEl.className = 'sub';
+    subEl.textContent = sub;
+    textWrap.appendChild(subEl);
+    row.appendChild(textWrap);
+
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const hide = document.createElement('button');
+    hide.type = 'button';
+    hide.dataset.action = 'hide';
+    hide.textContent = 'Hide';
+    hide.title = `Hide or show ${id}`;
+    hide.addEventListener('click', () => {
+      if (isGroup) toggleGroupHidden(id);
+      else togglePartHidden(id);
+    });
+    const isolate = document.createElement('button');
+    isolate.type = 'button';
+    isolate.dataset.action = 'isolate';
+    isolate.textContent = 'Iso';
+    isolate.title = `Isolate ${id}`;
+    isolate.addEventListener('click', () => {
+      if (isGroup) toggleGroupIsolated(id);
+      else togglePartIsolated(id);
+    });
+    actions.appendChild(hide);
+    actions.appendChild(isolate);
+    row.appendChild(actions);
+
+    if (isGroup) groupRows.set(id, row);
+    else partRows.set(id, row);
+    return row;
 }
 
 function partMatchesNameExact(partId, name) {
@@ -544,8 +676,64 @@ function partIsPrimary(partId) {
   return false;
 }
 
+function allMembersInSet(ids, set) {
+  return ids.length > 0 && ids.every(id => set.has(id));
+}
+
 function allPartMeshes() {
   return Array.from(partObjects.values()).flat();
+}
+
+function meshMaterials(mesh) {
+  if (!mesh.material) return [];
+  return Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+}
+
+function meshIsGhosted(mesh) {
+  const materials = meshMaterials(mesh);
+  return materials.length > 0 && materials.every(m => m.transparent && m.opacity <= 0.2);
+}
+
+function viewerDebugState() {
+  return {
+    ready: viewerReady,
+    mode: currentMode,
+    review: PART_REVIEW,
+    parts: PARTS.map(p => {
+      const meshes = partObjects.get(p.id) || [];
+      const visibleMeshes = meshes.filter(m => m.visible);
+      return {
+        id: p.id,
+        part_of: p.part_of || null,
+        mesh_count: meshes.length,
+        visible_mesh_count: visibleMeshes.length,
+        visible: visibleMeshes.length > 0,
+        hidden: partState.hidden.has(p.id),
+        isolated: partState.isolated.has(p.id),
+        selected: partState.selected === p.id || partState.isolated.has(p.id),
+        ghosted: visibleMeshes.length > 0 && visibleMeshes.every(meshIsGhosted),
+      };
+    }),
+    groups: GROUPS.map(g => {
+      const ids = groupPartIds(g.id);
+      return {
+        id: g.id,
+        part_ids: ids,
+        hidden: allMembersInSet(ids, partState.hidden),
+        isolated: allMembersInSet(ids, partState.isolated),
+        selected: ids.includes(partState.selected) || allMembersInSet(ids, partState.isolated),
+      };
+    }),
+    ghost_rest: partState.ghostRest,
+  };
+}
+
+function publishViewerDebugState() {
+  if (!window.agentcadViewer) return;
+  window.agentcadViewer.lastState = viewerDebugState();
+  window.dispatchEvent(new CustomEvent('agentcad:viewer-state', {
+    detail: window.agentcadViewer.lastState,
+  }));
 }
 
 function applyPartState() {
@@ -566,6 +754,22 @@ function applyPartState() {
   }
   const ghostBtn = document.getElementById('ghost-rest-btn');
   if (ghostBtn) ghostBtn.classList.toggle('active', partState.ghostRest);
+  for (const g of GROUPS) {
+    const row = groupRows.get(g.id);
+    if (!row) continue;
+    const ids = groupPartIds(g.id);
+    const hidden = allMembersInSet(ids, partState.hidden);
+    const isolated = allMembersInSet(ids, partState.isolated);
+    row.classList.toggle('selected', isolated || ids.includes(partState.selected));
+    row.classList.toggle('hidden', hidden);
+    const hideBtn = row.querySelector('[data-action="hide"]');
+    const isolateBtn = row.querySelector('[data-action="isolate"]');
+    if (hideBtn) {
+      hideBtn.classList.toggle('active', hidden);
+      hideBtn.textContent = hidden ? 'Show' : 'Hide';
+    }
+    if (isolateBtn) isolateBtn.classList.toggle('active', isolated);
+  }
 
   for (const mesh of allPartMeshes()) {
     const partId = mesh.userData.partId;
@@ -580,6 +784,7 @@ function applyPartState() {
     const shouldGhost = partState.ghostRest && !partIsPrimary(partId);
     mesh.material = shouldGhost ? mesh.userData.ghostMaterial : mesh.userData.originalMaterial;
   }
+  publishViewerDebugState();
 }
 
 function selectPart(partId, { focus=false }={}) {
@@ -604,8 +809,62 @@ function togglePartIsolated(partId) {
   selectPart(partId, { focus: true });
 }
 
+function selectGroup(groupId, { focus=false }={}) {
+  const ids = groupPartIds(groupId);
+  partState.selected = ids[0] || null;
+  applyPartState();
+  if (focus) focusGroup(groupId);
+}
+
+function toggleGroupHidden(groupId) {
+  const ids = groupPartIds(groupId);
+  const allHidden = allMembersInSet(ids, partState.hidden);
+  for (const id of ids) {
+    if (allHidden) partState.hidden.delete(id);
+    else partState.hidden.add(id);
+  }
+  selectGroup(groupId, { focus: false });
+}
+
+function toggleGroupIsolated(groupId) {
+  const ids = groupPartIds(groupId);
+  const allIsolated = allMembersInSet(ids, partState.isolated);
+  partState.isolated.clear();
+  if (!allIsolated) {
+    for (const id of ids) {
+      partState.isolated.add(id);
+      partState.hidden.delete(id);
+    }
+  }
+  selectGroup(groupId, { focus: true });
+}
+
 function focusPart(partId) {
   const meshes = partObjects.get(partId) || [];
+  if (!meshes.length) return;
+  const box = new THREE.Box3();
+  for (const mesh of meshes) box.expandByObject(mesh);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
+  const direction = camera.position.clone().sub(controls.target);
+  if (direction.lengthSq() < 1e-6) direction.set(1, 0.8, 1);
+  direction.normalize();
+  controls.target.copy(center);
+  camera.position.copy(center).add(direction.multiplyScalar(maxDim * 3.2));
+  camera.near = Math.max(maxDim * 0.001, 0.01);
+  camera.far = Math.max(maxDim * 100, 1000);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+function focusGroup(groupId) {
+  focusPartIds(groupPartIds(groupId));
+}
+
+function focusPartIds(partIds) {
+  const meshes = partIds.flatMap(id => partObjects.get(id) || []);
   if (!meshes.length) return;
   const box = new THREE.Box3();
   for (const mesh of meshes) box.expandByObject(mesh);
@@ -1013,10 +1272,11 @@ Promise.all([
   fitCamera();
   applyPartState();
   if (partState.focus) focusPart(partState.focus);
+  viewerReady = true;
+  publishViewerDebugState();
 });
 
 // ---- Mode switching ----
-let currentMode = null;
 let currentScene = sceneA_single;
 let splitMode = false;
 resize();
@@ -1360,6 +1620,7 @@ def _render_unified(
     diff_side_png=None,
     diff_overlay_png=None,
     parts=None,
+    groups=None,
     review=None,
     part_review=None,
 ):
@@ -1369,8 +1630,12 @@ def _render_unified(
     mode toggle will grey out the buttons that depend on missing data.
     """
     parts_payload = [
-        {k: p[k] for k in ("id", "id_source", "name", "color") if k in p}
+        {k: p[k] for k in ("id", "id_source", "name", "color", "part_of") if k in p}
         for p in (parts or [])
+    ]
+    groups_payload = [
+        {k: g[k] for k in ("id", "name", "color", "part_ids") if k in g}
+        for g in (groups or [])
     ]
     replacements = {
         "__MODEL_A_URL__": _embed_data_uri(glb_a),
@@ -1382,6 +1647,7 @@ def _render_unified(
         "__DIFF_OVERLAY_PNG_URL__": _embed_data_uri(diff_overlay_png),
         "__DEFAULT_MODE__": default_mode,
         "__PARTS_JSON__": json.dumps(parts_payload),
+        "__GROUPS_JSON__": json.dumps(groups_payload),
         "__REVIEW_JSON__": json.dumps(review) if review else "null",
         "__PART_REVIEW_JSON__": json.dumps(part_review) if part_review else "null",
     }

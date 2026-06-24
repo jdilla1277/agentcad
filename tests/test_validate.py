@@ -4,6 +4,7 @@ import pytest
 
 from agentcad.cli import cli
 from agentcad.manifest import MANIFEST_FILE
+from agentcad.runners import cadquery as cq_runner
 from agentcad.validate import validate_script
 
 
@@ -55,6 +56,37 @@ class TestValidateScript:
         )
         errors = validate_script(source)
         assert not any(e["check"] == "show_object_missing" for e in errors)
+
+    def test_show_assembly_is_not_generic_output_call(self):
+        source = (
+            'from build123d import Box\n'
+            'result = [Box(10, 10, 10), Box(5, 5, 5)]\n'
+            'show_assembly(result)\n'
+        )
+        errors = validate_script(source)
+        assert any(e["check"] == "show_object_missing" for e in errors)
+
+    def test_show_assembly_counts_as_build123d_output_call(self):
+        source = (
+            'from build123d import Box\n'
+            'result = [Box(10, 10, 10), Box(5, 5, 5)]\n'
+            'show_assembly(result)\n'
+        )
+        errors = validate_script(
+            source,
+            output_calls=("show_object", "show_assembly", "show_compound"),
+        )
+        assert errors == []
+
+    def test_cadquery_validation_rejects_show_assembly_as_b3d_only(self):
+        source = (
+            'import cadquery as cq\n'
+            'result = [cq.Workplane("XY").box(1, 1, 1)]\n'
+            'show_assembly(result)\n'
+        )
+        errors = cq_runner.validate(source)
+        assert any(e["check"] == "show_object_missing" for e in errors)
+        assert any(e["check"] == "b3d_only_helper_in_cq_script" for e in errors)
 
     def test_bad_import_caught(self):
         source = (

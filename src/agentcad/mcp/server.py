@@ -141,29 +141,77 @@ def export(step_file: str, formats: str, cwd: str) -> dict:
 
 
 @mcp.tool()
-def measure(file: str, cwd: str, features: bool = False) -> dict:
+def measure(
+    file: str,
+    cwd: str,
+    features: bool = False,
+    cylinders_only: bool = False,
+    diameter: float | None = None,
+    tolerance: float = 0.5,
+    axis: str | None = None,
+    limit: int | None = None,
+    no_limit: bool = False,
+) -> dict:
     """Measure dimensions and feature sizes in a STEP/BREP file.
 
     Args:
         file: Path to the STEP/STP/BREP file.
         cwd: Project directory.
         features: Include full per-solid, per-face, and per-edge measurement lists.
+        cylinders_only: Return only cylindrical feature buckets and core metrics.
+        diameter: Optional cylindrical feature diameter filter.
+        tolerance: Diameter tolerance used with diameter.
+        axis: Optional axis filter (+x, -x, +y, -y, +z, -z, other).
+        limit: Optional maximum records per feature list.
+        no_limit: Return complete feature lists. Can be very large.
     """
     args = ["measure", file]
     if features:
         args.append("--features")
+    if cylinders_only:
+        args.append("--cylinders-only")
+    if diameter is not None:
+        args.extend(["--diameter", str(diameter)])
+    if tolerance != 0.5:
+        args.extend(["--tolerance", str(tolerance)])
+    if axis:
+        args.extend(["--axis", axis])
+    if limit is not None:
+        args.extend(["--limit", str(limit)])
+    if no_limit:
+        args.append("--no-limit")
     return _invoke(args, cwd=cwd)
 
 
 @mcp.tool()
-def inspect(file: str, cwd: str) -> dict:
+def inspect(
+    file: str,
+    cwd: str,
+    ids: bool = False,
+    summary: bool = False,
+    limit: int | None = None,
+    no_limit: bool = False,
+) -> dict:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
     Args:
         file: Path to the STEP file.
         cwd: Project directory.
+        ids: Include per-feature ID lists.
+        summary: Include compact face/edge clusters.
+        limit: Optional maximum records per ID list and IDs per summary cluster.
+        no_limit: Return complete ID lists. Can be very large.
     """
-    return _invoke(["inspect", file], cwd=cwd)
+    args = ["inspect", file]
+    if ids:
+        args.append("--ids")
+    if summary:
+        args.append("--summary")
+    if limit is not None:
+        args.extend(["--limit", str(limit)])
+    if no_limit:
+        args.append("--no-limit")
+    return _invoke(args, cwd=cwd)
 
 
 @mcp.tool()

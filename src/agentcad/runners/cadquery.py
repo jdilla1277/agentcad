@@ -20,8 +20,9 @@ PREAMBLE = (
     "import cadquery as cq; "
     "from agentcad.helpers import ("
     "loft_sections, tapered_sweep, naca_wire, mirror_fuse, translate, "
-    "rotate, bbox_point, place_at, assemble, ellipse_wire, spline_wire, "
-    "polygon_wire, rounded_rect_wire, elliptical_sweep, involute_gear_profile"
+    "rotate, bbox_point, place_at, assemble, annular_boss, raise_annulus, "
+    "ellipse_wire, spline_wire, polygon_wire, rounded_rect_wire, "
+    "elliptical_sweep, involute_gear_profile"
     ")\n"
 )
 
@@ -34,6 +35,7 @@ def with_preamble(user_source: str) -> str:
 # build123d-only helpers per design_conventions.md. A CQ-routed script
 # calling these would otherwise get a bare NameError at exec time.
 _B3D_ONLY_HELPERS = (
+    "show_assembly", "show_compound",
     "load_step", "load_step_shape",
     "pick_face", "pick_edge",
     "fillet_edges", "chamfer_edges", "shell_faces",
@@ -196,11 +198,17 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
                 "explicit_id": opts.get("id"),
                 "name": opts.get("name"),
                 "color": opts.get("color"),
+                "part_of": opts.get("part_of") or opts.get("group"),
+                "group_color": opts.get("group_color"),
                 "topo_shape": wp.wrapped,
             })
 
         if len(per_part_shapes) == 1:
-            shape = build_result.results[0].shape
+            original_shape = build_result.results[0].shape
+            if hasattr(original_shape, "val"):
+                shape = original_shape
+            else:
+                shape = cq.Workplane("XY").newObject([per_part_shapes[0]])
         else:
             shape = cq.Workplane("XY").newObject(
                 [cq.Compound.makeCompound(per_part_shapes)]

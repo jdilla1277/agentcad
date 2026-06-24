@@ -151,8 +151,10 @@ def test_docs_parts_mentions_review_viewers(runner):
 
     assert "agentcad parts view" in content
     assert "--isolate main_deck" in content
+    assert "--isolate-group frame" in content
     assert "--ghost-rest" in content
     assert "viewer_glb" in content
+    assert "group_color" in content
 
 
 def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
@@ -454,6 +456,41 @@ def test_docs_preamble_mentions_wire_helpers(runner):
     content = data["content"]
     assert "ellipse_wire" in content
     assert "elliptical_sweep" in content
+
+
+def test_docs_build123d_mentions_annular_edit_helpers(runner):
+    result = runner.invoke(cli, ["docs", "helpers", "--runtime", "build123d"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "annular_boss" in content
+    assert "raise_annulus" in content
+    assert "load_step_shape" in content
+    assert "Compound(result)" in content
+    assert "fragile boolean fuse" in content
+
+
+def test_docs_preamble_mentions_annular_edit_helpers(runner):
+    result = runner.invoke(cli, ["docs", "preamble", "--runtime", "build123d"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "annular_boss" in content
+    assert "raise_annulus" in content
+
+
+def test_docs_cadquery_preamble_mentions_annular_edit_helpers(runner):
+    result = runner.invoke(cli, ["docs", "preamble", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "annular_boss" in content
+    assert "raise_annulus" in content
+
+
+def test_docs_editing_describes_runtime_neutral_annular_helpers(runner):
+    result = runner.invoke(cli, ["docs", "editing", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "annular_boss and raise_annulus are runtime-neutral" in content
+    assert "the helpers above are build123d-only" not in content
 
 
 # --- M38: Complex profile patterns ---

@@ -33,7 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.0.0"]
-dev = ["pytest>=8.0", "pytest-timeout>=2.0"]
+dev = ["pytest>=8.0", "pytest-timeout>=2.0", "playwright>=1.40"]
 
 [project.urls]
 Repository = "https://github.com/jdilla1277/agentcad"
@@ -62,3 +62,6 @@ testpaths = ["tests", "tests_b3d"]
 # preview renders). Individual tests can override via the
 # @pytest.mark.timeout decorator if they truly need longer.
 timeout = 120
+markers = [
+    "browser: browser-level viewer smoke tests that require Playwright browsers",
+]

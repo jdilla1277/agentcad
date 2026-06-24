@@ -3,6 +3,7 @@
 from OCP.Bnd import Bnd_Box
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepTools import BRepTools
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_WIRE
@@ -33,9 +34,22 @@ def compute_metrics(topo_shape):
     Returns a JSON-serializable dict with bounding_box, dimensions, volume,
     surface_area, center_of_mass, face_count, edge_count, and is_valid.
     """
-    # Bounding box
+    # Bounding box.
+    #
+    # Use AddOptimal_s, not Add_s. Add_s derives each face/edge bound from the
+    # *poles* (control points) of its B-spline/NURBS geometry, which for
+    # rational curves and swept/lofted surfaces lie well outside the actual
+    # trimmed geometry. STEP exporters routinely emit circles, cylinders, and
+    # blade surfaces as NURBS, so Add_s can inflate `dimensions` far past the
+    # real envelope (CADGenBench 203 impeller: 586.7 reported vs 360 real).
+    # AddOptimal_s computes a tight box from the trimmed geometry and matches
+    # build123d's `bounding_box()` (which is what produced the correct 360
+    # envelope in that benchmark). Clean_s first to drop any cached
+    # triangulation that AddOptimal would otherwise prefer over the exact
+    # geometry — same sequence build123d uses.
+    BRepTools.Clean_s(topo_shape)
     bbox = Bnd_Box()
-    BRepBndLib.Add_s(topo_shape, bbox)
+    BRepBndLib.AddOptimal_s(topo_shape, bbox)
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
 
     bb = {

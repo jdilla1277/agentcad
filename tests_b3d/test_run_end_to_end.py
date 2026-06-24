@@ -11,6 +11,7 @@ coarse-grained on purpose.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from agentcad.cli import cli
@@ -41,6 +42,32 @@ arm = Box(8, 2, 1).translate((0, 5, 0))
 show_object(deck, name="deck")
 show_object(pin)
 show_object(arm, name="arm")
+"""
+GROUPED_PARTS = """\
+from build123d import Box, Cylinder
+base = Box(20, 10, 2)
+rib = Box(3, 14, 4).translate((0, 0, 3))
+pin = Cylinder(radius=1, height=5).translate((8, 0, 0))
+show_object(base, id="base_plate", name="Base Plate", options={
+    "part_of": "frame", "group_color": "steelblue"
+})
+show_object(rib, id="center_rib", name="Center Rib", options={
+    "part_of": "frame", "group_color": "steelblue"
+})
+show_object(pin, id="locator_pin", name="Locator Pin", options={"color": "coral"})
+"""
+GROUP_COLOR_CONFLICTS = """\
+from build123d import Box, Cylinder
+base = Box(20, 10, 2)
+rib = Box(3, 14, 4).translate((0, 0, 3))
+pin = Cylinder(radius=1, height=5).translate((8, 0, 0))
+show_object(base, id="base_plate", name="Base Plate", options={
+    "part_of": "frame", "group_color": "steelblue"
+})
+show_object(rib, id="center_rib", name="Center Rib", options={
+    "part_of": "frame", "group_color": "seagreen"
+})
+show_object(pin, id="locator_pin", name="Locator Pin", options={"group_color": "gold"})
 """
 DUPLICATE_NAMES = """\
 from build123d import Box
@@ -83,6 +110,14 @@ from build123d import Box, Sphere, Compound
 a = Box(10, 10, 10)
 b = Sphere(6).translate((20, 0, 0))
 show_object(Compound(children=[a, b]))
+"""
+SHAPELIST_ASSEMBLY = """\
+from build123d import Box, ShapeList
+result = ShapeList([
+    Box(10, 10, 10),
+    Box(5, 5, 5).translate((20, 0, 0)),
+])
+show_assembly(result, name="fallback_proxy")
 """
 BROKEN = """\
 from build123d import Box
@@ -138,6 +173,38 @@ class TestVersionDirectory:
         _run(runner, "s.py", "--output", "two")
         assert (isolated_dir / "v1_one").is_dir()
         assert (isolated_dir / "v2_two").is_dir()
+
+    def test_raw_topods_compound_step_export_path(self, runner, isolated_dir):
+        """Preserve a source STEP as raw TopoDS and add a raw OCCT feature."""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "source.py", SIMPLE)
+        first = _run(runner, "source.py", "--output", "source", "--no-preview")
+        assert first.exit_code == 0, first.output
+
+        raw_edit = """\
+from build123d import Box
+from OCP.BRep import BRep_Builder
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from OCP.gp import gp_Pnt
+from OCP.TopoDS import TopoDS_Compound
+
+base = load_step_shape("v1_source/output.step")
+feature = BRepPrimAPI_MakeBox(gp_Pnt(20, 0, 0), 2, 2, 2).Shape()
+compound = TopoDS_Compound()
+builder = BRep_Builder()
+builder.MakeCompound(compound)
+builder.Add(compound, base)
+builder.Add(compound, feature)
+show_object(compound, name="raw_topods_edit")
+"""
+        _write(isolated_dir, "raw_edit.py", raw_edit)
+        second = _run(runner, "raw_edit.py", "--output", "raw", "--no-preview")
+        assert second.exit_code == 0, second.output
+        parsed = json.loads(second.stdout)
+        assert parsed["runtime"] == "build123d"
+        assert parsed["outputs"]["step"] == "v2_raw/output.step"
+        assert (isolated_dir / "v2_raw" / "output.step").exists()
+        assert parsed["metrics"]["volume"] > 1000.0
 
 
 # ---------- preview (default on) ----------
@@ -568,12 +635,83 @@ class TestDryRun:
         parsed = json.loads(r.stdout)
         assert parsed["status"] == "success"
         assert parsed["runtime"] == "build123d"
+        assert parsed["output_type"] == "single_part"
         assert parsed["metrics"]["volume"] == 1000.0
+
+    def test_show_assembly_dry_run_reports_assembly_output(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SHAPELIST_ASSEMBLY)
+        r = _run(runner, "s.py", "--output", "assembly", "--dry-run")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["runtime"] == "build123d"
+        assert parsed["output_type"] == "assembly"
+        assert parsed["parts"][0]["name"] == "fallback_proxy"
+        assert parsed["parts"][0]["metrics"]["volume"] == 1125.0
 
 
 # ---------- failures ----------
 
 class TestFailures:
+    def test_timeout_during_script_execution_reports_phase(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+
+        from agentcad.runners import build123d as b3d_runner
+
+        def slow_execute(*_args, **_kwargs):
+            time.sleep(1)
+
+        monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+        monkeypatch.setattr(b3d_runner, "validate", lambda _source: [])
+        monkeypatch.setattr(b3d_runner, "execute", slow_execute)
+
+        r = _run(runner, "s.py", "--output", "slow", "--no-preview", "--no-daemon")
+
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "failed"
+        assert parsed["error_kind"] == "timeout"
+        assert parsed["timeout_phase"] == "script_exec"
+        assert parsed["completed_phases"] == ["validation"]
+        assert "validation_ms" in parsed["phase_timings"]
+        assert "script" in parsed["suggestion"].lower()
+
+    def test_timeout_during_step_export_reports_completed_phases(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+
+        # Warm imports with the watchdog disabled so the short test timeout
+        # below exercises post-script STEP export, not CAD startup.
+        monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
+        warmup = _run(runner, "s.py", "--output", "warmup", "--no-preview", "--no-daemon")
+        assert warmup.exit_code == 0, warmup.output
+
+        from agentcad.runners import build123d as b3d_runner
+
+        def slow_export_step(*_args, **_kwargs):
+            time.sleep(1)
+
+        monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+        monkeypatch.setattr(b3d_runner, "export_step", slow_export_step)
+
+        r = _run(runner, "s.py", "--output", "slow_export", "--no-preview", "--no-daemon")
+
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "failed"
+        assert parsed["error_kind"] == "timeout"
+        assert parsed["timeout_phase"] == "export_step"
+        assert parsed["completed_phases"][-2:] == ["script_exec", "metrics"]
+        assert "script_exec_ms" in parsed["phase_timings"]
+        assert "metrics_ms" in parsed["phase_timings"]
+        assert "export" in parsed["suggestion"].lower()
+
     def test_missing_script_errors(self, runner, isolated_dir):
         _init(runner, isolated_dir)
         r = _run(runner, "nope.py", "--output", "x")
@@ -742,6 +880,78 @@ class TestNamedParts:
         assert [p["name"] for p in parts] == ["deck", "pin", "arm"]
         assert [p["color"] for p in parts] == ["gray", "blue", "red"]
         assert all(p["part_of"] is None for p in parts)
+
+    def test_grouped_parts_emit_groups_and_inherit_group_color(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", GROUPED_PARTS)
+        r = _run(runner, "s.py", "--output", "grouped")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+
+        assert [p["id"] for p in parsed["parts"]] == [
+            "base_plate", "center_rib", "locator_pin",
+        ]
+        assert [p["part_of"] for p in parsed["parts"]] == [
+            "frame", "frame", None,
+        ]
+        assert [p["color"] for p in parsed["parts"]] == [
+            "steelblue", "steelblue", "coral",
+        ]
+        assert parsed["groups"] == [{
+            "id": "frame",
+            "name": "frame",
+            "part_ids": ["base_plate", "center_rib"],
+            "color": "steelblue",
+        }]
+
+    def test_viewer_embeds_part_groups(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", GROUPED_PARTS)
+        r = _run(runner, "s.py", "--output", "grouped_viewer")
+        assert r.exit_code == 0, r.output
+
+        viewer_html = (isolated_dir / "v1_grouped_viewer" / "viewer.html").read_text()
+        import re
+        parts_match = re.search(r"const PARTS = (\[.*?\]);", viewer_html)
+        groups_match = re.search(r"const GROUPS = (\[.*?\]);", viewer_html)
+        assert parts_match, "PARTS const not found in viewer.html"
+        assert groups_match, "GROUPS const not found in viewer.html"
+
+        parts = json.loads(parts_match.group(1))
+        groups = json.loads(groups_match.group(1))
+        assert [p.get("part_of") for p in parts] == ["frame", "frame", None]
+        assert groups == [{
+            "id": "frame",
+            "name": "frame",
+            "color": "steelblue",
+            "part_ids": ["base_plate", "center_rib"],
+        }]
+        assert 'id="parts-groups-section"' in viewer_html
+        assert "makeStaticGroupRow" in viewer_html
+        assert "part-group-tag" in viewer_html
+        assert "toggleGroupHidden" in viewer_html
+        assert "toggleGroupIsolated" in viewer_html
+
+    def test_group_color_conflicts_warn_and_use_first_color(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", GROUP_COLOR_CONFLICTS)
+        r = _run(runner, "s.py", "--output", "group_conflicts")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+
+        assert parsed["groups"] == [{
+            "id": "frame",
+            "name": "frame",
+            "part_ids": ["base_plate", "center_rib"],
+            "color": "steelblue",
+        }]
+        assert [p.get("color") for p in parsed["parts"]] == [
+            "steelblue", "steelblue", None,
+        ]
+        warnings = parsed.get("warnings", [])
+        assert any("conflicting group_color" in w for w in warnings)
+        assert any("group_color ignored for ungrouped part 'locator_pin'" in w
+                   for w in warnings)
 
     def test_named_parts_have_metrics(self, runner, isolated_dir):
         _init(runner, isolated_dir)

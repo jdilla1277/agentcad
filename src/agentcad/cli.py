@@ -33,6 +33,8 @@ from agentcad.commands.view import view
 _BRIEFING_TEMPLATE = """\b
 SCRIPT WRITING
   agentcad runs Python scripts that call show_object() to surface geometry.
+  In build123d projects, use show_assembly() for intentional multi-body
+  ShapeList/list output.
   The script-writing API depends on the project's engine (cadquery or
   build123d). Run:
 
@@ -68,6 +70,7 @@ EXAMPLE SESSION
   # Write script.py (see 'agentcad docs quickstart'), then:
   $ agentcad run script.py --output first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
+   "output_type": "single_part",
    "version": 1, "label": "first",
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
    "viewer": "v1_first/viewer.html", "viewer_glb": "v1_first/output.glb",
@@ -122,15 +125,16 @@ COMMANDS
     Export STEP to mesh formats. GLB auto-colors individual solids.
 
 \b
-  agentcad inspect STEP
+  agentcad inspect STEP [--ids|--summary] [--limit N|--no-limit]
     Topology report: solid_count, shell_count, shells (open/closed + face
     count per shell), face_count, face_orientations (forward/reversed),
-    edge_count, free_edge_count, is_valid.
+    edge_count, free_edge_count, is_valid. --ids is capped by default.
 
 \b
-  agentcad measure STEP [--features]
+  agentcad measure STEP [--features] [--cylinders-only] [--limit N|--no-limit]
     Dimensional report: overall metrics plus compact feature measurements
     (edge lengths, face areas, circular/cylindrical radii and diameters).
+    Full feature lists are capped by default; use --no-limit only when needed.
 
 \b
   agentcad check-spec STEP SPEC.json
@@ -141,6 +145,7 @@ COMMANDS
   agentcad parts list REF       List named/captured parts for a version.
   agentcad parts show REF ID    Show one part from that version by stable id.
   agentcad parts view REF [--isolate ID] [--hide ID] [--ghost-rest] [--focus ID]
+                          [--isolate-group GROUP] [--hide-group GROUP]
                                 Generate a reproducible part review viewer.
                                 Uses the same meta.json snapshot as viewer.html.
   agentcad view FILE [--measure] [--spec spec.json]
@@ -294,3 +299,9 @@ cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)
 cli.add_command(view)
+
+
+if __name__ == "__main__":
+    # Allow `python -m agentcad.cli ...`; without this the module imports
+    # and exits silently. See also agentcad/__main__.py for `python -m agentcad`.
+    cli()
