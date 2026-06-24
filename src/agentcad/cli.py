@@ -294,3 +294,9 @@ cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)
 cli.add_command(view)
+
+
+if __name__ == "__main__":
+    # Allow `python -m agentcad.cli ...`; without this the module imports
+    # and exits silently. See also agentcad/__main__.py for `python -m agentcad`.
+    cli()

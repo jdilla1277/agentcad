@@ -8,6 +8,7 @@ from OCP.Bnd import Bnd_Box
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
+from OCP.BRepTools import BRepTools
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeWire,
@@ -302,8 +303,16 @@ def bbox_point(shape, x="center", y="center", z="center"):
                 f"Invalid value '{val}' for {name}. Must be one of: {', '.join(valid)}"
             )
 
+    # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
+    # control-point poles, which sit outside the trimmed geometry. For a
+    # placement helper that's a real footgun: bbox_point(shape, x="max")
+    # would return a point floating in space beyond the actual body, so
+    # place_at / assemble would mis-seat NURBS parts. AddOptimal_s gives a
+    # tight box on the same basis as `agentcad measure`. Clean_s first to
+    # drop cached triangulation (matches metrics.compute_metrics).
+    BRepTools.Clean_s(shape)
     box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
+    BRepBndLib.AddOptimal_s(shape, box)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
 
     def _pick(lo, hi, spec):

@@ -382,6 +382,33 @@ class TestBboxPoint:
         assert isinstance(pt, tuple)
         assert len(pt) == 3
 
+    def test_not_inflated_by_nurbs_poles(self):
+        """A B-spline/NURBS body must report its trimmed extents, not the
+        control-point poles. Under the old Add_s, the max corner of this
+        radius-180 disk floated out past ~198 in X/Y, mis-seating place_at."""
+        from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
+        from OCP.Geom import Geom_Circle
+        from OCP.GeomConvert import GeomConvert
+        from OCP.BRepBuilderAPI import (
+            BRepBuilderAPI_MakeEdge,
+            BRepBuilderAPI_MakeFace,
+            BRepBuilderAPI_MakeWire,
+        )
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+
+        bspline = GeomConvert.CurveToBSplineCurve_s(
+            Geom_Circle(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 180.0)
+        )
+        edge = BRepBuilderAPI_MakeEdge(bspline).Edge()
+        wire = BRepBuilderAPI_MakeWire(edge).Wire()
+        face = BRepBuilderAPI_MakeFace(wire, True).Face()
+        solid = BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, 134.0)).Shape()
+
+        x_max, y_max, z_max = bbox_point(solid, "max", "max", "max")
+        assert x_max == pytest.approx(180.0, abs=0.5)
+        assert y_max == pytest.approx(180.0, abs=0.5)
+        assert z_max == pytest.approx(134.0, abs=0.5)
+
 
 # ── place_at tests ───────────────────────────────────────────
 
