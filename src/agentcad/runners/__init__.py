@@ -44,6 +44,9 @@ class ExecutionResult:
     warnings: list[str] = field(default_factory=list)
     exception: str | None = None
     traceback: str | None = None
+    # "single_part" for one explicit part; "assembly" for intentional or
+    # multi-capture compound output.
+    output_type: str | None = None
     # Per-part breakdown. One entry per show_object() call, declaration order.
     # Each dict has a raw sequential id, optional explicit_id/name/color, and
     # topo_shape (TopoDS_Shape). run.py resolves public IDs and enriches with

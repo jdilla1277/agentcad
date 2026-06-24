@@ -33,6 +33,8 @@ from agentcad.commands.view import view
 _BRIEFING_TEMPLATE = """\b
 SCRIPT WRITING
   agentcad runs Python scripts that call show_object() to surface geometry.
+  In build123d projects, use show_assembly() for intentional multi-body
+  ShapeList/list output.
   The script-writing API depends on the project's engine (cadquery or
   build123d). Run:
 
@@ -68,6 +70,7 @@ EXAMPLE SESSION
   # Write script.py (see 'agentcad docs quickstart'), then:
   $ agentcad run script.py --output first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
+   "output_type": "single_part",
    "version": 1, "label": "first",
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
    "viewer": "v1_first/viewer.html", "viewer_glb": "v1_first/output.glb",

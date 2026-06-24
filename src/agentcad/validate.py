@@ -4,12 +4,13 @@ import ast
 import importlib
 
 
-def validate_script(source):
+def validate_script(source, output_calls=None):
     """Validate a script source before execution.
 
     Returns a list of error dicts. Empty list means the script is valid.
     Each error dict has: check, severity, message.
     """
+    output_calls = set(output_calls or ("show_object",))
     errors = []
 
     # 1. Syntax check
@@ -23,12 +24,21 @@ def validate_script(source):
         })
         return errors  # Can't do further AST checks with bad syntax
 
-    # 2. Check for show_object() call
-    if not _has_show_object(tree):
+    # 2. Check for an output capture call
+    if not _has_output_call(tree, output_calls):
+        if output_calls == {"show_object"}:
+            call_hint = "show_object()"
+            add_hint = "Add show_object(result) to surface your geometry."
+        else:
+            call_hint = " or ".join(f"{name}()" for name in sorted(output_calls))
+            add_hint = (
+                "Add show_object(result) for one shape, or show_assembly(result) "
+                "for intentional multi-body build123d output."
+            )
         errors.append({
             "check": "show_object_missing",
             "severity": "error",
-            "message": "Script does not call show_object(). Add show_object(result) to surface your geometry.",
+            "message": f"Script does not call {call_hint}. {add_hint}",
         })
 
     # 3. Check imports resolve
@@ -52,12 +62,13 @@ def validate_script(source):
     return errors
 
 
-def _has_show_object(tree):
-    """Check if AST contains a call to show_object()."""
+def _has_output_call(tree, output_calls=None):
+    """Check if AST contains a geometry output call."""
+    output_calls = set(output_calls or ("show_object",))
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             func = node.func
-            if isinstance(func, ast.Name) and func.id == "show_object":
+            if isinstance(func, ast.Name) and func.id in output_calls:
                 return True
     return False
 

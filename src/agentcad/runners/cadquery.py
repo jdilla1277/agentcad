@@ -34,6 +34,7 @@ def with_preamble(user_source: str) -> str:
 # build123d-only helpers per design_conventions.md. A CQ-routed script
 # calling these would otherwise get a bare NameError at exec time.
 _B3D_ONLY_HELPERS = (
+    "show_assembly", "show_compound",
     "load_step", "load_step_shape",
     "pick_face", "pick_edge",
     "fillet_edges", "chamfer_edges", "shell_faces",
