@@ -385,9 +385,17 @@ def _edge_geometry(edge):
 def _bbox(shape) -> dict:
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
+    from OCP.BRepTools import BRepTools
 
+    # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
+    # control-point poles, which sit outside the trimmed geometry and inflate
+    # the box (see metrics.compute_metrics for the full rationale). Keeping
+    # per-solid/per-face bboxes here on the same tight basis as the top-level
+    # `metrics.dimensions` avoids `measure --features` / `inspect` reporting a
+    # per-body envelope larger than the whole-part one on NURBS geometry.
+    BRepTools.Clean_s(shape)
     box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
+    BRepBndLib.AddOptimal_s(shape, box)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
     return {
         "x": [_round(xmin), _round(xmax)],

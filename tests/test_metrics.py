@@ -160,3 +160,70 @@ class TestNegativeVolumeWarning:
         reversed_shape = box.Reversed()
         m = compute_metrics(reversed_shape)
         assert any("winding" in w.lower() for w in m["warnings"])
+
+
+def _make_bspline_circle_prism(radius=180.0, height=134.0):
+    """Extruded solid whose profile circle is stored as a rational B-spline.
+
+    STEP exporters routinely emit circles/cylinders and swept blade surfaces
+    as NURBS rather than analytic geometry. The poles (control points) of a
+    rational B-spline circle lie *outside* the curve, so BRepBndLib.Add_s
+    over-reports the envelope. AddOptimal_s (what compute_metrics uses)
+    computes a tight box. Mirrors CADGenBench sample 203 (issue #28), where
+    the raw-pole bbox read 586.7 while the true impeller envelope was ~360.
+    """
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
+    from OCP.Geom import Geom_Circle
+    from OCP.GeomConvert import GeomConvert
+    from OCP.BRepBuilderAPI import (
+        BRepBuilderAPI_MakeEdge,
+        BRepBuilderAPI_MakeFace,
+        BRepBuilderAPI_MakeWire,
+    )
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+
+    circ = Geom_Circle(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), radius)
+    bspline = GeomConvert.CurveToBSplineCurve_s(circ)
+    edge = BRepBuilderAPI_MakeEdge(bspline).Edge()
+    wire = BRepBuilderAPI_MakeWire(edge).Wire()
+    face = BRepBuilderAPI_MakeFace(wire, True).Face()
+    return BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, height)).Shape()
+
+
+class TestBSplineBBoxNotInflatedByPoles:
+    """Regression for issue #28: dimensions must reflect the trimmed body
+    envelope, not the inflated control-point (pole) extents of NURBS geometry."""
+
+    def test_dimensions_match_true_envelope(self):
+        shape = _make_bspline_circle_prism(radius=180.0, height=134.0)
+        dims = compute_metrics(shape)["dimensions"]
+        # True diameter is 360; raw Add_s reports ~397 x ~435 from the poles.
+        assert dims["x"] == pytest.approx(360.0, abs=0.5)
+        assert dims["y"] == pytest.approx(360.0, abs=0.5)
+        assert dims["z"] == pytest.approx(134.0, abs=0.5)
+
+    def test_not_inflated_by_poles(self):
+        """Guard against a regression back to BRepBndLib.Add_s, which would
+        report the pole envelope (~397 x ~435) instead of ~360 x 360."""
+        shape = _make_bspline_circle_prism(radius=180.0, height=134.0)
+        dims = compute_metrics(shape)["dimensions"]
+        assert dims["x"] < 370.0
+        assert dims["y"] < 370.0
+
+
+class TestPerSolidBBoxNotInflatedByPoles:
+    """Regression for issue #28: the per-solid bbox in `measure --features`
+    and `inspect` (topo_ids._bbox) must use the same tight basis as the
+    top-level dimensions — not the inflated NURBS pole extents."""
+
+    def test_solid_entry_bbox_is_tight(self):
+        from agentcad import topo_ids
+
+        shape = _make_bspline_circle_prism(radius=180.0, height=134.0)
+        entry = topo_ids.solid_entries(shape)[0]
+        bb = entry["bbox"]
+        # True radius 180 → [-180, 180]; raw Add_s would push past ±198.
+        assert bb["x"][0] == pytest.approx(-180.0, abs=0.5)
+        assert bb["x"][1] == pytest.approx(180.0, abs=0.5)
+        assert bb["y"][0] == pytest.approx(-180.0, abs=0.5)
+        assert bb["y"][1] == pytest.approx(180.0, abs=0.5)
