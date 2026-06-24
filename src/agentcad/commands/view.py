@@ -352,12 +352,18 @@ const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 const partObjects = new Map();
 const partRows = new Map();
 const groupRows = new Map();
+let currentMode = null;
+let viewerReady = false;
 let partState = {
   selected: (PART_REVIEW && (PART_REVIEW.selected || PART_REVIEW.focus)) || null,
   focus: (PART_REVIEW && PART_REVIEW.focus) || null,
   hidden: new Set((PART_REVIEW && PART_REVIEW.hidden) || []),
   isolated: new Set((PART_REVIEW && PART_REVIEW.isolated) || []),
   ghostRest: Boolean(PART_REVIEW && PART_REVIEW.ghost_rest),
+};
+window.agentcadViewer = {
+  debugState: viewerDebugState,
+  lastState: null,
 };
 
 // Disable buttons that lack data
@@ -608,6 +614,58 @@ function allPartMeshes() {
   return Array.from(partObjects.values()).flat();
 }
 
+function meshMaterials(mesh) {
+  if (!mesh.material) return [];
+  return Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+}
+
+function meshIsGhosted(mesh) {
+  const materials = meshMaterials(mesh);
+  return materials.length > 0 && materials.every(m => m.transparent && m.opacity <= 0.2);
+}
+
+function viewerDebugState() {
+  return {
+    ready: viewerReady,
+    mode: currentMode,
+    review: PART_REVIEW,
+    parts: PARTS.map(p => {
+      const meshes = partObjects.get(p.id) || [];
+      const visibleMeshes = meshes.filter(m => m.visible);
+      return {
+        id: p.id,
+        part_of: p.part_of || null,
+        mesh_count: meshes.length,
+        visible_mesh_count: visibleMeshes.length,
+        visible: visibleMeshes.length > 0,
+        hidden: partState.hidden.has(p.id),
+        isolated: partState.isolated.has(p.id),
+        selected: partState.selected === p.id || partState.isolated.has(p.id),
+        ghosted: visibleMeshes.length > 0 && visibleMeshes.every(meshIsGhosted),
+      };
+    }),
+    groups: GROUPS.map(g => {
+      const ids = groupPartIds(g.id);
+      return {
+        id: g.id,
+        part_ids: ids,
+        hidden: allMembersInSet(ids, partState.hidden),
+        isolated: allMembersInSet(ids, partState.isolated),
+        selected: ids.includes(partState.selected) || allMembersInSet(ids, partState.isolated),
+      };
+    }),
+    ghost_rest: partState.ghostRest,
+  };
+}
+
+function publishViewerDebugState() {
+  if (!window.agentcadViewer) return;
+  window.agentcadViewer.lastState = viewerDebugState();
+  window.dispatchEvent(new CustomEvent('agentcad:viewer-state', {
+    detail: window.agentcadViewer.lastState,
+  }));
+}
+
 function applyPartState() {
   if (!hasParts) return;
   for (const p of PARTS) {
@@ -656,6 +714,7 @@ function applyPartState() {
     const shouldGhost = partState.ghostRest && !partIsPrimary(partId);
     mesh.material = shouldGhost ? mesh.userData.ghostMaterial : mesh.userData.originalMaterial;
   }
+  publishViewerDebugState();
 }
 
 function selectPart(partId, { focus=false }={}) {
@@ -1143,10 +1202,11 @@ Promise.all([
   fitCamera();
   applyPartState();
   if (partState.focus) focusPart(partState.focus);
+  viewerReady = true;
+  publishViewerDebugState();
 });
 
 // ---- Mode switching ----
-let currentMode = null;
 let currentScene = sceneA_single;
 let splitMode = false;
 resize();
