@@ -151,8 +151,10 @@ def test_docs_parts_mentions_review_viewers(runner):
 
     assert "agentcad parts view" in content
     assert "--isolate main_deck" in content
+    assert "--isolate-group frame" in content
     assert "--ghost-rest" in content
     assert "viewer_glb" in content
+    assert "group_color" in content
 
 
 def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):

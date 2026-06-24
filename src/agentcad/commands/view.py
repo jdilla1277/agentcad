@@ -27,6 +27,7 @@ import click
 #   __DIFF_SIDE_PNG_URL__    base64 data URI for diff_side.png, or ""
 #   __DIFF_OVERLAY_PNG_URL__ base64 data URI for diff_overlay.png, or ""
 #   __DEFAULT_MODE__         starting mode string
+#   __GROUPS_JSON__          part groups payload
 #   __REVIEW_JSON__          measure/check-spec review payload, or null
 #   __PART_REVIEW_JSON__     part visibility/focus state, or null
 _HTML_UNIFIED = r"""<!DOCTYPE html>
@@ -101,7 +102,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   #parts-view .swatch { width: 11px; height: 11px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; display: inline-block; margin-right: 8px; vertical-align: -1px; box-sizing: border-box; }
   #part-controls {
     position: absolute; top: 60px; left: 12px; z-index: 20;
-    width: 310px; max-height: calc(100vh - 126px); overflow: auto;
+    width: 340px; max-height: calc(100vh - 126px); overflow: auto;
     background: rgba(255,255,255,0.94); border: 1px solid rgba(0,0,0,0.10);
     border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,0.12);
     color: #1f2933; display: none; user-select: none;
@@ -112,6 +113,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   }
   #part-controls h3 { margin: 0; font-size: 13px; font-weight: 700; }
   #part-controls .actions { display: flex; gap: 6px; align-items: center; }
+  #part-controls .actions button { white-space: nowrap; }
   #part-controls button {
     border: 1px solid rgba(0,0,0,0.14); background: #fff; color: #27313f;
     border-radius: 5px; padding: 5px 7px; font-family: monospace; font-size: 11px;
@@ -120,6 +122,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   #part-controls button:hover { background: #f2f5f8; }
   #part-controls button.active { background: #27313f; color: #fff; border-color: #27313f; }
   #part-controls .rows { display: grid; gap: 6px; padding: 10px; }
+  #part-controls .section-title { padding: 8px 10px 0; color: #667085; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   #part-controls .part-row {
     display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
     align-items: center; gap: 8px; padding: 7px; border: 1px solid rgba(0,0,0,0.08);
@@ -127,6 +130,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   }
   #part-controls .part-row.selected { border-color: #1b75bb; box-shadow: 0 0 0 3px rgba(27,117,187,0.12); }
   #part-controls .part-row.hidden { opacity: 0.48; }
+  #part-controls .group-row { background: rgba(248,250,252,0.95); border-style: solid; }
   #part-controls .swatch { width: 12px; height: 12px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; box-sizing: border-box; }
   #part-controls .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   #part-controls .sub { color: #667085; font-size: 10px; margin-top: 2px; }
@@ -336,15 +340,18 @@ const DIFF_SIDE_PNG_URL = "__DIFF_SIDE_PNG_URL__";
 const DIFF_OVERLAY_PNG_URL = "__DIFF_OVERLAY_PNG_URL__";
 const DEFAULT_MODE = "__DEFAULT_MODE__";
 const PARTS = __PARTS_JSON__;
+const GROUPS = __GROUPS_JSON__;
 const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
 
 const hasB = MODEL_B_URL.length > 0;
 const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0;
 const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
+const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
 const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 const partObjects = new Map();
 const partRows = new Map();
+const groupRows = new Map();
 let partState = {
   selected: (PART_REVIEW && (PART_REVIEW.selected || PART_REVIEW.focus)) || null,
   focus: (PART_REVIEW && PART_REVIEW.focus) || null,
@@ -412,54 +419,48 @@ function partLabel(part) {
   return part.name || part.id;
 }
 
+function groupLabel(group) {
+  return group.name || group.id;
+}
+
+function groupPartIds(groupId) {
+  const group = GROUPS.find(g => g.id === groupId);
+  return group ? (group.part_ids || []) : [];
+}
+
 function setupPartControls() {
   const rows = document.getElementById('part-control-rows');
   rows.innerHTML = '';
-  document.getElementById('part-controls-heading').textContent = `Part controls (${PARTS.length})`;
+  document.getElementById('part-controls-heading').textContent = hasGroups
+    ? `Parts ${PARTS.length} · Groups ${GROUPS.length}`
+    : `Part controls (${PARTS.length})`;
+  if (hasGroups) {
+    const heading = document.createElement('div');
+    heading.className = 'section-title';
+    heading.textContent = 'Groups';
+    rows.appendChild(heading);
+    for (const g of GROUPS) {
+      rows.appendChild(makeControlRow({
+        id: g.id,
+        label: groupLabel(g),
+        sub: `${g.id} · ${(g.part_ids || []).length} parts`,
+        color: g.color,
+        isGroup: true,
+      }));
+    }
+    const partsHeading = document.createElement('div');
+    partsHeading.className = 'section-title';
+    partsHeading.textContent = 'Parts';
+    rows.appendChild(partsHeading);
+  }
   for (const p of PARTS) {
-    const row = document.createElement('div');
-    row.className = 'part-row';
-    row.dataset.partId = p.id;
-
-    const swatch = document.createElement('span');
-    swatch.className = 'swatch';
-    swatch.style.background = p.color || '#c0c0c0';
-    row.appendChild(swatch);
-
-    const name = document.createElement('button');
-    name.type = 'button';
-    name.className = 'name';
-    name.title = `Focus ${p.id}`;
-    name.textContent = partLabel(p);
-    name.addEventListener('click', () => selectPart(p.id, { focus: true }));
-    const textWrap = document.createElement('div');
-    textWrap.appendChild(name);
-    const sub = document.createElement('div');
-    sub.className = 'sub';
-    sub.textContent = p.id;
-    textWrap.appendChild(sub);
-    row.appendChild(textWrap);
-
-    const actions = document.createElement('div');
-    actions.className = 'row-actions';
-    const hide = document.createElement('button');
-    hide.type = 'button';
-    hide.dataset.action = 'hide';
-    hide.textContent = 'Hide';
-    hide.title = `Hide or show ${p.id}`;
-    hide.addEventListener('click', () => togglePartHidden(p.id));
-    const isolate = document.createElement('button');
-    isolate.type = 'button';
-    isolate.dataset.action = 'isolate';
-    isolate.textContent = 'Iso';
-    isolate.title = `Isolate ${p.id}`;
-    isolate.addEventListener('click', () => togglePartIsolated(p.id));
-    actions.appendChild(hide);
-    actions.appendChild(isolate);
-    row.appendChild(actions);
-
-    rows.appendChild(row);
-    partRows.set(p.id, row);
+    rows.appendChild(makeControlRow({
+      id: p.id,
+      label: partLabel(p),
+      sub: p.part_of ? `${p.id} · ${p.part_of}` : p.id,
+      color: p.color,
+      isGroup: false,
+    }));
   }
   document.getElementById('ghost-rest-btn').addEventListener('click', () => {
     partState.ghostRest = !partState.ghostRest;
@@ -472,6 +473,61 @@ function setupPartControls() {
     applyPartState();
   });
   applyPartState();
+}
+
+function makeControlRow({ id, label, sub, color, isGroup }) {
+    const row = document.createElement('div');
+    row.className = isGroup ? 'part-row group-row' : 'part-row';
+    row.dataset[isGroup ? 'groupId' : 'partId'] = id;
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = color || '#c0c0c0';
+    row.appendChild(swatch);
+
+    const name = document.createElement('button');
+    name.type = 'button';
+    name.className = 'name';
+    name.title = `Focus ${id}`;
+    name.textContent = label;
+    name.addEventListener('click', () => {
+      if (isGroup) selectGroup(id, { focus: true });
+      else selectPart(id, { focus: true });
+    });
+    const textWrap = document.createElement('div');
+    textWrap.appendChild(name);
+    const subEl = document.createElement('div');
+    subEl.className = 'sub';
+    subEl.textContent = sub;
+    textWrap.appendChild(subEl);
+    row.appendChild(textWrap);
+
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const hide = document.createElement('button');
+    hide.type = 'button';
+    hide.dataset.action = 'hide';
+    hide.textContent = 'Hide';
+    hide.title = `Hide or show ${id}`;
+    hide.addEventListener('click', () => {
+      if (isGroup) toggleGroupHidden(id);
+      else togglePartHidden(id);
+    });
+    const isolate = document.createElement('button');
+    isolate.type = 'button';
+    isolate.dataset.action = 'isolate';
+    isolate.textContent = 'Iso';
+    isolate.title = `Isolate ${id}`;
+    isolate.addEventListener('click', () => {
+      if (isGroup) toggleGroupIsolated(id);
+      else togglePartIsolated(id);
+    });
+    actions.appendChild(hide);
+    actions.appendChild(isolate);
+    row.appendChild(actions);
+
+    if (isGroup) groupRows.set(id, row);
+    else partRows.set(id, row);
+    return row;
 }
 
 function partMatchesNameExact(partId, name) {
@@ -544,6 +600,10 @@ function partIsPrimary(partId) {
   return false;
 }
 
+function allMembersInSet(ids, set) {
+  return ids.length > 0 && ids.every(id => set.has(id));
+}
+
 function allPartMeshes() {
   return Array.from(partObjects.values()).flat();
 }
@@ -566,6 +626,22 @@ function applyPartState() {
   }
   const ghostBtn = document.getElementById('ghost-rest-btn');
   if (ghostBtn) ghostBtn.classList.toggle('active', partState.ghostRest);
+  for (const g of GROUPS) {
+    const row = groupRows.get(g.id);
+    if (!row) continue;
+    const ids = groupPartIds(g.id);
+    const hidden = allMembersInSet(ids, partState.hidden);
+    const isolated = allMembersInSet(ids, partState.isolated);
+    row.classList.toggle('selected', isolated || ids.includes(partState.selected));
+    row.classList.toggle('hidden', hidden);
+    const hideBtn = row.querySelector('[data-action="hide"]');
+    const isolateBtn = row.querySelector('[data-action="isolate"]');
+    if (hideBtn) {
+      hideBtn.classList.toggle('active', hidden);
+      hideBtn.textContent = hidden ? 'Show' : 'Hide';
+    }
+    if (isolateBtn) isolateBtn.classList.toggle('active', isolated);
+  }
 
   for (const mesh of allPartMeshes()) {
     const partId = mesh.userData.partId;
@@ -604,8 +680,62 @@ function togglePartIsolated(partId) {
   selectPart(partId, { focus: true });
 }
 
+function selectGroup(groupId, { focus=false }={}) {
+  const ids = groupPartIds(groupId);
+  partState.selected = ids[0] || null;
+  applyPartState();
+  if (focus) focusGroup(groupId);
+}
+
+function toggleGroupHidden(groupId) {
+  const ids = groupPartIds(groupId);
+  const allHidden = allMembersInSet(ids, partState.hidden);
+  for (const id of ids) {
+    if (allHidden) partState.hidden.delete(id);
+    else partState.hidden.add(id);
+  }
+  selectGroup(groupId, { focus: false });
+}
+
+function toggleGroupIsolated(groupId) {
+  const ids = groupPartIds(groupId);
+  const allIsolated = allMembersInSet(ids, partState.isolated);
+  partState.isolated.clear();
+  if (!allIsolated) {
+    for (const id of ids) {
+      partState.isolated.add(id);
+      partState.hidden.delete(id);
+    }
+  }
+  selectGroup(groupId, { focus: true });
+}
+
 function focusPart(partId) {
   const meshes = partObjects.get(partId) || [];
+  if (!meshes.length) return;
+  const box = new THREE.Box3();
+  for (const mesh of meshes) box.expandByObject(mesh);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
+  const direction = camera.position.clone().sub(controls.target);
+  if (direction.lengthSq() < 1e-6) direction.set(1, 0.8, 1);
+  direction.normalize();
+  controls.target.copy(center);
+  camera.position.copy(center).add(direction.multiplyScalar(maxDim * 3.2));
+  camera.near = Math.max(maxDim * 0.001, 0.01);
+  camera.far = Math.max(maxDim * 100, 1000);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+function focusGroup(groupId) {
+  focusPartIds(groupPartIds(groupId));
+}
+
+function focusPartIds(partIds) {
+  const meshes = partIds.flatMap(id => partObjects.get(id) || []);
   if (!meshes.length) return;
   const box = new THREE.Box3();
   for (const mesh of meshes) box.expandByObject(mesh);
@@ -1360,6 +1490,7 @@ def _render_unified(
     diff_side_png=None,
     diff_overlay_png=None,
     parts=None,
+    groups=None,
     review=None,
     part_review=None,
 ):
@@ -1369,8 +1500,12 @@ def _render_unified(
     mode toggle will grey out the buttons that depend on missing data.
     """
     parts_payload = [
-        {k: p[k] for k in ("id", "id_source", "name", "color") if k in p}
+        {k: p[k] for k in ("id", "id_source", "name", "color", "part_of") if k in p}
         for p in (parts or [])
+    ]
+    groups_payload = [
+        {k: g[k] for k in ("id", "name", "color", "part_ids") if k in g}
+        for g in (groups or [])
     ]
     replacements = {
         "__MODEL_A_URL__": _embed_data_uri(glb_a),
@@ -1382,6 +1517,7 @@ def _render_unified(
         "__DIFF_OVERLAY_PNG_URL__": _embed_data_uri(diff_overlay_png),
         "__DEFAULT_MODE__": default_mode,
         "__PARTS_JSON__": json.dumps(parts_payload),
+        "__GROUPS_JSON__": json.dumps(groups_payload),
         "__REVIEW_JSON__": json.dumps(review) if review else "null",
         "__PART_REVIEW_JSON__": json.dumps(part_review) if part_review else "null",
     }

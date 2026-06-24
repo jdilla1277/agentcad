@@ -318,6 +318,15 @@ def _dedupe_part_id(base, used):
     return candidate
 
 
+def _resolve_group_id(value):
+    if value is None:
+        return None, None
+    group_name = str(value).strip()
+    if not group_name:
+        return None, None
+    return _slugify_part_id(group_name), group_name
+
+
 def _assign_part_identity(raw_parts):
     """Resolve public part IDs from author intent, name, then ordinal fallback."""
     used: set[str] = set()
@@ -572,21 +581,60 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     # are rendered later (below) only when the version directory is being
     # materialized and --no-preview wasn't passed.
     parts_output: list[dict] = []
+    groups_by_id: dict[str, dict] = {}
     raw_parts = result.parts
     output_type = result.output_type or (
         "assembly" if len(raw_parts) > 1 else "single_part"
     )
     part_id_sources = _assign_part_identity(raw_parts)
-    for p, (part_id, id_source) in zip(raw_parts, part_id_sources):
+    part_groups: list[tuple[str | None, str | None]] = []
+    for p, (part_id, _id_source) in zip(raw_parts, part_id_sources):
+        group_id, group_name = _resolve_group_id(p.get("part_of"))
+        part_groups.append((group_id, group_name))
+        group_color = p.get("group_color")
+        if group_id is None:
+            if group_color is not None:
+                warnings.append(
+                    f"group_color ignored for ungrouped part {part_id!r}; "
+                    "set options.part_of to create a group."
+                )
+            continue
+
+        group = groups_by_id.setdefault(
+            group_id,
+            {"id": group_id, "name": group_name, "part_ids": []},
+        )
+        group["part_ids"].append(part_id)
+        if group_color is None:
+            continue
+        existing_color = group.get("color")
+        if existing_color is None:
+            group["color"] = group_color
+        elif existing_color != group_color:
+            warnings.append(
+                f"group {group_id!r} declares conflicting group_color values "
+                f"({existing_color!r} and {group_color!r}); using {existing_color!r}."
+            )
+
+    for p, (part_id, id_source), (group_id, _group_name) in zip(
+        raw_parts, part_id_sources, part_groups,
+    ):
         entry: dict = {"id": part_id, "id_source": id_source}
         if p.get("name") is not None:
             entry["name"] = p["name"]
+        group_color = groups_by_id.get(group_id, {}).get("color")
+        if group_id is not None:
+            entry["part_of"] = group_id
+        else:
+            entry["part_of"] = None
         if p.get("color") is not None:
             entry["color"] = p["color"]
-        entry["part_of"] = None
+        elif group_id is not None and group_color is not None:
+            entry["color"] = group_color
         entry["metrics"] = compute_metrics(p["topo_shape"])
         parts_output.append(entry)
     _finish_phase("metrics", _t, "metrics_ms")
+    groups_output = list(groups_by_id.values())
 
     glb_parts = [
         {**entry, "topo_shape": raw["topo_shape"]}
@@ -613,6 +661,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         }
         if parts_output:
             output_json["parts"] = parts_output
+        if groups_output:
+            output_json["groups"] = groups_output
         if warnings:
             output_json["warnings"] = warnings
         _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
@@ -831,6 +881,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
         diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
         parts=parts_output,
+        groups=groups_output,
     )
     viewer_meta = f"{dir_name}/viewer.html"
     viewer_glb_meta = f"{dir_name}/output.glb"
@@ -854,6 +905,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     meta["metrics"] = metrics
     if parts_output:
         meta["parts"] = parts_output
+    if groups_output:
+        meta["groups"] = groups_output
     if parsed_params:
         meta["params"] = parsed_params
     if warnings:
@@ -910,6 +963,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     output_json["metrics"] = metrics
     if parts_output:
         output_json["parts"] = parts_output
+    if groups_output:
+        output_json["groups"] = groups_output
     if parsed_params:
         output_json["params"] = parsed_params
     if warnings:

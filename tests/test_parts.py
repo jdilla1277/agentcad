@@ -3,7 +3,15 @@ import json
 from agentcad.cli import cli
 
 
-def _write_project(root, *, current="assembly", parts=None, version=1, label="assembly"):
+def _write_project(
+    root,
+    *,
+    current="assembly",
+    parts=None,
+    groups=None,
+    version=1,
+    label="assembly",
+):
     version_dir = root / f"v{version}_{label}"
     version_dir.mkdir()
     (version_dir / "output.glb").write_bytes(b"glb-test")
@@ -16,6 +24,7 @@ def _write_project(root, *, current="assembly", parts=None, version=1, label="as
         "viewer": f"v{version}_{label}/viewer.html",
         "viewer_glb": f"v{version}_{label}/output.glb",
         "parts": parts or [],
+        "groups": groups or [],
     }))
     (root / "agentcad.json").write_text(json.dumps({
         "name": "parts-test",
@@ -60,7 +69,39 @@ def test_parts_list_reads_version_snapshot(runner, isolated_dir):
     assert data["viewer_glb"] == "v1_assembly/output.glb"
     assert data["script"] == "v1_assembly/script.py"
     assert data["part_count"] == 2
+    assert data["group_count"] == 0
     assert [p["id"] for p in data["parts"]] == ["base_plate", "axle_shaft"]
+    assert data["groups"] == []
+
+
+def test_parts_list_reads_group_snapshot(runner, isolated_dir):
+    _write_project(
+        isolated_dir,
+        parts=[
+            {"id": "base_plate", "id_source": "explicit", "part_of": "frame"},
+            {"id": "rib", "id_source": "explicit", "part_of": "frame"},
+        ],
+        groups=[
+            {
+                "id": "frame",
+                "name": "frame",
+                "color": "steelblue",
+                "part_ids": ["base_plate", "rib"],
+            },
+        ],
+    )
+
+    result = runner.invoke(cli, ["parts", "list", "v1"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+
+    assert data["group_count"] == 1
+    assert data["groups"] == [{
+        "id": "frame",
+        "name": "frame",
+        "color": "steelblue",
+        "part_ids": ["base_plate", "rib"],
+    }]
 
 
 def test_parts_show_returns_one_part_by_id(runner, isolated_dir):
@@ -137,6 +178,7 @@ def test_parts_nested_help_documents_refs_and_legacy_ids(runner):
     assert "PART_ID" in show_result.output
     assert "numeric alias" in show_result.output
     assert "--isolate" in view_result.output
+    assert "--isolate-group" in view_result.output
     assert "--ghost-rest" in view_result.output
     assert "--focus" in view_result.output
 
@@ -205,6 +247,9 @@ def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
         "focus": "axle_shaft",
         "isolated": ["axle_shaft"],
         "hidden": ["base_plate"],
+        "isolated_groups": [],
+        "hidden_groups": [],
+        "focus_group": None,
         "ghost_rest": True,
     }
 
@@ -214,6 +259,61 @@ def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
     assert '"isolated": ["axle_shaft"]' in html
     assert "Part controls" in html
     assert "Ghost rest" in html
+
+
+def test_parts_view_can_target_groups(runner, isolated_dir):
+    _write_project(
+        isolated_dir,
+        parts=[
+            {"id": "base_plate", "id_source": "explicit", "part_of": "frame"},
+            {"id": "rib", "id_source": "explicit", "part_of": "frame"},
+            {"id": "pin", "id_source": "explicit"},
+        ],
+        groups=[
+            {
+                "id": "frame",
+                "name": "frame",
+                "color": "steelblue",
+                "part_ids": ["base_plate", "rib"],
+            },
+        ],
+    )
+
+    result = runner.invoke(cli, [
+        "parts", "view", "assembly",
+        "--isolate-group", "frame",
+        "--ghost-rest",
+        "--focus-group", "frame",
+        "--no-open",
+    ])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+
+    assert data["part_review"]["isolated_groups"] == ["frame"]
+    assert data["part_review"]["focus_group"] == "frame"
+    assert data["part_review"]["isolated"] == ["base_plate", "rib"]
+    assert data["part_review"]["focus"] == "base_plate"
+    assert data["groups"][0]["id"] == "frame"
+
+    html = (isolated_dir / data["review_viewer"]).read_text()
+    assert 'const GROUPS = [{"id": "frame"' in html
+    assert '"isolated_groups": ["frame"]' in html
+    assert "toggleGroupIsolated" in html
+
+
+def test_parts_view_rejects_unknown_group_ids(runner, isolated_dir):
+    _write_project(isolated_dir, parts=[
+        {"id": "base_plate", "id_source": "explicit", "part_of": "frame"},
+    ])
+
+    result = runner.invoke(cli, [
+        "parts", "view", "1", "--isolate-group", "missing", "--no-open",
+    ])
+    assert result.exit_code == 1
+    data = json.loads(result.stdout)
+
+    assert data["status"] == "error"
+    assert data["missing_group_ids"] == ["missing"]
 
 
 def test_parts_view_rejects_unknown_part_ids(runner, isolated_dir):

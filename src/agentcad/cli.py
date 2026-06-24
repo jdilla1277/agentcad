@@ -145,6 +145,7 @@ COMMANDS
   agentcad parts list REF       List named/captured parts for a version.
   agentcad parts show REF ID    Show one part from that version by stable id.
   agentcad parts view REF [--isolate ID] [--hide ID] [--ghost-rest] [--focus ID]
+                          [--isolate-group GROUP] [--hide-group GROUP]
                                 Generate a reproducible part review viewer.
                                 Uses the same meta.json snapshot as viewer.html.
   agentcad view FILE [--measure] [--spec spec.json]
