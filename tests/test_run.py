@@ -1616,7 +1616,7 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert [p.get("name") for p in parts] == ["deck", "pin", "arm"]
     assert [p.get("color") for p in parts] == ["gray", "blue", "red"]
     assert "className = 'swatch'" in viewer_html
-    assert "swatch.style.background = p.color" in viewer_html
+    assert "swatch.style.background = part.color" in viewer_html
     assert "registerPartMeshes(m)" in viewer_html
     assert "attach(sceneA_single, MODEL_A_URL, { onMesh:" in viewer_html
     assert "partMatchesNameExact" in viewer_html
@@ -1658,6 +1658,10 @@ def test_run_viewer_embeds_part_groups(runner, isolated_dir):
         "color": "steelblue",
         "part_ids": ["base_plate", "center_rib"],
     }]
+    assert 'id="parts-groups-section"' in viewer_html
+    assert "makeStaticGroupRow" in viewer_html
+    assert "part-group-tag" in viewer_html
+    assert "Parts ${PARTS.length} · Groups ${GROUPS.length}" in viewer_html
     assert "toggleGroupHidden" in viewer_html
     assert "toggleGroupIsolated" in viewer_html
 

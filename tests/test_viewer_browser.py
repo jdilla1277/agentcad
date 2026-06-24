@@ -127,10 +127,10 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert parts["locator_pin"]["isolated"] is False
             assert parts["locator_pin"]["ghosted"] is True
 
-            assert page.locator('[data-group-id="frame"]').evaluate(
+            assert page.locator('#part-controls [data-group-id="frame"]').evaluate(
                 "el => el.classList.contains('selected')"
             )
-            assert page.locator('[data-part-id="locator_pin"]').evaluate(
+            assert page.locator('#part-controls [data-part-id="locator_pin"]').evaluate(
                 "el => !el.classList.contains('selected')"
             )
 
@@ -138,5 +138,19 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert pixels["width"] > 0
             assert pixels["height"] > 0
             assert pixels["non_background_pixels"] > 1000
+
+            page.click("#btn-parts")
+            expect = page.locator("#parts-view")
+            assert expect.evaluate("el => getComputedStyle(el).display === 'block'")
+            assert page.locator("#parts-heading").inner_text() == "Parts 3 · Groups 1"
+            assert page.locator('#parts-groups [data-group-id="frame"]').inner_text() == (
+                "frame\nframe · 2 parts"
+            )
+            assert page.locator('#parts-groups [data-group-id="frame"] .swatch').evaluate(
+                "el => el.style.background === 'steelblue'"
+            )
+            assert page.locator('#parts-list [data-part-id="base_plate"] .part-group-tag').inner_text() == "frame"
+            assert page.locator('#parts-list [data-part-id="center_rib"] .part-group-tag').inner_text() == "frame"
+            assert page.locator('#parts-list [data-part-id="locator_pin"] .part-group-tag').count() == 0
         finally:
             browser.close()
