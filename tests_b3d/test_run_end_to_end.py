@@ -139,6 +139,38 @@ class TestVersionDirectory:
         assert (isolated_dir / "v1_one").is_dir()
         assert (isolated_dir / "v2_two").is_dir()
 
+    def test_raw_topods_compound_step_export_path(self, runner, isolated_dir):
+        """Preserve a source STEP as raw TopoDS and add a raw OCCT feature."""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "source.py", SIMPLE)
+        first = _run(runner, "source.py", "--output", "source", "--no-preview")
+        assert first.exit_code == 0, first.output
+
+        raw_edit = """\
+from build123d import Box
+from OCP.BRep import BRep_Builder
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from OCP.gp import gp_Pnt
+from OCP.TopoDS import TopoDS_Compound
+
+base = load_step_shape("v1_source/output.step")
+feature = BRepPrimAPI_MakeBox(gp_Pnt(20, 0, 0), 2, 2, 2).Shape()
+compound = TopoDS_Compound()
+builder = BRep_Builder()
+builder.MakeCompound(compound)
+builder.Add(compound, base)
+builder.Add(compound, feature)
+show_object(compound, name="raw_topods_edit")
+"""
+        _write(isolated_dir, "raw_edit.py", raw_edit)
+        second = _run(runner, "raw_edit.py", "--output", "raw", "--no-preview")
+        assert second.exit_code == 0, second.output
+        parsed = json.loads(second.stdout)
+        assert parsed["runtime"] == "build123d"
+        assert parsed["outputs"]["step"] == "v2_raw/output.step"
+        assert (isolated_dir / "v2_raw" / "output.step").exists()
+        assert parsed["metrics"]["volume"] > 1000.0
+
 
 # ---------- preview (default on) ----------
 
