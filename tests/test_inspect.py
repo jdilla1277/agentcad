@@ -13,6 +13,38 @@ def _make_step(directory, name="output.step"):
     return path
 
 
+def _invalid_large_brep(directory, name="invalid_large.brep", count=600):
+    """A CADGenBench-202-class input: compound of self-intersecting (bowtie)
+    faces — invalid topology, large face/edge count, many free edges.
+
+    Built via raw OCP and written to BREP because cadquery/OCCT heal simple
+    invalidity on a STEP round-trip; a BREP compound of bowtie faces survives
+    as genuinely invalid (BRepCheck reports SelfIntersectingWire +
+    UnorientableShape, the same classes the issue observed)."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepBuilderAPI import (
+        BRepBuilderAPI_MakeFace,
+        BRepBuilderAPI_MakePolygon,
+    )
+    from OCP.BRepTools import BRepTools
+    from OCP.gp import gp_Pnt
+    from OCP.TopoDS import TopoDS_Compound
+
+    builder = BRep_Builder()
+    comp = TopoDS_Compound()
+    builder.MakeCompound(comp)
+    for i in range(count):
+        dx, dy = (i % 30) * 30.0, (i // 30) * 30.0
+        poly = BRepBuilderAPI_MakePolygon()
+        for x, y in [(0, 0), (10, 10), (10, 0), (0, 10)]:
+            poly.Add(gp_Pnt(x + dx, y + dy, 0))
+        poly.Close()
+        builder.Add(comp, BRepBuilderAPI_MakeFace(poly.Wire(), True).Face())
+    path = directory / name
+    BRepTools.Write_s(comp, str(path))
+    return path
+
+
 class TestInspectCommand:
     def test_inspect_returns_json(self, runner, isolated_dir):
         step = _make_step(isolated_dir)
@@ -124,6 +156,26 @@ class TestInspectEditRisk:
         assert parsed["edit_risk"] == "medium"  # large but valid
         assert any("large topology" in r for r in parsed["risk_reasons"])
         assert parsed["recommended_workflow"]
+
+    def test_invalid_large_input_flagged_high_end_to_end(self, runner, isolated_dir):
+        """CADGenBench-202-class input at the real CLI boundary: invalid +
+        large + many free edges -> high, with validity_errors surfaced and
+        next_actions kept coherent with the workflow (no normal-editing
+        suggestions that contradict it)."""
+        brep = _invalid_large_brep(isolated_dir)
+        result = runner.invoke(cli, ["inspect", str(brep), "--no-daemon"])
+        assert result.exit_code == 0, result.stdout
+        parsed = json.loads(result.stdout)
+        assert parsed["is_valid"] is False
+        assert "BRepCheck_UnorientableShape" in parsed["validity_errors"]
+        assert parsed["edit_risk"] == "high"
+        workflow = " ".join(parsed["recommended_workflow"]).lower()
+        assert "load_step" in workflow and "boolean" in workflow
+        # next_actions must not contradict the workflow with cheerful
+        # normal-editing follow-ups.
+        next_joined = " ".join(parsed["next_actions"]).lower()
+        assert "recommended_workflow" in next_joined
+        assert "hole diameters" not in next_joined
 
 
 # --- Daemon routing (#177) ---

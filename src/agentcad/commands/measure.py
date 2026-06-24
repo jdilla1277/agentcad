@@ -248,6 +248,15 @@ def measure_tier0_payload(
     )
     if risk:
         payload.update(risk)
+        # The default next_actions point at inspect --ids for targeted edits;
+        # on a high-risk input that contradicts the recommended_workflow.
+        # Keep the next step coherent with the risk guidance.
+        if risk["edit_risk"] == "high":
+            payload["next_actions"] = [
+                "read metrics + validity — this input is high edit-risk",
+                "follow recommended_workflow before attempting any edit; do "
+                "not start with load_step() + boolean/fillet",
+            ]
 
     if with_features:
         payload["features"] = {

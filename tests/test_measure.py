@@ -172,6 +172,19 @@ class TestMeasureEditRisk:
         assert any("large topology" in r for r in parsed["risk_reasons"])
         assert parsed["recommended_workflow"]
 
+    def test_invalid_large_input_flagged_high_end_to_end(self, runner, isolated_dir):
+        from tests.test_inspect import _invalid_large_brep
+
+        brep = _invalid_large_brep(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(brep), "--no-daemon"])
+        assert result.exit_code == 0, result.stdout
+        parsed = json.loads(result.stdout)
+        assert parsed["edit_risk"] == "high"
+        assert any("invalid topology" in r for r in parsed["risk_reasons"])
+        # next_actions stays coherent with the risk guidance
+        joined = " ".join(parsed["next_actions"]).lower()
+        assert "recommended_workflow" in joined
+
 
 class TestMeasureDaemonRouting:
     def test_measure_routes_through_daemon_when_available(

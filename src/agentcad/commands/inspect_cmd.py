@@ -245,6 +245,17 @@ def _inspect_tier0(file_path: str, detection: dict, *, with_ids: bool = False, w
             "see `agentcad docs editing`",
         ]
 
+    # On a high edit-risk input the generic next_actions above (view, measure,
+    # or the import → pick_face flow) all assume the part is normally editable,
+    # which contradicts the recommended_workflow. Make the next step coherent:
+    # look, then follow the workflow — don't jump straight into an edit flow.
+    if payload.get("edit_risk") == "high":
+        payload["next_actions"] = [
+            f"agentcad view {file_path} — look at the geometry before deciding how to edit",
+            "follow recommended_workflow — do not start with load_step() + "
+            "boolean/fillet edits on this input",
+        ]
+
     notes = _compute_notes(payload)
     if with_ids or with_summary:
         # ID-stability caveat — load-bearing for the addressability flow.
