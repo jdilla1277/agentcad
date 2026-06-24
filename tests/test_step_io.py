@@ -87,3 +87,23 @@ class TestLoadCadShape:
         step = _real_step(tmp_path / "box.step")
         shape = load_cad_shape(str(step))
         assert not shape.IsNull()
+
+    def test_format_hint_loads_extensionless_step(self, tmp_path):
+        step = _real_step(tmp_path / "box.step")
+        blob = tmp_path / "661210dec702"
+        step.rename(blob)
+
+        shape = load_cad_shape(blob, format_hint="step")
+
+        assert not shape.IsNull()
+
+    def test_format_hint_loads_extensionless_brep(self, tmp_path):
+        from OCP.BRepTools import BRepTools
+        plate = cq.Workplane("XY").box(20, 20, 5)
+        blob = tmp_path / "brep-blob"
+        BRepTools.Write_s(plate.val().wrapped, str(blob))
+
+        shape = load_cad_shape(blob, format_hint="brep")
+
+        assert shape is not None
+        assert not shape.IsNull()

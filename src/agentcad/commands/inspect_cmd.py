@@ -149,7 +149,7 @@ def inspect_cmd(file, with_ids, with_summary, no_daemon):
         return
 
     if category == file_detect.TIER0_BREP:
-        _inspect_tier0(str(file_path.resolve()), detection, with_ids=with_ids, with_summary=with_summary)
+        _inspect_tier0(str(file_path.absolute()), detection, with_ids=with_ids, with_summary=with_summary)
         # Fork off the warm process as the daemon — only the Tier 0 path
         # paid the OCP cost worth keeping around. Idempotent on its own.
         maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
@@ -201,7 +201,11 @@ def _inspect_tier0(file_path: str, detection: dict, *, with_ids: bool = False, w
     diagnostic on stdout."""
     try:
         # load_cad_shape (called inside _topology_report) handles silencing.
-        payload, topo_shape = _topology_report(file_path, return_shape=True)
+        payload, topo_shape = _topology_report(
+            file_path,
+            return_shape=True,
+            format_hint=detection.get("format"),
+        )
     except Exception as exc:
         _emit({
             "command": "inspect", "status": "malformed",
@@ -317,7 +321,12 @@ def _compute_notes(payload: dict) -> list:
     return notes
 
 
-def _topology_report(file_path: str, *, return_shape: bool = False):
+def _topology_report(
+    file_path: str,
+    *,
+    return_shape: bool = False,
+    format_hint: str | None = None,
+):
     from agentcad.step_io import load_cad_shape
     from OCP.BRepCheck import BRepCheck_Analyzer
     from OCP.ShapeAnalysis import ShapeAnalysis_Shell
@@ -329,7 +338,7 @@ def _topology_report(file_path: str, *, return_shape: bool = False):
     from OCP.TopoDS import TopoDS
     from OCP.TopTools import TopTools_IndexedMapOfShape
 
-    shape = load_cad_shape(file_path)
+    shape = load_cad_shape(file_path, format_hint=format_hint)
 
     solid_count = 0
     exp = TopExp_Explorer(shape, TopAbs_SOLID)

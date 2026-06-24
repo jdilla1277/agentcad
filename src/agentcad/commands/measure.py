@@ -131,7 +131,7 @@ def measure(file, with_features, no_daemon):
 
     if category == file_detect.TIER0_BREP:
         _measure_tier0(
-            str(file_path.resolve()),
+            str(file_path.absolute()),
             detection,
             with_features=with_features,
         )
@@ -211,7 +211,7 @@ def measure_tier0_payload(
     from agentcad.step_io import load_cad_shape
     from agentcad import topo_ids
 
-    topo_shape = load_cad_shape(file_path)
+    topo_shape = load_cad_shape(file_path, format_hint=detection.get("format"))
     metrics = compute_metrics(topo_shape)
     feature_summary = topo_ids.summary_entries(topo_shape)
     cylindrical_features = _cylindrical_features(topo_shape)

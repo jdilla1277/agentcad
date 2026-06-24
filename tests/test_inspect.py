@@ -128,6 +128,24 @@ class TestInspectCommand:
         parsed = json.loads(result.stdout)
         assert parsed["free_edge_count"] == 0
 
+    def test_inspect_loads_step_symlink_to_extensionless_target(
+        self, runner, isolated_dir
+    ):
+        step = _make_step(isolated_dir, "source.step")
+        blob = isolated_dir / "661210dec702"
+        link = isolated_dir / "input.step"
+        step.rename(blob)
+        link.symlink_to(blob.name)
+
+        result = runner.invoke(cli, ["inspect", str(link), "--no-daemon"])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["file"].endswith("input.step")
+        assert parsed["format_detected"] == "step"
+        assert parsed["face_count"] == 6
+
 
 # --- Edit-risk classification (#32) ---
 
@@ -176,6 +194,24 @@ class TestInspectEditRisk:
         next_joined = " ".join(parsed["next_actions"]).lower()
         assert "recommended_workflow" in next_joined
         assert "hole diameters" not in next_joined
+
+    def test_high_risk_brep_symlink_to_extensionless_target_loads(
+        self, runner, isolated_dir
+    ):
+        brep = _invalid_large_brep(isolated_dir, "source.brep")
+        blob = isolated_dir / "661210dec702"
+        link = isolated_dir / "input.brep"
+        brep.rename(blob)
+        link.symlink_to(blob.name)
+
+        result = runner.invoke(cli, ["inspect", str(link), "--no-daemon"])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["file"].endswith("input.brep")
+        assert parsed["format_detected"] == "brep"
+        assert parsed["edit_risk"] == "high"
 
 
 # --- Daemon routing (#177) ---
