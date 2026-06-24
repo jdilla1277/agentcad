@@ -38,6 +38,17 @@ def _plate_with_two_holes_step(directory, name="two_holes.step"):
     return path
 
 
+def _many_boxes_step(directory, name="many_boxes.step", count=20):
+    solids = [
+        cq.Workplane("XY").box(1, 1, 1).translate((i * 3, 0, 0)).val()
+        for i in range(count)
+    ]
+    compound = cq.Compound.makeCompound(solids)
+    path = directory / name
+    exporters.export(compound, str(path))
+    return path
+
+
 class TestMeasureCommand:
     def test_measure_returns_json_metrics_and_feature_summary(self, runner, isolated_dir):
         step = _box_step(isolated_dir)
@@ -119,6 +130,69 @@ class TestMeasureCommand:
         assert len(features["edges"]) == 12
         assert "area" in features["faces"][0]
         assert "length" in features["edges"][0]
+
+    def test_measure_features_default_is_bounded(self, runner, isolated_dir):
+        step = _many_boxes_step(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(step), "--features"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert len(parsed["features"]["faces"]) == 100
+        assert len(parsed["features"]["edges"]) == 100
+        fields = {f["path"]: f for f in parsed["truncation"]["fields"]}
+        assert fields["features.faces"]["total"] == 120
+        assert fields["features.edges"]["total"] == 240
+        assert any("--no-limit" in c for c in parsed["truncation"]["recommended_commands"])
+
+    def test_measure_features_no_limit_restores_complete_lists(
+        self, runner, isolated_dir
+    ):
+        step = _many_boxes_step(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(step), "--features", "--no-limit"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert len(parsed["features"]["faces"]) == parsed["metrics"]["face_count"]
+        assert len(parsed["features"]["edges"]) == parsed["metrics"]["edge_count"]
+        assert "truncation" not in parsed
+
+    def test_measure_summary_truncation_recommends_summary_sized_followup(
+        self, runner, isolated_dir
+    ):
+        step = _box_step(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(step), "--limit", "1"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        recommended = " ".join(parsed["truncation"]["recommended_commands"])
+        assert "measure" in recommended
+        assert "--limit 500" in recommended
+        assert "--no-limit" in recommended
+        assert "--features --no-limit" not in recommended
+
+    def test_measure_cylinders_only_filters_diameter_and_axis(
+        self, runner, isolated_dir
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        result = runner.invoke(cli, [
+            "measure", str(step),
+            "--cylinders-only", "--diameter", "6", "--axis", "+z",
+        ])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert "feature_summary" not in parsed
+        assert "features" not in parsed
+        assert parsed["query"]["cylinders_only"] is True
+        assert parsed["cylindrical_features"] == [{
+            "diameter_mm": 6.0,
+            "count": 2,
+            "axis": "+z",
+            "representative_centers": [
+                {"x": -10.0, "y": 0.0, "z": 0.0},
+                {"x": 10.0, "y": 0.0, "z": 0.0},
+            ],
+        }]
 
     def test_measure_missing_file_error(self, runner, isolated_dir):
         result = runner.invoke(cli, ["measure", "missing.step"])

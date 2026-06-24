@@ -63,6 +63,7 @@ SECTIONS = {
         "  render  — Render PNG views of an existing STEP file.\n"
         "  export  — Export an existing STEP file to mesh formats (STL, GLB).\n"
         "  measure — Measure overall dimensions and feature sizes in STEP/BREP files.\n"
+        "            Full feature output is capped by default; use --no-limit explicitly.\n"
         "  check-spec\n"
         "          — Compare measured cylindrical features against an explicit JSON spec.\n"
         "  parts   — List/show parts captured for a version snapshot, or generate\n"
@@ -73,6 +74,7 @@ SECTIONS = {
         "  docs    — Show this documentation.\n"
         "  diff    — Compare two versions of a model.\n"
         "  inspect — Inspect STEP file topology (shells, faces, edges).\n"
+        "            --ids output is capped by default; use --no-limit explicitly.\n"
     ),
     "render": (
         "Rendering:\n"
@@ -238,7 +240,13 @@ SECTIONS = {
         "    agentcad measure v1_label/output.step --features\n"
         "    Adds features.solids[], features.faces[], features.edges[]. Use this\n"
         "    when you need exact face areas, face centroids/normals/bboxes, or\n"
-        "    individual edge lengths/endpoints.\n"
+        "    individual edge lengths/endpoints. Lists are capped at 100 records\n"
+        "    by default with truncation metadata. Use --limit N for a larger slice\n"
+        "    or --no-limit only when you truly need the complete JSON payload.\n"
+        "\n"
+        "  Cylinder-focused queries for large parts:\n"
+        "    agentcad measure v1_label/output.step --cylinders-only\n"
+        "    agentcad measure v1_label/output.step --cylinders-only --diameter 12 --axis +z\n"
         "\n"
         "  Relationship to inspect:\n"
         "    measure answers dimensional questions. inspect answers topology and\n"
@@ -499,7 +507,7 @@ SECTIONS = {
     ),
     "inspect": (
         "Inspecting shape topology:\n"
-        "  agentcad inspect <step_file>\n"
+        "  agentcad inspect <step_file> [--ids|--summary] [--limit N|--no-limit]\n"
         "\n"
         "  Reports the internal topology of a STEP file:\n"
         "    solid_count      Number of solid bodies\n"
@@ -518,6 +526,13 @@ SECTIONS = {
         "\n"
         "  For dimensional questions, run:\n"
         "    agentcad measure <step_file>\n"
+        "\n"
+        "  Addressable IDs:\n"
+        "    agentcad inspect <step_file> --ids\n"
+        "    Emits solids[], faces[], and edges[] for targeted edits. Lists are\n"
+        "    capped at 100 records by default with truncation metadata. Use\n"
+        "    --limit N for a larger slice or --no-limit only when you need every\n"
+        "    face and edge in the JSON response.\n"
     ),
     "daemon": (
         "Daemon (auto-managed background worker):\n"

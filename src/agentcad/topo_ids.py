@@ -12,22 +12,25 @@ This module is the single source of truth for that mapping. Both
 the IDs they exchange are identical.
 
 Public API:
-    solid_entries(shape) -> list[dict]   # id, volume, bbox
-    face_entries(shape)  -> list[dict]   # id, normal, area, centroid, bbox
-    edge_entries(shape)  -> list[dict]   # id, length, endpoints
+    solid_entries(shape, limit=None) -> list[dict]   # id, volume, bbox
+    face_entries(shape, limit=None)  -> list[dict]   # id, normal, area, centroid, bbox
+    edge_entries(shape, limit=None)  -> list[dict]   # id, length, endpoints
+    topology_counts(shape) -> dict                   # total solids/faces/edges
     pick_face_topods(shape, face_id) -> TopoDS_Face
     pick_edge_topods(shape, edge_id) -> TopoDS_Edge
 """
 from typing import Any
 
 
-def solid_entries(topo_shape) -> list[dict]:
+def solid_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
     """One dict per solid in `topo_shape`. IDs are 1-indexed."""
     from OCP.TopAbs import TopAbs_SOLID
     from OCP.TopoDS import TopoDS
 
     entries = []
     for i, raw in enumerate(_iter_indexed_map(topo_shape, TopAbs_SOLID), start=1):
+        if _limit_reached(entries, limit):
+            break
         solid = TopoDS.Solid_s(raw)
         entries.append({
             "id": i,
@@ -37,13 +40,15 @@ def solid_entries(topo_shape) -> list[dict]:
     return entries
 
 
-def face_entries(topo_shape) -> list[dict]:
+def face_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
     """One dict per face in `topo_shape`. IDs are 1-indexed."""
     from OCP.TopAbs import TopAbs_FACE
     from OCP.TopoDS import TopoDS
 
     entries = []
     for i, raw in enumerate(_iter_indexed_map(topo_shape, TopAbs_FACE), start=1):
+        if _limit_reached(entries, limit):
+            break
         face = TopoDS.Face_s(raw)
         area, centroid = _face_area_and_centroid(face)
         entries.append({
@@ -80,7 +85,7 @@ def _classify_axis(xyz_dict_or_tuple) -> str:
     return "other"
 
 
-def summary_entries(topo_shape) -> dict:
+def summary_entries(topo_shape, *, id_limit: int | None = None) -> dict:
     """Cluster faces and edges into semantic groups for compact reporting.
 
     Replaces the per-feature ID/area/normal/etc. payload with a much smaller
@@ -88,8 +93,8 @@ def summary_entries(topo_shape) -> dict:
     the M60 Phase 4 friction (#131): a 118-face Pump Manifold's `--ids`
     output is 70 KB, blowing the agent's context budget; the summary
     reduces that to a few hundred bytes while preserving the key signals
-    (counts, sizes, axes). IDs are still emitted per cluster (full lists,
-    not truncated — integers are cheap).
+    (counts, sizes, axes). IDs are emitted per cluster and can be capped for
+    large parts.
 
     Cluster shape:
       face_clusters: [
@@ -247,15 +252,19 @@ def summary_entries(topo_shape) -> dict:
         edge_clusters.append(entry)
     edge_clusters.sort(key=lambda e: -e["count"])
 
+    summary_id_truncation = _truncate_cluster_ids(
+        face_clusters, edge_clusters, id_limit
+    )
     return {
         "face_count": sum(e["count"] for e in face_clusters),
         "edge_count": sum(e["count"] for e in edge_clusters),
         "face_clusters": face_clusters,
         "edge_clusters": edge_clusters,
+        **({"id_truncation": summary_id_truncation} if summary_id_truncation else {}),
     }
 
 
-def edge_entries(topo_shape) -> list[dict]:
+def edge_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
     """One dict per edge in `topo_shape`. IDs are 1-indexed.
     For closed edges (circles, splines), the two endpoints coincide."""
     from OCP.TopAbs import TopAbs_EDGE
@@ -263,6 +272,8 @@ def edge_entries(topo_shape) -> list[dict]:
 
     entries = []
     for i, raw in enumerate(_iter_indexed_map(topo_shape, TopAbs_EDGE), start=1):
+        if _limit_reached(entries, limit):
+            break
         edge = TopoDS.Edge_s(raw)
         length, p_first, p_last = _edge_geometry(edge)
         entries.append({
@@ -271,6 +282,17 @@ def edge_entries(topo_shape) -> list[dict]:
             "endpoints": [_xyz(p_first), _xyz(p_last)],
         })
     return entries
+
+
+def topology_counts(topo_shape) -> dict:
+    """Return total indexed feature counts without materializing entries."""
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID
+
+    return {
+        "solids": _indexed_map(topo_shape, TopAbs_SOLID).Extent(),
+        "faces": _indexed_map(topo_shape, TopAbs_FACE).Extent(),
+        "edges": _indexed_map(topo_shape, TopAbs_EDGE).Extent(),
+    }
 
 
 def pick_face_topods(topo_shape, face_id: int):
@@ -304,6 +326,47 @@ def pick_edge_topods(topo_shape, edge_id: int):
 
 
 # --- internals --------------------------------------------------------------
+
+def _limit_reached(entries: list, limit: int | None) -> bool:
+    return limit is not None and len(entries) >= limit
+
+
+def _truncate_cluster_ids(
+    face_clusters: list[dict], edge_clusters: list[dict], id_limit: int | None
+) -> dict | None:
+    if id_limit is None:
+        return None
+
+    fields = []
+    for path, clusters in (
+        ("face_clusters", face_clusters),
+        ("edge_clusters", edge_clusters),
+    ):
+        truncated_clusters = 0
+        omitted = 0
+        for cluster in clusters:
+            ids = cluster.get("ids", [])
+            total = len(ids)
+            if total <= id_limit:
+                continue
+            cluster["ids"] = ids[:id_limit]
+            cluster["ids_total"] = total
+            cluster["ids_omitted"] = total - id_limit
+            cluster["ids_truncated"] = True
+            truncated_clusters += 1
+            omitted += total - id_limit
+        if truncated_clusters:
+            fields.append({
+                "path": path,
+                "limit_per_cluster": id_limit,
+                "truncated_clusters": truncated_clusters,
+                "omitted_ids": omitted,
+            })
+
+    if not fields:
+        return None
+    return {"limited": True, "fields": fields}
+
 
 def _indexed_map(topo_shape, topabs_kind):
     """Build OCCT's IndexedMapOfShape — same call inspect and pick share."""

@@ -122,15 +122,16 @@ COMMANDS
     Export STEP to mesh formats. GLB auto-colors individual solids.
 
 \b
-  agentcad inspect STEP
+  agentcad inspect STEP [--ids|--summary] [--limit N|--no-limit]
     Topology report: solid_count, shell_count, shells (open/closed + face
     count per shell), face_count, face_orientations (forward/reversed),
-    edge_count, free_edge_count, is_valid.
+    edge_count, free_edge_count, is_valid. --ids is capped by default.
 
 \b
-  agentcad measure STEP [--features]
+  agentcad measure STEP [--features] [--cylinders-only] [--limit N|--no-limit]
     Dimensional report: overall metrics plus compact feature measurements
     (edge lengths, face areas, circular/cylindrical radii and diameters).
+    Full feature lists are capped by default; use --no-limit only when needed.
 
 \b
   agentcad check-spec STEP SPEC.json
