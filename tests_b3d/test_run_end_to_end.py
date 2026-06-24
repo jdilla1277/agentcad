@@ -926,6 +926,9 @@ class TestNamedParts:
             "color": "steelblue",
             "part_ids": ["base_plate", "center_rib"],
         }]
+        assert 'id="parts-groups-section"' in viewer_html
+        assert "makeStaticGroupRow" in viewer_html
+        assert "part-group-tag" in viewer_html
         assert "toggleGroupHidden" in viewer_html
         assert "toggleGroupIsolated" in viewer_html
 

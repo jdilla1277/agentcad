@@ -95,11 +95,26 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     padding: 60px 24px 24px; display: none;
     box-sizing: border-box;
   }
-  #parts-view .panel { margin: 0 auto; max-width: 600px; background: #fff; border-radius: 8px; padding: 20px 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  #parts-view .panel { margin: 0 auto; max-width: 720px; background: #fff; border-radius: 8px; padding: 20px 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
   #parts-view h3 { margin: 0 0 12px; font-size: 14px; color: #555; font-weight: normal; }
+  #parts-view h4 { margin: 16px 0 8px; font-size: 11px; color: #667085; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
   #parts-view ol { margin: 0; padding-left: 24px; font-family: monospace; font-size: 13px; color: #222; }
   #parts-view ol li { margin: 6px 0; }
   #parts-view .swatch { width: 11px; height: 11px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; display: inline-block; margin-right: 8px; vertical-align: -1px; box-sizing: border-box; }
+  #parts-view .group-list { display: grid; gap: 6px; margin-bottom: 10px; }
+  #parts-view .group-row {
+    display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
+    align-items: center; gap: 8px; padding: 8px 10px;
+    border: 1px solid rgba(0,0,0,0.08); border-radius: 6px;
+    background: #f8fafc; font-family: monospace; font-size: 13px;
+  }
+  #parts-view .group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #222; }
+  #parts-view .meta { color: #667085; font-size: 11px; white-space: nowrap; }
+  #parts-view .part-group-tag {
+    display: inline-block; margin-left: 8px; padding: 1px 5px;
+    border: 1px solid rgba(0,0,0,0.12); border-radius: 999px;
+    color: #3f4856; background: #f8fafc; font-size: 11px;
+  }
   #part-controls {
     position: absolute; top: 60px; left: 12px; z-index: 20;
     width: 340px; max-height: calc(100vh - 126px); overflow: auto;
@@ -261,6 +276,11 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
 <div id="parts-view">
   <div class="panel">
     <h3 id="parts-heading">Parts</h3>
+    <div id="parts-groups-section" style="display:none;">
+      <h4>Groups</h4>
+      <div class="group-list" id="parts-groups"></div>
+    </div>
+    <h4 id="parts-list-heading" style="display:none;">Parts</h4>
     <ol id="parts-list"></ol>
   </div>
 </div>
@@ -391,20 +411,7 @@ function setupModeButtons() {
   if (DIFF_OVERLAY_PNG_URL) { document.getElementById('panel-diff-overlay').style.display = ''; document.getElementById('img-diff-overlay').src = DIFF_OVERLAY_PNG_URL; }
 
   if (hasParts) {
-    document.getElementById('parts-heading').textContent = `Parts (${PARTS.length})`;
-    const list = document.getElementById('parts-list');
-    for (const p of PARTS) {
-      const li = document.createElement('li');
-      if (p.color) {
-        const swatch = document.createElement('span');
-        swatch.className = 'swatch';
-        swatch.style.background = p.color;
-        swatch.title = p.color;
-        li.appendChild(swatch);
-      }
-      li.appendChild(document.createTextNode(p.name || p.id));
-      list.appendChild(li);
-    }
+    setupStaticPartsPanel();
     setupPartControls();
   }
   if (hasReview) {
@@ -432,6 +439,69 @@ function groupLabel(group) {
 function groupPartIds(groupId) {
   const group = GROUPS.find(g => g.id === groupId);
   return group ? (group.part_ids || []) : [];
+}
+
+function setupStaticPartsPanel() {
+  document.getElementById('parts-heading').textContent = hasGroups
+    ? `Parts ${PARTS.length} · Groups ${GROUPS.length}`
+    : `Parts (${PARTS.length})`;
+  document.getElementById('parts-list-heading').style.display = hasGroups ? 'block' : 'none';
+
+  const groupsSection = document.getElementById('parts-groups-section');
+  const groupsList = document.getElementById('parts-groups');
+  groupsList.innerHTML = '';
+  groupsSection.style.display = hasGroups ? 'block' : 'none';
+  if (hasGroups) {
+    for (const g of GROUPS) groupsList.appendChild(makeStaticGroupRow(g));
+  }
+
+  const list = document.getElementById('parts-list');
+  list.innerHTML = '';
+  for (const p of PARTS) list.appendChild(makeStaticPartRow(p));
+}
+
+function makeStaticGroupRow(group) {
+  const row = document.createElement('div');
+  row.className = 'group-row';
+  row.dataset.groupId = group.id;
+
+  const swatch = document.createElement('span');
+  swatch.className = 'swatch';
+  swatch.style.background = group.color || '#c0c0c0';
+  swatch.title = group.color || 'group';
+  row.appendChild(swatch);
+
+  const name = document.createElement('span');
+  name.className = 'group-name';
+  name.textContent = groupLabel(group);
+  row.appendChild(name);
+
+  const count = document.createElement('span');
+  count.className = 'meta';
+  const partCount = (group.part_ids || []).length;
+  count.textContent = `${group.id} · ${partCount} ${partCount === 1 ? 'part' : 'parts'}`;
+  row.appendChild(count);
+  return row;
+}
+
+function makeStaticPartRow(part) {
+  const li = document.createElement('li');
+  li.dataset.partId = part.id;
+  if (part.color) {
+    const swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = part.color;
+    swatch.title = part.color;
+    li.appendChild(swatch);
+  }
+  li.appendChild(document.createTextNode(partLabel(part)));
+  if (part.part_of) {
+    const tag = document.createElement('span');
+    tag.className = 'part-group-tag';
+    tag.textContent = part.part_of;
+    li.appendChild(tag);
+  }
+  return li;
 }
 
 function setupPartControls() {
