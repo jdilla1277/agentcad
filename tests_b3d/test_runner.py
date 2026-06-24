@@ -127,6 +127,46 @@ def test_step_export_accepts_build123d_shape(tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
+_RAW_TOPODS_COMPOUND_SCRIPT = """\
+from OCP.BRep import BRep_Builder
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from OCP.TopoDS import TopoDS_Compound
+
+compound = TopoDS_Compound()
+builder = BRep_Builder()
+builder.MakeCompound(compound)
+builder.Add(compound, BRepPrimAPI_MakeBox(1, 2, 3).Shape())
+show_object(compound)
+"""
+
+
+def test_show_object_accepts_raw_topods_compound_and_exports_step(tmp_path):
+    """Raw OCCT compounds are the recovery path for fragile STEP edits."""
+    from agentcad.step_io import load_cad_shape
+
+    result = b3d_runner.execute(_RAW_TOPODS_COMPOUND_SCRIPT)
+    assert result.success, result.exception
+    assert type(result.native_shape).__name__ == "TopoDS_Compound"
+    assert type(result.topo_shape).__name__ == "TopoDS_Compound"
+
+    metrics = compute_metrics(result.topo_shape)
+    assert round(metrics["volume"], 2) == 6.0
+
+    out = tmp_path / "raw_compound.step"
+    b3d_runner.export_step(result.native_shape, str(out))
+    assert out.exists() and out.stat().st_size > 0
+    exported = load_cad_shape(out)
+    assert round(compute_metrics(exported)["volume"], 2) == 6.0
+
+
+def test_show_object_rejects_non_shape_with_raw_topods_hint():
+    result = b3d_runner.execute("show_object(object())\n")
+    assert not result.success
+    msg = result.exception or ""
+    assert "TopoDS_Shape" in msg
+    assert "load_step_shape" in msg
+
+
 # --- ShapeList footgun (issue #97) ---
 
 _SINGLE_SHAPELIST_SCRIPT = """\
