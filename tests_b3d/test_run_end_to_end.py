@@ -11,6 +11,7 @@ coarse-grained on purpose.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from agentcad.cli import cli
@@ -627,6 +628,64 @@ class TestDryRun:
 # ---------- failures ----------
 
 class TestFailures:
+    def test_timeout_during_script_execution_reports_phase(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+
+        from agentcad.runners import build123d as b3d_runner
+
+        def slow_execute(*_args, **_kwargs):
+            time.sleep(1)
+
+        monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+        monkeypatch.setattr(b3d_runner, "validate", lambda _source: [])
+        monkeypatch.setattr(b3d_runner, "execute", slow_execute)
+
+        r = _run(runner, "s.py", "--output", "slow", "--no-preview", "--no-daemon")
+
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "failed"
+        assert parsed["error_kind"] == "timeout"
+        assert parsed["timeout_phase"] == "script_exec"
+        assert parsed["completed_phases"] == ["validation"]
+        assert "validation_ms" in parsed["phase_timings"]
+        assert "script" in parsed["suggestion"].lower()
+
+    def test_timeout_during_step_export_reports_completed_phases(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+
+        # Warm imports with the watchdog disabled so the short test timeout
+        # below exercises post-script STEP export, not CAD startup.
+        monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
+        warmup = _run(runner, "s.py", "--output", "warmup", "--no-preview", "--no-daemon")
+        assert warmup.exit_code == 0, warmup.output
+
+        from agentcad.runners import build123d as b3d_runner
+
+        def slow_export_step(*_args, **_kwargs):
+            time.sleep(1)
+
+        monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+        monkeypatch.setattr(b3d_runner, "export_step", slow_export_step)
+
+        r = _run(runner, "s.py", "--output", "slow_export", "--no-preview", "--no-daemon")
+
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "failed"
+        assert parsed["error_kind"] == "timeout"
+        assert parsed["timeout_phase"] == "export_step"
+        assert parsed["completed_phases"][-2:] == ["script_exec", "metrics"]
+        assert "script_exec_ms" in parsed["phase_timings"]
+        assert "metrics_ms" in parsed["phase_timings"]
+        assert "export" in parsed["suggestion"].lower()
+
     def test_missing_script_errors(self, runner, isolated_dir):
         _init(runner, isolated_dir)
         r = _run(runner, "nope.py", "--output", "x")
