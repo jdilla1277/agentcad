@@ -31,6 +31,17 @@ def _box_step(directory: Path, name: str = "box.step") -> Path:
     return path
 
 
+def _many_boxes_step(directory: Path, name: str = "many_boxes.step", count: int = 20) -> Path:
+    solids = [
+        cq.Workplane("XY").box(1, 1, 1).translate((i * 3, 0, 0)).val()
+        for i in range(count)
+    ]
+    compound = cq.Compound.makeCompound(solids)
+    path = directory / name
+    exporters.export(compound, str(path))
+    return path
+
+
 # --- the --ids flag -------------------------------------------------------
 
 class TestInspectIdsFlag:
@@ -157,6 +168,33 @@ class TestInspectIdsFlag:
         assert "id" in joined
         assert "edit" in joined or "stable" in joined
 
+    def test_ids_default_is_bounded_with_truncation_metadata(
+        self, runner, isolated_dir
+    ):
+        step = _many_boxes_step(isolated_dir)
+        result = runner.invoke(cli, ["inspect", str(step), "--ids"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert parsed["face_count"] == 120
+        assert parsed["edge_count"] == 240
+        assert len(parsed["faces"]) == 100
+        assert len(parsed["edges"]) == 100
+        fields = {f["path"]: f for f in parsed["truncation"]["fields"]}
+        assert fields["faces"]["total"] == 120
+        assert fields["edges"]["total"] == 240
+        assert any("--no-limit" in c for c in parsed["truncation"]["recommended_commands"])
+
+    def test_ids_no_limit_restores_complete_lists(self, runner, isolated_dir):
+        step = _many_boxes_step(isolated_dir)
+        result = runner.invoke(cli, ["inspect", str(step), "--ids", "--no-limit"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert len(parsed["faces"]) == parsed["face_count"]
+        assert len(parsed["edges"]) == parsed["edge_count"]
+        assert "truncation" not in parsed
+
 
 # --- the --summary flag (issue #131) --------------------------------------
 
@@ -247,3 +285,18 @@ class TestInspectSummaryFlag:
         joined = " ".join(parsed["next_actions"])
         assert "import" in joined
         assert "pick_face" in joined or "pick_edge" in joined
+
+    def test_summary_cluster_ids_are_bounded(self, runner, isolated_dir):
+        step = _many_boxes_step(isolated_dir)
+        result = runner.invoke(cli, ["inspect", str(step), "--summary", "--limit", "5"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert parsed["summary"]["face_count"] == 120
+        assert "id_truncation" in parsed["summary"]
+        assert "truncation" in parsed
+        recommended = " ".join(parsed["truncation"]["recommended_commands"])
+        assert "--summary --limit 500" in recommended
+        assert "--summary --no-limit" in recommended
+        for cluster in parsed["summary"]["face_clusters"]:
+            assert len(cluster["ids"]) <= 5
