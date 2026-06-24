@@ -11,6 +11,22 @@ from OCP.TopExp import TopExp
 from OCP.TopTools import TopTools_IndexedMapOfShape
 
 
+def extract_validity_errors(analyzer, topo_shape):
+    """Return a sorted list of distinct BRepCheck error class names for an
+    invalid shape (e.g. 'BRepCheck_SelfIntersectingWire'). Empty if none."""
+    errors = set()
+    for shape_type in (TopAbs_FACE, TopAbs_EDGE, TopAbs_WIRE, TopAbs_SHELL):
+        exp = TopExp_Exp(topo_shape, shape_type)
+        while exp.More():
+            check_result = analyzer.Result(exp.Current())
+            if check_result:
+                for status in check_result.Status():
+                    if status.value != 0:  # BRepCheck_NoError = 0
+                        errors.add(status.name)
+            exp.Next()
+    return sorted(errors)
+
+
 def compute_metrics(topo_shape):
     """Compute geometric metrics from a TopoDS_Shape.
 
@@ -78,18 +94,9 @@ def compute_metrics(topo_shape):
 
     # Validity diagnostics — when invalid, extract BRepCheck error descriptions
     if not is_valid:
-        errors = set()
-        for shape_type in (TopAbs_FACE, TopAbs_EDGE, TopAbs_WIRE, TopAbs_SHELL):
-            exp = TopExp_Exp(topo_shape, shape_type)
-            while exp.More():
-                check_result = analyzer.Result(exp.Current())
-                if check_result:
-                    for status in check_result.Status():
-                        if status.value != 0:  # BRepCheck_NoError = 0
-                            errors.add(status.name)
-                exp.Next()
+        errors = extract_validity_errors(analyzer, topo_shape)
         if errors:
-            result["validity_errors"] = sorted(errors)
+            result["validity_errors"] = errors
 
     # Negative volume warning
     warnings = []

@@ -235,6 +235,20 @@ def measure_tier0_payload(
         "more_at": "agentcad docs measure",
     }
 
+    # Flag high-risk edit inputs (invalid/large topology) so the agent gets
+    # workflow guidance before committing to fragile load_step() + boolean
+    # edits. measure doesn't compute free_edge_count (expensive), so risk is
+    # classified on face/edge counts + validity only.
+    from agentcad.edit_risk import classify_edit_risk
+    risk = classify_edit_risk(
+        face_count=metrics["face_count"],
+        edge_count=metrics["edge_count"],
+        is_valid=metrics["is_valid"],
+        validity_errors=metrics.get("validity_errors"),
+    )
+    if risk:
+        payload.update(risk)
+
     if with_features:
         payload["features"] = {
             "solids": topo_ids.solid_entries(topo_shape),

@@ -97,6 +97,35 @@ class TestInspectCommand:
         assert parsed["free_edge_count"] == 0
 
 
+# --- Edit-risk classification (#32) ---
+
+class TestInspectEditRisk:
+    def test_clean_part_has_no_edit_risk(self, runner, isolated_dir):
+        step = _make_step(isolated_dir)
+        result = runner.invoke(cli, ["inspect", str(step), "--no-daemon"])
+        parsed = json.loads(result.stdout)
+        assert "edit_risk" not in parsed
+        assert "risk_reasons" not in parsed
+
+    def test_large_part_flagged_with_guidance(self, runner, isolated_dir):
+        # 200 separate boxes -> 1200 faces, over the large-topology threshold.
+        solids = []
+        for i in range(200):
+            solids.append(cq.Workplane("XY").transformed(offset=(i * 20, 0, 0)).box(10, 10, 10).val())
+        compound = cq.Compound.makeCompound(solids)
+        wp = cq.Workplane("XY").newObject([compound])
+        step = isolated_dir / "big.step"
+        exporters.export(wp, str(step))
+
+        result = runner.invoke(cli, ["inspect", str(step), "--no-daemon"])
+        assert result.exit_code == 0, result.stdout
+        parsed = json.loads(result.stdout)
+        assert parsed["face_count"] >= 1000
+        assert parsed["edit_risk"] == "medium"  # large but valid
+        assert any("large topology" in r for r in parsed["risk_reasons"])
+        assert parsed["recommended_workflow"]
+
+
 # --- Daemon routing (#177) ---
 
 class TestInspectDaemonRouting:

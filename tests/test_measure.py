@@ -146,6 +146,33 @@ class TestMeasureCommand:
         assert "--summary" not in joined
 
 
+class TestMeasureEditRisk:
+    """Edit-risk classification (issue #32)."""
+
+    def test_clean_part_has_no_edit_risk(self, runner, isolated_dir):
+        step = _box_step(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(step), "--no-daemon"])
+        parsed = json.loads(result.stdout)
+        assert "edit_risk" not in parsed
+
+    def test_large_part_flagged_with_guidance(self, runner, isolated_dir):
+        solids = [
+            cq.Workplane("XY").transformed(offset=(i * 20, 0, 0)).box(10, 10, 10).val()
+            for i in range(200)
+        ]
+        compound = cq.Compound.makeCompound(solids)
+        wp = cq.Workplane("XY").newObject([compound])
+        step = isolated_dir / "big.step"
+        exporters.export(wp, str(step))
+
+        result = runner.invoke(cli, ["measure", str(step), "--no-daemon"])
+        assert result.exit_code == 0, result.stdout
+        parsed = json.loads(result.stdout)
+        assert parsed["edit_risk"] == "medium"
+        assert any("large topology" in r for r in parsed["risk_reasons"])
+        assert parsed["recommended_workflow"]
+
+
 class TestMeasureDaemonRouting:
     def test_measure_routes_through_daemon_when_available(
         self, runner, isolated_dir, monkeypatch

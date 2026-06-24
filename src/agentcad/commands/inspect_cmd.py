@@ -375,7 +375,8 @@ def _topology_report(file_path: str, *, return_shape: bool = False):
         if face_ref_count < 2:
             free_edge_count += 1
 
-    is_valid = BRepCheck_Analyzer(shape).IsValid()
+    analyzer = BRepCheck_Analyzer(shape)
+    is_valid = analyzer.IsValid()
 
     payload = {
         "command": "inspect",
@@ -390,6 +391,24 @@ def _topology_report(file_path: str, *, return_shape: bool = False):
         "free_edge_count": free_edge_count,
         "is_valid": is_valid,
     }
+
+    validity_errors = []
+    if not is_valid:
+        from agentcad.metrics import extract_validity_errors
+        validity_errors = extract_validity_errors(analyzer, shape)
+        if validity_errors:
+            payload["validity_errors"] = validity_errors
+
+    from agentcad.edit_risk import classify_edit_risk
+    risk = classify_edit_risk(
+        face_count=face_count,
+        edge_count=edge_count,
+        is_valid=is_valid,
+        free_edge_count=free_edge_count,
+        validity_errors=validity_errors,
+    )
+    if risk:
+        payload.update(risk)
     if return_shape:
         return payload, shape
     return payload
