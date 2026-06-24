@@ -3,15 +3,18 @@ import math
 import cadquery as cq
 import pytest
 from OCP.BRep import BRep_Tool
+from OCP.BRepGProp import BRepGProp
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
 from OCP.Bnd import Bnd_Box
-from OCP.TopAbs import TopAbs_FACE, TopAbs_VERTEX
+from OCP.GProp import GProp_GProps
+from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
 
 from agentcad.helpers import (
+    annular_boss,
     assemble,
     bbox_point,
     ellipse_wire,
@@ -22,6 +25,7 @@ from agentcad.helpers import (
     naca_wire,
     place_at,
     polygon_wire,
+    raise_annulus,
     rotate,
     rounded_rect_wire,
     spline_wire,
@@ -58,6 +62,12 @@ def _bounding_box(shape):
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box)
     return box.Get()
+
+
+def _volume(shape):
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props)
+    return props.Mass()
 
 
 # ── loft_sections tests ────────────────────────────────────────
@@ -467,6 +477,74 @@ class TestAssemble:
         # show_object expects a CQ object — val() should not raise
         val = result.val()
         assert val is not None
+
+
+# ── annular boss tests ────────────────────────────────────────
+
+
+class TestAnnularBoss:
+    def test_annular_boss_dimensions_and_volume_from_diameters(self):
+        result = annular_boss(
+            center=(-105, -30),
+            inner_diameter=74,
+            outer_diameter=134.2,
+            height=10,
+            z_min=5,
+        )
+        bb = _bounding_box(result)
+        assert abs(bb[0] - (-105 - 67.1)) < 0.01
+        assert abs(bb[3] - (-105 + 67.1)) < 0.01
+        assert abs(bb[1] - (-30 - 67.1)) < 0.01
+        assert abs(bb[4] - (-30 + 67.1)) < 0.01
+        assert abs(bb[2] - 5) < 0.01
+        assert abs(bb[5] - 15) < 0.01
+
+        expected = math.pi * (67.1 ** 2 - 37 ** 2) * 10
+        assert abs(_volume(result) - expected) / expected < 0.001
+
+    def test_raise_annulus_returns_compound_with_source_by_default(self):
+        base = cq.Workplane("XY").box(20, 20, 4).val().wrapped
+        result = raise_annulus(
+            base,
+            center=(0, 0),
+            inner_diameter=4,
+            outer_diameter=10,
+            height=3,
+            z=2,
+        )
+        solids = TopExp_Explorer(result, TopAbs_SOLID)
+        count = 0
+        while solids.More():
+            count += 1
+            solids.Next()
+
+        assert count == 2
+        expected_added = math.pi * (5 ** 2 - 2 ** 2) * 3
+        assert abs(_volume(result) - (20 * 20 * 4 + expected_added)) < 0.1
+
+    def test_annular_boss_rejects_invalid_dimensions(self):
+        with pytest.raises(ValueError, match="outer radius"):
+            annular_boss(
+                center=(0, 0),
+                inner_diameter=10,
+                outer_diameter=10,
+                height=1,
+            )
+
+    def test_annular_boss_accepts_build123d_axis_z(self):
+        from build123d import Axis
+
+        result = annular_boss(
+            center=(0, 0),
+            inner_diameter=4,
+            outer_diameter=10,
+            height=2,
+            z_min=1,
+            axis=Axis.Z,
+        )
+        bb = _bounding_box(result)
+        assert abs(bb[2] - 1) < 0.01
+        assert abs(bb[5] - 3) < 0.01
 
 
 # ── ellipse_wire tests ────────────────────────────────────────

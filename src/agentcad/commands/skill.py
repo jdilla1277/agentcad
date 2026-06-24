@@ -99,7 +99,14 @@ agentcad --help   # Read this — it is your complete operational briefing
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
-  and `replace_face`.
+  `replace_face`, `annular_boss`, and `raise_annulus`.
+- For imported STEP annular edits, use the non-fuse workflow:
+  ```python
+  raw = load_step_shape("v1_vendor/output.step")
+  result = raise_annulus(raw, center=(0, 0), inner_diameter=40,
+                         outer_diameter=80, height=7, z=5)
+  show_object(Compound(result))
+  ```
 - CadQuery remains supported. Use `import cadquery as cq`, initialize with
   `agentcad init --runtime cadquery`, or pass `--runtime cadquery`.
 - CadQuery helper paths operate on `TopoDS_Shape`. Bridge with `.val().wrapped`:
