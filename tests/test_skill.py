@@ -34,6 +34,8 @@ def test_skill_show_content_mentions_commands(runner):
     assert "`passed` is false" in content
     assert "cylindrical_features[].axis" in content
     assert "show_object" in content
+    assert "raise_annulus" in content
+    assert "Compound(result)" in content
 
 
 def test_skill_install_creates_file(runner, isolated_dir):

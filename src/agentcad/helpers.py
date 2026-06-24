@@ -3,6 +3,7 @@
 import math
 
 import warnings
+from pathlib import Path
 
 from OCP.Bnd import Bnd_Box
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
@@ -360,6 +361,197 @@ def assemble(*shapes):
     wrapped = [cq.Shape.cast(s) for s in shapes]
     compound = cq.Compound.makeCompound(wrapped)
     return cq.Workplane("XY").newObject([compound])
+
+
+def annular_boss(
+    center,
+    inner_radius=None,
+    outer_radius=None,
+    height=None,
+    *,
+    inner_diameter=None,
+    outer_diameter=None,
+    z=0.0,
+    z_min=None,
+    axis="Z",
+):
+    """Create a raised annular land as a raw ``TopoDS_Shape``.
+
+    Args:
+        center: ``(x, y)`` or ``(x, y, z)`` center of the annulus.
+        inner_radius / outer_radius: Radii of the bore and outside land.
+        height: Boss height, extruded from ``z`` toward +Z.
+        inner_diameter / outer_diameter: Diameter alternatives to radii.
+        z: Base Z when ``center`` is 2D.
+        z_min: Alias for ``z`` matching STEP-edit measurement terminology.
+        axis: Currently only ``"Z"`` is supported.
+
+    Returns:
+        TopoDS_Shape annular solid suitable for raw-shape assembly/export.
+    """
+    axis_name = _coerce_axis_name(axis)
+    if axis_name != "Z":
+        raise ValueError("annular_boss currently supports axis='Z' only")
+
+    inner = _coerce_radius(
+        radius=inner_radius,
+        diameter=inner_diameter,
+        radius_name="inner_radius",
+        diameter_name="inner_diameter",
+    )
+    outer = _coerce_radius(
+        radius=outer_radius,
+        diameter=outer_diameter,
+        radius_name="outer_radius",
+        diameter_name="outer_diameter",
+    )
+    if outer <= inner:
+        raise ValueError(
+            f"outer radius must be greater than inner radius, got {outer} <= {inner}"
+        )
+    if height is None or height <= 0:
+        raise ValueError(f"height must be positive, got {height}")
+
+    if z_min is not None:
+        z = z_min
+    cx, cy, cz = _coerce_annulus_center(center, z)
+
+    import cadquery as cq
+
+    boss = (
+        cq.Workplane("XY", origin=(cx, cy, cz))
+        .circle(float(outer))
+        .circle(float(inner))
+        .extrude(float(height))
+    )
+    return boss.val().wrapped
+
+
+def raise_annulus(
+    source=None,
+    *,
+    center,
+    inner_diameter=None,
+    outer_diameter=None,
+    height,
+    z=0.0,
+    inner_radius=None,
+    outer_radius=None,
+    axis="Z",
+    fuse=False,
+):
+    """Add an annular raised land to an imported shape.
+
+    By default this returns a compound of ``source`` plus the annular boss,
+    so STEP-edit scripts can preserve fragile imported topology without a
+    successful boolean fuse. Set ``fuse=True`` to try a boolean union; if the
+    fuse fails, the helper warns and returns the same compound fallback.
+
+    ``source`` may be a STEP/STP/BREP path, a raw TopoDS_Shape, or a wrapped
+    build123d/CadQuery shape. Passing ``source=None`` returns only the annular
+    boss shape.
+    """
+    land = annular_boss(
+        center=center,
+        inner_radius=inner_radius,
+        outer_radius=outer_radius,
+        inner_diameter=inner_diameter,
+        outer_diameter=outer_diameter,
+        height=height,
+        z=z,
+        axis=axis,
+    )
+    if source is None:
+        return land
+
+    base = _coerce_topods_shape(source)
+    if not fuse:
+        return _compound_topods(base, land)
+
+    try:
+        fused = BRepAlgoAPI_Fuse(base, land)
+        if fused.IsDone():
+            return fused.Shape()
+    except Exception:
+        pass
+
+    warnings.warn("raise_annulus boolean fuse failed, returning compound instead")
+    return _compound_topods(base, land)
+
+
+def _compound_topods(*shapes):
+    builder = BRep_Builder()
+    compound = TopoDS_Compound()
+    builder.MakeCompound(compound)
+    for shape in shapes:
+        builder.Add(compound, _coerce_topods_shape(shape))
+    return compound
+
+
+def _coerce_topods_shape(shape):
+    if isinstance(shape, (str, Path)):
+        from agentcad.step_io import load_cad_shape
+        return load_cad_shape(shape)
+    if hasattr(shape, "wrapped"):
+        return shape.wrapped
+    if hasattr(shape, "val"):
+        return shape.val().wrapped
+    return shape
+
+
+def _coerce_radius(*, radius, diameter, radius_name, diameter_name):
+    if radius is None and diameter is None:
+        raise ValueError(f"pass {radius_name} or {diameter_name}")
+    if radius is not None and diameter is not None:
+        raise ValueError(f"pass only one of {radius_name} or {diameter_name}")
+    divisor = 1.0 if radius is not None else 2.0
+    value = float(radius if radius is not None else diameter) / divisor
+    if value <= 0:
+        label = radius_name if radius is not None else diameter_name
+        original = radius if radius is not None else diameter
+        raise ValueError(f"{label} must be positive, got {original}")
+    return value
+
+
+def _coerce_annulus_center(center, z):
+    values = tuple(center)
+    if len(values) == 2:
+        return (float(values[0]), float(values[1]), float(z))
+    if len(values) == 3:
+        return (float(values[0]), float(values[1]), float(values[2]))
+    raise ValueError("center must be a 2D or 3D point")
+
+
+def _coerce_axis_name(axis):
+    if not isinstance(axis, str) and hasattr(axis, "direction"):
+        coords = _coerce_vector3(axis.direction)
+        if coords and _is_positive_z_direction(coords):
+            return "Z"
+    name = getattr(axis, "name", axis)
+    return str(name).strip().upper()
+
+
+def _coerce_vector3(vector):
+    attrs = []
+    for attr in ("X", "Y", "Z"):
+        if not hasattr(vector, attr):
+            break
+        value = getattr(vector, attr)
+        attrs.append(value() if callable(value) else value)
+    if len(attrs) == 3:
+        return tuple(float(v) for v in attrs)
+    try:
+        values = tuple(vector)
+    except TypeError:
+        return None
+    if len(values) != 3:
+        return None
+    return tuple(float(v) for v in values)
+
+
+def _is_positive_z_direction(coords, tol=1e-9):
+    x, y, z = coords
+    return abs(x) <= tol and abs(y) <= tol and z > 0
 
 
 def involute_gear_profile(module, teeth, pressure_angle=20.0):
