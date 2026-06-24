@@ -197,6 +197,8 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
                 "explicit_id": opts.get("id"),
                 "name": opts.get("name"),
                 "color": opts.get("color"),
+                "part_of": opts.get("part_of") or opts.get("group"),
+                "group_color": opts.get("group_color"),
                 "topo_shape": wp.wrapped,
             })
 

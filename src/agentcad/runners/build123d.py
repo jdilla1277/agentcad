@@ -112,11 +112,21 @@ def execute(
             )
         source = _apply_overrides(source, params)
 
-    # List of (obj, explicit_id, name, color) tuples in declaration order.
-    captured: list[tuple[Any, Any, Any, Any]] = []
+    # List of (obj, explicit_id, name, color, part_of, group_color) tuples
+    # in declaration order.
+    captured: list[tuple[Any, Any, Any, Any, Any, Any]] = []
     assembly_requested = False
 
-    def show_object(obj, *_args, id=None, name=None, options=None, **_kwargs):
+    def show_object(
+        obj,
+        *_args,
+        id=None,
+        name=None,
+        part_of=None,
+        group_color=None,
+        options=None,
+        **_kwargs,
+    ):
         # Boolean ops in build123d (`a - b - c`) can return a ShapeList instead
         # of a single Shape when the result is multi-piece. Auto-extract the
         # single-element case (the common one) and surface a recovery hint
@@ -153,9 +163,22 @@ def execute(
             color = options.get("color")
             if name is None:
                 name = options.get("name")
-        captured.append((obj, id, name, color))
+            if part_of is None:
+                part_of = options.get("part_of") or options.get("group")
+            if group_color is None:
+                group_color = options.get("group_color")
+        captured.append((obj, id, name, color, part_of, group_color))
 
-    def show_assembly(shapes, *_args, id=None, name=None, options=None, **_kwargs):
+    def show_assembly(
+        shapes,
+        *_args,
+        id=None,
+        name=None,
+        part_of=None,
+        group_color=None,
+        options=None,
+        **_kwargs,
+    ):
         """Capture an intentional multi-body build123d output.
 
         This is the supported escape hatch for ShapeList/list/tuple outputs:
@@ -191,8 +214,14 @@ def execute(
             color = options.get("color")
             if name is None:
                 name = options.get("name")
+            if part_of is None:
+                part_of = options.get("part_of") or options.get("group")
+            if group_color is None:
+                group_color = options.get("group_color")
 
-        captured.append((Compound(children=children), id, name, color))
+        captured.append(
+            (Compound(children=children), id, name, color, part_of, group_color)
+        )
         assembly_requested = True
 
     import build123d as _b3d
@@ -315,7 +344,7 @@ def execute(
         if issubclass(w.category, UserWarning)
         and not issubclass(w.category, DeprecationWarning)
     ]
-    shapes = [obj for obj, _id, _n, _c in captured]
+    shapes = [obj for obj, _id, _n, _c, _g, _gc in captured]
     if len(shapes) == 1:
         native_shape = shapes[0]
     elif any(_is_topods_shape(s) for s in shapes):
@@ -334,9 +363,11 @@ def execute(
             "explicit_id": explicit_id,
             "name": name,
             "color": color,
+            "part_of": part_of,
+            "group_color": group_color,
             "topo_shape": _topods_shape(obj),
         }
-        for idx, (obj, explicit_id, name, color) in enumerate(captured)
+        for idx, (obj, explicit_id, name, color, part_of, group_color) in enumerate(captured)
     ]
 
     return ExecutionResult(

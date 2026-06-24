@@ -87,6 +87,26 @@ def _parts_from_meta(meta):
     ]
 
 
+def _groups_from_meta(meta, parts):
+    groups = [dict(group) for group in meta.get("groups", [])]
+    if groups:
+        return groups
+
+    by_id = {}
+    for part in parts:
+        group_id = part.get("part_of")
+        if not group_id:
+            continue
+        group = by_id.setdefault(
+            group_id,
+            {"id": group_id, "name": group_id, "part_ids": []},
+        )
+        group["part_ids"].append(part.get("id"))
+        if part.get("color") and "color" not in group:
+            group["color"] = part["color"]
+    return list(by_id.values())
+
+
 def _base_response(manifest, version_entry, meta):
     response = {
         "project": manifest.get("name"),
@@ -116,6 +136,22 @@ def _validate_part_ids(parts, ids):
     available = {str(p.get("id")) for p in parts}
     missing = [part_id for part_id in ids if part_id not in available]
     return missing, sorted(available)
+
+
+def _validate_group_ids(groups, ids):
+    available = {str(g.get("id")) for g in groups}
+    missing = [group_id for group_id in ids if group_id not in available]
+    return missing, sorted(available)
+
+
+def _parts_for_groups(groups, group_ids):
+    wanted = set(group_ids)
+    part_ids = []
+    for group in groups:
+        if group.get("id") not in wanted:
+            continue
+        part_ids.extend(str(part_id) for part_id in group.get("part_ids", []))
+    return _dedupe_preserve_order(part_ids)
 
 
 def _dedupe_preserve_order(values):
@@ -158,12 +194,15 @@ def list_parts(ref):
 
     meta = _load_version_meta(version_entry)
     parts = _parts_from_meta(meta)
+    groups = _groups_from_meta(meta, parts)
     click.echo(json.dumps({
         "command": "parts list",
         "status": "success",
         **_base_response(manifest, version_entry, meta),
         "part_count": len(parts),
+        "group_count": len(groups),
         "parts": parts,
+        "groups": groups,
     }))
 
 
@@ -223,8 +262,31 @@ def show_part(ref, part_id):
 )
 @click.option("--ghost-rest", is_flag=True, default=False, help="Make non-selected parts transparent.")
 @click.option("--focus", "focus_id", default=None, help="Part id to focus the camera on.")
+@click.option(
+    "--isolate-group",
+    "isolate_group_ids",
+    multiple=True,
+    help="Group id to isolate in the generated review viewer. Repeat for multiple groups.",
+)
+@click.option(
+    "--hide-group",
+    "hide_group_ids",
+    multiple=True,
+    help="Group id to hide in the generated review viewer. Repeat for multiple groups.",
+)
+@click.option("--focus-group", "focus_group_id", default=None, help="Group id to focus the camera on.")
 @click.option("--open/--no-open", "open_browser", default=True, help="Open the generated viewer in a browser.")
-def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
+def view_parts(
+    ref,
+    isolate_ids,
+    hide_ids,
+    ghost_rest,
+    focus_id,
+    isolate_group_ids,
+    hide_group_ids,
+    focus_group_id,
+    open_browser,
+):
     """Generate a reproducible part review viewer for agents and humans.
 
     REF accepts the same forms as `parts list`. The generated HTML embeds the
@@ -237,6 +299,7 @@ def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
 
     meta = _load_version_meta(version_entry)
     parts = _parts_from_meta(meta)
+    groups = _groups_from_meta(meta, parts)
     if not parts:
         _emit_error(
             f"Version '{ref}' has no parts snapshot.",
@@ -247,9 +310,34 @@ def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
 
     isolate_ids = _dedupe_preserve_order(isolate_ids)
     hide_ids = _dedupe_preserve_order(hide_ids)
+    isolate_group_ids = _dedupe_preserve_order(isolate_group_ids)
+    hide_group_ids = _dedupe_preserve_order(hide_group_ids)
+    requested_group_ids = [*isolate_group_ids, *hide_group_ids]
+    if focus_group_id:
+        requested_group_ids.append(focus_group_id)
+    missing_groups, available_group_ids = _validate_group_ids(groups, requested_group_ids)
+    if missing_groups:
+        _emit_error(
+            "Unknown group id requested for review viewer.",
+            ref=ref,
+            missing_group_ids=missing_groups,
+            available_group_ids=available_group_ids,
+        )
+
+    isolate_ids = _dedupe_preserve_order([
+        *isolate_ids,
+        *_parts_for_groups(groups, isolate_group_ids),
+    ])
+    hide_ids = _dedupe_preserve_order([
+        *hide_ids,
+        *_parts_for_groups(groups, hide_group_ids),
+    ])
+    group_focus_parts = _parts_for_groups(groups, [focus_group_id]) if focus_group_id else []
+    effective_focus_id = focus_id or (group_focus_parts[0] if group_focus_parts else None)
+
     requested_ids = [*isolate_ids, *hide_ids]
-    if focus_id:
-        requested_ids.append(focus_id)
+    if effective_focus_id:
+        requested_ids.append(effective_focus_id)
     missing, available_ids = _validate_part_ids(parts, requested_ids)
     if missing:
         _emit_error(
@@ -276,16 +364,19 @@ def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
             path=str(glb_path),
         )
 
-    selected = focus_id or (isolate_ids[0] if isolate_ids else None)
+    selected = effective_focus_id or (isolate_ids[0] if isolate_ids else None)
     review_state = {
         "mode": "part-review",
         "source": "agentcad parts view",
         "version": meta.get("version", version_entry.get("version")),
         "label": meta.get("label", version_entry.get("label")),
         "selected": selected,
-        "focus": focus_id,
+        "focus": effective_focus_id,
         "isolated": isolate_ids,
         "hidden": hide_ids,
+        "isolated_groups": isolate_group_ids,
+        "hidden_groups": hide_group_ids,
+        "focus_group": focus_group_id,
         "ghost_rest": ghost_rest,
     }
 
@@ -297,8 +388,12 @@ def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
         name_parts.extend(["isolate", *isolate_ids])
     if hide_ids:
         name_parts.extend(["hide", *hide_ids])
-    if focus_id:
-        name_parts.extend(["focus", focus_id])
+    if isolate_group_ids:
+        name_parts.extend(["isolate_group", *isolate_group_ids])
+    if hide_group_ids:
+        name_parts.extend(["hide_group", *hide_group_ids])
+    if effective_focus_id:
+        name_parts.extend(["focus", effective_focus_id])
     if ghost_rest:
         name_parts.append("ghost")
     html_path = version_dir / f"{_slugify_review_name(name_parts)}.html"
@@ -308,6 +403,7 @@ def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
         label_a=f"{meta.get('label', version_entry.get('label'))} parts",
         default_mode="single-a",
         parts=parts,
+        groups=groups,
         part_review=review_state,
     )
 
@@ -324,4 +420,6 @@ def view_parts(ref, isolate_ids, hide_ids, ghost_rest, focus_id, open_browser):
         "url": url,
         "part_review": review_state,
     }
+    if groups:
+        response["groups"] = groups
     click.echo(json.dumps(response))
