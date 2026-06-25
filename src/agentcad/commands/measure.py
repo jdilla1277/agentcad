@@ -192,7 +192,7 @@ def measure(
 
     if category == file_detect.TIER0_BREP:
         _measure_tier0(
-            str(file_path.resolve()),
+            str(file_path.absolute()),
             detection,
             with_features=with_features,
             cylinders_only=cylinders_only,
@@ -297,7 +297,7 @@ def measure_tier0_payload(
     from agentcad.step_io import load_cad_shape
     from agentcad import topo_ids
 
-    topo_shape = load_cad_shape(file_path)
+    topo_shape = load_cad_shape(file_path, format_hint=detection.get("format"))
     metrics = compute_metrics(topo_shape)
     cylindrical_features = _filter_cylindrical_features(
         _cylindrical_features(topo_shape),
@@ -328,6 +328,29 @@ def measure_tier0_payload(
         "next_actions": next_actions,
         "more_at": "agentcad docs measure",
     }
+
+    # Flag high-risk edit inputs (invalid/large topology) so the agent gets
+    # workflow guidance before committing to fragile load_step() + boolean
+    # edits. measure doesn't compute free_edge_count (expensive), so risk is
+    # classified on face/edge counts + validity only.
+    from agentcad.edit_risk import classify_edit_risk
+    risk = classify_edit_risk(
+        face_count=metrics["face_count"],
+        edge_count=metrics["edge_count"],
+        is_valid=metrics["is_valid"],
+        validity_errors=metrics.get("validity_errors"),
+    )
+    if risk:
+        payload.update(risk)
+        # The default next_actions point at inspect --ids for targeted edits;
+        # on a high-risk input that contradicts the recommended_workflow.
+        # Keep the next step coherent with the risk guidance.
+        if risk["edit_risk"] == "high":
+            payload["next_actions"] = [
+                "read metrics + validity — this input is high edit-risk",
+                "follow recommended_workflow before attempting any edit; do "
+                "not start with load_step() + boolean/fillet",
+            ]
 
     if diameter is not None or axis is not None or cylinders_only:
         payload["query"] = {

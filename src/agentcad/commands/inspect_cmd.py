@@ -169,7 +169,7 @@ def inspect_cmd(file, with_ids, with_summary, id_limit, no_limit, no_daemon):
 
     if category == file_detect.TIER0_BREP:
         _inspect_tier0(
-            str(file_path.resolve()),
+            str(file_path.absolute()),
             detection,
             with_ids=with_ids,
             with_summary=with_summary,
@@ -233,7 +233,11 @@ def _inspect_tier0(
     diagnostic on stdout."""
     try:
         # load_cad_shape (called inside _topology_report) handles silencing.
-        payload, topo_shape = _topology_report(file_path, return_shape=True)
+        payload, topo_shape = _topology_report(
+            file_path,
+            return_shape=True,
+            format_hint=detection.get("format"),
+        )
     except Exception as exc:
         _emit({
             "command": "inspect", "status": "malformed",
@@ -302,6 +306,17 @@ def _inspect_tier0(
                     with_summary=with_summary,
                 ),
             }
+
+    # On a high edit-risk input the generic next_actions above (view, measure,
+    # or the import → pick_face flow) all assume the part is normally editable,
+    # which contradicts the recommended_workflow. Make the next step coherent:
+    # look, then follow the workflow — don't jump straight into an edit flow.
+    if payload.get("edit_risk") == "high":
+        payload["next_actions"] = [
+            f"agentcad view {file_path} — look at the geometry before deciding how to edit",
+            "follow recommended_workflow — do not start with load_step() + "
+            "boolean/fillet edits on this input",
+        ]
 
     notes = _compute_notes(payload)
     if with_ids or with_summary:
@@ -421,7 +436,12 @@ def _compute_notes(payload: dict) -> list:
     return notes
 
 
-def _topology_report(file_path: str, *, return_shape: bool = False):
+def _topology_report(
+    file_path: str,
+    *,
+    return_shape: bool = False,
+    format_hint: str | None = None,
+):
     from agentcad.step_io import load_cad_shape
     from OCP.BRepCheck import BRepCheck_Analyzer
     from OCP.ShapeAnalysis import ShapeAnalysis_Shell
@@ -433,7 +453,7 @@ def _topology_report(file_path: str, *, return_shape: bool = False):
     from OCP.TopoDS import TopoDS
     from OCP.TopTools import TopTools_IndexedMapOfShape
 
-    shape = load_cad_shape(file_path)
+    shape = load_cad_shape(file_path, format_hint=format_hint)
 
     solid_count = 0
     exp = TopExp_Explorer(shape, TopAbs_SOLID)
@@ -490,7 +510,8 @@ def _topology_report(file_path: str, *, return_shape: bool = False):
         if face_ref_count < 2:
             free_edge_count += 1
 
-    is_valid = BRepCheck_Analyzer(shape).IsValid()
+    analyzer = BRepCheck_Analyzer(shape)
+    is_valid = analyzer.IsValid()
 
     payload = {
         "command": "inspect",
@@ -505,6 +526,24 @@ def _topology_report(file_path: str, *, return_shape: bool = False):
         "free_edge_count": free_edge_count,
         "is_valid": is_valid,
     }
+
+    validity_errors = []
+    if not is_valid:
+        from agentcad.metrics import extract_validity_errors
+        validity_errors = extract_validity_errors(analyzer, shape)
+        if validity_errors:
+            payload["validity_errors"] = validity_errors
+
+    from agentcad.edit_risk import classify_edit_risk
+    risk = classify_edit_risk(
+        face_count=face_count,
+        edge_count=edge_count,
+        is_valid=is_valid,
+        free_edge_count=free_edge_count,
+        validity_errors=validity_errors,
+    )
+    if risk:
+        payload.update(risk)
     if return_shape:
         return payload, shape
     return payload

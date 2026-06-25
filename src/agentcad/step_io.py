@@ -35,24 +35,29 @@ _STEP_SUFFIXES = (".step", ".stp")
 _BREP_SUFFIXES = (".brep",)
 
 
-def load_cad_shape(path: Union[str, Path]):
+def load_cad_shape(path: Union[str, Path], *, format_hint: str | None = None):
     """Load a STEP / STP / BREP file as an unwrapped TopoDS_Shape.
 
     Wraps the OCCT call in ``silence_native_stdout()`` so parser
     diagnostics go to stderr (not stdout) and JSON-on-stdout contracts
     stay clean. Raises ``ValueError`` with a context-rich message on
     any failure — never lets an OCCT exception leak unwrapped.
+
+    ``format_hint`` may be ``"step"`` or ``"brep"`` when the caller has
+    already sniffed the file type. This matters for resolved symlinks and
+    content-addressed blobs whose real path has no useful suffix.
     """
     p = Path(path)
     if not p.exists():
         raise ValueError(f"CAD file not found: {p}")
 
-    suffix = p.suffix.lower()
-    if suffix in _STEP_SUFFIXES:
+    fmt = _cad_format(p, format_hint=format_hint)
+    if fmt == "step":
         shape = _load_step_topods(p)
-    elif suffix in _BREP_SUFFIXES:
+    elif fmt == "brep":
         shape = _load_brep_topods(p)
     else:
+        suffix = p.suffix.lower()
         raise ValueError(
             f"Unsupported CAD extension '{suffix}' for {p.name}. "
             "load_cad_shape handles .step / .stp / .brep — use file_detect "
@@ -77,6 +82,25 @@ def load_cad_shape(path: Union[str, Path]):
 
 
 # --- internals --------------------------------------------------------------
+
+def _cad_format(path: Path, *, format_hint: str | None) -> str | None:
+    if format_hint is not None:
+        normalized = format_hint.lower().lstrip(".")
+        if normalized == "stp":
+            normalized = "step"
+        if normalized in {"step", "brep"}:
+            return normalized
+        raise ValueError(
+            f"Unsupported CAD format hint '{format_hint}'. "
+            "load_cad_shape accepts 'step' or 'brep'."
+        )
+
+    suffix = path.suffix.lower()
+    if suffix in _STEP_SUFFIXES:
+        return "step"
+    if suffix in _BREP_SUFFIXES:
+        return "brep"
+    return None
 
 def _load_step_topods(path: Path):
     from cadquery import Shape, importers

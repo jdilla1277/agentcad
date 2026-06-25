@@ -219,6 +219,84 @@ class TestMeasureCommand:
         assert "inspect" in joined
         assert "--summary" not in joined
 
+    def test_measure_loads_step_symlink_to_extensionless_target(
+        self, runner, isolated_dir
+    ):
+        step = _box_step(isolated_dir, "source.step")
+        blob = isolated_dir / "661210dec702"
+        link = isolated_dir / "input.step"
+        step.rename(blob)
+        link.symlink_to(blob.name)
+
+        result = runner.invoke(cli, ["measure", str(link), "--no-daemon"])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["file"].endswith("input.step")
+        assert parsed["format_detected"] == "step"
+        assert parsed["metrics"]["dimensions"] == {"x": 10.0, "y": 20.0, "z": 5.0}
+
+
+class TestMeasureEditRisk:
+    """Edit-risk classification (issue #32)."""
+
+    def test_clean_part_has_no_edit_risk(self, runner, isolated_dir):
+        step = _box_step(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(step), "--no-daemon"])
+        parsed = json.loads(result.stdout)
+        assert "edit_risk" not in parsed
+
+    def test_large_part_flagged_with_guidance(self, runner, isolated_dir):
+        solids = [
+            cq.Workplane("XY").transformed(offset=(i * 20, 0, 0)).box(10, 10, 10).val()
+            for i in range(200)
+        ]
+        compound = cq.Compound.makeCompound(solids)
+        wp = cq.Workplane("XY").newObject([compound])
+        step = isolated_dir / "big.step"
+        exporters.export(wp, str(step))
+
+        result = runner.invoke(cli, ["measure", str(step), "--no-daemon"])
+        assert result.exit_code == 0, result.stdout
+        parsed = json.loads(result.stdout)
+        assert parsed["edit_risk"] == "medium"
+        assert any("large topology" in r for r in parsed["risk_reasons"])
+        assert parsed["recommended_workflow"]
+
+    def test_invalid_large_input_flagged_high_end_to_end(self, runner, isolated_dir):
+        from tests.test_inspect import _invalid_large_brep
+
+        brep = _invalid_large_brep(isolated_dir)
+        result = runner.invoke(cli, ["measure", str(brep), "--no-daemon"])
+        assert result.exit_code == 0, result.stdout
+        parsed = json.loads(result.stdout)
+        assert parsed["edit_risk"] == "high"
+        assert any("invalid topology" in r for r in parsed["risk_reasons"])
+        # next_actions stays coherent with the risk guidance
+        joined = " ".join(parsed["next_actions"]).lower()
+        assert "recommended_workflow" in joined
+
+    def test_high_risk_brep_symlink_to_extensionless_target_loads(
+        self, runner, isolated_dir
+    ):
+        from tests.test_inspect import _invalid_large_brep
+
+        brep = _invalid_large_brep(isolated_dir, "source.brep")
+        blob = isolated_dir / "661210dec702"
+        link = isolated_dir / "input.brep"
+        brep.rename(blob)
+        link.symlink_to(blob.name)
+
+        result = runner.invoke(cli, ["measure", str(link), "--no-daemon"])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["file"].endswith("input.brep")
+        assert parsed["format_detected"] == "brep"
+        assert parsed["edit_risk"] == "high"
+
 
 class TestMeasureDaemonRouting:
     def test_measure_routes_through_daemon_when_available(
