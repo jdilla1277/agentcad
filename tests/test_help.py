@@ -74,7 +74,11 @@ def test_help_mentions_part_review_views(runner):
     assert "agentcad parts view" in output
     assert "--isolate ID" in output
     assert "--isolate-group GROUP" in output
+    assert "--label TEXT" in output
+    assert "--note TEXT" in output
     assert "--ghost-rest" in output
+    assert "temporary part review handoff viewer" in output
+    assert "Browser changes are not saved" in output
 
 
 def test_help_documents_status_values(runner):

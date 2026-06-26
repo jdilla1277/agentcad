@@ -275,6 +275,17 @@ def show_part(ref, part_id):
     help="Group id to hide in the generated review viewer. Repeat for multiple groups.",
 )
 @click.option("--focus-group", "focus_group_id", default=None, help="Group id to focus the camera on.")
+@click.option(
+    "--label",
+    "review_label",
+    default=None,
+    help="Optional short label for this temporary handoff viewer.",
+)
+@click.option(
+    "--note",
+    default=None,
+    help="Optional human-facing note explaining what to inspect.",
+)
 @click.option("--open/--no-open", "open_browser", default=True, help="Open the generated viewer in a browser.")
 def view_parts(
     ref,
@@ -285,12 +296,16 @@ def view_parts(
     isolate_group_ids,
     hide_group_ids,
     focus_group_id,
+    review_label,
+    note,
     open_browser,
 ):
-    """Generate a reproducible part review viewer for agents and humans.
+    """Generate a temporary part review viewer for agents and humans.
 
     REF accepts the same forms as `parts list`. The generated HTML embeds the
-    version's viewer GLB plus a review state for hide/isolate/ghost/focus.
+    version's viewer GLB plus an initial review state for hide/isolate/ghost/focus.
+    Human changes inside the browser are not persisted; agents can generate a
+    new viewer whenever a different inspection setup is useful.
     """
     manifest = load_manifest(command="parts")
     version_entry = _resolve_version(manifest, ref)
@@ -368,8 +383,12 @@ def view_parts(
     review_state = {
         "mode": "part-review",
         "source": "agentcad parts view",
+        "temporary": True,
+        "persisted": False,
         "version": meta.get("version", version_entry.get("version")),
         "label": meta.get("label", version_entry.get("label")),
+        "review_label": review_label,
+        "note": note,
         "selected": selected,
         "focus": effective_focus_id,
         "isolated": isolate_ids,
@@ -384,23 +403,28 @@ def view_parts(
 
     version_dir = Path.cwd() / version_entry["path"]
     name_parts = ["parts_review"]
-    if isolate_ids:
-        name_parts.extend(["isolate", *isolate_ids])
-    if hide_ids:
-        name_parts.extend(["hide", *hide_ids])
-    if isolate_group_ids:
-        name_parts.extend(["isolate_group", *isolate_group_ids])
-    if hide_group_ids:
-        name_parts.extend(["hide_group", *hide_group_ids])
-    if effective_focus_id:
-        name_parts.extend(["focus", effective_focus_id])
-    if ghost_rest:
-        name_parts.append("ghost")
+    if review_label:
+        name_parts.append(review_label)
+    else:
+        if isolate_ids:
+            name_parts.extend(["isolate", *isolate_ids])
+        if hide_ids:
+            name_parts.extend(["hide", *hide_ids])
+        if isolate_group_ids:
+            name_parts.extend(["isolate_group", *isolate_group_ids])
+        if hide_group_ids:
+            name_parts.extend(["hide_group", *hide_group_ids])
+        if effective_focus_id:
+            name_parts.extend(["focus", effective_focus_id])
+        if ghost_rest:
+            name_parts.append("ghost")
     html_path = version_dir / f"{_slugify_review_name(name_parts)}.html"
+    version_label = meta.get("label", version_entry.get("label"))
+    viewer_label = f"{version_label} · {review_label}" if review_label else f"{version_label} parts"
     _render_unified(
         html_path,
         glb_a=glb_path,
-        label_a=f"{meta.get('label', version_entry.get('label'))} parts",
+        label_a=viewer_label,
         default_mode="single-a",
         parts=parts,
         groups=groups,
@@ -412,13 +436,31 @@ def view_parts(
         _open_browser(url)
 
     rel_html = html_path.relative_to(Path.cwd()).as_posix()
+    handoff_label = review_label or "part review"
+    handoff_message = (
+        f"Open this temporary {handoff_label} viewer to inspect "
+        f"{version_label}. Browser changes are not saved."
+    )
     response = {
         "command": "parts view",
         "status": "success",
         **_base_response(manifest, version_entry, meta),
+        "temporary": True,
+        "persisted": False,
+        "lifecycle": "temporary",
         "review_viewer": rel_html,
         "url": url,
         "part_review": review_state,
+        "handoff": {
+            "kind": "temporary_part_review",
+            "label": review_label,
+            "note": note,
+            "viewer": rel_html,
+            "url": url,
+            "message": handoff_message,
+            "temporary": True,
+            "persisted": False,
+        },
     }
     if groups:
         response["groups"] = groups

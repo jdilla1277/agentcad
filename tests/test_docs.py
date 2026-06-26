@@ -155,6 +155,12 @@ def test_docs_parts_mentions_review_viewers(runner):
     assert "--ghost-rest" in content
     assert "viewer_glb" in content
     assert "group_color" in content
+    assert "--label \"Frame check\"" in content
+    assert "--note \"Inspect the gussets\"" in content
+    assert "temporary=true" in content
+    assert "persisted=false" in content
+    assert "saved-views catalog" in content
+    assert "browser changes are not saved" in content.lower()
 
 
 def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
