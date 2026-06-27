@@ -260,7 +260,7 @@ def _inspect_tier0(
             f"agentcad view {file_path} — open in a browser to inspect or share with humans",
             f"agentcad measure {file_path} — get dimensions, edge lengths, and hole diameters",
         ],
-        "more_at": "agentcad docs",
+        "more_at": "agentcad docs inspect",
     })
 
     if with_ids or with_summary:

@@ -67,8 +67,25 @@ def test_docs_schema_section(runner):
     assert "success" in content
     assert "failed" in content
     assert "error" in content
+    assert "unknown_format" in content
+    assert "recognized_deferred" in content
     assert "viewer_glb" in content
     assert "outputs.glb appears only when --export glb" in content
+
+
+def test_docs_schema_lists_current_inspect_measure_fields(runner):
+    result = runner.invoke(cli, ["docs", "schema"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    content = data["content"]
+
+    for field in (
+        "format_detected", "extension", "size_bytes", "next_actions",
+        "more_at", "solids?/faces?/edges?", "summary?", "truncation?",
+        "validity", "cylindrical_features", "feature_summary?", "features?",
+        "query?", "edit_risk?",
+    ):
+        assert field in content
 
 
 def test_docs_workflow_section(runner):
@@ -382,6 +399,14 @@ def test_docs_inspect_section(runner):
     assert "solid_count" in content
     assert "shell" in content.lower()
     assert "free_edge" in content
+    assert "format_detected" in content
+    assert "next_actions" in content
+    assert "--summary" in content
+    assert "solids / faces / edges" in content
+    assert "[--ids] [--summary]" in content
+    assert "face_clusters" in content
+    assert "ids_total?" in content
+    assert "truncation" in content
 
 
 def test_docs_commands_mentions_inspect(runner):
@@ -401,6 +426,17 @@ def test_docs_measure_section(runner):
     assert "cylindrical_features" in content
     assert "not a manufacturing tolerance" in content
     assert "--features" in content
+    assert "validity" in content
+    assert "query" in content
+    assert "features" in content
+    assert "direction?" in content
+    assert "+x/+y/+z/other" in content
+    assert "face_clusters" in content
+    assert "diameter_tolerance_mm" in content
+    assert "Use reported axis labels" in content
+    assert "ids_total?" in content
+    assert "truncation" in content
+    assert "Omitted by --cylinders-only" in content
 
 
 # --- M26: twistExtrude performance warning ---
