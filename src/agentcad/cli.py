@@ -146,8 +146,9 @@ COMMANDS
   agentcad parts show REF ID    Show one part from that version by stable id.
   agentcad parts view REF [--isolate ID] [--hide ID] [--ghost-rest] [--focus ID]
                           [--isolate-group GROUP] [--hide-group GROUP]
-                                Generate a reproducible part review viewer.
-                                Uses the same meta.json snapshot as viewer.html.
+                          [--label TEXT] [--note TEXT]
+                                Generate a temporary part review handoff viewer.
+                                Browser changes are not saved.
   agentcad view FILE [--measure] [--spec spec.json]
                                 Open GLB/STEP in browser. STEP auto-converts.
                                 Review mode needs STEP/STP source geometry.

@@ -237,12 +237,25 @@ def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
     assert data["command"] == "parts view"
     assert data["status"] == "success"
     assert data["viewer_glb"] == "v1_assembly/output.glb"
+    assert data["temporary"] is True
+    assert data["persisted"] is False
+    assert data["lifecycle"] == "temporary"
     assert data["review_viewer"].startswith("v1_assembly/parts_review_")
+    assert data["handoff"]["kind"] == "temporary_part_review"
+    assert data["handoff"]["viewer"] == data["review_viewer"]
+    assert data["handoff"]["url"] == data["url"]
+    assert data["handoff"]["temporary"] is True
+    assert data["handoff"]["persisted"] is False
+    assert "Browser changes are not saved" in data["handoff"]["message"]
     assert data["part_review"] == {
         "mode": "part-review",
         "source": "agentcad parts view",
+        "temporary": True,
+        "persisted": False,
         "version": 1,
         "label": "assembly",
+        "review_label": None,
+        "note": None,
         "selected": "axle_shaft",
         "focus": "axle_shaft",
         "isolated": ["axle_shaft"],
@@ -259,6 +272,51 @@ def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
     assert '"isolated": ["axle_shaft"]' in html
     assert "Part controls" in html
     assert "Ghost rest" in html
+
+    meta = json.loads((isolated_dir / "v1_assembly" / "meta.json").read_text())
+    assert "review_views" not in meta
+
+
+def test_parts_view_label_and_note_are_temporary_handoff_metadata(runner, isolated_dir):
+    _write_project(isolated_dir, parts=[
+        {
+            "id": "axle_shaft",
+            "id_source": "name",
+            "name": "Axle Shaft",
+            "color": "steelblue",
+        },
+    ])
+
+    result = runner.invoke(cli, [
+        "parts", "view", "assembly",
+        "--isolate", "axle_shaft",
+        "--focus", "axle_shaft",
+        "--label", "Axle handoff",
+        "--note", "Check the axle clearance before approving.",
+        "--no-open",
+    ])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+
+    assert data["review_viewer"] == "v1_assembly/parts_review_Axle_handoff.html"
+    assert data["part_review"]["review_label"] == "Axle handoff"
+    assert data["part_review"]["note"] == "Check the axle clearance before approving."
+    assert data["handoff"]["label"] == "Axle handoff"
+    assert data["handoff"]["note"] == "Check the axle clearance before approving."
+    assert data["handoff"]["message"] == (
+        "Open this temporary Axle handoff viewer to inspect assembly. "
+        "Browser changes are not saved."
+    )
+
+    html = (isolated_dir / data["review_viewer"]).read_text()
+    assert "assembly · Axle handoff" in html
+    assert 'id="part-handoff"' in html
+    assert "setupPartHandoff" in html
+    assert '"review_label": "Axle handoff"' in html
+    assert '"note": "Check the axle clearance before approving."' in html
+
+    meta = json.loads((isolated_dir / "v1_assembly" / "meta.json").read_text())
+    assert "review_views" not in meta
 
 
 def test_parts_view_can_target_groups(runner, isolated_dir):

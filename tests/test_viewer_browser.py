@@ -79,6 +79,10 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             "parts",
             "view",
             "grouped",
+            "--label",
+            "Frame check",
+            "--note",
+            "Inspect the frame before approving.",
             "--isolate-group",
             "frame",
             "--ghost-rest",
@@ -89,6 +93,8 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
     )
     assert view_result.exit_code == 0, view_result.output
     viewer = json.loads(view_result.stdout)
+    assert viewer["part_review"]["review_label"] == "Frame check"
+    assert viewer["part_review"]["note"] == "Inspect the frame before approving."
     assert viewer["part_review"]["isolated_groups"] == ["frame"]
     assert viewer["part_review"]["isolated"] == ["base_plate", "center_rib"]
 
@@ -116,6 +122,13 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert state["ghost_rest"] is True
             assert groups["frame"]["selected"] is True
             assert groups["frame"]["isolated"] is True
+            assert page.locator("#part-handoff").evaluate(
+                "el => getComputedStyle(el).display === 'block'"
+            )
+            assert page.locator("#part-handoff-title").inner_text() == "Frame check"
+            assert page.locator("#part-handoff-note").inner_text() == (
+                "Inspect the frame before approving."
+            )
 
             assert parts["base_plate"]["visible"] is True
             assert parts["base_plate"]["isolated"] is True
