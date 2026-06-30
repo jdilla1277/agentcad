@@ -1385,10 +1385,17 @@ document.getElementById('visible-b').addEventListener('change', e => { if (overl
 
 // Pause/play
 const pauseBtn = document.getElementById('pause-btn');
-pauseBtn.addEventListener('click', () => {
-  controls.autoRotate = !controls.autoRotate;
+function setAutoRotate(enabled) {
+  controls.autoRotate = enabled;
   pauseBtn.innerHTML = controls.autoRotate ? '&#9646;&#9646;' : '&#9654;';
+}
+function pauseAutoRotate() {
+  setAutoRotate(false);
+}
+pauseBtn.addEventListener('click', () => {
+  setAutoRotate(!controls.autoRotate);
 });
+controls.addEventListener('start', pauseAutoRotate);
 
 // Render one frame to the canvas. Shared between the rAF loop and the GIF
 // export, so split-viewport rendering stays consistent.
@@ -1451,7 +1458,7 @@ async function exportGif() {
   const workerUrl = await getGifWorkerUrl();
 
   const wasRotating = controls.autoRotate;
-  controls.autoRotate = false;
+  setAutoRotate(false);
 
   const startPosition = camera.position.clone();
   const startTarget = controls.target.clone();
@@ -1520,7 +1527,7 @@ async function exportGif() {
     camera.position.copy(startPosition);
     controls.target.copy(startTarget);
     camera.lookAt(startTarget);
-    controls.autoRotate = wasRotating;
+    setAutoRotate(wasRotating);
     exportBtn.disabled = false;
     progressDiv.style.display = 'none';
   });

@@ -1711,6 +1711,22 @@ def test_render_unified_includes_export_gif_button(isolated_dir):
     assert "agentcad.dev" in html  # watermark text
 
 
+def test_render_unified_pauses_rotation_on_viewer_interaction(isolated_dir):
+    """Auto-rotation pauses when OrbitControls reports user interaction."""
+    from agentcad.commands.view import _render_unified
+
+    glb = isolated_dir / "fake.glb"
+    glb.write_bytes(b"")
+    out = isolated_dir / "v.html"
+    _render_unified(out, glb_a=glb, label_a="x")
+
+    html = out.read_text()
+    assert "function setAutoRotate(enabled)" in html
+    assert "function pauseAutoRotate()" in html
+    assert "controls.addEventListener('start', pauseAutoRotate);" in html
+    assert "setAutoRotate(wasRotating);" in html
+
+
 def test_render_unified_keeps_preserve_drawing_buffer(isolated_dir):
     """The WebGL renderer must be constructed with `preserveDrawingBuffer: true`.
 
