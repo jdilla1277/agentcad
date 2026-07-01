@@ -55,6 +55,8 @@ PARITY_MAP: dict[str, str] = {
         "cq_only:unit test on view helper, runtime-agnostic",
     "test_render_unified_includes_export_gif_button":
         "cq_only:unit test on view helper, runtime-agnostic",
+    "test_render_unified_pauses_rotation_on_viewer_interaction":
+        "cq_only:unit test on view helper, runtime-agnostic",
     "test_render_unified_keeps_preserve_drawing_buffer":
         "cq_only:unit test on view helper, runtime-agnostic",
     "test_run_brep_api_error_enriched":
