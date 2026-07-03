@@ -11,6 +11,7 @@ import cadquery as cq
 base = cq.Workplane("XY").box(20, 10, 2)
 rib = cq.Workplane("XY").box(3, 14, 4).translate((0, 0, 3))
 pin = cq.Workplane("XY").circle(1).extrude(5).translate((8, 0, 0))
+cover = cq.Workplane("XY").box(12, 8, 1).translate((0, 0, 6))
 show_object(base, id="base_plate", name="Base Plate", options={
     "part_of": "frame", "group_color": "steelblue"
 })
@@ -18,6 +19,9 @@ show_object(rib, id="center_rib", name="Center Rib", options={
     "part_of": "frame", "group_color": "steelblue"
 })
 show_object(pin, id="locator_pin", name="Locator Pin", options={"color": "coral"})
+show_object(cover, id="cover_panel", name="Cover Panel", options={
+    "part_of": "cover", "group_color": "forestgreen"
+})
 """
 
 
@@ -88,6 +92,8 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             "--ghost-rest",
             "--focus-group",
             "frame",
+            "--hide-group",
+            "cover",
             "--no-open",
         ],
     )
@@ -122,6 +128,7 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert state["ghost_rest"] is True
             assert groups["frame"]["selected"] is True
             assert groups["frame"]["isolated"] is True
+            assert groups["cover"]["hidden"] is True
             assert page.locator("#part-handoff").evaluate(
                 "el => getComputedStyle(el).display === 'block'"
             )
@@ -139,12 +146,17 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert parts["locator_pin"]["visible"] is True
             assert parts["locator_pin"]["isolated"] is False
             assert parts["locator_pin"]["ghosted"] is True
+            assert parts["cover_panel"]["visible"] is False
+            assert parts["cover_panel"]["hidden"] is True
 
             assert page.locator('#part-controls [data-group-id="frame"]').evaluate(
                 "el => el.classList.contains('selected')"
             )
             assert page.locator('#part-controls [data-part-id="locator_pin"]').evaluate(
                 "el => !el.classList.contains('selected')"
+            )
+            assert page.locator('#part-controls [data-group-id="cover"]').evaluate(
+                "el => el.classList.contains('hidden')"
             )
 
             pixels = _canvas_pixel_summary(page)
@@ -155,7 +167,7 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             page.click("#btn-parts")
             expect = page.locator("#parts-view")
             assert expect.evaluate("el => getComputedStyle(el).display === 'block'")
-            assert page.locator("#parts-heading").inner_text() == "Parts 3 · Groups 1"
+            assert page.locator("#parts-heading").inner_text() == "Parts 4 · Groups 2"
             assert page.locator('#parts-groups [data-group-id="frame"]').inner_text() == (
                 "frame\nframe · 2 parts"
             )
@@ -165,5 +177,23 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert page.locator('#parts-list [data-part-id="base_plate"] .part-group-tag').inner_text() == "frame"
             assert page.locator('#parts-list [data-part-id="center_rib"] .part-group-tag').inner_text() == "frame"
             assert page.locator('#parts-list [data-part-id="locator_pin"] .part-group-tag').count() == 0
+            assert page.locator('#parts-list [data-part-id="cover_panel"] .part-group-tag').inner_text() == "cover"
+
+            assert page.locator("#btn-agent").is_enabled()
+            page.click("#btn-agent")
+            assert page.locator("#agent-view").evaluate(
+                "el => getComputedStyle(el).display === 'block'"
+            )
+            assert page.locator("#agent-handoff-heading").inner_text() == "Frame check"
+            assert page.locator("#agent-handoff-note").inner_text() == (
+                "Inspect the frame before approving."
+            )
+            assert "frame (2 parts)" in page.locator("#agent-handoff-details").inner_text()
+            assert "cover (1 part)" in page.locator("#agent-handoff-details").inner_text()
+            assert "Base Plate (base_plate)" in page.locator("#agent-handoff-details").inner_text()
+            assert "Center Rib (center_rib)" in page.locator("#agent-handoff-details").inner_text()
+            assert "Cover Panel (cover_panel)" in page.locator("#agent-handoff-details").inner_text()
+            assert "Ghost rest\nOn" in page.locator("#agent-handoff-details").inner_text()
+            assert "Lifecycle\nTemporary, not saved" in page.locator("#agent-handoff-details").inner_text()
         finally:
             browser.close()
