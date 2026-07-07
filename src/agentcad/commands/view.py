@@ -99,6 +99,8 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     background: #f8fafc; color: #222; font-size: 12px;
   }
   #agent-view .agent-swatch { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; display: inline-block; box-sizing: border-box; }
+  #agent-view .empty-state { color: #667085; font-size: 13px; line-height: 1.5; }
+  #agent-view .empty-state strong { display: block; margin-bottom: 4px; color: #222; font-weight: 600; }
   #parts-view {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
     background: #f5f5f5; overflow: auto;
@@ -286,6 +288,12 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <p class="agent-note" id="agent-handoff-note"></p>
     <div class="agent-state-grid" id="agent-handoff-details"></div>
   </div>
+  <div class="panel" id="panel-agent-images-empty" style="display:none;">
+    <div class="empty-state">
+      <strong>No preview images</strong>
+      The agent did not ask for a preview on this run.
+    </div>
+  </div>
   <div class="panel" id="panel-preview" style="display:none;">
     <h3>preview.png — 4-view composite (top + three iso angles) the agent reads by default</h3>
     <img id="img-preview">
@@ -439,6 +447,9 @@ function setupModeButtons() {
 
   // Agent-view panels: show only those with data
   setupAgentHandoffPanel();
+  if (!hasAgentImgs && hasAgentView) {
+    document.getElementById('panel-agent-images-empty').style.display = '';
+  }
   if (PREVIEW_PNG_URL) { document.getElementById('panel-preview').style.display = ''; document.getElementById('img-preview').src = PREVIEW_PNG_URL; }
   if (DIFF_SIDE_PNG_URL) { document.getElementById('panel-diff-side').style.display = ''; document.getElementById('img-diff-side').src = DIFF_SIDE_PNG_URL; }
   if (DIFF_OVERLAY_PNG_URL) { document.getElementById('panel-diff-overlay').style.display = ''; document.getElementById('img-diff-overlay').src = DIFF_OVERLAY_PNG_URL; }

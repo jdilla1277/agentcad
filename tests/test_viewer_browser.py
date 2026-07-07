@@ -195,5 +195,11 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert "Cover Panel (cover_panel)" in page.locator("#agent-handoff-details").inner_text()
             assert "Ghost rest\nOn" in page.locator("#agent-handoff-details").inner_text()
             assert "Lifecycle\nTemporary, not saved" in page.locator("#agent-handoff-details").inner_text()
+            assert page.locator("#panel-agent-images-empty").evaluate(
+                "el => getComputedStyle(el).display === 'block'"
+            )
+            assert "The agent did not ask for a preview on this run." in page.locator(
+                "#panel-agent-images-empty"
+            ).inner_text()
         finally:
             browser.close()

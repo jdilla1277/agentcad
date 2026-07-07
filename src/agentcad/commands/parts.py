@@ -132,6 +132,10 @@ def _slugify_review_name(values):
     return slug[:80] or "all"
 
 
+def _existing_file(path):
+    return path if path.exists() else None
+
+
 def _validate_part_ids(parts, ids):
     available = {str(p.get("id")) for p in parts}
     missing = [part_id for part_id in ids if part_id not in available]
@@ -426,6 +430,9 @@ def view_parts(
         glb_a=glb_path,
         label_a=viewer_label,
         default_mode="single-a",
+        preview_png=_existing_file(version_dir / "preview.png"),
+        diff_side_png=_existing_file(version_dir / "diff_side.png"),
+        diff_overlay_png=_existing_file(version_dir / "diff_overlay.png"),
         parts=parts,
         groups=groups,
         part_review=review_state,
