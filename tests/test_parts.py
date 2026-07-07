@@ -208,7 +208,7 @@ def test_parts_show_missing_part_errors_with_available_ids(runner, isolated_dir)
 
 
 def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
-    _write_project(isolated_dir, parts=[
+    version_dir = _write_project(isolated_dir, parts=[
         {
             "id": "base_plate",
             "id_source": "explicit",
@@ -222,6 +222,9 @@ def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
             "color": "steelblue",
         },
     ])
+    (version_dir / "preview.png").write_bytes(b"preview")
+    (version_dir / "diff_side.png").write_bytes(b"diff-side")
+    (version_dir / "diff_overlay.png").write_bytes(b"diff-overlay")
 
     result = runner.invoke(cli, [
         "parts", "view", "assembly",
@@ -270,6 +273,9 @@ def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
     assert "const PART_REVIEW = " in html
     assert '"mode": "part-review"' in html
     assert '"isolated": ["axle_shaft"]' in html
+    assert 'const PREVIEW_PNG_URL = "data:image/png;base64,cHJldmlldw=="' in html
+    assert 'const DIFF_SIDE_PNG_URL = "data:image/png;base64,ZGlmZi1zaWRl"' in html
+    assert 'const DIFF_OVERLAY_PNG_URL = "data:image/png;base64,ZGlmZi1vdmVybGF5"' in html
     assert "Part controls" in html
     assert "Ghost rest" in html
 
