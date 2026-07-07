@@ -12,7 +12,7 @@ import click
 #   - single-b        → previous/comparison model alone
 #   - side-by-side    → two viewports, synchronized camera
 #   - overlay         → both models tinted (green A, red B), opacity sliders
-#   - agent-view      → shows the PNGs the agent sees as <img> elements
+#   - agent-view      → shows agent-visible images and structured handoff state
 #   - spec            → docked measurement/spec review panel with 3D highlights
 #
 # A mode is enabled only if the data it needs was embedded. The mode toggle
@@ -89,6 +89,16 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   #agent-view .panel { margin: 0 auto 24px; max-width: 1200px; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
   #agent-view .panel h3 { margin: 0 0 8px; font-size: 14px; color: #555; font-weight: normal; }
   #agent-view .panel img { max-width: 100%; display: block; }
+  #agent-view .agent-note { margin: 0 0 14px; color: #222; font-size: 13px; line-height: 1.5; max-width: 840px; }
+  #agent-view .agent-state-grid { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 8px 14px; font-size: 13px; }
+  #agent-view .agent-state-key { color: #667085; }
+  #agent-view .agent-state-value { color: #222; min-width: 0; }
+  #agent-view .agent-chip {
+    display: inline-flex; align-items: center; gap: 6px; margin: 0 6px 6px 0;
+    padding: 3px 7px; border: 1px solid rgba(0,0,0,0.12); border-radius: 999px;
+    background: #f8fafc; color: #222; font-size: 12px;
+  }
+  #agent-view .agent-swatch { width: 10px; height: 10px; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px; display: inline-block; box-sizing: border-box; }
   #parts-view {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
     background: #f5f5f5; overflow: auto;
@@ -271,6 +281,11 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   <div class="row"><span style="width:12px;"></span>opacity <input type="range" id="opacity-b" min="0" max="100" value="70"></div>
 </div>
 <div id="agent-view">
+  <div class="panel" id="panel-agent-handoff" style="display:none;">
+    <h3 id="agent-handoff-heading">Agent handoff</h3>
+    <p class="agent-note" id="agent-handoff-note"></p>
+    <div class="agent-state-grid" id="agent-handoff-details"></div>
+  </div>
   <div class="panel" id="panel-preview" style="display:none;">
     <h3>preview.png — 4-view composite (top + three iso angles) the agent reads by default</h3>
     <img id="img-preview">
@@ -381,6 +396,8 @@ const PART_REVIEW = __PART_REVIEW_JSON__;
 
 const hasB = MODEL_B_URL.length > 0;
 const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0;
+const hasAgentState = Boolean(PART_REVIEW);
+const hasAgentView = hasAgentImgs || hasAgentState;
 const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
 const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
 const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
@@ -414,13 +431,14 @@ function setupModeButtons() {
     disable('btn-side', 'Open two models to use side-by-side comparison.');
     disable('btn-overlay', 'Open two models to use overlay comparison.');
   }
-  if (!hasAgentImgs) {
-    disable('btn-agent', 'Agent view is available for run viewers with embedded preview or diff images.');
+  if (!hasAgentView) {
+    disable('btn-agent', 'Agent view is available when preview images, diff images, or handoff state are embedded.');
   }
   if (!hasParts) { disable('btn-parts', 'No named parts were embedded in this viewer.'); }
   if (!hasReview) { disable('btn-spec', 'Run view with --measure or --spec to enable Spec check.'); }
 
   // Agent-view panels: show only those with data
+  setupAgentHandoffPanel();
   if (PREVIEW_PNG_URL) { document.getElementById('panel-preview').style.display = ''; document.getElementById('img-preview').src = PREVIEW_PNG_URL; }
   if (DIFF_SIDE_PNG_URL) { document.getElementById('panel-diff-side').style.display = ''; document.getElementById('img-diff-side').src = DIFF_SIDE_PNG_URL; }
   if (DIFF_OVERLAY_PNG_URL) { document.getElementById('panel-diff-overlay').style.display = ''; document.getElementById('img-diff-overlay').src = DIFF_OVERLAY_PNG_URL; }
@@ -454,6 +472,92 @@ function groupLabel(group) {
 function groupPartIds(groupId) {
   const group = GROUPS.find(g => g.id === groupId);
   return group ? (group.part_ids || []) : [];
+}
+
+function partById(partId) {
+  return PARTS.find(p => p.id === partId) || null;
+}
+
+function groupById(groupId) {
+  return GROUPS.find(g => g.id === groupId) || null;
+}
+
+function makeAgentChip(label, color) {
+  const chip = document.createElement('span');
+  chip.className = 'agent-chip';
+  if (color) {
+    const swatch = document.createElement('span');
+    swatch.className = 'agent-swatch';
+    swatch.style.background = color;
+    chip.appendChild(swatch);
+  }
+  chip.appendChild(document.createTextNode(label));
+  return chip;
+}
+
+function appendAgentHandoffRow(details, key, value) {
+  const keyEl = document.createElement('div');
+  keyEl.className = 'agent-state-key';
+  keyEl.textContent = key;
+  const valueEl = document.createElement('div');
+  valueEl.className = 'agent-state-value';
+  if (Array.isArray(value)) {
+    if (value.length) {
+      for (const item of value) valueEl.appendChild(item);
+    } else {
+      valueEl.textContent = 'None';
+    }
+  } else {
+    valueEl.textContent = value || 'None';
+  }
+  details.appendChild(keyEl);
+  details.appendChild(valueEl);
+}
+
+function formatPartChips(ids) {
+  return (ids || []).map(id => {
+    const part = partById(id);
+    const group = part && part.group ? groupById(part.group) : null;
+    const label = part ? `${partLabel(part)} (${part.id})` : id;
+    return makeAgentChip(label, group && group.color);
+  });
+}
+
+function formatGroupChips(ids) {
+  return (ids || []).map(id => {
+    const group = groupById(id);
+    const count = group ? group.part_ids.length : 0;
+    const label = group ? `${groupLabel(group)} (${count} ${count === 1 ? 'part' : 'parts'})` : id;
+    return makeAgentChip(label, group && group.color);
+  });
+}
+
+function setupAgentHandoffPanel() {
+  const panel = document.getElementById('panel-agent-handoff');
+  if (!PART_REVIEW) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  document.getElementById('agent-handoff-heading').textContent = PART_REVIEW.review_label || 'Agent handoff';
+  document.getElementById('agent-handoff-note').textContent = (
+    PART_REVIEW.note || 'Temporary review viewer. Browser changes are not saved.'
+  );
+
+  const details = document.getElementById('agent-handoff-details');
+  details.innerHTML = '';
+  appendAgentHandoffRow(details, 'Focus group', formatGroupChips(PART_REVIEW.focus_group ? [PART_REVIEW.focus_group] : []));
+  appendAgentHandoffRow(details, 'Focus part', formatPartChips(PART_REVIEW.focus ? [PART_REVIEW.focus] : []));
+  appendAgentHandoffRow(details, 'Selected part', formatPartChips(PART_REVIEW.selected ? [PART_REVIEW.selected] : []));
+  appendAgentHandoffRow(details, 'Hidden groups', formatGroupChips(PART_REVIEW.hidden_groups || []));
+  appendAgentHandoffRow(details, 'Hidden parts', formatPartChips(PART_REVIEW.hidden || []));
+  appendAgentHandoffRow(details, 'Isolated groups', formatGroupChips(PART_REVIEW.isolated_groups || []));
+  appendAgentHandoffRow(details, 'Isolated parts', formatPartChips(PART_REVIEW.isolated || []));
+  appendAgentHandoffRow(details, 'Ghost rest', PART_REVIEW.ghost_rest ? 'On' : 'Off');
+  appendAgentHandoffRow(details, 'Lifecycle', PART_REVIEW.temporary ? 'Temporary, not saved' : (PART_REVIEW.persisted ? 'Persisted' : 'Not specified'));
+  appendAgentHandoffRow(details, 'Inventory', hasGroups ? `${PARTS.length} parts, ${GROUPS.length} groups` : `${PARTS.length} parts`);
+
+  panel.style.display = '';
 }
 
 function setupPartHandoff() {
@@ -1313,7 +1417,7 @@ resize();
 function setMode(mode) {
   // Validate
   if (!hasB && (mode === 'single-b' || mode === 'side-by-side' || mode === 'overlay')) return;
-  if (!hasAgentImgs && mode === 'agent-view') return;
+  if (!hasAgentView && mode === 'agent-view') return;
   if (!hasParts && mode === 'parts') return;
   if (!hasReview && mode === 'spec') return;
 
