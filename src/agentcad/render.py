@@ -94,7 +94,7 @@ def parse_view_spec(spec):
     )
 
 
-def _setup_render(shape, width=800, height=600, parts=None):
+def _setup_render(shape, width=800, height=600, parts=None, msaa=0):
     """Set up offscreen rendering pipeline, returning (view, context)."""
     display_connection = Aspect_DisplayConnection()
     driver = OpenGl_GraphicDriver(display_connection)
@@ -119,6 +119,7 @@ def _setup_render(shape, width=800, height=600, parts=None):
     viewer.SetLightOn(fill_light)
 
     view = viewer.CreateView()
+    view.ChangeRenderingParams().NbMsaaSamples = msaa
     window = Aspect_NeutralWindow()
     window.SetSize(width, height)
     view.SetWindow(window)
@@ -148,13 +149,23 @@ def _setup_render(shape, width=800, height=600, parts=None):
     return view, context
 
 
-def _capture(view, output_path, width=800, height=600):
+def _capture(view, output_path, width=800, height=600, msaa=0):
     """Capture the current view to a PNG file."""
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Some offscreen/software-GL drivers accept NbMsaaSamples but do not apply
+    # it to V3d_View.ToPixMap(). Always render nonzero-MSAA requests at 2x
+    # resolution and downsample so antialiasing is effective on those drivers.
+    capture_scale = 2 if msaa else 1
     pixmap = Image_AlienPixMap()
-    view.ToPixMap(pixmap, width, height)
+    view.ToPixMap(pixmap, width * capture_scale, height * capture_scale)
     pixmap.Save(TCollection_AsciiString(str(output_path)))
+    if capture_scale > 1:
+        from PIL import Image
+
+        with Image.open(output_path) as image:
+            resized = image.resize((width, height), Image.Resampling.LANCZOS)
+            resized.save(output_path)
 
 
 def _apply_camera(view, zoom, focus, fit):
@@ -169,18 +180,19 @@ def _apply_camera(view, zoom, focus, fit):
 
 
 def render_shape(shape, view_name, output_path, width=800, height=600,
-                 zoom=1.0, focus=None, fit=True, parts=None):
+                 zoom=1.0, focus=None, fit=True, parts=None, msaa=0):
     """Render a TopoDS_Shape to a PNG file from the given view."""
     orientation = VIEWS[view_name]
-    view, _ctx = _setup_render(shape, width, height, parts=parts)
+    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
 
     view.SetProj(orientation)
     _apply_camera(view, zoom, focus, fit)
 
-    _capture(view, output_path, width, height)
+    _capture(view, output_path, width, height, msaa=msaa)
 
 
-def render_shape_batch(shape, view_specs, output_paths, width=512, height=512, parts=None):
+def render_shape_batch(shape, view_specs, output_paths, width=512, height=512,
+                       parts=None, msaa=0):
     """Render multiple views of the same shape through ONE viewer setup.
 
     Shares the OpenGL context, lights, and AIS geometry upload across all views —
@@ -193,8 +205,9 @@ def render_shape_batch(shape, view_specs, output_paths, width=512, height=512, p
             custom (azimuth, elevation) tuples in degrees.
         output_paths: Parallel iterable of output PNG paths.
         width, height: Per-view dimensions in pixels.
+        msaa: Number of multisample antialiasing samples; 0 disables MSAA.
     """
-    view, _ctx = _setup_render(shape, width, height, parts=parts)
+    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
     for spec, out_path in zip(view_specs, output_paths):
         if isinstance(spec, str):
             view.SetProj(VIEWS[spec])
@@ -209,7 +222,7 @@ def render_shape_batch(shape, view_specs, output_paths, width=512, height=512, p
             view.SetUp(0, 0, 1)
         view.FitAll()
         view.Redraw()
-        _capture(view, out_path, width, height)
+        _capture(view, out_path, width, height, msaa=msaa)
 
 
 # The default composite is one top-down layout view + three iso angles spaced
@@ -356,7 +369,8 @@ def render_diff_side_by_side(shape_a, shape_b, label_a, label_b, output_path,
 
 
 def render_shape_custom(shape, azimuth, elevation, output_path,
-                        width=800, height=600, zoom=1.0, focus=None, fit=True, parts=None):
+                        width=800, height=600, zoom=1.0, focus=None, fit=True,
+                        parts=None, msaa=0):
     """Render a TopoDS_Shape to a PNG file from a custom azimuth/elevation angle."""
     az = math.radians(azimuth)
     el = math.radians(elevation)
@@ -365,13 +379,13 @@ def render_shape_custom(shape, azimuth, elevation, output_path,
     vy = math.cos(az) * math.cos(el)
     vz = -math.sin(el)
 
-    view, _ctx = _setup_render(shape, width, height, parts=parts)
+    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
 
     view.SetProj(vx, vy, vz)
     view.SetUp(0, 0, 1)
     _apply_camera(view, zoom, focus, fit)
 
-    _capture(view, output_path, width, height)
+    _capture(view, output_path, width, height, msaa=msaa)
 
 
 def render_views(shape, view_names, output_dir):

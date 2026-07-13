@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from PIL import Image
+
 from agentcad.cli import cli
 
 
@@ -60,6 +62,89 @@ def test_render_produces_png(runner, isolated_dir):
     png_path = Path(parsed["renders"]["iso"])
     assert png_path.exists()
     assert png_path.read_bytes()[:4] == b"\x89PNG"
+
+
+def test_render_defaults_to_800_by_600(runner, isolated_dir):
+    step_path = _create_standalone_step(isolated_dir)
+    result = runner.invoke(cli, ["render", str(step_path), "--view", "iso", "--no-daemon"])
+    assert result.exit_code == 0, result.output
+    png_path = Path(json.loads(result.stdout)["renders"]["iso"])
+    with Image.open(png_path) as image:
+        assert image.size == (800, 600)
+
+
+def test_render_custom_size_and_msaa(runner, isolated_dir):
+    step_path = _create_standalone_step(isolated_dir)
+    result = runner.invoke(cli, [
+        "render", str(step_path), "--view", "45,30", "--size", "320x240",
+        "--msaa", "8", "--no-daemon",
+    ])
+    assert result.exit_code == 0, result.output
+    png_path = Path(json.loads(result.stdout)["renders"]["custom_45_30"])
+    with Image.open(png_path) as image:
+        assert image.size == (320, 240)
+
+
+def test_render_size_accepts_uppercase_separator(runner, isolated_dir):
+    step_path = _create_standalone_step(isolated_dir)
+    result = runner.invoke(cli, [
+        "render", str(step_path), "--view", "iso", "--size", "160X120",
+        "--no-daemon",
+    ])
+    assert result.exit_code == 0, result.output
+    png_path = Path(json.loads(result.stdout)["renders"]["iso"])
+    with Image.open(png_path) as image:
+        assert image.size == (160, 120)
+
+
+def test_render_rejects_invalid_size(runner, isolated_dir):
+    result = runner.invoke(cli, [
+        "render", "any.step", "--view", "iso", "--size", "800x0",
+    ])
+    assert result.exit_code == 2
+    assert "width and height must be positive" in result.output
+
+
+def test_render_rejects_malformed_and_negative_sizes(runner, isolated_dir):
+    for size in ("800", "800*600", "-1x600"):
+        result = runner.invoke(cli, [
+            "render", "any.step", "--view", "iso", "--size", size,
+        ])
+        assert result.exit_code == 2
+        assert "expected WIDTHxHEIGHT" in result.output
+
+
+def test_render_rejects_excessive_size(runner, isolated_dir):
+    result = runner.invoke(cli, [
+        "render", "any.step", "--view", "iso", "--size", f"{'9' * 5000}x600",
+    ])
+    assert result.exit_code == 2
+    assert "must not exceed 8192 pixels" in result.output
+
+
+def test_render_rejects_excessive_antialiased_size(runner, isolated_dir):
+    result = runner.invoke(cli, [
+        "render", "any.step", "--view", "iso", "--size", "4096x4096",
+        "--msaa", "8",
+    ])
+    assert result.exit_code == 2
+    assert "antialiased output size must not exceed 9 million pixels" in result.output
+
+
+def test_render_rejects_msaa_above_limit(runner, isolated_dir):
+    result = runner.invoke(cli, [
+        "render", "any.step", "--view", "iso", "--msaa", "32",
+    ])
+    assert result.exit_code == 2
+    assert "32 is not in the range 0<=x<=16" in result.output
+
+
+def test_render_rejects_negative_msaa(runner, isolated_dir):
+    result = runner.invoke(cli, [
+        "render", "any.step", "--view", "iso", "--msaa", "-1",
+    ])
+    assert result.exit_code == 2
+    assert "-1 is not in the range 0<=x<=16" in result.output
 
 
 def test_render_multiple_views(runner, isolated_dir):
@@ -247,6 +332,34 @@ def test_render_routes_through_daemon_when_available(runner, isolated_dir, monke
     parsed = json.loads(result.stdout)
     assert parsed["via"] == "daemon"
     assert parsed["command"] == "render"
+
+
+def test_render_forwards_size_and_msaa_to_daemon(runner, isolated_dir, monkeypatch):
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    requests = []
+
+    def _capture(request, **_kwargs):
+        requests.append(request)
+        return {
+            "type": "result",
+            "exit_code": 0,
+            "output": json.dumps({
+                "command": "render",
+                "status": "success",
+                "renders": {"iso": "iso.png"},
+            }),
+        }
+
+    monkeypatch.setattr("agentcad.daemon.send_request", _capture)
+    result = runner.invoke(cli, [
+        "render", "any.step", "--view", "iso", "--size", "2400x1800",
+        "--msaa", "8",
+    ])
+    assert result.exit_code == 0, result.output
+    assert requests[0]["argv"] == [
+        "render", "any.step", "--view", "iso", "--size", "2400x1800",
+        "--msaa", "8",
+    ]
 
 
 def test_render_direct_no_via_field(runner, isolated_dir):

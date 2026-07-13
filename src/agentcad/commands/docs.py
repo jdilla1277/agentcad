@@ -78,12 +78,15 @@ SECTIONS = {
     ),
     "render": (
         "Rendering:\n"
-        "  agentcad render <step_file> --view <spec> [--zoom N] [--name label] "
-        "[--focus x,y,z] [--no-fit]\n"
+        "  agentcad render <step_file> --view <spec> [--zoom N] [--size WxH] "
+        "[--msaa N] [--name label] [--focus x,y,z] [--no-fit]\n"
         "\n"
         "  --view   Named views (front, back, left, right, top, bottom, iso),\n"
         "           comma-separated, 'all', or custom 'azimuth,elevation'.\n"
         "  --zoom   Zoom factor applied after FitAll (default 1.0).\n"
+        "  --size   Output resolution as WIDTHxHEIGHT (default 800x600).\n"
+        "  --msaa   Antialiasing samples, 0-16 (default 0). Nonzero values also\n"
+        "           use 2x supersampling to ensure offscreen antialiasing.\n"
         "  --focus  Camera target point as 'x,y,z'.\n"
         "  --no-fit Skip FitAll (requires --focus).\n"
         "  --name   Custom filename for single-view renders.\n"

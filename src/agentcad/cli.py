@@ -117,7 +117,7 @@ COMMANDS
     --dry-run        Metrics only — no version consumed, no disk artifacts.
 
 \b
-  agentcad render STEP --view SPEC [--zoom N] [--focus x,y,z] [--no-fit] [--name LABEL]
+  agentcad render STEP --view SPEC [--zoom N] [--size WxH] [--msaa N] [--focus x,y,z] [--no-fit] [--name LABEL]
     Render PNG views of an existing STEP file. Same view spec as --render.
 
 \b
