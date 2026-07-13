@@ -10,6 +10,10 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 
+MAX_RENDER_DIMENSION = 8192
+MAX_RENDER_PIXELS = 32_000_000
+MAX_ANTIALIASED_PIXELS = 9_000_000
+
 
 def _is_version_dir(directory):
     """Check if directory matches v\\d+_\\w+ pattern and contains meta.json."""
@@ -34,20 +38,56 @@ def _parse_focus(focus_str):
         raise ValueError(f"Invalid --focus '{focus_str}'. Expected 'x,y,z' (3 numeric values).")
 
 
+def _parse_size(_ctx, _param, value):
+    """Parse a WIDTHxHEIGHT string into a pair of positive pixel dimensions."""
+    match = re.fullmatch(r"(\d+)[xX](\d+)", value)
+    if not match:
+        raise click.BadParameter("expected WIDTHxHEIGHT, for example 2400x1800")
+    components = match.groups()
+    if any(len(component) > 5 for component in components):
+        raise click.BadParameter(
+            f"width and height must not exceed {MAX_RENDER_DIMENSION} pixels"
+        )
+    width, height = (int(component) for component in components)
+    if width < 1 or height < 1:
+        raise click.BadParameter("width and height must be positive")
+    if width > MAX_RENDER_DIMENSION or height > MAX_RENDER_DIMENSION:
+        raise click.BadParameter(
+            f"width and height must not exceed {MAX_RENDER_DIMENSION} pixels"
+        )
+    if width * height > MAX_RENDER_PIXELS:
+        raise click.BadParameter("output size must not exceed 32 million pixels")
+    return width, height
+
+
 @click.command()
 @click.argument("step_file")
 @click.option("--view", required=True, help="View spec: named view(s), 'all', or 'azimuth,elevation'.")
 @click.option("--zoom", default=1.0, type=float, help="Zoom factor (applied after FitAll).")
+@click.option("--size", default="800x600", callback=_parse_size, metavar="WIDTHxHEIGHT",
+              help="Output resolution (default: 800x600).")
+@click.option("--msaa", default=0, type=click.IntRange(min=0, max=16),
+              help="Antialiasing samples; 0 disables antialiasing (default: 0).")
 @click.option("--name", default=None, help="Custom filename for the rendered PNG (single view only).")
 @click.option("--focus", default=None, help="Camera target point 'x,y,z'.")
 @click.option("--no-fit", is_flag=True, default=False, help="Skip FitAll (requires --focus).")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def render(step_file, view, zoom, name, focus, no_fit, no_daemon):
+def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
     """Render PNG views of an existing STEP file."""
+    if msaa and size[0] * size[1] > MAX_ANTIALIASED_PIXELS:
+        raise click.BadParameter(
+            "antialiased output size must not exceed 9 million pixels",
+            param_hint="--size",
+        )
+
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["render", step_file, "--view", view]
     if zoom != 1.0:
         argv.extend(["--zoom", str(zoom)])
+    if size != (800, 600):
+        argv.extend(["--size", f"{size[0]}x{size[1]}"])
+    if msaa != 0:
+        argv.extend(["--msaa", str(msaa)])
     if name:
         argv.extend(["--name", name])
     if focus:
@@ -92,6 +132,7 @@ def render(step_file, view, zoom, name, focus, no_fit, no_daemon):
             sys.exit(1)
 
     fit = not no_fit
+    width, height = size
 
     # Parse view spec
     try:
@@ -148,8 +189,8 @@ def render(step_file, view, zoom, name, focus, no_fit, no_daemon):
                 filename = f"{spec_value}.png"
                 key = spec_value
             out_path = output_dir / filename
-            render_shape(shape, spec_value, out_path, zoom=zoom,
-                         focus=focus_point, fit=fit)
+            render_shape(shape, spec_value, out_path, width=width, height=height,
+                         zoom=zoom, focus=focus_point, fit=fit, msaa=msaa)
             renders[key] = str(out_path)
         elif spec_type == "custom":
             azimuth, elevation = spec_value
@@ -160,8 +201,9 @@ def render(step_file, view, zoom, name, focus, no_fit, no_daemon):
                 key = _format_custom_angle_name(azimuth, elevation)
                 filename = f"{key}.png"
             out_path = output_dir / filename
-            render_shape_custom(shape, azimuth, elevation, out_path, zoom=zoom,
-                                focus=focus_point, fit=fit)
+            render_shape_custom(shape, azimuth, elevation, out_path,
+                                width=width, height=height, zoom=zoom,
+                                focus=focus_point, fit=fit, msaa=msaa)
             renders[key] = str(out_path)
 
     # Update meta.json if in a version directory

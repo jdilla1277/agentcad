@@ -1,11 +1,14 @@
 from pathlib import Path
 
 import cadquery as cq
+from PIL import Image, ImageChops
 
 import pytest
 
 from agentcad.render import (
+    _setup_render,
     render_shape,
+    render_shape_batch,
     render_shape_custom,
     render_views,
     parse_view_spec,
@@ -25,6 +28,35 @@ def test_render_shape_produces_png(tmp_path):
     render_shape(shape, "iso", out)
     assert out.exists()
     assert out.stat().st_size > 0
+
+
+def test_render_shape_supports_custom_size_and_msaa(tmp_path):
+    shape = _make_box_shape()
+    aliased = tmp_path / "aliased.png"
+    antialiased = tmp_path / "antialiased.png"
+    render_shape(shape, "iso", aliased, width=320, height=240)
+    render_shape(shape, "iso", antialiased, width=320, height=240, msaa=8)
+    with Image.open(antialiased) as image:
+        assert image.size == (320, 240)
+    with Image.open(aliased) as before, Image.open(antialiased) as after:
+        assert ImageChops.difference(before, after).getbbox() is not None
+
+
+def test_setup_render_configures_msaa_samples():
+    shape = _make_box_shape()
+    view, _context = _setup_render(shape, width=64, height=64, msaa=8)
+    assert view.ChangeRenderingParams().NbMsaaSamples == 8
+
+
+def test_render_shape_batch_supports_msaa(tmp_path):
+    shape = _make_box_shape()
+    outputs = [tmp_path / "front.png", tmp_path / "iso.png"]
+    render_shape_batch(
+        shape, ["front", "iso"], outputs, width=160, height=120, msaa=4,
+    )
+    for output in outputs:
+        with Image.open(output) as image:
+            assert image.size == (160, 120)
 
 
 def test_render_shape_iso_view(tmp_path):
