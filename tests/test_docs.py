@@ -509,6 +509,7 @@ def test_docs_build123d_mentions_annular_edit_helpers(runner):
     assert "load_step_shape" in content
     assert "Compound(result)" in content
     assert "fragile boolean fuse" in content
+    assert "loft_sections([lower, upper])" in content
 
 
 def test_docs_preamble_mentions_annular_edit_helpers(runner):

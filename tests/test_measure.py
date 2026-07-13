@@ -1,7 +1,9 @@
 import json
+import math
 from pathlib import Path
 
 import cadquery as cq
+import pytest
 from cadquery import exporters
 
 from agentcad.cli import cli
@@ -49,6 +51,16 @@ def _many_boxes_step(directory, name="many_boxes.step", count=20):
     return path
 
 
+def _surface_step(directory, name="surface.step"):
+    from cadquery.occ_impl.shapes import Face, Shell
+
+    face = Face.makePlane(length=10, width=10)
+    shell = Shell.makeShell([face])
+    path = directory / name
+    exporters.export(cq.Workplane("XY").newObject([shell]), str(path))
+    return path
+
+
 class TestMeasureCommand:
     def test_measure_returns_json_metrics_and_feature_summary(self, runner, isolated_dir):
         step = _box_step(isolated_dir)
@@ -65,6 +77,45 @@ class TestMeasureCommand:
         assert parsed["feature_summary"]["face_count"] == 6
         assert parsed["feature_summary"]["edge_count"] == 12
         assert "features" not in parsed
+
+    @pytest.mark.parametrize(
+        "flags", [[], ["--features"], ["--cylinders-only"]]
+    )
+    def test_surface_only_input_explains_zero_volume(
+        self, runner, isolated_dir, flags
+    ):
+        step = _surface_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["measure", str(step), "--no-daemon", *flags]
+        )
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert parsed["metrics"]["volume"] == 0.0
+        notes = " ".join(parsed.get("notes", [])).lower()
+        assert "no solid body" in notes
+        assert "zero volume" in notes
+        assert "loft" in notes
+        next_actions = " ".join(parsed["next_actions"]).lower()
+        assert "loft" in next_actions
+        assert "targeted edits" not in next_actions
+
+    def test_rounded_zero_volume_solid_does_not_get_surface_note(
+        self, runner, isolated_dir
+    ):
+        """Use topology, not rounded volume, to distinguish tiny solids from
+        surface-only inputs."""
+        tiny = cq.Workplane("XY").box(0.01, 0.01, 0.01)
+        path = isolated_dir / "tiny.step"
+        exporters.export(tiny, str(path))
+
+        result = runner.invoke(cli, ["measure", str(path), "--no-daemon"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+
+        assert parsed["metrics"]["volume"] == 0.0
+        notes = " ".join(parsed.get("notes", [])).lower()
+        assert "no solid body" not in notes
 
     def test_measure_summary_reports_circle_and_cylinder_diameter(
         self, runner, isolated_dir
@@ -273,6 +324,8 @@ class TestMeasureEditRisk:
         parsed = json.loads(result.stdout)
         assert parsed["edit_risk"] == "high"
         assert any("invalid topology" in r for r in parsed["risk_reasons"])
+        if parsed["metrics"]["surface_area"] == 0.0:
+            assert math.copysign(1.0, parsed["metrics"]["surface_area"]) == 1.0
         # next_actions stays coherent with the risk guidance
         joined = " ".join(parsed["next_actions"]).lower()
         assert "recommended_workflow" in joined

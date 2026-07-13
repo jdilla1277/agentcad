@@ -307,11 +307,27 @@ def _inspect_tier0(
                 ),
             }
 
+    # A zero-solid input cannot use the normal import/pick/edit flow, even when
+    # OCCT considers its surface topology valid. Give the categorical guidance
+    # precedence over edit-risk guidance, which is about difficult solids.
+    if payload.get("solid_count") == 0:
+        rebuild_action = (
+            "follow recommended_workflow — rebuild a solid from usable profiles "
+            "or faces instead of attempting normal solid edits"
+            if payload.get("edit_risk") == "high"
+            else "agentcad docs helpers — rebuild a solid with an extrusion, "
+            "loft_sections, or another parametric construction"
+        )
+        payload["next_actions"] = [
+            f"agentcad view {file_path} — inspect which surfaces or profiles are usable",
+            rebuild_action,
+        ]
+
     # On a high edit-risk input the generic next_actions above (view, measure,
     # or the import → pick_face flow) all assume the part is normally editable,
     # which contradicts the recommended_workflow. Make the next step coherent:
     # look, then follow the workflow — don't jump straight into an edit flow.
-    if payload.get("edit_risk") == "high":
+    elif payload.get("edit_risk") == "high":
         payload["next_actions"] = [
             f"agentcad view {file_path} — look at the geometry before deciding how to edit",
             "follow recommended_workflow — do not start with load_step() + "
@@ -398,6 +414,10 @@ def _compute_notes(payload: dict) -> list:
     might confuse an agent without domain knowledge. See `notes` convention
     in `design_conventions.md`."""
     notes = []
+    if payload.get("solid_count") == 0:
+        from agentcad.geometry_notes import NO_SOLID_BODY_NOTE
+        notes.append(NO_SOLID_BODY_NOTE)
+
     # is_valid==True together with free_edge_count > 0 reads as contradictory
     # to an unfamiliar agent ("the shape has dangling edges *and* the tool
     # says it's valid"). Both can be correct: is_valid checks topological
@@ -467,6 +487,7 @@ def _topology_report(
         shell = TopoDS.Shell_s(exp.Current())
         sa = ShapeAnalysis_Shell()
         sa.LoadShells(shell)
+        sa.CheckOrientedShells(shell, True)
         has_free = sa.HasFreeEdges()
         shell_face_count = 0
         face_exp = TopExp_Explorer(shell, TopAbs_FACE)
