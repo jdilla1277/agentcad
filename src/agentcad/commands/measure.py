@@ -299,6 +299,7 @@ def measure_tier0_payload(
 
     topo_shape = load_cad_shape(file_path, format_hint=detection.get("format"))
     metrics = compute_metrics(topo_shape)
+    solid_count = topo_ids.topology_counts(topo_shape)["solids"]
     cylindrical_features = _filter_cylindrical_features(
         _cylindrical_features(topo_shape),
         diameter=diameter,
@@ -351,6 +352,24 @@ def measure_tier0_payload(
                 "follow recommended_workflow before attempting any edit; do "
                 "not start with load_step() + boolean/fillet",
             ]
+
+    # Surface/shell compounds can be topologically valid while containing no
+    # solid body. This is more specific than edit-risk classification and the
+    # normal inspect-for-targeted-edits follow-up does not apply.
+    if solid_count == 0:
+        from agentcad.geometry_notes import NO_SOLID_BODY_NOTE
+        payload["notes"] = [NO_SOLID_BODY_NOTE]
+        rebuild_action = (
+            "follow recommended_workflow — rebuild a solid from usable profiles "
+            "or faces instead of attempting normal solid edits"
+            if payload.get("edit_risk") == "high"
+            else "agentcad docs helpers — rebuild a solid with an extrusion, "
+            "loft_sections, or another parametric construction"
+        )
+        payload["next_actions"] = [
+            f"agentcad view {file_path} — inspect which surfaces or profiles are usable",
+            rebuild_action,
+        ]
 
     if diameter is not None or axis is not None or cylinders_only:
         payload["query"] = {

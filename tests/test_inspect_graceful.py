@@ -240,6 +240,36 @@ class TestTier0FullEdit:
                 f"free_edge_count={parsed.get('free_edge_count')})"
             )
 
+    @pytest.mark.parametrize("flags", [[], ["--ids"], ["--summary"]])
+    def test_surface_only_input_explains_zero_solids(
+        self, runner, isolated_dir, flags
+    ):
+        """A valid surface can have no solid body; explain the resulting zero
+        volume and do not direct the agent into a normal solid edit flow."""
+        import cadquery as cq
+        from cadquery import exporters
+        from cadquery.occ_impl.shapes import Face, Shell
+
+        face = Face.makePlane(length=10, width=10)
+        shell = Shell.makeShell([face])
+        path = isolated_dir / "surface_only.step"
+        exporters.export(cq.Workplane("XY").newObject([shell]), str(path))
+
+        result = runner.invoke(
+            cli, ["inspect", str(path), "--no-daemon", *flags]
+        )
+        parsed = _assert_clean_json(result)
+
+        assert parsed["solid_count"] == 0
+        assert parsed["shells"] == [{"closed": False, "face_count": 1}]
+        notes = " ".join(parsed.get("notes", [])).lower()
+        assert "no solid body" in notes
+        assert "zero volume" in notes
+        assert "loft" in notes
+        next_actions = " ".join(parsed["next_actions"]).lower()
+        assert "loft" in next_actions
+        assert "pick_face" not in next_actions
+
     def test_brep_extension_is_recognized_as_tier0(self, runner, isolated_dir):
         # Even a stub BREP file (we don't need a parseable one for the format
         # detection layer; the kernel-level error is a separate concern).

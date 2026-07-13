@@ -68,6 +68,8 @@ def compute_metrics(topo_shape):
     vol_props = GProp_GProps()
     BRepGProp.VolumeProperties_s(topo_shape, vol_props)
     volume = round(vol_props.Mass(), 4)
+    if volume == 0:
+        volume = 0.0
 
     com = vol_props.CentreOfMass()
     center_of_mass = {
@@ -80,6 +82,8 @@ def compute_metrics(topo_shape):
     surf_props = GProp_GProps()
     BRepGProp.SurfaceProperties_s(topo_shape, surf_props)
     surface_area = round(surf_props.Mass(), 4)
+    if surface_area == 0:
+        surface_area = 0.0
 
     # Face count (unique)
     face_map = TopTools_IndexedMapOfShape()
