@@ -5,6 +5,7 @@ from pathlib import Path
 
 import click
 
+from agentcad import __version__
 from agentcad.manifest import MANIFEST_FILE
 
 
@@ -62,7 +63,7 @@ def _build_manifest(project_name: str, runtime: str | None) -> dict:
 
     manifest = {
         "name": project_name,
-        "version": "0.1.0",
+        "version": __version__,
         "created": datetime.now(timezone.utc).isoformat(),
         "runtime": runtime or dispatch.DEFAULT_RUNTIME,
         "versions": [],
