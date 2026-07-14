@@ -23,6 +23,41 @@ def _short_pid_path(name):
     return f"/tmp/agentcad-test-{name}-{os.getpid()}.pid"
 
 
+def _start_slow_request_server(name, delay_s=0.15):
+    """Accept one daemon frame, record its side effect, then stay silent."""
+    from agentcad.daemon import _read_one_message
+
+    sock_path = _short_sock_path(name)
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(sock_path)
+    listener.listen(1)
+    listener.settimeout(2)
+    submissions = []
+    errors = []
+
+    def _serve():
+        try:
+            conn, _ = listener.accept()
+            try:
+                request = _read_one_message(conn)
+                submissions.append(request)
+                time.sleep(delay_s)
+            finally:
+                conn.close()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            listener.close()
+            if os.path.exists(sock_path):
+                os.unlink(sock_path)
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    return sock_path, thread, submissions, errors
+
+
 # ---------- Phase 1: Protocol ----------
 
 class TestProtocol:
@@ -105,6 +140,69 @@ class TestSendRequest:
         finally:
             if os.path.exists(sock_path):
                 os.unlink(sock_path)
+
+    def test_run_timeout_after_submission_returns_unknown_outcome(self):
+        """A response timeout is not equivalent to daemon unavailability.
+
+        The server has already observed the request side effect, so returning
+        ``None`` here would cause the CLI to repeat non-idempotent work.
+        """
+        from agentcad.daemon import send_request
+
+        sock_path, thread, submissions, errors = _start_slow_request_server(
+            "uncertain-timeout"
+        )
+        response = send_request(
+            {
+                "type": "run",
+                "cwd": "/tmp",
+                "argv": ["run", "slow.py", "--output", "slow"],
+            },
+            socket_path=sock_path,
+            response_timeout_s=0.03,
+        )
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert errors == []
+        assert len(submissions) == 1
+        assert response is not None
+        assert response["exit_code"] != 0
+        payload = json.loads(response["output"])
+        assert payload["error_kind"] == "daemon_response_timeout"
+        assert payload["request_submitted"] is True
+        assert payload["outcome"] == "unknown"
+        assert payload["retry_safe"] is False
+
+    def test_run_eof_after_submission_returns_unknown_outcome(self):
+        """A daemon disconnect after reading the request is also unsafe to
+        retry because the child may have completed its side effects."""
+        from agentcad.daemon import send_request
+
+        sock_path, thread, submissions, errors = _start_slow_request_server(
+            "uncertain-eof", delay_s=0
+        )
+        response = send_request(
+            {
+                "type": "run",
+                "cwd": "/tmp",
+                "argv": ["render", "part.step"],
+            },
+            socket_path=sock_path,
+            response_timeout_s=1,
+        )
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert errors == []
+        assert len(submissions) == 1
+        assert response is not None
+        assert response["exit_code"] != 0
+        payload = json.loads(response["output"])
+        assert payload["error_kind"] == "daemon_response_lost"
+        assert payload["request_submitted"] is True
+        assert payload["outcome"] == "unknown"
+        assert payload["retry_safe"] is False
 
 
 # ---------- Phase 2: Server handlers ----------
@@ -586,9 +684,24 @@ class TestRunRouting:
         send_request({"type": "shutdown"}, socket_path=sock_path)
         t.join(timeout=5)
 
-    def test_run_fallback_when_daemon_not_running(self, runner, isolated_dir):
+    def test_run_fallback_when_daemon_not_running(
+        self, runner, isolated_dir, monkeypatch
+    ):
         """agentcad run still works when daemon is not running."""
         from agentcad.cli import cli
+
+        monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+        missing_socket = _short_sock_path("fallback-missing")
+        if os.path.exists(missing_socket):
+            os.unlink(missing_socket)
+        monkeypatch.setattr(
+            "agentcad.commands._daemon_routing._socket_path",
+            lambda: missing_socket,
+        )
+        monkeypatch.setattr(
+            "agentcad.daemon.spawn_daemon_via_fork",
+            lambda **kwargs: {"spawned": False, "reason": "test"},
+        )
 
         runner.invoke(cli, ["init", "--name", "test"])
         script = isolated_dir / "box.py"
@@ -598,6 +711,56 @@ class TestRunRouting:
         assert result.exit_code == 0
         output = json.loads(result.stdout)
         assert output["status"] == "success"
+
+    def test_submitted_timeout_is_not_retried_directly(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        """A silent daemon receives the request once; the CLI must stop with
+        an unknown-outcome error instead of executing the script locally."""
+        from agentcad.cli import cli
+
+        monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+        sock_path, thread, submissions, errors = _start_slow_request_server(
+            "routing-timeout"
+        )
+        monkeypatch.setattr(
+            "agentcad.commands._daemon_routing._socket_path",
+            lambda: sock_path,
+        )
+        monkeypatch.setattr(
+            "agentcad.daemon._DEFAULT_RESPONSE_TIMEOUT_S",
+            0.03,
+        )
+
+        runner.invoke(cli, ["init", "--name", "test"])
+        direct_marker = isolated_dir / "direct-execution.txt"
+        script = isolated_dir / "slow.py"
+        script.write_text(
+            "from pathlib import Path\n"
+            "import cadquery as cq\n"
+            f"Path({str(direct_marker)!r}).write_text('ran directly')\n"
+            "show_object(cq.Workplane('XY').box(1, 1, 1))\n"
+        )
+
+        result = runner.invoke(
+            cli,
+            ["run", str(script), "--output", "slow", "--no-preview"],
+        )
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert errors == []
+        assert len(submissions) == 1
+        assert not direct_marker.exists(), (
+            "the submitted request timed out and was executed again locally"
+        )
+        assert result.exit_code == 124
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "error"
+        assert payload["error_kind"] == "daemon_response_timeout"
+        assert payload["outcome"] == "unknown"
+        assert payload["retry_safe"] is False
+        assert payload["via"] == "daemon"
 
     def test_run_routing_uses_daemon_when_available(self, isolated_dir, daemon_paths, monkeypatch):
         """agentcad run routes through daemon when it is running."""

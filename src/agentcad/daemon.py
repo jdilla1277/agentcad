@@ -372,22 +372,106 @@ def _run_in_child(server, request, conn):
 
 # ---------- Client ----------
 
-def send_request(msg, socket_path=None):
-    """Send a request to the daemon and return the response, or None if unavailable."""
-    if socket_path is None:
-        socket_path = _default_socket_path()
+_DEFAULT_CONNECT_TIMEOUT_S = 1.0
+_DEFAULT_RESPONSE_TIMEOUT_S = 30.0
+_UNKNOWN_OUTCOME_EXIT_CODE = 124
 
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(30)
-        sock.connect(socket_path)
-    except (FileNotFoundError, ConnectionRefusedError, OSError):
+
+def _unknown_run_outcome(msg, *, timed_out):
+    """Return a routed error when a submitted run's result is unknowable.
+
+    Once socket submission begins, falling back to direct execution is unsafe:
+    the daemon child may still be running and both copies could allocate the
+    same version or write the same artifacts. Operational requests keep their
+    historical ``None`` result on transport failure; only non-idempotent
+    CLI requests need the explicit at-most-once response.
+    """
+    if msg.get("type") != "run":
         return None
 
+    argv = msg.get("argv") or []
+    command = argv[0] if argv else "unknown"
+    error_kind = (
+        "daemon_response_timeout" if timed_out
+        else "daemon_response_lost"
+    )
+    return {
+        "type": "result",
+        "exit_code": _UNKNOWN_OUTCOME_EXIT_CODE,
+        "output": json.dumps({
+            "command": command,
+            "status": "error",
+            "error_kind": error_kind,
+            "request_submitted": True,
+            "outcome": "unknown",
+            "retry_safe": False,
+            "message": (
+                "The daemon request was submitted, but its response was not "
+                "received. The command may still be running and was not "
+                "retried locally."
+            ),
+            "suggestion": (
+                "Check the project outputs and `agentcad daemon status` "
+                "before deciding whether to retry."
+            ),
+        }),
+        "stderr": "",
+    }
+
+
+def send_request(
+    msg,
+    socket_path=None,
+    *,
+    connect_timeout_s=None,
+    response_timeout_s=None,
+):
+    """Send one request and return its response.
+
+    ``None`` means the daemon could not be reached before submission, so CLI
+    callers may safely execute directly. A ``run`` failure after submission
+    begins returns a nonzero ``result`` with ``outcome=unknown`` instead; the
+    caller must not retry a non-idempotent command automatically.
+
+    Connect and response deadlines are separate and injectable so regression
+    tests can exercise slow responses without waiting 30 seconds.
+    """
+    if socket_path is None:
+        socket_path = _default_socket_path()
+    if connect_timeout_s is None:
+        connect_timeout_s = _DEFAULT_CONNECT_TIMEOUT_S
+    if response_timeout_s is None:
+        response_timeout_s = _DEFAULT_RESPONSE_TIMEOUT_S
+
+    sock = None
     try:
-        sock.sendall(encode_message(msg))
-        return _read_one_message(sock)
-    except (ConnectionError, OSError):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(connect_timeout_s)
+        sock.connect(socket_path)
+    except (FileNotFoundError, ConnectionRefusedError, OSError):
+        if sock is not None:
+            _safe_close(sock)
+        return None
+
+    submission_started = False
+    try:
+        payload = encode_message(msg)
+        sock.settimeout(response_timeout_s)
+        # From this point onward, any send/read failure has an uncertain
+        # outcome. ``sendall`` can raise after writing only part of a frame,
+        # so conservatively suppress direct fallback as soon as it begins.
+        submission_started = True
+        sock.sendall(payload)
+        response = _read_one_message(sock)
+        if response is None:
+            return _unknown_run_outcome(msg, timed_out=False)
+        return response
+    except (ConnectionError, OSError) as exc:
+        if submission_started:
+            return _unknown_run_outcome(
+                msg,
+                timed_out=isinstance(exc, TimeoutError),
+            )
         return None
     finally:
         _safe_close(sock)
