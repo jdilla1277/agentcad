@@ -747,10 +747,6 @@ SECTIONS = {
         "\n"
         "  --local-only     Save the bundle locally without sending.\n"
         "  --max-entries N  Session log entries to include (default 10).\n"
-        "\n"
-        "  Maintainers can read the queue: `agentcad feedback list`, `feedback\n"
-        "  show <id>`, `feedback resolve <id>` (requires the read key in\n"
-        "  AGENTCAD_FEEDBACK_READ_KEY; submitting needs no key).\n"
     ),
     "mcp": (
         "MCP integration — native agent tools:\n"
