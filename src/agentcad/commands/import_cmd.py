@@ -273,7 +273,7 @@ def import_cmd(file, label, init_flag, no_daemon):
     response["more_at"] = "agentcad docs"
     click.echo(json.dumps(response))
 
-    maybe_spawn_daemon_for_next_run()
+    maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
 
 
 # --- helpers ----------------------------------------------------------------

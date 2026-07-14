@@ -370,16 +370,62 @@ def test_import_routes_through_daemon_when_available(runner, isolated_dir, monke
     assert parsed["command"] == "import"
 
 
-def test_import_no_daemon_flag_skips_routing(runner, isolated_dir, monkeypatch):
+def test_import_no_daemon_flag_skips_routing_and_spawn(
+    runner, isolated_dir, monkeypatch
+):
     monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
-    calls: list[tuple] = []
-    def _track(*a, **kw):
-        calls.append((a, kw))
+    socket_path = isolated_dir / "daemon.sock"
+    pid_path = isolated_dir / "daemon.pid"
+    monkeypatch.setenv("AGENTCAD_SOCKET_PATH", str(socket_path))
+    monkeypatch.setenv("AGENTCAD_PID_PATH", str(pid_path))
+    route_calls: list[tuple] = []
+    spawn_calls: list[tuple] = []
+
+    def _track_route(*a, **kw):
+        route_calls.append((a, kw))
         return None
-    monkeypatch.setattr("agentcad.daemon.send_request", _track)
-    # No STEP file exists, but with --no-daemon we should bypass routing
-    # entirely and hit the direct-execution path's missing-file error.
-    result = runner.invoke(cli, ["import", "missing.step", "--no-daemon"])
-    # Direct execution emits a structured "missing" / "error" — what matters
-    # is that we never tried to route.
-    assert calls == [], f"send_request was called despite --no-daemon: {calls}"
+
+    def _track_spawn(*a, **kw):
+        spawn_calls.append((a, kw))
+        return {"spawned": True}
+
+    monkeypatch.setattr("agentcad.daemon.send_request", _track_route)
+    monkeypatch.setattr("agentcad.daemon.spawn_daemon_via_fork", _track_spawn)
+
+    _init_project(runner, isolated_dir)
+    step = _box_step(isolated_dir)
+    result = runner.invoke(cli, ["import", str(step), "--no-daemon"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["status"] == "success"
+    assert route_calls == []
+    assert spawn_calls == []
+    assert not socket_path.exists()
+    assert not pid_path.exists()
+
+
+def test_successful_import_without_flag_still_routes_then_spawns(
+    runner, isolated_dir, monkeypatch
+):
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    route_calls: list[tuple] = []
+    spawn_calls: list[tuple] = []
+
+    def _track_route(*a, **kw):
+        route_calls.append((a, kw))
+        return None
+
+    def _track_spawn(*a, **kw):
+        spawn_calls.append((a, kw))
+        return {"spawned": True}
+
+    monkeypatch.setattr("agentcad.daemon.send_request", _track_route)
+    monkeypatch.setattr("agentcad.daemon.spawn_daemon_via_fork", _track_spawn)
+
+    _init_project(runner, isolated_dir)
+    step = _box_step(isolated_dir)
+    result = runner.invoke(cli, ["import", str(step)])
+
+    assert result.exit_code == 0, result.output
+    assert len(route_calls) == 1
+    assert len(spawn_calls) == 1
