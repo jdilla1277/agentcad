@@ -11,6 +11,19 @@ from agentcad.commands._daemon_routing import (
 )
 
 VALID_FORMATS = {"stl", "glb", "obj"}
+SUPPORTED_FORMATS_MESSAGE = "stl, glb, obj"
+
+
+def parse_export_formats(formats):
+    """Return requested export formats or raise ValueError for unsupported ones."""
+    fmt_list = [f.strip() for f in formats.split(",")]
+    invalid = [f for f in fmt_list if f not in VALID_FORMATS]
+    if invalid:
+        raise ValueError(
+            f"Unsupported format(s): {', '.join(invalid)}. "
+            f"Supported: {SUPPORTED_FORMATS_MESSAGE}"
+        )
+    return fmt_list
 
 
 def _is_version_dir(directory):
@@ -40,13 +53,13 @@ def export_cmd(step_file, formats, no_daemon):
         sys.exit(1)
 
     # Parse and validate formats
-    fmt_list = [f.strip() for f in formats.split(",")]
-    invalid = [f for f in fmt_list if f not in VALID_FORMATS]
-    if invalid:
+    try:
+        fmt_list = parse_export_formats(formats)
+    except ValueError as exc:
         click.echo(json.dumps({
             "command": "export",
             "status": "error",
-            "message": f"Unsupported format(s): {', '.join(invalid)}. Supported: stl, glb, obj",
+            "message": str(exc),
         }))
         sys.exit(1)
 

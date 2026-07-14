@@ -573,6 +573,24 @@ class TestExportFlag:
         for fmt in ("stl", "glb", "obj"):
             assert fmt in parsed["outputs"]
 
+    def test_rejects_unsupported_export_format_without_consuming_version(
+        self, runner, isolated_dir
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--output", "label", "--export", "ply",
+                 "--no-preview")
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["command"] == "run"
+        assert parsed["status"] == "error"
+        assert "Unsupported format(s): ply" in parsed["message"]
+        assert "Supported: stl, glb, obj" in parsed["message"]
+
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["versions"] == []
+        assert not any(isolated_dir.glob("v1_*"))
+
     # ---- parity ports from tests/test_run.py ----
 
     def test_export_and_render(self, runner, isolated_dir):

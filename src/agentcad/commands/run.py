@@ -15,6 +15,7 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
+from agentcad.commands.export_cmd import parse_export_formats
 from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
 
 
@@ -527,6 +528,18 @@ def _run_impl(ctx, script, output, render, export, preview, params,
                 "message": str(e),
             }))
             sys.exit(1)
+
+    export_formats = None
+    if export:
+        try:
+            export_formats = parse_export_formats(export)
+        except ValueError as e:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": str(e),
+            }))
+            sys.exit(1)
     _finish_phase("validation", _t, "validation_ms")
 
     # Spawn the daemon NOW — after the runner module is imported (so OCP is
@@ -691,9 +704,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     if export:
         _heartbeat("exporting requested mesh formats…")
         _t = _start_phase("export_mesh")
-        formats = [f.strip() for f in export.split(",")]
         topo_shape = result.topo_shape
-        for fmt in formats:
+        for fmt in export_formats:
             if fmt == "stl":
                 stl_path = version_dir / "output.stl"
                 runner.export_stl(shape, str(stl_path))
