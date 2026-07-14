@@ -15,6 +15,7 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
+from agentcad.commands.export_cmd import parse_export_formats, unsupported_export_formats
 from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
 
 
@@ -442,6 +443,22 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         click.echo(f"[agentcad] {message}", err=True)
 
 
+    # Reject unsupported --export formats up front — before daemon routing,
+    # version allocation, or any disk artifacts — so `run --export` matches
+    # `agentcad export` instead of silently ignoring unknown formats.
+    if export:
+        invalid = unsupported_export_formats(export)
+        if invalid:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": (
+                    f"Unsupported format(s): {', '.join(invalid)}. "
+                    f"Supported: stl, glb, obj"
+                ),
+            }))
+            sys.exit(1)
+
     # Try routing through daemon. If reachable, this exits before returning.
     argv = ["run", script, "--output", output]
     if render:
@@ -691,7 +708,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     if export:
         _heartbeat("exporting requested mesh formats…")
         _t = _start_phase("export_mesh")
-        formats = [f.strip() for f in export.split(",")]
+        formats = parse_export_formats(export)
         topo_shape = result.topo_shape
         for fmt in formats:
             if fmt == "stl":

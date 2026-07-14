@@ -118,6 +118,47 @@ def test_run_script_not_found_error(runner, isolated_dir):
     assert "missing.py" in parsed["message"]
 
 
+def test_run_rejects_unsupported_export_format(runner, isolated_dir):
+    """`run --export ply` must reject the unknown format the way
+    `agentcad export` does — before allocating a version or writing artifacts —
+    instead of succeeding with no ply output. Rejection happens before any
+    CAD kernel import, so this runs without cadquery/build123d installed."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "test", "--export", "ply"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "ply" in parsed["message"]
+    assert "stl, glb, obj" in parsed["message"]
+    # No version consumed and no artifacts written.
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+    assert not (isolated_dir / "v1_test").exists()
+    assert not (isolated_dir / "test").exists()
+
+
+def test_run_reports_every_unsupported_export_format(runner, isolated_dir):
+    """A mixed list names each invalid format; the valid one (stl) is not
+    flagged, and an empty trailing entry (stl,) is trimmed, not treated as
+    an unknown format."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "test", "--export", "stl,ply,fbx"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "error"
+    unsupported = parsed["message"].split("Supported:")[0]
+    assert "ply" in unsupported
+    assert "fbx" in unsupported
+    assert "stl" not in unsupported
+
+
 def test_run_creates_version_directory(runner, isolated_dir):
     _init_project(runner)
     _write_script(isolated_dir)
