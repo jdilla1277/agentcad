@@ -33,6 +33,7 @@ def test_docs_lists_sections(runner):
     assert "daemon" in sections
     assert "inspect" in sections
     assert "parts" in sections
+    assert "feedback" in sections
 
 
 def test_docs_commands_section(runner):
@@ -42,7 +43,7 @@ def test_docs_commands_section(runner):
     content = data["content"]
     for cmd in [
         "init", "run", "render", "measure", "check-spec", "parts",
-        "context", "docs", "diff",
+        "context", "docs", "diff", "feedback",
     ]:
         assert cmd in content
     assert "part review viewers" in content
