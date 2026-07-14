@@ -435,3 +435,23 @@ def test_feedback_read_error_surfaces_with_suggestion(runner, isolated_dir, read
     assert output["status"] == "error"
     assert "401" in output["error"]
     assert "AGENTCAD_FEEDBACK_READ_KEY" in output["suggestion"]
+
+
+def test_feedback_show_404_suggests_listing_ids(runner, isolated_dir, read_key_env, monkeypatch):
+    """A not-found id should point at `feedback list`, not at network troubleshooting."""
+    _stub_read_api(monkeypatch, None, err="HTTP Error 404: No feedback row with id 999.")
+    result = runner.invoke(cli, ["feedback", "show", "999"])
+    assert result.exit_code == 1
+
+    output = json.loads(result.stdout)
+    assert output["status"] == "error"
+    assert "feedback list" in output["suggestion"]
+    assert "network" not in output["suggestion"].lower()
+
+
+def test_feedback_read_subcommand_help_names_env_var(runner):
+    """Each read subcommand's own --help must name the env var, not just the group help."""
+    for sub in ("list", "show", "resolve"):
+        result = runner.invoke(cli, ["feedback", sub, "--help"])
+        assert result.exit_code == 0
+        assert "AGENTCAD_FEEDBACK_READ_KEY" in result.output

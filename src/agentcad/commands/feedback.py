@@ -104,9 +104,9 @@ def _read_key_or_fail(command: str) -> str:
             "status": "error",
             "error": f"{_READ_KEY_ENV} is not set.",
             "suggestion": (
-                "Reading feedback requires the maintainer read key — export "
-                f"{_READ_KEY_ENV} in your shell (see 'Feedback Read Access' in "
-                "the internal repo's CLAUDE.md). Submitting feedback needs no key."
+                "Reading the queue is for agentcad maintainers — export "
+                f"{_READ_KEY_ENV} with the team's read key. Submitting "
+                "feedback (agentcad feedback \"msg\") needs no key."
             ),
         }))
         sys.exit(1)
@@ -118,6 +118,11 @@ def _read_api_error(command: str, err: str):
         suggestion = (
             f"The read key was rejected — check {_READ_KEY_ENV} matches the key "
             "configured on the server (Vercel project env)."
+        )
+    elif "404" in err:
+        suggestion = (
+            "No row with that id — run `agentcad feedback list --status all` "
+            "to see valid ids."
         )
     elif "503" in err:
         suggestion = (
@@ -163,6 +168,9 @@ def feedback():
 
     list / show / resolve read the feedback queue and require the maintainer
     read key in AGENTCAD_FEEDBACK_READ_KEY; submitting needs no key.
+
+    All subcommands honor AGENTCAD_FEEDBACK_URL for non-default endpoints
+    (preview deploys, self-hosted instances).
     """
 
 
@@ -193,8 +201,9 @@ def submit(message, max_entries, local_only):
 
     \b
     Response fields agents should check:
-      - "status": "success" iff Neon stored the bundle; "partial" if the
-        remote upload failed (the local file is still written).
+      - "status": "success" when the bundle was stored (remotely, or just
+        locally with --local-only); "partial" if the remote upload failed
+        (the local file is still written).
       - "discord": the human alert webhook status — "ok" / "failed: ..."
         / "skipped: ...". Note: "status" can be "success" while "discord"
         is "failed: ..." — that means Neon has the row but no one was paged.
@@ -267,11 +276,14 @@ def submit(message, max_entries, local_only):
 @click.option(
     "--limit",
     default=20,
-    type=int,
+    type=click.IntRange(min=1),
     help="Max rows to return (default: 20, server caps at 100).",
 )
 def feedback_list(status_filter, limit):
-    """List feedback queue rows, newest first (requires the read key)."""
+    """List feedback queue rows, newest first.
+
+    Requires the maintainer read key in AGENTCAD_FEEDBACK_READ_KEY.
+    """
     key = _read_key_or_fail("feedback list")
     err, data = _call_read_api("GET", key, params={"status": status_filter, "limit": limit})
     if err:
@@ -294,7 +306,10 @@ def feedback_list(status_filter, limit):
 @feedback.command()
 @click.argument("feedback_id", type=int)
 def show(feedback_id):
-    """Show one feedback row with its full payload (requires the read key)."""
+    """Show one feedback row with its full payload.
+
+    Requires the maintainer read key in AGENTCAD_FEEDBACK_READ_KEY.
+    """
     key = _read_key_or_fail("feedback show")
     err, data = _call_read_api("GET", key, params={"id": feedback_id})
     if err:
@@ -321,7 +336,10 @@ def show(feedback_id):
     help="Status to set (default: resolved).",
 )
 def resolve(feedback_id, new_status):
-    """Mark a feedback row resolved (or triaged) so the queue drains (requires the read key)."""
+    """Mark a feedback row resolved (or triaged) so the queue drains.
+
+    Requires the maintainer read key in AGENTCAD_FEEDBACK_READ_KEY.
+    """
     key = _read_key_or_fail("feedback resolve")
     err, data = _call_read_api("PATCH", key, body={"id": feedback_id, "status": new_status})
     if err:

@@ -75,6 +75,9 @@ SECTIONS = {
         "  diff    — Compare two versions of a model.\n"
         "  inspect — Inspect STEP file topology (shells, faces, edges).\n"
         "            --ids output is capped by default; use --no-limit explicitly.\n"
+        "  feedback\n"
+        "          — Send an observation to the agentcad team (any friction,\n"
+        "            any time — bundles your session log automatically).\n"
     ),
     "render": (
         "Rendering:\n"
@@ -731,6 +734,23 @@ SECTIONS = {
         "  7. agentcad export v1_label/output.step --format stl,glb\n"
         "  8. agentcad context — review project state.\n"
         "  9. agentcad diff 1 2 — compare versions.\n"
+    ),
+    "feedback": (
+        "Feedback:\n"
+        "  agentcad feedback \"your observation\"\n"
+        "\n"
+        "  Hit friction? Confused by an error? Wish a helper existed? Send it —\n"
+        "  any observation, mid-task, no permission needed. Your message is\n"
+        "  bundled with the recent session log and goes straight to the agentcad\n"
+        "  team. Casual, partial, just-a-thought messages are exactly the signal\n"
+        "  we want.\n"
+        "\n"
+        "  --local-only     Save the bundle locally without sending.\n"
+        "  --max-entries N  Session log entries to include (default 10).\n"
+        "\n"
+        "  Maintainers can read the queue: `agentcad feedback list`, `feedback\n"
+        "  show <id>`, `feedback resolve <id>` (requires the read key in\n"
+        "  AGENTCAD_FEEDBACK_READ_KEY; submitting needs no key).\n"
     ),
     "mcp": (
         "MCP integration — native agent tools:\n"
