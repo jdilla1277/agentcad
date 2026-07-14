@@ -50,6 +50,18 @@ def _no_remote_feedback(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_remote_feedback_reads(monkeypatch):
+    """Stub the feedback read API (GET/PATCH) so pytest never hits the production endpoint."""
+    from agentcad.commands import feedback as feedback_mod
+
+    monkeypatch.setattr(
+        feedback_mod,
+        "_call_read_api",
+        lambda method, key, params=None, body=None: (None, {"items": [], "count": 0}),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_browser_launch(monkeypatch):
     """Stub `webbrowser.open` so view/diff tests never spawn a real browser."""
     import webbrowser

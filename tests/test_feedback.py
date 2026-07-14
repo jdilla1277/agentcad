@@ -282,3 +282,156 @@ def test_feedback_url_honors_env_override(monkeypatch):
 
     monkeypatch.delenv("AGENTCAD_FEEDBACK_URL", raising=False)
     assert _resolve_feedback_url() == "https://agentcad.dev/api/feedback"
+
+
+# --- read path: list / show / resolve ---------------------------------------
+#
+# These subcommands call the GET/PATCH side of /api/feedback, guarded by the
+# maintainer read key (AGENTCAD_FEEDBACK_READ_KEY). The legacy submit form
+# `agentcad feedback "msg"` must keep working — pinned explicitly below.
+
+_READ_KEY = "test-read-key"
+
+
+@pytest.fixture
+def read_key_env(monkeypatch):
+    monkeypatch.setenv("AGENTCAD_FEEDBACK_READ_KEY", _READ_KEY)
+
+
+def _stub_read_api(monkeypatch, data, err=None):
+    """Replace _call_read_api, capturing calls. Returns the call list."""
+    calls = []
+
+    def fake(method, key, params=None, body=None):
+        calls.append({"method": method, "key": key, "params": params, "body": body})
+        return (err, None if err else data)
+
+    monkeypatch.setattr(feedback_mod, "_call_read_api", fake)
+    return calls
+
+
+def test_feedback_legacy_message_form_still_works(runner, isolated_dir):
+    """`agentcad feedback "msg"` (no subcommand) must keep submitting."""
+    result = runner.invoke(cli, ["feedback", "legacy form"])
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["command"] == "feedback"
+    assert output["bundle"]["summary"] == "legacy form"
+
+
+def test_feedback_legacy_form_with_options_before_message(runner, isolated_dir):
+    """Options preceding the message must also fall through to submit."""
+    result = runner.invoke(cli, ["feedback", "--local-only", "draft thought"])
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["remote"] == "skipped"
+    assert output["bundle"]["summary"] == "draft thought"
+
+
+def test_feedback_explicit_submit_subcommand(runner, isolated_dir):
+    """`feedback submit` is the explicit path (needed if a message equals a subcommand name)."""
+    result = runner.invoke(cli, ["feedback", "submit", "list"])
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["bundle"]["summary"] == "list"
+
+
+def test_feedback_help_lists_read_subcommands(runner):
+    result = runner.invoke(cli, ["feedback", "--help"])
+    assert result.exit_code == 0
+    for sub in ("submit", "list", "show", "resolve"):
+        assert sub in result.output
+
+
+def test_feedback_list_requires_read_key(runner, isolated_dir, monkeypatch):
+    monkeypatch.delenv("AGENTCAD_FEEDBACK_READ_KEY", raising=False)
+    result = runner.invoke(cli, ["feedback", "list"])
+    assert result.exit_code == 1
+    output = json.loads(result.stdout)
+    assert output["command"] == "feedback list"
+    assert output["status"] == "error"
+    assert "AGENTCAD_FEEDBACK_READ_KEY" in output["error"]
+    assert "suggestion" in output
+
+
+def test_feedback_list_defaults(runner, isolated_dir, read_key_env, monkeypatch):
+    items = [{"id": 3, "created_at": "2026-07-13T10:00:00Z", "status": "new", "summary": "hi"}]
+    calls = _stub_read_api(monkeypatch, {"items": items, "count": 1})
+
+    result = runner.invoke(cli, ["feedback", "list"])
+    assert result.exit_code == 0
+
+    assert calls == [{
+        "method": "GET",
+        "key": _READ_KEY,
+        "params": {"status": "new", "limit": 20},
+        "body": None,
+    }]
+    output = json.loads(result.stdout)
+    assert output["command"] == "feedback list"
+    assert output["status"] == "success"
+    assert output["items"] == items
+    assert output["count"] == 1
+    assert output["filter"] == "new"
+    # next_actions convention: teach show/resolve, with a more_at pointer
+    assert any("feedback show" in a for a in output["next_actions"])
+    assert output["more_at"]
+
+
+def test_feedback_list_status_and_limit_flags(runner, isolated_dir, read_key_env, monkeypatch):
+    calls = _stub_read_api(monkeypatch, {"items": [], "count": 0})
+    result = runner.invoke(cli, ["feedback", "list", "--status", "all", "--limit", "5"])
+    assert result.exit_code == 0
+    assert calls[0]["params"] == {"status": "all", "limit": 5}
+
+
+def test_feedback_show_fetches_full_row(runner, isolated_dir, read_key_env, monkeypatch):
+    item = {"id": 7, "status": "new", "payload": {"summary": "hello", "session_log": []}}
+    calls = _stub_read_api(monkeypatch, {"item": item})
+
+    result = runner.invoke(cli, ["feedback", "show", "7"])
+    assert result.exit_code == 0
+
+    assert calls[0]["method"] == "GET"
+    assert calls[0]["params"] == {"id": 7}
+    output = json.loads(result.stdout)
+    assert output["command"] == "feedback show"
+    assert output["status"] == "success"
+    assert output["item"] == item
+
+
+def test_feedback_resolve_patches_status(runner, isolated_dir, read_key_env, monkeypatch):
+    calls = _stub_read_api(monkeypatch, {"status": "updated", "id": 7, "feedback_status": "resolved"})
+
+    result = runner.invoke(cli, ["feedback", "resolve", "7"])
+    assert result.exit_code == 0
+
+    assert calls == [{
+        "method": "PATCH",
+        "key": _READ_KEY,
+        "params": None,
+        "body": {"id": 7, "status": "resolved"},
+    }]
+    output = json.loads(result.stdout)
+    assert output["command"] == "feedback resolve"
+    assert output["status"] == "success"
+    assert output["id"] == 7
+    assert output["feedback_status"] == "resolved"
+
+
+def test_feedback_resolve_custom_status(runner, isolated_dir, read_key_env, monkeypatch):
+    calls = _stub_read_api(monkeypatch, {"status": "updated", "id": 9, "feedback_status": "triaged"})
+    result = runner.invoke(cli, ["feedback", "resolve", "9", "--status", "triaged"])
+    assert result.exit_code == 0
+    assert calls[0]["body"] == {"id": 9, "status": "triaged"}
+
+
+def test_feedback_read_error_surfaces_with_suggestion(runner, isolated_dir, read_key_env, monkeypatch):
+    _stub_read_api(monkeypatch, None, err="HTTP Error 401: Unauthorized.")
+    result = runner.invoke(cli, ["feedback", "list"])
+    assert result.exit_code == 1
+
+    output = json.loads(result.stdout)
+    assert output["status"] == "error"
+    assert "401" in output["error"]
+    assert "AGENTCAD_FEEDBACK_READ_KEY" in output["suggestion"]
