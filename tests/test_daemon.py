@@ -115,6 +115,40 @@ class TestProtocol:
         assert decoded == original
         assert remainder == b""
 
+    def test_read_deadline_is_absolute_for_incomplete_header(self):
+        from agentcad.daemon import _read_one_message
+
+        reader, writer = socket.socketpair()
+        try:
+            writer.sendall(b"\x00")
+            started = time.monotonic()
+            with pytest.raises(socket.timeout):
+                _read_one_message(reader, timeout_s=0.03)
+            assert time.monotonic() - started < 0.5
+        finally:
+            reader.close()
+            writer.close()
+
+    def test_oversized_declared_payload_is_rejected_before_body_read(self):
+        from agentcad.daemon import (
+            DaemonProtocolError,
+            _MAX_REQUEST_PAYLOAD_BYTES,
+            _read_one_message,
+        )
+
+        reader, writer = socket.socketpair()
+        try:
+            writer.sendall(struct.pack("!I", _MAX_REQUEST_PAYLOAD_BYTES + 1))
+            with pytest.raises(DaemonProtocolError, match="exceeds limit"):
+                _read_one_message(
+                    reader,
+                    timeout_s=0.5,
+                    max_payload_bytes=_MAX_REQUEST_PAYLOAD_BYTES,
+                )
+        finally:
+            reader.close()
+            writer.close()
+
 
 # ---------- Phase 1: Client fallback ----------
 
@@ -537,6 +571,118 @@ class TestLifecycle:
 
         send_request({"type": "shutdown"}, socket_path=sock_path)
         t.join(timeout=5)
+
+
+class TestBoundedServerReads:
+    @staticmethod
+    def _start_server(sock_path, pid_path, monkeypatch):
+        from agentcad.daemon import DaemonServer
+
+        monkeypatch.setattr("agentcad.daemon._REQUEST_READ_TIMEOUT_S", 0.05)
+        server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
+        thread = threading.Thread(target=server.serve)
+        thread.start()
+        for _ in range(100):
+            if os.path.exists(sock_path):
+                break
+            time.sleep(0.01)
+        assert os.path.exists(sock_path)
+        return thread
+
+    @pytest.mark.parametrize(
+        "partial_frame",
+        [
+            b"\x00",
+            struct.pack("!I", 100) + b"short",
+        ],
+        ids=["incomplete-header", "incomplete-body"],
+    )
+    def test_partial_frame_cannot_block_ping(
+        self, daemon_paths, monkeypatch, partial_frame
+    ):
+        from agentcad.daemon import send_request
+
+        sock_path, pid_path = daemon_paths
+        thread = self._start_server(sock_path, pid_path, monkeypatch)
+        blocker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            blocker.connect(sock_path)
+            blocker.sendall(partial_frame)
+
+            started = time.monotonic()
+            response = send_request(
+                {"type": "ping"},
+                socket_path=sock_path,
+                response_timeout_s=0.5,
+            )
+            elapsed = time.monotonic() - started
+
+            assert response["type"] == "pong"
+            assert elapsed < 0.5
+        finally:
+            blocker.close()
+            send_request({"type": "shutdown"}, socket_path=sock_path)
+            thread.join(timeout=2)
+        assert not thread.is_alive()
+
+    def test_oversized_frame_is_rejected_and_server_recovers(
+        self, daemon_paths, monkeypatch
+    ):
+        from agentcad.daemon import (
+            _MAX_REQUEST_PAYLOAD_BYTES,
+            send_request,
+        )
+
+        sock_path, pid_path = daemon_paths
+        thread = self._start_server(sock_path, pid_path, monkeypatch)
+        attacker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            attacker.connect(sock_path)
+            attacker.sendall(
+                struct.pack("!I", _MAX_REQUEST_PAYLOAD_BYTES + 1)
+            )
+            response = send_request(
+                {"type": "ping"},
+                socket_path=sock_path,
+                response_timeout_s=0.5,
+            )
+            assert response["type"] == "pong"
+        finally:
+            attacker.close()
+            send_request({"type": "shutdown"}, socket_path=sock_path)
+            thread.join(timeout=2)
+        assert not thread.is_alive()
+
+    def test_status_preserves_live_state_after_response_timeout(
+        self, monkeypatch
+    ):
+        from agentcad.daemon import daemon_status
+
+        sock_path, thread, submissions, errors = _start_slow_request_server(
+            "status-timeout", delay_s=0.15
+        )
+        pid_path = _short_pid_path("status-timeout")
+        with open(pid_path, "w") as f:
+            f.write(str(os.getpid()))
+        monkeypatch.setattr("agentcad.daemon._STATUS_PING_TIMEOUT_S", 0.03)
+        try:
+            result = daemon_status(
+                socket_path=sock_path,
+                pid_path=pid_path,
+            )
+
+            assert result["running"] is True
+            assert result["responsive"] is False
+            assert result["pid"] == os.getpid()
+            assert os.path.exists(sock_path)
+            assert os.path.exists(pid_path)
+            assert len(submissions) == 1
+        finally:
+            thread.join(timeout=2)
+            if os.path.exists(pid_path):
+                os.unlink(pid_path)
+        assert not thread.is_alive()
+        assert errors == []
 
 
 # ---------- Phase 4: CLI commands ----------
