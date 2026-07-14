@@ -2,9 +2,13 @@ import json
 
 import click
 
+from agentcad import __version__
 from agentcad.manifest import load_manifest
 
-TOOL_VERSION = "0.1.0"
+# The tool version reported in command metadata tracks the installed package
+# version (agentcad.__version__), falling back to "0.0.0+source" in an
+# un-installed checkout. import_cmd re-exports this for imported-version meta.
+TOOL_VERSION = __version__
 
 
 @click.command()

@@ -1,6 +1,7 @@
 import json
 
 from click.testing import CliRunner
+from agentcad import __version__
 from agentcad.cli import cli
 
 
@@ -82,4 +83,4 @@ def test_context_includes_tool_version(runner, isolated_dir):
     result = runner.invoke(cli, ["context"])
     data = json.loads(result.stdout)
     assert "tool_version" in data
-    assert data["tool_version"] == "0.1.0"
+    assert data["tool_version"] == __version__

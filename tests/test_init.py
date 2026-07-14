@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 
+from agentcad import __version__
 from agentcad.cli import cli
 from agentcad.commands.init import MANIFEST_FILE
 
@@ -16,7 +17,7 @@ def test_init_manifest_has_correct_schema(runner, isolated_dir):
     assert "name" in manifest
     assert "created" in manifest
     assert "version" in manifest
-    assert manifest["version"] == "0.1.0"
+    assert manifest["version"] == __version__
 
 
 def test_init_default_project_name_is_directory_name(runner, isolated_dir):
