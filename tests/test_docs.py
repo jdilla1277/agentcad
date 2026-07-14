@@ -372,8 +372,8 @@ def test_docs_patterns_angled_positioning_example(runner):
 
 def test_docs_daemon_section(runner):
     """Daemon docs reflect the auto-managed reality: agents don't start the
-    daemon, but `stop` and `status` are kept as diagnostic commands. `start`
-    and `restart` were removed from the docs because auto-spawn replaces them."""
+    daemon, but `stop` and `status` are kept as diagnostic commands, and
+    `restart` is named as the recovery action for version drift."""
     result = runner.invoke(cli, ["docs", "daemon"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
@@ -383,6 +383,18 @@ def test_docs_daemon_section(runner):
     assert "daemon status" in content
     # Auto-managed framing: the daemon spawns itself.
     assert "auto" in content.lower() or "automatic" in content.lower()
+
+
+def test_docs_daemon_does_not_claim_self_heal(runner):
+    """The daemon does not self-heal on version drift — it keeps running the
+    code it loaded at startup and must be restarted manually (see daemon.py's
+    status hint and _daemon_routing warning). Docs must not promise otherwise,
+    and must name `agentcad daemon restart` as the recovery action."""
+    result = runner.invoke(cli, ["docs", "daemon"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"].lower()
+    assert "self-heal" not in content and "self heal" not in content
+    assert "daemon restart" in content
 
 
 def test_docs_commands_does_not_list_daemon(runner):
