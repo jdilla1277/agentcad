@@ -766,6 +766,7 @@ SECTIONS = {
         "    export    Export STEP to mesh formats (stl, glb, obj)\n"
         "    measure   Dimensional report (overall metrics and feature sizes)\n"
         "    inspect   Topology report (solids, shells, faces, validity)\n"
+        "    check_spec Check a STEP against a JSON cylindrical-feature spec\n"
         "    docs      Show documentation (this command)\n"
         "    context   Project state (versions, current)\n"
         "    diff      Compare two versions\n"
