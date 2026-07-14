@@ -96,6 +96,16 @@ def _default_pid_path():
 
 # ---------- Protocol ----------
 
+_MAX_REQUEST_PAYLOAD_BYTES = 1024 * 1024
+_MAX_RESPONSE_PAYLOAD_BYTES = 64 * 1024 * 1024
+_REQUEST_READ_TIMEOUT_S = 1.0
+_STATUS_PING_TIMEOUT_S = 2.0
+
+
+class DaemonProtocolError(Exception):
+    """A peer sent a frame that violates the daemon protocol contract."""
+
+
 def encode_message(msg):
     """Encode a dict as length-prefixed JSON (4-byte big-endian uint32 + UTF-8)."""
     payload = json.dumps(msg).encode("utf-8")
@@ -254,7 +264,11 @@ class DaemonServer:
                 except socket.timeout:
                     continue
                 try:
-                    request = _read_one_message(conn)
+                    request = _read_one_message(
+                        conn,
+                        timeout_s=_REQUEST_READ_TIMEOUT_S,
+                        max_payload_bytes=_MAX_REQUEST_PAYLOAD_BYTES,
+                    )
                 except Exception:
                     _safe_close(conn)
                     continue
@@ -318,20 +332,61 @@ class DaemonServer:
             _safe_close(conn)
 
 
-def _read_one_message(conn):
+def _read_one_message(conn, *, timeout_s=None, max_payload_bytes=None):
     """Block until one length-prefixed JSON message arrives on ``conn``.
 
-    Returns the decoded dict or None on EOF. Raises on socket error.
+    ``timeout_s`` is an absolute frame deadline, not a per-recv inactivity
+    timeout, so a peer cannot hold the reader forever by dripping bytes. The
+    declared payload length is rejected before body accumulation when it
+    exceeds ``max_payload_bytes``.
+
+    Returns the decoded dict or None on EOF. Raises on socket/protocol error.
     """
-    buf = b""
-    while True:
-        chunk = conn.recv(65536)
-        if not chunk:
-            return None
-        buf += chunk
-        request, _ = decode_message(buf)
-        if request is not None:
-            return request
+    buf = bytearray()
+    declared_length = None
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
+    original_timeout = conn.gettimeout()
+
+    try:
+        while True:
+            if declared_length is None and len(buf) >= 4:
+                declared_length = struct.unpack("!I", buf[:4])[0]
+                if (
+                    max_payload_bytes is not None
+                    and declared_length > max_payload_bytes
+                ):
+                    raise DaemonProtocolError(
+                        f"daemon frame payload {declared_length} exceeds "
+                        f"limit {max_payload_bytes}"
+                    )
+
+            if declared_length is not None:
+                total_length = 4 + declared_length
+                if len(buf) >= total_length:
+                    try:
+                        message, _ = decode_message(bytes(buf))
+                        return message
+                    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                        raise DaemonProtocolError(
+                            "daemon frame payload is not valid UTF-8 JSON"
+                        ) from exc
+                recv_size = min(65536, total_length - len(buf))
+            else:
+                recv_size = 4 - len(buf)
+
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise socket.timeout("daemon frame read timed out")
+                conn.settimeout(remaining)
+
+            chunk = conn.recv(recv_size)
+            if not chunk:
+                return None
+            buf.extend(chunk)
+    finally:
+        if timeout_s is not None:
+            conn.settimeout(original_timeout)
 
 
 def _safe_close(sock):
@@ -377,17 +432,22 @@ _DEFAULT_RESPONSE_TIMEOUT_S = 30.0
 _UNKNOWN_OUTCOME_EXIT_CODE = 124
 
 
-def _unknown_run_outcome(msg, *, timed_out):
-    """Return a routed error when a submitted run's result is unknowable.
+def _post_submission_failure(msg, *, timed_out):
+    """Describe a transport failure after request submission has begun.
 
     Once socket submission begins, falling back to direct execution is unsafe:
     the daemon child may still be running and both copies could allocate the
-    same version or write the same artifacts. Operational requests keep their
-    historical ``None`` result on transport failure; only non-idempotent
-    CLI requests need the explicit at-most-once response.
+    same version or write the same artifacts. Non-idempotent CLI requests get
+    an explicit at-most-once result; operational requests get an internal
+    transport marker so status checks can distinguish an accepted-but-silent
+    listener from a missing listener.
     """
     if msg.get("type") != "run":
-        return None
+        return {
+            "type": "transport_error",
+            "phase": "response",
+            "timed_out": timed_out,
+        }
 
     argv = msg.get("argv") or []
     command = argv[0] if argv else "unknown"
@@ -431,7 +491,8 @@ def send_request(
     ``None`` means the daemon could not be reached before submission, so CLI
     callers may safely execute directly. A ``run`` failure after submission
     begins returns a nonzero ``result`` with ``outcome=unknown`` instead; the
-    caller must not retry a non-idempotent command automatically.
+    caller must not retry a non-idempotent command automatically. Operational
+    requests return an internal ``transport_error`` marker after submission.
 
     Connect and response deadlines are separate and injectable so regression
     tests can exercise slow responses without waiting 30 seconds.
@@ -462,13 +523,17 @@ def send_request(
         # so conservatively suppress direct fallback as soon as it begins.
         submission_started = True
         sock.sendall(payload)
-        response = _read_one_message(sock)
+        response = _read_one_message(
+            sock,
+            timeout_s=response_timeout_s,
+            max_payload_bytes=_MAX_RESPONSE_PAYLOAD_BYTES,
+        )
         if response is None:
-            return _unknown_run_outcome(msg, timed_out=False)
+            return _post_submission_failure(msg, timed_out=False)
         return response
-    except (ConnectionError, OSError) as exc:
+    except (ConnectionError, OSError, DaemonProtocolError) as exc:
         if submission_started:
-            return _unknown_run_outcome(
+            return _post_submission_failure(
                 msg,
                 timed_out=isinstance(exc, TimeoutError),
             )
@@ -526,15 +591,15 @@ def daemon_status(socket_path=None, pid_path=None):
     and (when relevant) a ``stale`` flag + hint when the daemon's in-memory
     code is older than the installed agentcad on disk.
 
-    Requires successful ping, not just an alive PID. The pid file by itself
-    can lie — a leftover from a dead daemon could point at an unrelated
-    alive process (e.g. an ``agentcad render`` from another shell, or PID
-    recycling after the original daemon was SIGKILLed), which would
-    otherwise falsely report ``running:true`` and block
-    ``spawn_daemon_via_fork`` from starting a fresh daemon. Issue #190.
+    Uses ping, not just an alive PID, to confirm a responsive daemon. The pid
+    file by itself can lie — a leftover from a dead daemon could point at an
+    unrelated alive process (e.g. an ``agentcad render`` from another shell,
+    or PID recycling after the original daemon was SIGKILLed). A listener that
+    accepts the ping but misses the response deadline is reported as running
+    but unresponsive, and its ownership files are preserved for safe recovery.
 
-    Stale state (PID alive but socket unbound, or socket file present but
-    no listener answering ping) is cleaned up so the next spawn attempt
+    Stale state (PID alive but socket absent, or a socket pathname with no
+    listener accepting connections) is cleaned up so the next spawn attempt
     has a clean slate.
 
     The staleness check on the daemon's reported version is the only way
@@ -565,10 +630,27 @@ def daemon_status(socket_path=None, pid_path=None):
         _unlink_quiet(pid_path)
         return {"running": False}
 
-    # Probe the listener. Ping bypasses any state the daemon might be in;
-    # no response means this PID isn't actually a daemon (or the daemon
-    # is wedged) — clean up so spawn_daemon_via_fork can take over.
-    resp = send_request({"type": "ping"}, socket_path=socket_path)
+    # Probe the listener. A connection failure means there is no listener and
+    # the paths are stale. If the listener accepted our request but did not
+    # answer, preserve its ownership state: blindly unlinking a live endpoint
+    # can orphan the daemon and let a second parent bind the same pathname.
+    resp = send_request(
+        {"type": "ping"},
+        socket_path=socket_path,
+        response_timeout_s=_STATUS_PING_TIMEOUT_S,
+    )
+    if resp and resp.get("type") == "transport_error":
+        return {
+            "running": True,
+            "responsive": False,
+            "pid": pid,
+            "message": (
+                "Daemon process is alive and accepted the status probe, but "
+                "did not return a response. Its socket and PID state were "
+                "preserved; use `agentcad daemon restart` if it remains "
+                "unresponsive."
+            ),
+        }
     if not resp or resp.get("type") != "pong":
         _unlink_quiet(pid_path)
         _unlink_quiet(socket_path)
