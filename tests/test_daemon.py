@@ -58,6 +58,43 @@ def _start_slow_request_server(name, delay_s=0.15):
     return sock_path, thread, submissions, errors
 
 
+def _start_unresponsive_daemon(sock_path, pid_path, *, ignore_sigterm=False):
+    """Start a real DaemonServer that accepts shutdown but never answers."""
+    source = """
+import signal
+import sys
+import time
+from agentcad.daemon import DaemonServer
+
+if sys.argv[3] == "ignore-sigterm":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+class UnresponsiveDaemon(DaemonServer):
+    def handle_request(self, request):
+        if request.get("type") == "shutdown":
+            time.sleep(60)
+        return super().handle_request(request)
+
+UnresponsiveDaemon(socket_path=sys.argv[1], pid_path=sys.argv[2]).serve()
+"""
+    mode = "ignore-sigterm" if ignore_sigterm else "default-sigterm"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", source, sock_path, pid_path, mode],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    for _ in range(100):
+        if os.path.exists(sock_path) and os.path.exists(pid_path):
+            break
+        if proc.poll() is not None:
+            stderr = proc.stderr.read().decode("utf-8", errors="replace")
+            raise AssertionError(f"unresponsive daemon exited early: {stderr}")
+        time.sleep(0.02)
+    assert os.path.exists(sock_path)
+    assert os.path.exists(pid_path)
+    return proc
+
+
 # ---------- Phase 1: Protocol ----------
 
 class TestProtocol:
@@ -250,6 +287,7 @@ def _bare_server():
 
     server = DaemonServer.__new__(DaemonServer)
     server._version = agentcad.__version__
+    server._instance_id = "test-instance-id"
     return server
 
 
@@ -400,13 +438,16 @@ class TestLifecycle:
         assert os.path.exists(sock_path)
         assert os.path.exists(pid_path)
 
-        # PID file should contain an integer
-        pid = int(open(pid_path).read().strip())
-        assert pid == os.getpid()
+        # PID metadata ties the process to one random daemon startup.
+        metadata = json.loads(pathlib.Path(pid_path).read_text())
+        assert metadata["pid"] == os.getpid()
+        assert metadata["version"] == 1
+        assert metadata["instance_id"] == server._instance_id
 
         # Ping to verify it's alive
         resp = send_request({"type": "ping"}, socket_path=sock_path)
         assert resp["type"] == "pong"
+        assert resp["instance_id"] == metadata["instance_id"]
 
         # Shut it down
         resp = send_request({"type": "shutdown"}, socket_path=sock_path)
@@ -1040,50 +1081,276 @@ class TestPingShutdownContract:
         response = server.handle_request(_req(type="ping"))
         assert response["type"] == "pong"
         assert response["version"] == "9.9.9-test"
+        assert response["instance_id"] == "test-instance-id"
+
+    def test_shutdown_rejects_wrong_instance(self):
+        server = _bare_server()
+        server._running = True
+
+        response = server.handle_request(
+            _req(type="shutdown", instance_id="different-instance")
+        )
+
+        assert response["error_kind"] == "daemon_identity_mismatch"
+        assert server._running is True
 
 
 class TestForceStopDaemon:
-    """`stop_daemon` always wins. If graceful shutdown fails or is ignored,
-    escalate to SIGTERM and SIGKILL, then unlink socket+PID files."""
+    """Force-stop requires both startup identity and kernel peer identity."""
 
     def test_stop_daemon_escalates_to_sigterm_when_unresponsive(
         self, daemon_paths, monkeypatch
     ):
-        """Daemon ignores shutdown ack → SIGTERM is sent → cleanup."""
-        from agentcad.daemon import stop_daemon
+        """An identifiable daemon that ignores shutdown is sent SIGTERM."""
+        import agentcad.daemon as daemon_mod
 
         sock_path, pid_path = daemon_paths
-        # Pretend a daemon is "running" by writing a PID for a real, controllable
-        # subprocess that doesn't actually serve the protocol.
-        proc = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
+        proc = _start_unresponsive_daemon(sock_path, pid_path)
+        monkeypatch.setattr(
+            daemon_mod, "_SHUTDOWN_RESPONSE_TIMEOUT_S", 0.05
         )
         try:
-            with open(pid_path, "w") as f:
-                f.write(str(proc.pid))
-            # Create a dummy socket file so daemon_status sees "running" without
-            # binding (graceful shutdown will fail to connect → escalate).
-            with open(sock_path, "w") as f:
-                f.write("")
-
-            result = stop_daemon(socket_path=sock_path, pid_path=pid_path)
+            result = daemon_mod.stop_daemon(
+                socket_path=sock_path, pid_path=pid_path
+            )
 
             assert result["stopped"] is True
-            # Method should indicate force-kill (graceful path failed)
-            assert result.get("method") in ("force", "sigterm", "sigkill")
-            # Process should be dead
-            for _ in range(20):
-                if proc.poll() is not None:
-                    break
-                time.sleep(0.1)
-            assert proc.poll() is not None, "subprocess should be killed"
-            # Cleanup happened
+            assert result["method"] == "sigterm"
+            proc.wait(timeout=2)
             assert not os.path.exists(sock_path)
             assert not os.path.exists(pid_path)
         finally:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+
+    def test_stop_daemon_escalates_verified_daemon_to_sigkill(
+        self, daemon_paths, monkeypatch
+    ):
+        """A verified daemon that ignores SIGTERM is escalated to SIGKILL."""
+        import agentcad.daemon as daemon_mod
+
+        sock_path, pid_path = daemon_paths
+        proc = _start_unresponsive_daemon(
+            sock_path, pid_path, ignore_sigterm=True
+        )
+        monkeypatch.setattr(
+            daemon_mod, "_SHUTDOWN_RESPONSE_TIMEOUT_S", 0.05
+        )
+        real_force_kill = daemon_mod._force_kill
+
+        def fast_force_kill(pid, pid_path, socket_path):
+            return real_force_kill(
+                pid,
+                pid_path,
+                socket_path,
+                sigterm_grace_s=0.05,
+            )
+
+        monkeypatch.setattr(daemon_mod, "_force_kill", fast_force_kill)
+        try:
+            result = daemon_mod.stop_daemon(
+                socket_path=sock_path, pid_path=pid_path
+            )
+
+            assert result == {"stopped": True, "method": "sigkill"}
+            proc.wait(timeout=2)
+            assert not os.path.exists(sock_path)
+            assert not os.path.exists(pid_path)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    def test_stale_pid_never_signals_unrelated_process(self, daemon_paths):
+        """A recycled PID in stale state leaves the unrelated process alive."""
+        from agentcad.daemon import _write_pid_metadata, stop_daemon
+
+        sock_path, pid_path = daemon_paths
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"]
+        )
+        try:
+            _write_pid_metadata(
+                pid_path,
+                pid=proc.pid,
+                instance_id="stale-daemon-instance",
+            )
+            pathlib.Path(sock_path).write_text("")
+
+            result = stop_daemon(socket_path=sock_path, pid_path=pid_path)
+
+            assert result["stopped"] is False
+            assert result["identity_verified"] is False
+            assert proc.poll() is None
+            assert not os.path.exists(sock_path)
+            assert not os.path.exists(pid_path)
+        finally:
+            proc.terminate()
+            proc.wait(timeout=2)
+
+    def test_legacy_pid_file_cannot_authorize_force_kill(
+        self, daemon_paths, monkeypatch
+    ):
+        import agentcad.daemon as daemon_mod
+
+        sock_path, pid_path = daemon_paths
+        proc = _start_unresponsive_daemon(sock_path, pid_path)
+        pathlib.Path(pid_path).write_text(str(proc.pid))
+        monkeypatch.setattr(
+            daemon_mod, "_SHUTDOWN_RESPONSE_TIMEOUT_S", 0.05
+        )
+        try:
+            result = daemon_mod.stop_daemon(
+                socket_path=sock_path,
+                pid_path=pid_path,
+            )
+
+            assert result["stopped"] is False
+            assert result["identity_verified"] is False
+            assert result["state_preserved"] is True
+            assert proc.poll() is None
+            assert os.path.exists(sock_path)
+            assert os.path.exists(pid_path)
+        finally:
+            proc.kill()
+            proc.wait(timeout=2)
+
+    def test_mismatched_socket_peer_never_receives_shutdown_or_signal(
+        self, daemon_paths
+    ):
+        """PID metadata cannot authorize actions against a different peer."""
+        from agentcad.daemon import _write_pid_metadata, stop_daemon
+
+        sock_path, pid_path = daemon_paths
+        unrelated = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"]
+        )
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(sock_path)
+        listener.listen(1)
+        received = []
+
+        def accept_once():
+            conn, _ = listener.accept()
+            try:
+                conn.settimeout(0.5)
+                received.append(conn.recv(4096))
+            finally:
+                conn.close()
+
+        thread = threading.Thread(target=accept_once)
+        thread.start()
+        _write_pid_metadata(
+            pid_path,
+            pid=unrelated.pid,
+            instance_id="stale-instance",
+        )
+        try:
+            result = stop_daemon(
+                socket_path=sock_path,
+                pid_path=pid_path,
+            )
+            thread.join(timeout=2)
+
+            assert result["stopped"] is False
+            assert result["identity_verified"] is False
+            assert result["pid"] == unrelated.pid
+            assert result["peer_pid"] == os.getpid()
+            assert unrelated.poll() is None
+            assert received == [b""]
+            assert os.path.exists(sock_path)
+            assert os.path.exists(pid_path)
+        finally:
+            listener.close()
+            unrelated.terminate()
+            unrelated.wait(timeout=2)
+
+    def test_mismatched_startup_token_preserves_real_daemon(
+        self, daemon_paths, monkeypatch
+    ):
+        from agentcad.daemon import DaemonServer, send_request, stop_daemon
+
+        sock_path, pid_path = daemon_paths
+        server = DaemonServer(socket_path=sock_path, pid_path=pid_path)
+        thread = threading.Thread(target=server.serve)
+        thread.start()
+        for _ in range(100):
+            if os.path.exists(sock_path) and os.path.exists(pid_path):
+                break
+            time.sleep(0.01)
+
+        metadata = json.loads(pathlib.Path(pid_path).read_text())
+        metadata["instance_id"] = "stale-instance"
+        pathlib.Path(pid_path).write_text(json.dumps(metadata))
+        monkeypatch.setattr(
+            "agentcad.daemon._force_kill",
+            lambda *args, **kwargs: pytest.fail("must not force-kill"),
+        )
+        try:
+            result = stop_daemon(
+                socket_path=sock_path,
+                pid_path=pid_path,
+            )
+
+            assert result["stopped"] is False
+            assert result["identity_verified"] is False
+            assert result["state_preserved"] is True
+            assert thread.is_alive()
+            assert os.path.exists(sock_path)
+            assert os.path.exists(pid_path)
+        finally:
+            send_request({"type": "shutdown"}, socket_path=sock_path)
+            thread.join(timeout=2)
+
+    def test_restart_does_not_replace_state_preserved_after_refusal(
+        self, monkeypatch
+    ):
+        import agentcad.daemon as daemon_mod
+
+        monkeypatch.setattr(
+            daemon_mod,
+            "stop_daemon",
+            lambda **kwargs: {
+                "stopped": False,
+                "state_preserved": True,
+                "message": "identity conflict",
+            },
+        )
+        monkeypatch.setattr(
+            daemon_mod,
+            "start_daemon",
+            lambda **kwargs: pytest.fail("must not start replacement"),
+        )
+
+        result = daemon_mod.restart_daemon(
+            socket_path="/tmp/conflict.sock",
+            pid_path="/tmp/conflict.pid",
+        )
+
+        assert result["started"] is False
+        assert result["state_preserved"] is True
+
+    @pytest.mark.parametrize(
+        "metadata",
+        ["not-json", '{"pid": 123, "instance_id": 7}'],
+        ids=["corrupt", "invalid-instance"],
+    )
+    def test_invalid_identity_metadata_never_signals_or_unlinks_socket(
+        self, daemon_paths, metadata
+    ):
+        from agentcad.daemon import stop_daemon
+
+        sock_path, pid_path = daemon_paths
+        pathlib.Path(pid_path).write_text(metadata)
+        pathlib.Path(sock_path).write_text("preserve")
+
+        result = stop_daemon(socket_path=sock_path, pid_path=pid_path)
+
+        assert result["stopped"] is False
+        assert result["identity_verified"] is False
+        assert os.path.exists(sock_path)
+        assert not os.path.exists(pid_path)
 
     def test_stop_daemon_returns_actionable_message_when_not_running(
         self, daemon_paths
