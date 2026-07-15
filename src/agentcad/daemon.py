@@ -24,6 +24,7 @@ Why no version-mismatch handshake:
 import hashlib
 import json
 import os
+import secrets
 import signal
 import socket
 import struct
@@ -100,6 +101,8 @@ _MAX_REQUEST_PAYLOAD_BYTES = 1024 * 1024
 _MAX_RESPONSE_PAYLOAD_BYTES = 64 * 1024 * 1024
 _REQUEST_READ_TIMEOUT_S = 1.0
 _STATUS_PING_TIMEOUT_S = 2.0
+_SHUTDOWN_RESPONSE_TIMEOUT_S = 2.0
+_PID_METADATA_VERSION = 1
 
 
 class DaemonProtocolError(Exception):
@@ -134,6 +137,7 @@ class DaemonServer:
         self._socket_path = socket_path or _default_socket_path()
         self._pid_path = pid_path or _default_pid_path()
         self._running = False
+        self._instance_id = secrets.token_hex(16)
         # Snapshot agentcad's version at startup so ``ping``/``status`` can
         # report it for diagnostics. Nothing is gated on it.
         self._version = agentcad.__version__
@@ -148,8 +152,24 @@ class DaemonServer:
         """
         req_type = request.get("type")
         if req_type == "ping":
-            return {"type": "pong", "version": self._version}
+            return {
+                "type": "pong",
+                "version": self._version,
+                "instance_id": self._instance_id,
+            }
         if req_type == "shutdown":
+            expected_instance = request.get("instance_id")
+            if (
+                expected_instance is not None
+                and not secrets.compare_digest(
+                    str(expected_instance), self._instance_id
+                )
+            ):
+                return {
+                    "type": "error",
+                    "error_kind": "daemon_identity_mismatch",
+                    "message": "Shutdown identity does not match this daemon",
+                }
             self._running = False
             return {"type": "ack"}
         if req_type == "run":
@@ -246,8 +266,11 @@ class DaemonServer:
         # hasn't been written yet, and a follow-up ``daemon status`` reads
         # an empty PID and reports running=false even though the process is
         # healthy.
-        with open(self._pid_path, "w") as f:
-            f.write(str(os.getpid()))
+        _write_pid_metadata(
+            self._pid_path,
+            pid=os.getpid(),
+            instance_id=self._instance_id,
+        )
 
         server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server_sock.bind(self._socket_path)
@@ -479,6 +502,108 @@ def _post_submission_failure(msg, *, timed_out):
     }
 
 
+def _peer_process_id(sock):
+    """Return the kernel-authenticated PID owning a connected Unix socket.
+
+    Linux exposes ``SO_PEERCRED``. macOS exposes ``LOCAL_PEERPID`` but the
+    Python socket module does not currently publish that constant, so use the
+    values from ``sys/un.h`` (``SOL_LOCAL=0``, ``LOCAL_PEERPID=2``). Unknown
+    POSIX variants fail closed: lifecycle code will not signal an unverified
+    PID there.
+    """
+    try:
+        if sys.platform.startswith("linux") and hasattr(socket, "SO_PEERCRED"):
+            credentials_size = struct.calcsize("3i")
+            credentials = sock.getsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_PEERCRED,
+                credentials_size,
+            )
+            peer_pid, _, _ = struct.unpack("3i", credentials)
+            return peer_pid
+
+        if sys.platform == "darwin":
+            pid_size = struct.calcsize("i")
+            peer_pid = sock.getsockopt(0, 2, pid_size)
+            return struct.unpack("i", peer_pid)[0]
+    except (OSError, struct.error):
+        pass
+    return None
+
+
+def _send_request_with_peer(
+    msg,
+    socket_path=None,
+    *,
+    connect_timeout_s=None,
+    response_timeout_s=None,
+    expected_peer_pid=None,
+):
+    """Send one request and return ``(response, peer_pid, connected)``.
+
+    When ``expected_peer_pid`` is set, the request is not submitted unless
+    kernel socket credentials identify that PID as the listening peer. This
+    is the lifecycle safety boundary: a stale PID file must never authorize a
+    shutdown request or signal against an unrelated process.
+    """
+    if socket_path is None:
+        socket_path = _default_socket_path()
+    if connect_timeout_s is None:
+        connect_timeout_s = _DEFAULT_CONNECT_TIMEOUT_S
+    if response_timeout_s is None:
+        response_timeout_s = _DEFAULT_RESPONSE_TIMEOUT_S
+
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(connect_timeout_s)
+        sock.connect(socket_path)
+    except (FileNotFoundError, ConnectionRefusedError, OSError):
+        if sock is not None:
+            _safe_close(sock)
+        return None, None, False
+
+    peer_pid = _peer_process_id(sock)
+    if expected_peer_pid is not None and peer_pid != expected_peer_pid:
+        _safe_close(sock)
+        return None, peer_pid, True
+
+    submission_started = False
+    try:
+        payload = encode_message(msg)
+        sock.settimeout(response_timeout_s)
+        # From this point onward, any send/read failure has an uncertain
+        # outcome. ``sendall`` can raise after writing only part of a frame,
+        # so conservatively suppress direct fallback as soon as it begins.
+        submission_started = True
+        sock.sendall(payload)
+        response = _read_one_message(
+            sock,
+            timeout_s=response_timeout_s,
+            max_payload_bytes=_MAX_RESPONSE_PAYLOAD_BYTES,
+        )
+        if response is None:
+            return (
+                _post_submission_failure(msg, timed_out=False),
+                peer_pid,
+                True,
+            )
+        return response, peer_pid, True
+    except (ConnectionError, OSError, DaemonProtocolError) as exc:
+        if submission_started:
+            return (
+                _post_submission_failure(
+                    msg,
+                    timed_out=isinstance(exc, TimeoutError),
+                ),
+                peer_pid,
+                True,
+            )
+        return None, peer_pid, True
+    finally:
+        _safe_close(sock)
+
+
 def send_request(
     msg,
     socket_path=None,
@@ -497,49 +622,13 @@ def send_request(
     Connect and response deadlines are separate and injectable so regression
     tests can exercise slow responses without waiting 30 seconds.
     """
-    if socket_path is None:
-        socket_path = _default_socket_path()
-    if connect_timeout_s is None:
-        connect_timeout_s = _DEFAULT_CONNECT_TIMEOUT_S
-    if response_timeout_s is None:
-        response_timeout_s = _DEFAULT_RESPONSE_TIMEOUT_S
-
-    sock = None
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(connect_timeout_s)
-        sock.connect(socket_path)
-    except (FileNotFoundError, ConnectionRefusedError, OSError):
-        if sock is not None:
-            _safe_close(sock)
-        return None
-
-    submission_started = False
-    try:
-        payload = encode_message(msg)
-        sock.settimeout(response_timeout_s)
-        # From this point onward, any send/read failure has an uncertain
-        # outcome. ``sendall`` can raise after writing only part of a frame,
-        # so conservatively suppress direct fallback as soon as it begins.
-        submission_started = True
-        sock.sendall(payload)
-        response = _read_one_message(
-            sock,
-            timeout_s=response_timeout_s,
-            max_payload_bytes=_MAX_RESPONSE_PAYLOAD_BYTES,
-        )
-        if response is None:
-            return _post_submission_failure(msg, timed_out=False)
-        return response
-    except (ConnectionError, OSError, DaemonProtocolError) as exc:
-        if submission_started:
-            return _post_submission_failure(
-                msg,
-                timed_out=isinstance(exc, TimeoutError),
-            )
-        return None
-    finally:
-        _safe_close(sock)
+    response, _, _ = _send_request_with_peer(
+        msg,
+        socket_path=socket_path,
+        connect_timeout_s=connect_timeout_s,
+        response_timeout_s=response_timeout_s,
+    )
+    return response
 
 
 # ---------- Lifecycle ----------
@@ -568,14 +657,58 @@ def _pid_alive(pid):
         return False
 
 
-def _read_pid(pid_path):
-    """Return the integer PID stored at ``pid_path``, or None if missing/garbage."""
-    if not os.path.exists(pid_path):
-        return None
+def _write_pid_metadata(pid_path, *, pid, instance_id):
+    """Publish the daemon PID together with its random startup identity."""
+    metadata = {
+        "version": _PID_METADATA_VERSION,
+        "pid": pid,
+        "instance_id": instance_id,
+    }
+    with open(pid_path, "w") as f:
+        json.dump(metadata, f, separators=(",", ":"))
+
+
+def _read_pid_metadata(pid_path):
+    """Return validated PID metadata, including legacy integer PID files."""
     try:
-        return int(open(pid_path).read().strip())
-    except (ValueError, OSError):
+        with open(pid_path) as f:
+            raw = f.read().strip()
+    except OSError:
         return None
+
+    try:
+        decoded = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+
+    if isinstance(decoded, int) and not isinstance(decoded, bool):
+        pid = decoded
+        instance_id = None
+        legacy = True
+    elif isinstance(decoded, dict):
+        pid = decoded.get("pid")
+        instance_id = decoded.get("instance_id")
+        legacy = False
+    else:
+        return None
+
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    if instance_id is not None and (
+        not isinstance(instance_id, str) or not instance_id
+    ):
+        return None
+    return {
+        "pid": pid,
+        "instance_id": instance_id,
+        "legacy": legacy,
+    }
+
+
+def _read_pid(pid_path):
+    """Return the integer PID stored at ``pid_path``, or None if invalid."""
+    metadata = _read_pid_metadata(pid_path)
+    return metadata["pid"] if metadata is not None else None
 
 
 def _unlink_quiet(path):
@@ -614,9 +747,10 @@ def daemon_status(socket_path=None, pid_path=None):
     if pid_path is None:
         pid_path = _default_pid_path()
 
-    pid = _read_pid(pid_path)
-    if pid is None:
+    pid_metadata = _read_pid_metadata(pid_path)
+    if pid_metadata is None:
         return {"running": False}
+    pid = pid_metadata["pid"]
 
     if not _pid_alive(pid):
         # Stale PID — process died. Clean up files.
@@ -634,11 +768,25 @@ def daemon_status(socket_path=None, pid_path=None):
     # the paths are stale. If the listener accepted our request but did not
     # answer, preserve its ownership state: blindly unlinking a live endpoint
     # can orphan the daemon and let a second parent bind the same pathname.
-    resp = send_request(
+    resp, peer_pid, connected = _send_request_with_peer(
         {"type": "ping"},
         socket_path=socket_path,
         response_timeout_s=_STATUS_PING_TIMEOUT_S,
+        expected_peer_pid=pid,
     )
+    if connected and peer_pid != pid:
+        return {
+            "running": True,
+            "responsive": False,
+            "identity_verified": False,
+            "pid": pid,
+            "peer_pid": peer_pid,
+            "message": (
+                "Daemon PID metadata does not match the process listening on "
+                "its socket. State was preserved and no lifecycle request "
+                "was sent; inspect the processes before retrying."
+            ),
+        }
     if resp and resp.get("type") == "transport_error":
         return {
             "running": True,
@@ -655,6 +803,21 @@ def daemon_status(socket_path=None, pid_path=None):
         _unlink_quiet(pid_path)
         _unlink_quiet(socket_path)
         return {"running": False}
+
+    instance_id = pid_metadata.get("instance_id")
+    if instance_id is not None and resp.get("instance_id") != instance_id:
+        return {
+            "running": True,
+            "responsive": True,
+            "identity_verified": False,
+            "pid": pid,
+            "peer_pid": peer_pid,
+            "message": (
+                "Daemon PID metadata and ping response identify different "
+                "instances. State was preserved; restart only after "
+                "inspecting the conflicting processes."
+            ),
+        }
 
     result = {"running": True, "pid": pid}
     version = resp.get("version")
@@ -713,23 +876,40 @@ def _force_kill(pid, pid_path, socket_path, sigterm_grace_s=2.0):
 
 
 def stop_daemon(socket_path=None, pid_path=None):
-    """Send shutdown to the daemon. Always wins or reports why it couldn't.
+    """Stop a daemon without ever signaling an identity inferred from PID alone.
 
     Strategy:
-      1. If no daemon is running, return a clear "not running" message.
-      2. Try graceful shutdown over the socket. If we get an ack and the
+      1. Read the PID plus random instance identity published by the daemon.
+      2. Connect only to a socket whose kernel-authenticated peer PID matches.
+      3. Try graceful shutdown. If we get an identity-matched ack and the
          process exits cleanly, report ``method="graceful"``.
-      3. Otherwise escalate to SIGTERM, then SIGKILL. Report
-         ``method="sigterm"`` or ``method="sigkill"``.
+      4. Escalate to SIGTERM/SIGKILL only when both peer PID and instance
+         metadata were available. Otherwise preserve live state and refuse.
     """
     if socket_path is None:
         socket_path = _default_socket_path()
     if pid_path is None:
         pid_path = _default_pid_path()
 
-    pid = _read_pid(pid_path)
-    if pid is None or not _pid_alive(pid):
-        # Nothing to stop. Clean up any leftover files for completeness.
+    pid_metadata = _read_pid_metadata(pid_path)
+    if pid_metadata is None:
+        _unlink_quiet(pid_path)
+        if not os.path.exists(socket_path):
+            return {"stopped": False, "message": "Daemon not running"}
+        return {
+            "stopped": False,
+            "identity_verified": False,
+            "state_preserved": True,
+            "message": (
+                "Refused to stop daemon: PID identity metadata is missing or "
+                "corrupt. The socket was preserved and no process was "
+                "signaled."
+            ),
+        }
+
+    pid = pid_metadata["pid"]
+    if not _pid_alive(pid):
+        # The recorded process is gone, so both paths are stale.
         _unlink_quiet(socket_path)
         _unlink_quiet(pid_path)
         return {"stopped": False, "message": "Daemon not running"}
@@ -739,8 +919,45 @@ def stop_daemon(socket_path=None, pid_path=None):
     # the PID file second, so a check that only watches the socket can
     # return prematurely while the PID file is still on disk — that races
     # with a follow-up ``start_daemon`` call.
+    peer_pid = None
+    connected = False
     if os.path.exists(socket_path):
-        resp = send_request({"type": "shutdown"}, socket_path=socket_path)
+        request = {"type": "shutdown"}
+        instance_id = pid_metadata.get("instance_id")
+        if instance_id is not None:
+            request["instance_id"] = instance_id
+        resp, peer_pid, connected = _send_request_with_peer(
+            request,
+            socket_path=socket_path,
+            response_timeout_s=_SHUTDOWN_RESPONSE_TIMEOUT_S,
+            expected_peer_pid=pid,
+        )
+        if connected and peer_pid != pid:
+            return {
+                "stopped": False,
+                "identity_verified": False,
+                "state_preserved": True,
+                "pid": pid,
+                "peer_pid": peer_pid,
+                "message": (
+                    "Refused to stop daemon: the PID file does not identify "
+                    "the process listening on the daemon socket. State was "
+                    "preserved and no process was signaled."
+                ),
+            }
+        if resp and resp.get("error_kind") == "daemon_identity_mismatch":
+            return {
+                "stopped": False,
+                "identity_verified": False,
+                "state_preserved": True,
+                "pid": pid,
+                "peer_pid": peer_pid,
+                "message": (
+                    "Refused to stop daemon: its startup identity does not "
+                    "match the PID metadata. State was preserved and no "
+                    "process was signaled."
+                ),
+            }
         if resp is not None and resp.get("type") == "ack":
             for _ in range(50):
                 if not os.path.exists(socket_path) and not os.path.exists(pid_path):
@@ -748,10 +965,39 @@ def stop_daemon(socket_path=None, pid_path=None):
                 time.sleep(0.1)
             # Ack but files lingered — fall through to force.
 
+    if not connected:
+        # There is no listening endpoint that can authenticate the PID. The
+        # paths are stale, but the live process may be completely unrelated.
+        _unlink_quiet(socket_path)
+        _unlink_quiet(pid_path)
+        return {
+            "stopped": False,
+            "identity_verified": False,
+            "message": (
+                f"Removed stale daemon state for unverified pid {pid}; no "
+                "process was signaled."
+            ),
+        }
+
+    if pid_metadata.get("instance_id") is None:
+        return {
+            "stopped": False,
+            "identity_verified": False,
+            "state_preserved": True,
+            "pid": pid,
+            "peer_pid": peer_pid,
+            "message": (
+                "Refused to force-stop daemon because its PID file has no "
+                "startup identity. State was preserved and no process was "
+                "signaled."
+            ),
+        }
+
     method = _force_kill(pid, pid_path, socket_path)
     if _pid_alive(pid):
         return {
             "stopped": False,
+            "state_preserved": True,
             "message": (
                 f"Daemon process (pid {pid}) did not exit after SIGKILL. "
                 f"Investigate manually with `ps -p {pid}`."
@@ -868,6 +1114,11 @@ def restart_daemon(socket_path=None, pid_path=None):
     if pid_path is None:
         pid_path = _default_pid_path()
     stop_result = stop_daemon(socket_path=socket_path, pid_path=pid_path)
+    if stop_result.get("state_preserved"):
+        return {
+            **stop_result,
+            "started": False,
+        }
     start_result = start_daemon(socket_path=socket_path, pid_path=pid_path)
     return {
         "stopped": stop_result.get("stopped", False),
