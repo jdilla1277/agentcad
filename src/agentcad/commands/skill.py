@@ -52,16 +52,19 @@ agentcad --help   # Read this — it is your complete operational briefing
      version. **Read this** when iterating to see what your change did.
    - `diff.overlay` — tinted (green prev, red this) overlay for subtle shifts.
      Read only if side-by-side didn't resolve the question.
-   - `viewer.html` — interactive 3D viewer for the user (humans only; you can't
-     render HTML). Mention it to the user so they open it.
+   - `viewer.html` — interactive 3D review viewer for the user (humans only;
+     you can't render HTML). It opens automatically after a successful run.
+     From v2, A=previous and B=current are already loaded with synchronized
+     A/B, side-by-side, overlay, diff-image, and Parts-tab change review.
 
    Pass `--no-preview` only for tight parametric sweeps where latency matters.
+   Pass `--no-view` only when browser launch would disrupt an unattended or
+   high-volume run.
 
-4. **Show the user.** After a successful build, open the interactive viewer:
-   ```bash
-   agentcad view v1_label/viewer.html   # or output.step / output.glb
-   ```
-   Users expect to see the result in a browser. Do this every run, unprompted.
+4. **Review with the user.** The generated viewer opens automatically. On v2+
+   start with its previous/current comparison, then use A/B, Overlay, and Parts
+   without selecting files manually. Use `agentcad view old.step new.step` only
+   for an explicit non-adjacent comparison.
 
 5. **Inspect if invalid.** If `is_valid: false` or geometry looks wrong:
    ```bash
@@ -130,6 +133,7 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad run SCRIPT --output LABEL` | Execute script, produce STEP + metrics |
 | `agentcad run ... --dry-run` | Metrics only, no version consumed |
 | `agentcad run ... --no-preview` | Suppress preview (on by default) |
+| `agentcad run ... --no-view` | Suppress automatic browser review |
 | `agentcad run ... --render iso,front` | PNG views |
 | `agentcad run ... --export stl,glb` | Mesh export |
 | `agentcad run ... --params k=v,k=v` | Override script parameters |
@@ -143,7 +147,7 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
 | `agentcad docs [SECTION]` | Deep-dive docs (17 sections) |
-| `agentcad view FILE` | **Run this after every successful build** — opens GLB/STEP in the user's browser |
+| `agentcad view FILE [FILE_B]` | Open one model or an explicit synchronized A/B comparison |
 
 ## Debugging playbook
 
