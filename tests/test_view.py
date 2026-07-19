@@ -255,8 +255,10 @@ def test_render_unified_embeds_review_payload(isolated_dir):
     out = isolated_dir / "v.html"
     review = {
         "measure": {
-            "validity": {"is_valid": True},
-            "metrics": {"dimensions": {"x": 50.0, "y": 20.0, "z": 5.0}},
+            "metrics": {
+                "dimensions": {"x": 50.0, "y": 20.0, "z": 5.0},
+                "is_valid": True,
+            },
             "cylindrical_features": [
                 {
                     "diameter_mm": 6.0,
