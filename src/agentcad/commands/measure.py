@@ -324,7 +324,6 @@ def measure_tier0_payload(
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
         "metrics": metrics,
-        "validity": {"is_valid": metrics["is_valid"]},
         "cylindrical_features": cylindrical_features,
         "next_actions": next_actions,
         "more_at": "agentcad docs measure",
@@ -348,7 +347,7 @@ def measure_tier0_payload(
         # Keep the next step coherent with the risk guidance.
         if risk["edit_risk"] == "high":
             payload["next_actions"] = [
-                "read metrics + validity — this input is high edit-risk",
+                "read metrics.is_valid and edit_risk — this input is high edit-risk",
                 "follow recommended_workflow before attempting any edit; do "
                 "not start with load_step() + boolean/fillet",
             ]
@@ -404,6 +403,16 @@ def measure_tier0_payload(
         }
 
     return payload
+
+
+def validity_from_metrics(metrics: dict) -> dict:
+    """Build the compact validity summary used by higher-level review commands.
+
+    ``agentcad measure`` keeps shape validity in ``metrics.is_valid`` so there
+    is one authoritative field in the measurement payload. Commands that have
+    their own top-level validity section can derive it from the same metrics.
+    """
+    return {"is_valid": metrics["is_valid"]}
 
 
 def _feature_lists(topo_shape, limit: int | None) -> tuple[dict, list[dict]]:

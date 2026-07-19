@@ -109,6 +109,8 @@ def test_docs_check_spec_section(runner):
     assert "missing_features" in content
     assert "Read passed" in content
     assert "cylindrical_features[].axis" in content
+    assert "validity" in content
+    assert "metrics" in content
 
 
 def test_docs_export_section(runner):
@@ -440,7 +442,8 @@ def test_docs_measure_section(runner):
     assert "cylindrical_features" in content
     assert "not a manufacturing tolerance" in content
     assert "--features" in content
-    assert "validity" in content
+    assert "metrics.is_valid" in content
+    assert "validity         {is_valid}" not in content
     assert "query" in content
     assert "features" in content
     assert "direction?" in content

@@ -1079,7 +1079,8 @@ function setupReviewPanel() {
   const measure = REVIEW.measure || {};
   const spec = REVIEW.check_spec || null;
   const dims = (spec && spec.metrics && spec.metrics.dimensions) || (measure.metrics && measure.metrics.dimensions) || {};
-  const valid = (spec && spec.validity) || measure.validity || {};
+  const valid = (spec && spec.validity) ||
+    (measure.metrics ? { is_valid: measure.metrics.is_valid } : {});
   const matched = spec ? (spec.matched_features || []) : [];
   const missing = spec ? (spec.missing_features || []) : [];
 
@@ -1886,7 +1887,7 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
         return None, _review_error(f"Unsupported review input '{file_path.suffix}'.")
 
     from agentcad import file_detect
-    from agentcad.commands.measure import measure_tier0_payload
+    from agentcad.commands.measure import measure_tier0_payload, validity_from_metrics
 
     detection = file_detect.detect_file_type(file_path)
     if detection["category"] != file_detect.TIER0_BREP:
@@ -1918,7 +1919,7 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
             "status": "success",
             "file": str(file_path),
             "spec_file": str(Path(spec_file).resolve()),
-            "validity": measurement["validity"],
+            "validity": validity_from_metrics(measurement["metrics"]),
             "metrics": measurement["metrics"],
             "next_actions": [
                 "revise the CAD so each missing or failed feature matches the spec",
