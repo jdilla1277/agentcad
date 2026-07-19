@@ -9,7 +9,7 @@ import click
 
 # Unified viewer template. Handles all display modes in a single HTML file:
 #   - single-a        → one model, orbit/zoom (current `agentcad view FILE` behavior)
-#   - single-b        → previous/comparison model alone
+#   - single-b        → second/comparison model alone
 #   - side-by-side    → two viewports, synchronized camera
 #   - overlay         → both models tinted (green A, red B), opacity sliders
 #   - agent-view      → shows agent-visible images and structured handoff state
@@ -27,6 +27,8 @@ import click
 #   __DIFF_SIDE_PNG_URL__    base64 data URI for diff_side.png, or ""
 #   __DIFF_OVERLAY_PNG_URL__ base64 data URI for diff_overlay.png, or ""
 #   __DEFAULT_MODE__         starting mode string
+#   __PARTS_MODEL__          model ("a" or "b") represented by PARTS
+#   __PART_CHANGES_JSON__    previous/current named-part change summary, or null
 #   __GROUPS_JSON__          part groups payload
 #   __REVIEW_JSON__          measure/check-spec review payload, or null
 #   __PART_REVIEW_JSON__     part visibility/focus state, or null
@@ -127,6 +129,14 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     border: 1px solid rgba(0,0,0,0.12); border-radius: 999px;
     color: #3f4856; background: #f8fafc; font-size: 11px;
   }
+  #parts-view .changes { margin-bottom: 18px; padding: 14px; border: 1px solid #d9dee7; border-radius: 7px; background: #f8fafc; }
+  #parts-view .changes h4 { margin-top: 0; }
+  #parts-view .change-summary { margin: 0 0 10px; color: #222; font-size: 13px; font-weight: 700; }
+  #parts-view .change-empty { margin: 0; color: #667085; font-size: 12px; }
+  #parts-view .change-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+  #parts-view .change-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; font-size: 12px; line-height: 1.4; }
+  #parts-view .change-kind { color: #667085; text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+  #parts-view .change-items { color: #222; }
   #part-controls {
     position: absolute; top: 60px; left: 12px; z-index: 20;
     width: 340px; max-height: calc(100vh - 126px); overflow: auto;
@@ -310,6 +320,12 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
 <div id="parts-view">
   <div class="panel">
     <h3 id="parts-heading">Parts</h3>
+    <div class="changes" id="parts-changes" style="display:none;">
+      <h4>What changed</h4>
+      <p class="change-summary" id="parts-change-summary"></p>
+      <ul class="change-list" id="parts-change-list"></ul>
+      <p class="change-empty" id="parts-change-empty" style="display:none;"></p>
+    </div>
     <div id="parts-groups-section" style="display:none;">
       <h4>Groups</h4>
       <div class="group-list" id="parts-groups"></div>
@@ -397,7 +413,9 @@ const PREVIEW_PNG_URL = "__PREVIEW_PNG_URL__";
 const DIFF_SIDE_PNG_URL = "__DIFF_SIDE_PNG_URL__";
 const DIFF_OVERLAY_PNG_URL = "__DIFF_OVERLAY_PNG_URL__";
 const DEFAULT_MODE = "__DEFAULT_MODE__";
+const PARTS_MODEL = "__PARTS_MODEL__";
 const PARTS = __PARTS_JSON__;
+const PART_CHANGES = __PART_CHANGES_JSON__;
 const GROUPS = __GROUPS_JSON__;
 const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
@@ -407,6 +425,8 @@ const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 
 const hasAgentState = Boolean(PART_REVIEW);
 const hasAgentView = hasAgentImgs || hasAgentState;
 const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
+const hasPartChanges = Boolean(PART_CHANGES);
+const hasPartsView = hasParts || hasPartChanges;
 const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
 const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 const partObjects = new Map();
@@ -442,7 +462,7 @@ function setupModeButtons() {
   if (!hasAgentView) {
     disable('btn-agent', 'Agent view is available when preview images, diff images, or handoff state are embedded.');
   }
-  if (!hasParts) { disable('btn-parts', 'No named parts were embedded in this viewer.'); }
+  if (!hasPartsView) { disable('btn-parts', 'No named parts or part changes were embedded in this viewer.'); }
   if (!hasReview) { disable('btn-spec', 'Run view with --measure or --spec to enable Spec check.'); }
 
   // Agent-view panels: show only those with data
@@ -454,8 +474,10 @@ function setupModeButtons() {
   if (DIFF_SIDE_PNG_URL) { document.getElementById('panel-diff-side').style.display = ''; document.getElementById('img-diff-side').src = DIFF_SIDE_PNG_URL; }
   if (DIFF_OVERLAY_PNG_URL) { document.getElementById('panel-diff-overlay').style.display = ''; document.getElementById('img-diff-overlay').src = DIFF_OVERLAY_PNG_URL; }
 
-  if (hasParts) {
+  if (hasPartsView) {
     setupStaticPartsPanel();
+  }
+  if (hasParts) {
     setupPartControls();
   }
   if (hasReview) {
@@ -585,9 +607,10 @@ function setupPartHandoff() {
 }
 
 function setupStaticPartsPanel() {
+  setupPartChangesPanel();
   document.getElementById('parts-heading').textContent = hasGroups
     ? `Parts ${PARTS.length} · Groups ${GROUPS.length}`
-    : `Parts (${PARTS.length})`;
+    : (hasParts ? `Parts (${PARTS.length})` : 'Parts');
   document.getElementById('parts-list-heading').style.display = hasGroups ? 'block' : 'none';
 
   const groupsSection = document.getElementById('parts-groups-section');
@@ -601,6 +624,49 @@ function setupStaticPartsPanel() {
   const list = document.getElementById('parts-list');
   list.innerHTML = '';
   for (const p of PARTS) list.appendChild(makeStaticPartRow(p));
+}
+
+function setupPartChangesPanel() {
+  const panel = document.getElementById('parts-changes');
+  if (!PART_CHANGES) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = 'block';
+  document.getElementById('parts-change-summary').textContent = PART_CHANGES.summary;
+  const list = document.getElementById('parts-change-list');
+  const empty = document.getElementById('parts-change-empty');
+  list.innerHTML = '';
+  const rows = [
+    ['Added', PART_CHANGES.added || []],
+    ['Removed', PART_CHANGES.removed || []],
+    ['Renamed', PART_CHANGES.renamed || []],
+    ['Changed', PART_CHANGES.changed || []],
+  ];
+  let rendered = 0;
+  for (const [kind, items] of rows) {
+    if (!items.length) continue;
+    const row = document.createElement('li');
+    row.className = 'change-row';
+    const key = document.createElement('span');
+    key.className = 'change-kind';
+    key.textContent = kind;
+    const value = document.createElement('span');
+    value.className = 'change-items';
+    value.textContent = items.map(item => {
+      if (kind === 'Renamed') return `${item.from || item.id} → ${item.to || item.id} (${item.id})`;
+      if (kind === 'Changed') return `${item.name || item.id} (${item.fields.join(', ')})`;
+      return item.name ? `${item.name} (${item.id})` : item.id;
+    }).join(', ');
+    row.appendChild(key);
+    row.appendChild(value);
+    list.appendChild(row);
+    rendered += 1;
+  }
+  list.style.display = rendered ? 'grid' : 'none';
+  empty.style.display = rendered ? 'none' : 'block';
+  empty.textContent = 'No named part changes detected.';
 }
 
 function makeStaticGroupRow(group) {
@@ -842,6 +908,10 @@ function viewerDebugState() {
   return {
     ready: viewerReady,
     mode: currentMode,
+    camera: viewerReady ? {
+      position: camera.position.toArray(),
+      target: controls.target.toArray(),
+    } : null,
     review: PART_REVIEW,
     parts: PARTS.map(p => {
       const meshes = partObjects.get(p.id) || [];
@@ -1407,8 +1477,12 @@ function fitCamera() {
 
 // Load all scenes in parallel, then fit camera
 Promise.all([
-  attach(sceneA_single, MODEL_A_URL, { onMesh: m => { registerPartMeshes(m); applyPartState(); } }),
-  hasB ? attach(sceneB_single, MODEL_B_URL, {}) : null,
+  attach(sceneA_single, MODEL_A_URL, {
+    onMesh: PARTS_MODEL === 'a' ? m => { registerPartMeshes(m); applyPartState(); } : null,
+  }),
+  hasB ? attach(sceneB_single, MODEL_B_URL, {
+    onMesh: PARTS_MODEL === 'b' ? m => { registerPartMeshes(m); applyPartState(); } : null,
+  }) : null,
   hasB ? attach(sceneA_split, MODEL_A_URL, {}) : null,
   hasB ? attach(sceneB_split, MODEL_B_URL, {}) : null,
   hasB ? attach(sceneOverlay, MODEL_A_URL, { material: tintA, onMesh: m => overlayModelA = m }) : null,
@@ -1430,7 +1504,7 @@ function setMode(mode) {
   // Validate
   if (!hasB && (mode === 'single-b' || mode === 'side-by-side' || mode === 'overlay')) return;
   if (!hasAgentView && mode === 'agent-view') return;
-  if (!hasParts && mode === 'parts') return;
+  if (!hasPartsView && mode === 'parts') return;
   if (!hasReview && mode === 'spec') return;
 
   currentMode = mode;
@@ -1496,12 +1570,13 @@ function setMode(mode) {
     currentScene = sceneA_single;
     labelL.textContent = LABEL_A;
     labelL.style.display = 'block';
-    if (hasParts) partControls.style.display = 'block';
+    if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
   } else if (mode === 'single-b') {
     clearReviewMarkers();
     currentScene = sceneB_single;
     labelL.textContent = LABEL_B;
     labelL.style.display = 'block';
+    if (hasParts && PARTS_MODEL === 'b') partControls.style.display = 'block';
   } else if (mode === 'side-by-side') {
     clearReviewMarkers();
     splitMode = true;
@@ -1514,7 +1589,7 @@ function setMode(mode) {
     overlayPanel.style.display = 'block';
   } else if (mode === 'spec') {
     currentScene = sceneA_single;
-    if (hasParts) partControls.style.display = 'block';
+    if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
     specPanel.style.display = 'grid';
     labelL.textContent = LABEL_A;
     labelL.style.display = 'block';
@@ -1532,6 +1607,14 @@ document.getElementById('visible-b').addEventListener('change', e => { if (overl
 const pauseBtn = document.getElementById('pause-btn');
 function setAutoRotate(enabled) {
   controls.autoRotate = enabled;
+  if (!enabled && controls.enableDamping) {
+    // Flush OrbitControls' residual spherical delta. Otherwise damping keeps
+    // moving the shared camera for a few frames after pause, which makes an
+    // immediate A/B toggle look like it changed orientation.
+    controls.enableDamping = false;
+    controls.update();
+    controls.enableDamping = true;
+  }
   pauseBtn.innerHTML = controls.autoRotate ? '&#9646;&#9646;' : '&#9654;';
 }
 function pauseAutoRotate() {
@@ -1703,7 +1786,7 @@ def _error(message):
 def _open_browser(url):
     """Single seam for opening the viewer in a browser. Tests stub this
     (or the autouse fixture stubs `webbrowser.open` directly)."""
-    webbrowser.open(url)
+    return webbrowser.open(url)
 
 
 def _resolve_to_glb(file_str):
@@ -1772,6 +1855,8 @@ def _render_unified(
     diff_side_png=None,
     diff_overlay_png=None,
     parts=None,
+    parts_model="a",
+    part_changes=None,
     groups=None,
     review=None,
     part_review=None,
@@ -1798,7 +1883,9 @@ def _render_unified(
         "__DIFF_SIDE_PNG_URL__": _embed_data_uri(diff_side_png),
         "__DIFF_OVERLAY_PNG_URL__": _embed_data_uri(diff_overlay_png),
         "__DEFAULT_MODE__": default_mode,
+        "__PARTS_MODEL__": parts_model,
         "__PARTS_JSON__": json.dumps(parts_payload),
+        "__PART_CHANGES_JSON__": json.dumps(part_changes) if part_changes else "null",
         "__GROUPS_JSON__": json.dumps(groups_payload),
         "__REVIEW_JSON__": json.dumps(review) if review else "null",
         "__PART_REVIEW_JSON__": json.dumps(part_review) if part_review else "null",

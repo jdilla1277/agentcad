@@ -97,6 +97,22 @@ def test_docs_workflow_section(runner):
     assert "init" in content
     assert "run" in content
     assert "check-spec" in content
+    assert "A=previous and B=current" in content
+    assert "opens automatically" in content
+
+
+def test_docs_and_skill_present_viewer_as_default_review_path(runner):
+    commands = json.loads(runner.invoke(cli, ["docs", "commands"]).stdout)["content"]
+    parts = json.loads(runner.invoke(cli, ["docs", "parts"]).stdout)["content"]
+    skill_result = runner.invoke(cli, ["skill", "show"])
+    skill_content = json.loads(skill_result.stdout)["content"]
+
+    assert "--no-view" in commands
+    assert "A=previous and B=current" in commands
+    assert "What changed" in parts
+    assert "added, removed, renamed" in parts
+    assert "opens automatically" in skill_content
+    assert "A=previous and B=current" in skill_content
 
 
 def test_docs_check_spec_section(runner):
