@@ -1254,7 +1254,70 @@ function viewerBoundingBox() {
   };
 }
 
-function markerSurfacePosition(center, diameter, axis) {
+function markerLift(diameter) {
+  const markerDiameter = Number(diameter);
+  return Number.isFinite(markerDiameter) ? Math.max(markerDiameter * 0.003, 0.02) : 0.02;
+}
+
+function markerOutwardForAxis(key) {
+  const bbox = viewerBoundingBox();
+  const range = bbox[key] || null;
+  if (!Array.isArray(range) || range.length !== 2) return null;
+  const min = Number(range[0]);
+  const max = Number(range[1]);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  const midpoint = (min + max) / 2;
+  return camera.position[key] >= midpoint ? 1 : -1;
+}
+
+function surfacePositionFromModel(center, diameter, axis) {
+  if (!reviewModelA) return null;
+  const key = viewerAxisKey(axis);
+  const bbox = viewerBoundingBox();
+  const range = bbox[key] || null;
+  if (!Array.isArray(range) || range.length !== 2) return null;
+  const min = Number(range[0]);
+  const max = Number(range[1]);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+
+  const outward = markerOutwardForAxis(key);
+  if (outward === null) return null;
+
+  const direction = new THREE.Vector3();
+  direction[key] = -outward;
+  const radialAxes = key === "x" ? ["y", "z"] : (key === "y" ? ["x", "z"] : ["x", "y"]);
+  const radius = Math.max(Number(diameter) / 2, 0.5);
+  const sampleRadius = radius * 1.05;
+  const base = cadPointToViewer(center);
+  const samples = [base.clone()];
+  for (let i = 0; i < 8; i++) {
+    const angle = (Math.PI * 2 * i) / 8;
+    const sample = base.clone();
+    sample[radialAxes[0]] += Math.cos(angle) * sampleRadius;
+    sample[radialAxes[1]] += Math.sin(angle) * sampleRadius;
+    samples.push(sample);
+  }
+
+  const hits = [];
+  const rayLength = Math.abs(max - min) + 2;
+  for (const sample of samples) {
+    const origin = sample.clone();
+    origin[key] = outward > 0 ? max + 1 : min - 1;
+    const raycaster = new THREE.Raycaster(origin, direction, 0, rayLength);
+    hits.push(...raycaster.intersectObject(reviewModelA, true));
+  }
+  if (!hits.length) return null;
+
+  hits.sort((a, b) => outward * (b.point[key] - a.point[key]));
+
+  const pos = hits[0].point.clone();
+  pos[radialAxes[0]] = base[radialAxes[0]];
+  pos[radialAxes[1]] = base[radialAxes[1]];
+  pos[key] += outward * markerLift(diameter);
+  return pos;
+}
+
+function fallbackMarkerSurfacePosition(center, diameter, axis) {
   const pos = cadPointToViewer(center);
   const key = viewerAxisKey(axis);
   const bbox = viewerBoundingBox();
@@ -1263,16 +1326,19 @@ function markerSurfacePosition(center, diameter, axis) {
     const min = Number(range[0]);
     const max = Number(range[1]);
     if (Number.isFinite(min) && Number.isFinite(max)) {
-      const midpoint = (min + max) / 2;
-      const cameraCoord = camera.position[key];
-      const outward = cameraCoord >= midpoint ? 1 : -1;
-      const face = outward > 0 ? max : min;
-      const markerDiameter = Number(diameter);
-      const offset = Number.isFinite(markerDiameter) ? Math.max(markerDiameter * 0.02, 0.06) : 0.06;
-      pos[key] = face + outward * offset;
+      const outward = markerOutwardForAxis(key);
+      if (outward !== null) {
+        const face = outward > 0 ? max : min;
+        pos[key] = face + outward * markerLift(diameter);
+      }
     }
   }
   return pos;
+}
+
+function markerSurfacePosition(center, diameter, axis) {
+  return surfacePositionFromModel(center, diameter, axis)
+    || fallbackMarkerSurfacePosition(center, diameter, axis);
 }
 
 function addRingMarker(center, diameter, axis, color, missing=false) {
@@ -1369,6 +1435,11 @@ function selectFirstReviewRow() {
   if (row) selectReviewRow(row, { focus: false });
 }
 
+function refreshActiveReviewMarkers() {
+  const row = document.querySelector("#spec-panel .review-row.active");
+  if (row) selectReviewRow(row, { focus: false });
+}
+
 // ---- Renderer + camera (shared across 3D modes) ----
 const canvas = document.getElementById('canvas');
 // preserveDrawingBuffer keeps the canvas readable for GIF export between
@@ -1426,6 +1497,7 @@ sceneA_single.add(reviewMarkerGroup);
 // Track loaded model meshes for overlay mode so UI can toggle visibility
 let overlayModelA = null;
 let overlayModelB = null;
+let reviewModelA = null;
 
 // Combined bounding box used to fit the camera globally
 const combinedBox = new THREE.Box3();
@@ -1478,7 +1550,13 @@ function fitCamera() {
 // Load all scenes in parallel, then fit camera
 Promise.all([
   attach(sceneA_single, MODEL_A_URL, {
-    onMesh: PARTS_MODEL === 'a' ? m => { registerPartMeshes(m); applyPartState(); } : null,
+    onMesh: m => {
+      reviewModelA = m;
+      if (PARTS_MODEL === 'a') {
+        registerPartMeshes(m);
+        applyPartState();
+      }
+    },
   }),
   hasB ? attach(sceneB_single, MODEL_B_URL, {
     onMesh: PARTS_MODEL === 'b' ? m => { registerPartMeshes(m); applyPartState(); } : null,
@@ -1490,6 +1568,7 @@ Promise.all([
 ].filter(Boolean)).then(() => {
   fitCamera();
   applyPartState();
+  refreshActiveReviewMarkers();
   if (partState.focus) focusPart(partState.focus);
   viewerReady = true;
   publishViewerDebugState();
