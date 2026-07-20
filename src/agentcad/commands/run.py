@@ -625,6 +625,19 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 "message": str(e),
             }))
             sys.exit(1)
+
+    # Validate --render spec before version allocation (errors should be cheap)
+    if render:
+        from agentcad.render import parse_view_spec as _parse_view_spec
+        try:
+            _parse_view_spec(render)
+        except ValueError as e:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": str(e),
+            }))
+            sys.exit(1)
     _finish_phase("validation", _t, "validation_ms")
 
     # Spawn the daemon NOW — after the runner module is imported (so OCP is

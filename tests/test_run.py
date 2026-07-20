@@ -458,6 +458,41 @@ def test_run_without_render_no_renders_key(runner, isolated_dir):
     assert "renders" not in meta
 
 
+def test_run_invalid_render_spec_returns_clean_error(runner, isolated_dir):
+    """agentcad run --render <invalid> must fail fast with a clean JSON
+    error, not execute the script or leave an orphaned version directory."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "label", "--render", "notaview"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "Invalid view spec" in parsed["message"]
+    assert "notaview" in parsed["message"]
+    assert "traceback" not in result.output.lower()
+    assert not (isolated_dir / "v1_label").exists()
+
+
+def test_run_invalid_render_spec_mixed_returns_clean_error(runner, isolated_dir):
+    """A bad token inside a mixed view spec (named + angle + bad) must also
+    fail fast with a clean JSON error before any disk writes."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "label", "--render", "front,45:30,notaview"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "notaview" in parsed["message"]
+    assert "traceback" not in result.output.lower()
+    assert not (isolated_dir / "v1_label").exists()
+
+
 # --- Export integration tests ---
 
 
