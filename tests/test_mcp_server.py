@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from agentcad.mcp.server import mcp, _invoke, _format_result
+from agentcad.mcp.server import mcp, _invoke, _format_result, check_spec
 
 
 # --- Tool registration ---
@@ -134,10 +134,7 @@ def test_check_spec_tool_missing_file_error(tmp_path):
         json.dumps({"features": [{"name": "hole", "type": "cylinder",
                                   "diameter_mm": 6, "count": 1}]})
     )
-    result = _invoke(
-        ["check-spec", str(tmp_path / "nonexistent.step"), str(spec)],
-        cwd=str(tmp_path),
-    )
+    result = check_spec(str(tmp_path / "nonexistent.step"), str(spec), str(tmp_path))
     assert result["_exit_code"] != 0
     assert result["command"] == "check-spec"
     assert "not found" in result.get("message", "").lower()
