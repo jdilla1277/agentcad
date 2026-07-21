@@ -72,7 +72,8 @@ class TestMeasureCommand:
         assert parsed["metrics"]["dimensions"]["x"] == 10.0
         assert parsed["metrics"]["dimensions"]["y"] == 20.0
         assert parsed["metrics"]["dimensions"]["z"] == 5.0
-        assert parsed["validity"]["is_valid"] is True
+        assert parsed["metrics"]["is_valid"] is True
+        assert "validity" not in parsed
         assert "cylindrical_features" in parsed
         assert parsed["feature_summary"]["face_count"] == 6
         assert parsed["feature_summary"]["edge_count"] == 12
@@ -161,7 +162,7 @@ class TestMeasureCommand:
             for f in parsed["cylindrical_features"]
         }
 
-        assert parsed["validity"]["is_valid"] is True
+        assert parsed["metrics"]["is_valid"] is True
         assert parsed["metrics"]["dimensions"] == {"x": 220.0, "y": 120.0, "z": 45.0}
         assert buckets[12.0]["count"] == 10
         assert buckets[12.0]["axis"] == "+z"
