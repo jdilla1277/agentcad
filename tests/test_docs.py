@@ -74,6 +74,18 @@ def test_docs_schema_section(runner):
     assert "outputs.glb appears only when --export glb" in content
 
 
+def test_docs_schema_documents_stdout_vs_stderr(runner):
+    """Agents learn the CLI contract from `docs schema`; it must spell out that
+    JSON goes to stdout and progress to stderr, and warn against merging the
+    streams with 2>&1 before a JSON parser (a real parse-corruption footgun)."""
+    result = runner.invoke(cli, ["docs", "schema"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "stdout" in content
+    assert "stderr" in content
+    assert "2>&1" in content
+
+
 def test_docs_schema_lists_current_inspect_measure_fields(runner):
     result = runner.invoke(cli, ["docs", "schema"])
     assert result.exit_code == 0
