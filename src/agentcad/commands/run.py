@@ -253,6 +253,94 @@ def _find_prev_success(versions):
     return None
 
 
+def _normalized_part_value(value):
+    """Normalize nested metric values so harmless float noise is ignored."""
+    if isinstance(value, float):
+        return round(value, 6)
+    if isinstance(value, dict):
+        return {key: _normalized_part_value(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_normalized_part_value(item) for item in value]
+    return value
+
+
+def _part_change_summary(previous_parts, current_parts, previous_label):
+    """Build the compact stable-ID part delta embedded in viewer.html."""
+    previous_by_id = {
+        str(part["id"]): part
+        for part in (previous_parts or [])
+        if part.get("id") is not None
+    }
+    current_by_id = {
+        str(part["id"]): part
+        for part in (current_parts or [])
+        if part.get("id") is not None
+    }
+
+    def snapshot(part):
+        return {
+            "id": str(part["id"]),
+            **({"name": part["name"]} if part.get("name") else {}),
+        }
+
+    added = [
+        snapshot(current_by_id[part_id])
+        for part_id in sorted(current_by_id.keys() - previous_by_id.keys())
+    ]
+    removed = [
+        snapshot(previous_by_id[part_id])
+        for part_id in sorted(previous_by_id.keys() - current_by_id.keys())
+    ]
+    renamed = []
+    changed = []
+    for part_id in sorted(previous_by_id.keys() & current_by_id.keys()):
+        before = previous_by_id[part_id]
+        after = current_by_id[part_id]
+        if before.get("name") != after.get("name"):
+            renamed.append({
+                "id": part_id,
+                "from": before.get("name") or part_id,
+                "to": after.get("name") or part_id,
+            })
+
+        fields = []
+        if _normalized_part_value(before.get("metrics")) != _normalized_part_value(
+            after.get("metrics")
+        ):
+            fields.append("geometry")
+        if before.get("part_of") != after.get("part_of"):
+            fields.append("group")
+        if before.get("color") != after.get("color"):
+            fields.append("color")
+        if fields:
+            changed.append({
+                "id": part_id,
+                "name": after.get("name") or part_id,
+                "fields": fields,
+            })
+
+    counts = [
+        (len(added), "added"),
+        (len(removed), "removed"),
+        (len(renamed), "renamed"),
+        (len(changed), "changed"),
+    ]
+    changed_count = sum(count for count, _label in counts)
+    summary = (
+        "No named part changes"
+        if changed_count == 0
+        else " · ".join(f"{count} {label}" for count, label in counts if count)
+    )
+    return {
+        "against": previous_label,
+        "summary": summary,
+        "added": added,
+        "removed": removed,
+        "renamed": renamed,
+        "changed": changed,
+    }
+
+
 def _record_failure(manifest, script_path, label, version_num, error_msg, runtime=None):
     """Record a script failure on disk and in the manifest."""
     dir_name = f"v{version_num}_{label}_failed"
@@ -363,12 +451,13 @@ def _assign_part_identity(raw_parts):
 @click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
 @click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb, obj).")
 @click.option("--preview/--no-preview", default=True, help="4-view composite PNG + per-part previews (default on, ~2-4s). The viewer.html, GLB, and diff PNGs always generate regardless — --no-preview only skips the composite render. Use it when you don't need the agent-readable PNG this iteration.")
+@click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
 @click.option("--runtime", default=None, type=click.Choice(["cadquery", "build123d"]), help="Force a runtime. Default: auto-detect from script imports, then project runtime, then build123d.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
-def run(ctx, script, output, render, export, preview, params, dry_run, runtime, no_daemon):
+def run(ctx, script, output, render, export, preview, open_view, params, dry_run, runtime, no_daemon):
     """Execute a CadQuery or build123d script and produce a versioned STEP file.
 
     If `script` is a CAD file (.step / .stp / .brep), dispatches to
@@ -400,7 +489,14 @@ def run(ctx, script, output, render, export, preview, params, dry_run, runtime, 
     from agentcad import file_detect as _fd
     if _fd.is_recognized_cad_extension(script):
         from agentcad.commands.import_cmd import import_cmd
-        ctx.invoke(import_cmd, file=script, label=output, init_flag=False)
+        ctx.invoke(
+            import_cmd,
+            file=script,
+            label=output,
+            init_flag=False,
+            open_view=open_view,
+            no_daemon=no_daemon,
+        )
         return
 
     # Run the actual work inside a try/except so internal exceptions
@@ -412,7 +508,7 @@ def run(ctx, script, output, render, export, preview, params, dry_run, runtime, 
     try:
         _run_impl(
             ctx, script, output, render, export,
-            preview, params, dry_run, runtime, no_daemon,
+            preview, open_view, params, dry_run, runtime, no_daemon,
         )
     except SystemExit:
         # Explicit sys.exit() calls inside _run_impl are intentional —
@@ -434,7 +530,7 @@ def run(ctx, script, output, render, export, preview, params, dry_run, runtime, 
         _clear_run_timeout()
 
 
-def _run_impl(ctx, script, output, render, export, preview, params,
+def _run_impl(ctx, script, output, render, export, preview, open_view, params,
               dry_run, runtime, no_daemon):
     _t_total_start = time.perf_counter()
     _timings = {}
@@ -468,6 +564,8 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         argv.extend(["--export", export])
     if not preview:
         argv.append("--no-preview")
+    if not open_view:
+        argv.append("--no-view")
     if params:
         argv.extend(["--params", params])
     if dry_run:
@@ -538,6 +636,19 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     if params:
         try:
             parsed_params = _parse_params(params)
+        except ValueError as e:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": str(e),
+            }))
+            sys.exit(1)
+
+    # Validate --render spec before version allocation (errors should be cheap)
+    if render:
+        from agentcad.render import parse_view_spec as _parse_view_spec
+        try:
+            _parse_view_spec(render)
         except ValueError as e:
             click.echo(json.dumps({
                 "command": "run",
@@ -827,6 +938,15 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         _finish_phase("export_viewer_glb", _t, "export_viewer_glb_ms")
 
     prev = _find_prev_success(versions)
+    previous_parts = []
+    part_changes = None
+    if prev is not None:
+        previous_meta_path = Path.cwd() / prev["path"] / "meta.json"
+        try:
+            previous_parts = json.loads(previous_meta_path.read_text()).get("parts", [])
+        except (OSError, json.JSONDecodeError):
+            previous_parts = []
+        part_changes = _part_change_summary(previous_parts, parts_output, prev["label"])
     if prev is not None:
         from agentcad.render import (
             render_diff_side_by_side,
@@ -890,20 +1010,31 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     viewer_path = version_dir / "viewer.html"
     _render_unified(
         viewer_path,
-        glb_a=viewer_glb_path,
-        glb_b=prev_glb_path,
-        label_a=label,
-        label_b=prev["label"] if prev_glb_path else "",
+        glb_a=prev_glb_path or viewer_glb_path,
+        glb_b=viewer_glb_path if prev_glb_path else None,
+        label_a=prev["label"] if prev_glb_path else label,
+        label_b=label if prev_glb_path else "",
         default_mode="side-by-side" if prev_glb_path else "single-a",
         preview_png=version_dir / "preview.png" if preview_meta else None,
         diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
         diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
         parts=parts_output,
+        parts_model="b" if prev_glb_path else "a",
+        part_changes=part_changes,
         groups=groups_output,
     )
     viewer_meta = f"{dir_name}/viewer.html"
     viewer_glb_meta = f"{dir_name}/output.glb"
     _finish_phase("viewer", _t, "viewer_ms")
+
+    viewer_opened = False
+    if open_view:
+        try:
+            from agentcad.commands.view import _open_browser
+
+            viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+        except Exception as exc:
+            warnings.append(f"Could not open the review viewer: {type(exc).__name__}: {exc}")
 
     # Write meta.json
     created = datetime.now(timezone.utc).isoformat()
@@ -958,11 +1089,11 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     if viewer_meta:
         if prev_glb_path:
             hint = (
-                f"Show your work in the browser by opening {viewer_meta} "
-                f"— side-by-side with the previous run."
+                f"Review {viewer_meta} in the browser — A is the previous run, "
+                f"B is this run, with side-by-side and overlay ready."
             )
         else:
-            hint = f"Show your work in the browser by opening {viewer_meta}."
+            hint = f"Review {viewer_meta} in the browser."
 
     # Output success JSON
     output_json = {
@@ -994,6 +1125,7 @@ def _run_impl(ctx, script, output, render, export, preview, params,
     if viewer_meta:
         output_json["viewer"] = viewer_meta
         output_json["viewer_glb"] = viewer_glb_meta
+        output_json["viewer_opened"] = viewer_opened
     if renders_meta:
         output_json["renders"] = renders_meta
     if hint:

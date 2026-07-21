@@ -215,6 +215,21 @@ def inspect(
 
 
 @mcp.tool()
+def check_spec(file: str, spec_file: str, cwd: str) -> dict:
+    """Check a STEP/BREP file against a JSON cylindrical-feature spec.
+
+    Returns the same structured result as `agentcad check-spec`, including
+    passed, matched_features, and missing_features.
+
+    Args:
+        file: Path to the STEP/STP/BREP file to check.
+        spec_file: Path to the JSON spec (cylindrical feature checklist).
+        cwd: Project directory.
+    """
+    return _invoke(["check-spec", file, spec_file], cwd=cwd)
+
+
+@mcp.tool()
 def docs(section: str | None = None) -> dict:
     """Show agentcad documentation. No project directory needed.
 

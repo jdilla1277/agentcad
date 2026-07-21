@@ -33,8 +33,12 @@ from agentcad.native_io import silence_native_stdout
     "--init", "init_flag", is_flag=True,
     help="Bootstrap a manifest if none exists in the current directory.",
 )
+@click.option(
+    "--view/--no-view", "open_view", default=True,
+    help="Open the generated review viewer after a successful import (default on).",
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def import_cmd(file, label, init_flag, no_daemon):
+def import_cmd(file, label, init_flag, open_view, no_daemon):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
@@ -47,6 +51,8 @@ def import_cmd(file, label, init_flag, no_daemon):
         argv.extend(["--label", label])
     if init_flag:
         argv.append("--init")
+    if not open_view:
+        argv.append("--no-view")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -196,13 +202,24 @@ def import_cmd(file, label, init_flag, no_daemon):
             prev_glb = cand
     viewer_path = version_dir / "viewer.html"
     _render_unified(
-        viewer_path, glb_path, prev_glb,
-        label_a=label, label_b=prev["label"] if prev else None,
-        default_mode="single-a",
+        viewer_path, prev_glb or glb_path, glb_path if prev_glb else None,
+        label_a=prev["label"] if prev_glb else label,
+        label_b=label if prev_glb else None,
+        default_mode="side-by-side" if prev_glb else "single-a",
         preview_png=preview_path,
         diff_side_png=(version_dir / "diff_side.png") if diff_meta else None,
         diff_overlay_png=(version_dir / "diff_overlay.png") if diff_meta else None,
     )
+
+    viewer_opened = False
+    if open_view:
+        try:
+            from agentcad.commands.view import _open_browser
+
+            viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+        except Exception:
+            # Browser launch is best-effort and must not discard a valid import.
+            viewer_opened = False
 
     # 10. Provenance metadata in meta.json.
     sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
@@ -261,6 +278,7 @@ def import_cmd(file, label, init_flag, no_daemon):
     # 13. Output JSON. Mirrors meta.json plus next_actions per the
     #     `next_actions` design convention.
     response = dict(meta)
+    response["viewer_opened"] = viewer_opened
     if scaffold_written:
         response["scaffold"] = "edit.py"
     response["next_actions"] = [
@@ -273,7 +291,7 @@ def import_cmd(file, label, init_flag, no_daemon):
     response["more_at"] = "agentcad docs"
     click.echo(json.dumps(response))
 
-    maybe_spawn_daemon_for_next_run()
+    maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
 
 
 # --- helpers ----------------------------------------------------------------

@@ -11,6 +11,7 @@ coarse-grained on purpose.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -1413,6 +1414,65 @@ class TestViewerHints:
 
         viewer_html = (isolated_dir / "v2" / "viewer.html").read_text()
         assert 'DEFAULT_MODE = "side-by-side"' in viewer_html
+        assert 'LABEL_A = "v1"' in viewer_html
+        assert 'LABEL_B = "v2"' in viewer_html
+
+    def test_opens_generated_viewer_by_default(self, runner, isolated_dir, monkeypatch):
+        opened = []
+        monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+
+        result = _run(runner, "s.py", "--output", "v1")
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["viewer_opened"] is True
+        assert opened == [(isolated_dir / "v1" / "viewer.html").as_uri()]
+
+    def test_no_view_suppresses_browser_launch(self, runner, isolated_dir, monkeypatch):
+        opened = []
+        monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+
+        result = _run(runner, "s.py", "--output", "v1", "--no-view")
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["viewer_opened"] is False
+        assert opened == []
+
+    def test_second_viewer_summarizes_part_changes(self, runner, isolated_dir):
+        first = """\
+from build123d import Box, Cylinder
+show_object(Box(10, 10, 2), id="deck", name="Deck", options={"color": "gray"})
+show_object(Cylinder(1, 5), id="pin", name="Pin")
+"""
+        second = """\
+from build123d import Box
+show_object(Box(12, 10, 2), id="deck", name="Main Deck", options={"color": "blue"})
+show_object(Box(8, 2, 1).translate((0, 5, 0)), id="arm", name="Arm")
+"""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", first)
+        first_result = _run(runner, "s.py", "--output", "first")
+        assert first_result.exit_code == 0, first_result.output
+        _write(isolated_dir, "s.py", second)
+        second_result = _run(runner, "s.py", "--output", "second")
+        assert second_result.exit_code == 0, second_result.output
+
+        viewer_html = (isolated_dir / "v2_second" / "viewer.html").read_text()
+        match = re.search(r"const PART_CHANGES = (\{.*?\});", viewer_html)
+        assert match, "PART_CHANGES const not found in viewer.html"
+        changes = json.loads(match.group(1))
+        assert changes["added"] == [{"id": "arm", "name": "Arm"}]
+        assert changes["removed"] == [{"id": "pin", "name": "Pin"}]
+        assert changes["renamed"] == [
+            {"id": "deck", "from": "Deck", "to": "Main Deck"}
+        ]
+        assert changes["changed"] == [
+            {"id": "deck", "name": "Main Deck", "fields": ["geometry", "color"]}
+        ]
+        assert 'PARTS_MODEL = "b"' in viewer_html
 
     def test_first_run_emits_hint_in_json(self, runner, isolated_dir):
         _init(runner, isolated_dir)
