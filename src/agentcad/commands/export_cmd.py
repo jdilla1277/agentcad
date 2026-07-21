@@ -54,8 +54,8 @@ def export_cmd(step_file, formats, no_daemon):
         sys.exit(1)
 
     # Parse and validate formats
-    fmt_list = [f.strip() for f in formats.split(",")]
-    invalid = [f for f in fmt_list if f not in VALID_FORMATS]
+    fmt_list = parse_export_formats(formats)
+    invalid = unsupported_export_formats(formats)
     if invalid:
         click.echo(json.dumps({
             "command": "export",

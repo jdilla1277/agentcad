@@ -73,6 +73,8 @@ PARITY_MAP: dict[str, str] = {
         "cq_only:CLI error orthogonal to runtime",
     "test_run_script_not_found_error":
         "cq_only:CLI error orthogonal to runtime",
+    "test_run_rejects_unsupported_export_format_for_cad_file_input":
+        "cq_only:--export validation before CAD-file suffix dispatch — fires before any runtime is selected",
     "test_run_existing_version_dir_no_crash":
         "cq_only:CLI dir-collision behavior, runtime-agnostic — happy path covered by b3d test_creates_versioned_output_step",
 

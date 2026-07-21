@@ -159,6 +159,27 @@ def test_run_reports_every_unsupported_export_format(runner, isolated_dir):
     assert "stl" not in unsupported
 
 
+def test_run_rejects_unsupported_export_format_for_cad_file_input(
+    runner, isolated_dir
+):
+    """CAD-file inputs suffix-dispatch to `agentcad import` before _run_impl,
+    so --export validation must happen before that dispatch — otherwise
+    `run model.step --export ply` silently imports instead of erroring."""
+    _init_project(runner)
+    (isolated_dir / "model.step").write_text("not real step data")
+    result = runner.invoke(
+        cli, ["run", "model.step", "--output", "test", "--export", "ply"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "ply" in parsed["message"]
+    # Dispatch to import never happened — no version consumed.
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+
+
 def test_run_creates_version_directory(runner, isolated_dir):
     _init_project(runner)
     _write_script(isolated_dir)

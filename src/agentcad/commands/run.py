@@ -375,6 +375,23 @@ def run(ctx, script, output, render, export, preview, params, dry_run, runtime, 
     `agentcad import` instead — agents who instinctively reach for `run`
     when handed a CAD file get the right behavior automatically.
     """
+    # Reject unsupported --export formats before anything else — before the
+    # CAD-file suffix dispatch below (which drops --export entirely), daemon
+    # routing, version allocation, or any disk artifacts — so `run --export`
+    # matches `agentcad export` instead of silently ignoring unknown formats.
+    if export:
+        invalid = unsupported_export_formats(export)
+        if invalid:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": (
+                    f"Unsupported format(s): {', '.join(invalid)}. "
+                    f"Supported: stl, glb, obj"
+                ),
+            }))
+            sys.exit(1)
+
     # M60 Phase 2 (slice 2b): suffix-dispatch CAD files to `agentcad import`.
     # This closes a footgun where agents handed a STEP would write
     # `agentcad run widget.step` and hit a confusing parse error. Tier 0
@@ -442,22 +459,6 @@ def _run_impl(ctx, script, output, render, export, preview, params,
         # the JSON on stdout remains parseable. Issue #164.
         click.echo(f"[agentcad] {message}", err=True)
 
-
-    # Reject unsupported --export formats up front — before daemon routing,
-    # version allocation, or any disk artifacts — so `run --export` matches
-    # `agentcad export` instead of silently ignoring unknown formats.
-    if export:
-        invalid = unsupported_export_formats(export)
-        if invalid:
-            click.echo(json.dumps({
-                "command": "run",
-                "status": "error",
-                "message": (
-                    f"Unsupported format(s): {', '.join(invalid)}. "
-                    f"Supported: stl, glb, obj"
-                ),
-            }))
-            sys.exit(1)
 
     # Try routing through daemon. If reachable, this exits before returning.
     argv = ["run", script, "--output", output]

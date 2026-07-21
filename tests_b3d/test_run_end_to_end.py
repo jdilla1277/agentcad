@@ -606,6 +606,36 @@ class TestExportFlag:
         assert parsed["outputs"]["step"] == "v1_label/output.step"
         assert parsed["viewer_glb"] == "v1_label/output.glb"
 
+    def test_rejects_unsupported_export_format(self, runner, isolated_dir):
+        """`--export ply` errors before version allocation — no artifacts."""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--output", "e", "--export", "ply")
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["command"] == "run"
+        assert parsed["status"] == "error"
+        assert "ply" in parsed["message"]
+        assert "stl, glb, obj" in parsed["message"]
+        from agentcad.manifest import MANIFEST_FILE
+        manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+        assert manifest["versions"] == []
+        assert not (isolated_dir / "v1_e").exists()
+
+    def test_reports_every_unsupported_export_format(self, runner, isolated_dir):
+        """Mixed list names each invalid format but not the valid stl; a
+        trailing comma is trimmed rather than flagged as unknown."""
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--output", "e", "--export", "stl,ply,fbx,")
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "error"
+        unsupported = parsed["message"].split("Supported:")[0]
+        assert "ply" in unsupported
+        assert "fbx" in unsupported
+        assert "stl" not in unsupported
+
     def test_without_export_no_extra_outputs(self, runner, isolated_dir):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
