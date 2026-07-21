@@ -15,7 +15,7 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
-from agentcad.commands.export_cmd import parse_export_formats
+from agentcad.commands.export_cmd import parse_export_formats, unsupported_export_formats
 from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
 
 
@@ -464,6 +464,23 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
     `agentcad import` instead — agents who instinctively reach for `run`
     when handed a CAD file get the right behavior automatically.
     """
+    # Reject unsupported --export formats before anything else — before the
+    # CAD-file suffix dispatch below (which drops --export entirely), daemon
+    # routing, version allocation, or any disk artifacts — so `run --export`
+    # matches `agentcad export` instead of silently ignoring unknown formats.
+    if export:
+        invalid = unsupported_export_formats(export)
+        if invalid:
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": (
+                    f"Unsupported format(s): {', '.join(invalid)}. "
+                    f"Supported: stl, glb, obj"
+                ),
+            }))
+            sys.exit(1)
+
     # M60 Phase 2 (slice 2b): suffix-dispatch CAD files to `agentcad import`.
     # This closes a footgun where agents handed a STEP would write
     # `agentcad run widget.step` and hit a confusing parse error. Tier 0
@@ -619,18 +636,6 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     if params:
         try:
             parsed_params = _parse_params(params)
-        except ValueError as e:
-            click.echo(json.dumps({
-                "command": "run",
-                "status": "error",
-                "message": str(e),
-            }))
-            sys.exit(1)
-
-    export_formats = None
-    if export:
-        try:
-            export_formats = parse_export_formats(export)
         except ValueError as e:
             click.echo(json.dumps({
                 "command": "run",
@@ -815,8 +820,9 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     if export:
         _heartbeat("exporting requested mesh formats…")
         _t = _start_phase("export_mesh")
+        formats = parse_export_formats(export)
         topo_shape = result.topo_shape
-        for fmt in export_formats:
+        for fmt in formats:
             if fmt == "stl":
                 stl_path = version_dir / "output.stl"
                 runner.export_stl(shape, str(stl_path))

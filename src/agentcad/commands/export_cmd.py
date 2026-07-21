@@ -11,19 +11,20 @@ from agentcad.commands._daemon_routing import (
 )
 
 VALID_FORMATS = {"stl", "glb", "obj"}
-SUPPORTED_FORMATS_MESSAGE = "stl, glb, obj"
 
 
-def parse_export_formats(formats):
-    """Return requested export formats or raise ValueError for unsupported ones."""
-    fmt_list = [f.strip() for f in formats.split(",")]
-    invalid = [f for f in fmt_list if f not in VALID_FORMATS]
-    if invalid:
-        raise ValueError(
-            f"Unsupported format(s): {', '.join(invalid)}. "
-            f"Supported: {SUPPORTED_FORMATS_MESSAGE}"
-        )
-    return fmt_list
+def parse_export_formats(formats: str) -> list[str]:
+    """Split a comma-separated mesh-format value into trimmed, non-empty
+    entries. Dropping empties means a trailing comma (e.g. ``stl,``) doesn't
+    leave a blank that gets silently ignored downstream."""
+    return [f.strip() for f in formats.split(",") if f.strip()]
+
+
+def unsupported_export_formats(formats: str) -> list[str]:
+    """Return the requested formats that aren't in :data:`VALID_FORMATS`.
+    Shared by ``agentcad export`` and ``agentcad run --export`` so both
+    reject unknown formats identically."""
+    return [f for f in parse_export_formats(formats) if f not in VALID_FORMATS]
 
 
 def _is_version_dir(directory):
@@ -53,13 +54,13 @@ def export_cmd(step_file, formats, no_daemon):
         sys.exit(1)
 
     # Parse and validate formats
-    try:
-        fmt_list = parse_export_formats(formats)
-    except ValueError as exc:
+    fmt_list = parse_export_formats(formats)
+    invalid = unsupported_export_formats(formats)
+    if invalid:
         click.echo(json.dumps({
             "command": "export",
             "status": "error",
-            "message": str(exc),
+            "message": f"Unsupported format(s): {', '.join(invalid)}. Supported: stl, glb, obj",
         }))
         sys.exit(1)
 
