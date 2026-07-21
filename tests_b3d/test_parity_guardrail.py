@@ -73,8 +73,14 @@ PARITY_MAP: dict[str, str] = {
         "cq_only:CLI error orthogonal to runtime",
     "test_run_script_not_found_error":
         "cq_only:CLI error orthogonal to runtime",
+    "test_run_rejects_unsupported_export_format_for_cad_file_input":
+        "cq_only:--export validation before CAD-file suffix dispatch — fires before any runtime is selected",
     "test_run_existing_version_dir_no_crash":
         "cq_only:CLI dir-collision behavior, runtime-agnostic — happy path covered by b3d test_creates_versioned_output_step",
+    "test_run_invalid_render_spec_returns_clean_error":
+        "cq_only:CLI render spec validation happens before runtime dispatch",
+    "test_run_invalid_render_spec_mixed_returns_clean_error":
+        "cq_only:CLI render spec validation happens before runtime dispatch",
 
     # ---- legacy name divergences (b3d twin under a different name) ----
     "test_run_auto_increments_version": "test_second_run_increments_version",

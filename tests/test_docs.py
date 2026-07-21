@@ -109,6 +109,22 @@ def test_docs_workflow_section(runner):
     assert "init" in content
     assert "run" in content
     assert "check-spec" in content
+    assert "A=previous and B=current" in content
+    assert "opens automatically" in content
+
+
+def test_docs_and_skill_present_viewer_as_default_review_path(runner):
+    commands = json.loads(runner.invoke(cli, ["docs", "commands"]).stdout)["content"]
+    parts = json.loads(runner.invoke(cli, ["docs", "parts"]).stdout)["content"]
+    skill_result = runner.invoke(cli, ["skill", "show"])
+    skill_content = json.loads(skill_result.stdout)["content"]
+
+    assert "--no-view" in commands
+    assert "A=previous and B=current" in commands
+    assert "What changed" in parts
+    assert "added, removed, renamed" in parts
+    assert "opens automatically" in skill_content
+    assert "A=previous and B=current" in skill_content
 
 
 def test_docs_check_spec_section(runner):
@@ -121,6 +137,8 @@ def test_docs_check_spec_section(runner):
     assert "missing_features" in content
     assert "Read passed" in content
     assert "cylindrical_features[].axis" in content
+    assert "validity" in content
+    assert "metrics" in content
 
 
 def test_docs_export_section(runner):
@@ -384,8 +402,8 @@ def test_docs_patterns_angled_positioning_example(runner):
 
 def test_docs_daemon_section(runner):
     """Daemon docs reflect the auto-managed reality: agents don't start the
-    daemon, but `stop` and `status` are kept as diagnostic commands. `start`
-    and `restart` were removed from the docs because auto-spawn replaces them."""
+    daemon, while lifecycle commands remain available for diagnostics and
+    explicit recovery after a package upgrade."""
     result = runner.invoke(cli, ["docs", "daemon"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
@@ -393,8 +411,15 @@ def test_docs_daemon_section(runner):
     # The kept diagnostic commands.
     assert "daemon stop" in content
     assert "daemon status" in content
+    assert "daemon restart" in content
     # Auto-managed framing: the daemon spawns itself.
     assert "auto" in content.lower() or "automatic" in content.lower()
+    # Version drift is reported, not automatically healed. Keep the docs in
+    # sync with daemon.py's manual-restart contract.
+    lower_content = content.lower()
+    assert "self-heal" not in lower_content
+    assert "pip" in lower_content and "upgrade" in lower_content
+    assert "loaded at" in lower_content and "startup" in lower_content
 
 
 def test_docs_commands_does_not_list_daemon(runner):
@@ -445,7 +470,8 @@ def test_docs_measure_section(runner):
     assert "cylindrical_features" in content
     assert "not a manufacturing tolerance" in content
     assert "--features" in content
-    assert "validity" in content
+    assert "metrics.is_valid" in content
+    assert "validity         {is_valid}" not in content
     assert "query" in content
     assert "features" in content
     assert "direction?" in content

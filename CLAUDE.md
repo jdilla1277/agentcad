@@ -48,6 +48,25 @@ fixtures. When validating unmerged CLI behavior, avoid stale installed code and
 stale daemons: use the current checkout (`PYTHONPATH=src` or editable install)
 and pass `--no-daemon` for command behavior checks.
 
+## Fork PRs
+
+External contributors submit PRs from forks. When acting as maintainer on one:
+
+- Check the head repo before pushing follow-up commits:
+  `gh pr view <N> --json headRepositoryOwner,maintainerCanModify`.
+  Pushing `origin HEAD:<branch>` creates a stray branch on this repo instead
+  of updating the PR — push to the fork instead:
+  `git push https://github.com/<owner>/agentcad.git HEAD:<branch>`
+  (allowed when the PR has maintainer edits enabled).
+- Fork-PR CI runs may be held at `action_required` awaiting maintainer
+  approval, and `gh pr checks` misleadingly reports "no checks reported".
+  Find the held run with
+  `gh api "repos/jdilla1277/agentcad/actions/runs?head_sha=<sha>"` and approve
+  it with `gh api -X POST repos/jdilla1277/agentcad/actions/runs/<id>/approve`.
+- `main` requires green checks and an up-to-date branch (branch protection,
+  admins included). If main moves under a fork PR, merge main into the branch
+  and push that to the fork.
+
 ## Public Repo Rules
 
 - Do not add internal PRDs, roadmap notes, marketing drafts, feedback logs, secrets, or private operational context.

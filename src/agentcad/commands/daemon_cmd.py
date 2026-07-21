@@ -108,7 +108,7 @@ def restart():
 
     Single-command recovery path for stale-version daemons after ``pip
     install --upgrade agentcad``. Equivalent to ``stop`` followed by
-    ``start``, but always force-kills if graceful shutdown fails.
+    ``start``. Force-stop is attempted only after daemon identity is verified.
     """
     if not daemon_supported():
         _emit_unsupported("restart")
