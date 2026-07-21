@@ -539,6 +539,38 @@ class TestRender:
         meta = json.loads((isolated_dir / "v1_label" / "meta.json").read_text())
         assert "renders" not in meta
 
+    def test_invalid_render_spec_returns_clean_error(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--output", "label", "--render", "notaview")
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["command"] == "run"
+        assert parsed["status"] == "error"
+        assert "Invalid view spec" in parsed["message"]
+        assert "notaview" in parsed["message"]
+        assert "traceback" not in r.output.lower()
+        assert not (isolated_dir / "v1_label").exists()
+
+    def test_invalid_render_spec_mixed_returns_clean_error(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(
+            runner,
+            "s.py",
+            "--output",
+            "label",
+            "--render",
+            "front,45:30,notaview",
+        )
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["command"] == "run"
+        assert parsed["status"] == "error"
+        assert "notaview" in parsed["message"]
+        assert "traceback" not in r.output.lower()
+        assert not (isolated_dir / "v1_label").exists()
+
 
 # ---------- export ----------
 
@@ -573,6 +605,24 @@ class TestExportFlag:
         parsed = json.loads(r.stdout)
         for fmt in ("stl", "glb", "obj"):
             assert fmt in parsed["outputs"]
+
+    def test_rejects_unsupported_export_format_without_consuming_version(
+        self, runner, isolated_dir
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--output", "label", "--export", "ply",
+                 "--no-preview")
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["command"] == "run"
+        assert parsed["status"] == "error"
+        assert "Unsupported format(s): ply" in parsed["message"]
+        assert "Supported: stl, glb, obj" in parsed["message"]
+
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["versions"] == []
+        assert not any(isolated_dir.glob("v1_*"))
 
     # ---- parity ports from tests/test_run.py ----
 
