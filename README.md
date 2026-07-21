@@ -40,6 +40,9 @@ to keep the phone from sliding. Show me a preview when you're done.
 ## What it does
 
 - **`agentcad run script.py --output label`** — execute a build123d or CadQuery script, produce versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+- **Automatic review viewer** — successful runs open `viewer.html`; from v2,
+  A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
+  Parts-tab change review (`--no-view` opts out)
 - **`agentcad run ... --preview`** — four-view PNG + turntable GIF for visual verification
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
@@ -47,7 +50,7 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
 - **`agentcad inspect output.step`** — topology deep-dive (shells, free edges, validity)
 - **`agentcad diff 1 2`** — compare versions (metrics, outputs, parameters)
-- **`agentcad view output.step`** — open STEP/GLB output in a browser preview viewer
+- **`agentcad view old.step new.step`** — open an explicit synchronized A/B comparison
 - **`agentcad docs [section]`** — 17 sections of built-in documentation
 
 ## No boilerplate

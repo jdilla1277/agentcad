@@ -51,9 +51,11 @@ def _pid_path() -> str:
 
 def _route_through_daemon(argv: list[str]):
     """Send an argv-shaped request to the daemon. Returns the raw response
-    dict, or ``None`` if the daemon couldn't be reached. argv[0] is the
-    Click subcommand name (``run``, ``render``, etc.); the daemon-side
-    handler invokes the CLI with this argv directly."""
+    dict, or ``None`` only if the daemon couldn't be reached before request
+    submission. A timeout/disconnect after submission is returned as an
+    explicit nonzero result so the caller never repeats non-idempotent work.
+    argv[0] is the Click subcommand name (``run``, ``render``, etc.); the
+    daemon-side handler invokes the CLI with this argv directly."""
     return _daemon.send_request(
         {"type": "run", "cwd": str(Path.cwd()), "argv": argv},
         socket_path=_socket_path(),
@@ -71,8 +73,10 @@ def maybe_route_through_daemon(argv: list[str], no_daemon: bool = False) -> None
         would recurse),
       * the daemon is unreachable.
 
-    On successful routing, prints the (possibly augmented) output on
-    stdout and calls ``sys.exit(exit_code)`` — caller never returns.
+    On successful routing, or when a submitted request's outcome is unknown,
+    prints the (possibly augmented) output on stdout and calls
+    ``sys.exit(exit_code)`` — caller never returns. Direct execution is only
+    safe when ``send_request`` returns ``None`` before submission.
 
     Pip-upgrade hint: a daemon started before ``pip install --upgrade
     agentcad`` keeps the old code in memory. We don't auto-restart it
