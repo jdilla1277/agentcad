@@ -16,10 +16,11 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-> **New: specs and measurements**
-> - `agentcad measure` reads the actual STEP geometry: dimensions, cylindrical feature buckets, diameters, and counts.
-> - `agentcad check-spec` compares the model against explicit feature requirements before the agent says it is done.
-> - `agentcad view --spec spec.json` opens a Spec check review mode so humans can inspect pass/fail results in the browser.
+### Introducing parts
+
+[![Watch agentcad parts rebuild a toy assembly](https://img.youtube.com/vi/VdMhRUiCaNU/maxresdefault.jpg)](https://youtu.be/VdMhRUiCaNU)
+
+Parts let an agent build CAD as named, color-coded pieces and groups, then hand back a viewer a human can inspect. Watch the demo on [YouTube](https://youtu.be/VdMhRUiCaNU) or read the story at [agentcad.dev/parts](https://agentcad.dev/parts).
 
 ## Quick start
 
@@ -51,6 +52,9 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
 - **`agentcad inspect output.step`** — topology deep-dive (shells, free edges, validity)
+- **`agentcad parts list REF`** — list named/captured parts for a version
+- **`agentcad parts show REF ID`** — show one versioned part by stable id
+- **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
 - **`agentcad diff 1 2`** — compare versions (metrics, outputs, parameters)
 - **`agentcad view old.step new.step`** — open an explicit synchronized A/B comparison
 - **`agentcad docs [section]`** — 17 sections of built-in documentation
