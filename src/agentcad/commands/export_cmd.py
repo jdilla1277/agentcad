@@ -13,6 +13,20 @@ from agentcad.commands._daemon_routing import (
 VALID_FORMATS = {"stl", "glb", "obj"}
 
 
+def parse_export_formats(formats: str) -> list[str]:
+    """Split a comma-separated mesh-format value into trimmed, non-empty
+    entries. Dropping empties means a trailing comma (e.g. ``stl,``) doesn't
+    leave a blank that gets silently ignored downstream."""
+    return [f.strip() for f in formats.split(",") if f.strip()]
+
+
+def unsupported_export_formats(formats: str) -> list[str]:
+    """Return the requested formats that aren't in :data:`VALID_FORMATS`.
+    Shared by ``agentcad export`` and ``agentcad run --export`` so both
+    reject unknown formats identically."""
+    return [f for f in parse_export_formats(formats) if f not in VALID_FORMATS]
+
+
 def _is_version_dir(directory):
     """Check if directory matches v\\d+_\\w+ pattern and contains meta.json."""
     return bool(re.match(r"v\d+_\w+", directory.name)) and (directory / "meta.json").exists()
@@ -40,8 +54,8 @@ def export_cmd(step_file, formats, no_daemon):
         sys.exit(1)
 
     # Parse and validate formats
-    fmt_list = [f.strip() for f in formats.split(",")]
-    invalid = [f for f in fmt_list if f not in VALID_FORMATS]
+    fmt_list = parse_export_formats(formats)
+    invalid = unsupported_export_formats(formats)
     if invalid:
         click.echo(json.dumps({
             "command": "export",

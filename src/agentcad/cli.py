@@ -90,7 +90,8 @@ EXAMPLE SESSION
       preview.png       4-view composite (front/right/top/iso, 1024x1068)
       diff_side.png     side-by-side vs. prior version (from v2 onward)
       diff_overlay.png  tinted overlay vs. prior version (from v2 onward)
-      viewer.html       interactive 3D viewer (always — open in a browser)
+      viewer.html       interactive 3D review viewer (opens automatically;
+                        from v2: A=previous, B=current)
       renders/          PNG views (when --render used)
 
 \b
@@ -114,6 +115,9 @@ COMMANDS
                      generate regardless — --no-preview only skips the
                      composite render. Turntable GIFs are on-demand via
                      the Export GIF button in viewer.html.
+    --view / --no-view Open the generated review viewer after success
+                     (default on). From v2, A/B, side-by-side, overlay,
+                     diff images, and part changes are preloaded.
     --params K=V,..  Override top-level script constants.
     --runtime ENGINE Force cadquery or build123d (beats project default).
     --dry-run        Metrics only — no version consumed, no disk artifacts.
@@ -151,8 +155,9 @@ COMMANDS
                           [--label TEXT] [--note TEXT]
                                 Generate a temporary part review handoff viewer.
                                 Browser changes are not saved.
-  agentcad view FILE [--measure] [--spec spec.json]
-                                Open GLB/STEP in browser. STEP auto-converts.
+  agentcad view FILE [FILE_B] [--overlay] [--measure] [--spec spec.json]
+                                Open GLB/STEP in browser. Two files preload
+                                synchronized A/B and overlay comparison.
                                 Review mode needs STEP/STP source geometry.
   agentcad diff REF1 REF2        Compare versions (by number or label).
   agentcad context               Project state: versions, current, tool_version.

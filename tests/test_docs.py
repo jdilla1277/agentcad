@@ -74,6 +74,18 @@ def test_docs_schema_section(runner):
     assert "outputs.glb appears only when --export glb" in content
 
 
+def test_docs_schema_documents_stdout_vs_stderr(runner):
+    """Agents learn the CLI contract from `docs schema`; it must spell out that
+    JSON goes to stdout and progress to stderr, and warn against merging the
+    streams with 2>&1 before a JSON parser (a real parse-corruption footgun)."""
+    result = runner.invoke(cli, ["docs", "schema"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "stdout" in content
+    assert "stderr" in content
+    assert "2>&1" in content
+
+
 def test_docs_schema_lists_current_inspect_measure_fields(runner):
     result = runner.invoke(cli, ["docs", "schema"])
     assert result.exit_code == 0
@@ -97,6 +109,22 @@ def test_docs_workflow_section(runner):
     assert "init" in content
     assert "run" in content
     assert "check-spec" in content
+    assert "A=previous and B=current" in content
+    assert "opens automatically" in content
+
+
+def test_docs_and_skill_present_viewer_as_default_review_path(runner):
+    commands = json.loads(runner.invoke(cli, ["docs", "commands"]).stdout)["content"]
+    parts = json.loads(runner.invoke(cli, ["docs", "parts"]).stdout)["content"]
+    skill_result = runner.invoke(cli, ["skill", "show"])
+    skill_content = json.loads(skill_result.stdout)["content"]
+
+    assert "--no-view" in commands
+    assert "A=previous and B=current" in commands
+    assert "What changed" in parts
+    assert "added, removed, renamed" in parts
+    assert "opens automatically" in skill_content
+    assert "A=previous and B=current" in skill_content
 
 
 def test_docs_check_spec_section(runner):
@@ -109,6 +137,8 @@ def test_docs_check_spec_section(runner):
     assert "missing_features" in content
     assert "Read passed" in content
     assert "cylindrical_features[].axis" in content
+    assert "validity" in content
+    assert "metrics" in content
 
 
 def test_docs_export_section(runner):
@@ -433,7 +463,8 @@ def test_docs_measure_section(runner):
     assert "cylindrical_features" in content
     assert "not a manufacturing tolerance" in content
     assert "--features" in content
-    assert "validity" in content
+    assert "metrics.is_valid" in content
+    assert "validity         {is_valid}" not in content
     assert "query" in content
     assert "features" in content
     assert "direction?" in content

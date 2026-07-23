@@ -255,8 +255,10 @@ def test_render_unified_embeds_review_payload(isolated_dir):
     out = isolated_dir / "v.html"
     review = {
         "measure": {
-            "validity": {"is_valid": True},
-            "metrics": {"dimensions": {"x": 50.0, "y": 20.0, "z": 5.0}},
+            "metrics": {
+                "dimensions": {"x": 50.0, "y": 20.0, "z": 5.0},
+                "is_valid": True,
+            },
             "cylindrical_features": [
                 {
                     "diameter_mm": 6.0,
@@ -285,6 +287,44 @@ def test_render_unified_embeds_review_payload(isolated_dir):
     assert 'const REVIEW = {"measure"' in html
     assert '"cylindrical_features"' in html
     assert 'DEFAULT_MODE = "spec"' in html
+
+
+def test_review_markers_use_model_surface_raycast(isolated_dir):
+    from agentcad.commands.view import _render_unified
+
+    glb = isolated_dir / "fake.glb"
+    glb.write_bytes(b"")
+    out = isolated_dir / "v.html"
+    review = {
+        "measure": {
+            "validity": {"is_valid": True},
+            "metrics": {
+                "dimensions": {"x": 50.0, "y": 20.0, "z": 5.0},
+                "bounding_box": {
+                    "x": [-25.0, 25.0],
+                    "y": [-10.0, 10.0],
+                    "z": [-2.5, 2.5],
+                },
+            },
+            "cylindrical_features": [
+                {
+                    "diameter_mm": 6.0,
+                    "count": 1,
+                    "axis": "+z",
+                    "representative_centers": [{"x": 0.0, "y": 0.0, "z": 0.0}],
+                }
+            ],
+        },
+        "check_spec": None,
+    }
+
+    _render_unified(out, glb_a=glb, label_a="x", default_mode="spec", review=review)
+
+    html = out.read_text()
+    assert "function surfacePositionFromModel" in html
+    assert "raycaster.intersectObject(reviewModelA, true)" in html
+    assert "fallbackMarkerSurfacePosition" in html
+    assert "reviewModelA = m" in html
 
 
 def test_view_step_with_spec_opens_spec_check_mode(runner, isolated_dir, monkeypatch):

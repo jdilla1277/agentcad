@@ -13,7 +13,7 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
-from agentcad.commands.measure import measure_tier0_payload
+from agentcad.commands.measure import measure_tier0_payload, validity_from_metrics
 
 
 @click.command("check-spec")
@@ -126,7 +126,7 @@ def check_spec(file, spec_file, no_daemon):
         "format_detected": detection.get("format"),
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
-        "validity": measurement["validity"],
+        "validity": validity_from_metrics(measurement["metrics"]),
         "metrics": measurement["metrics"],
         "next_actions": _next_actions(result["passed"], file_path, spec_path),
         "more_at": "agentcad docs check-spec",

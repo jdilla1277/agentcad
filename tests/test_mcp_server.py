@@ -5,14 +5,15 @@ import os
 
 import pytest
 
-from agentcad.mcp.server import mcp, _invoke, _format_result
+from agentcad.mcp.server import mcp, _invoke, _format_result, check_spec
 
 
 # --- Tool registration ---
 
 
 EXPECTED_TOOLS = {
-    "run", "render", "export", "measure", "inspect", "docs", "context", "diff", "view",
+    "run", "render", "export", "measure", "inspect", "check_spec",
+    "docs", "context", "diff", "view",
 }
 
 
@@ -122,6 +123,21 @@ def test_measure_tool_missing_file_error():
     result = _invoke(["measure", "/tmp/nonexistent.step"])
     assert result["_exit_code"] != 0
     assert result["command"] == "measure"
+
+
+def test_check_spec_tool_missing_file_error(tmp_path):
+    """The check_spec MCP tool routes to `agentcad check-spec` and surfaces
+    its structured error for a missing STEP file (a valid spec is present, so
+    this reaches the file check rather than a spec-load error)."""
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps({"features": [{"name": "hole", "type": "cylinder",
+                                  "diameter_mm": 6, "count": 1}]})
+    )
+    result = check_spec(str(tmp_path / "nonexistent.step"), str(spec), str(tmp_path))
+    assert result["_exit_code"] != 0
+    assert result["command"] == "check-spec"
+    assert "not found" in result.get("message", "").lower()
 
 
 def test_format_result_surfaces_exception_traceback():

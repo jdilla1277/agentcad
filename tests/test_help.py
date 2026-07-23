@@ -221,6 +221,16 @@ def test_run_subcommand_help_no_preview_scoped_to_composite_only(runner):
     assert "256x256" not in output
 
 
+def test_help_presents_automatic_previous_current_review(runner):
+    full_help = runner.invoke(cli, ["--help"]).output
+    run_help = runner.invoke(cli, ["run", "--help"]).output
+
+    assert "A=previous, B=current" in full_help
+    assert "--view / --no-view" in full_help
+    assert "--view / --no-view" in run_help
+    assert "previous/current A/B comparison" in run_help
+
+
 def test_help_example_runtime_defaults_to_dispatch_default(runner, isolated_dir):
     """Outside any project, EXAMPLE SESSION shows whatever the global
     DEFAULT_RUNTIME currently is. Tracks the constant rather than

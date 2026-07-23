@@ -2,7 +2,9 @@
 
 **CAD tool for AI agents.** Give your coding agent the ability to design 3D models.
 
-Your agent writes CadQuery or build123d Python scripts. agentcad handles execution, STEP export, PNG rendering, mesh export (STL/GLB/OBJ), geometric metrics, validation, diffing, and browser preview. All command output is structured JSON.
+Your agent writes CadQuery or build123d Python scripts. agentcad handles execution, STEP export, PNG rendering, mesh export (STL/GLB/OBJ), geometric metrics, validation, diffing, and browser preview. Each command's final response is structured JSON on stdout.
+
+> **Reading the output:** the JSON response is written to **stdout**; human-readable progress and diagnostics go to **stderr**. Parse stdout as JSON and treat stderr as plain text — don't merge the streams with `2>&1` before a JSON parser, or the progress lines will break parsing. If you need both, capture them separately.
 
 agentcad is open source under the Apache License 2.0. It runs locally and requires no signup.
 
@@ -14,10 +16,11 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-> **New: specs and measurements**
-> - `agentcad measure` reads the actual STEP geometry: dimensions, cylindrical feature buckets, diameters, and counts.
-> - `agentcad check-spec` compares the model against explicit feature requirements before the agent says it is done.
-> - `agentcad view --spec spec.json` opens a Spec check review mode so humans can inspect pass/fail results in the browser.
+### Introducing parts
+
+[![Watch agentcad parts rebuild a toy assembly](https://img.youtube.com/vi/VdMhRUiCaNU/maxresdefault.jpg)](https://youtu.be/VdMhRUiCaNU)
+
+Parts let an agent build CAD as named, color-coded pieces and groups, then hand back a viewer a human can inspect. Watch the demo on [YouTube](https://youtu.be/VdMhRUiCaNU) or read the story at [agentcad.dev/parts](https://agentcad.dev/parts).
 
 ## Quick start
 
@@ -40,14 +43,20 @@ to keep the phone from sliding. Show me a preview when you're done.
 ## What it does
 
 - **`agentcad run script.py --output label`** — execute a build123d or CadQuery script, produce versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+- **Automatic review viewer** — successful runs open `viewer.html`; from v2,
+  A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
+  Parts-tab change review (`--no-view` opts out)
 - **`agentcad run ... --preview`** — four-view PNG + turntable GIF for visual verification
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
 - **`agentcad inspect output.step`** — topology deep-dive (shells, free edges, validity)
+- **`agentcad parts list REF`** — list named/captured parts for a version
+- **`agentcad parts show REF ID`** — show one versioned part by stable id
+- **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
 - **`agentcad diff 1 2`** — compare versions (metrics, outputs, parameters)
-- **`agentcad view output.step`** — open STEP/GLB output in a browser preview viewer
+- **`agentcad view old.step new.step`** — open an explicit synchronized A/B comparison
 - **`agentcad docs [section]`** — 17 sections of built-in documentation
 
 ## No boilerplate

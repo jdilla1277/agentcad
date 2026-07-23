@@ -121,6 +121,68 @@ def test_run_script_not_found_error(runner, isolated_dir):
     assert "missing.py" in parsed["message"]
 
 
+def test_run_rejects_unsupported_export_format(runner, isolated_dir):
+    """`run --export ply` must reject the unknown format the way
+    `agentcad export` does — before allocating a version or writing artifacts —
+    instead of succeeding with no ply output. Rejection happens before any
+    CAD kernel import, so this runs without cadquery/build123d installed."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "test", "--export", "ply"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "ply" in parsed["message"]
+    assert "stl, glb, obj" in parsed["message"]
+    # No version consumed and no artifacts written.
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+    assert not (isolated_dir / "v1_test").exists()
+    assert not (isolated_dir / "test").exists()
+
+
+def test_run_reports_every_unsupported_export_format(runner, isolated_dir):
+    """A mixed list names each invalid format; the valid one (stl) is not
+    flagged, and an empty trailing entry (stl,) is trimmed, not treated as
+    an unknown format."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "test", "--export", "stl,ply,fbx"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "error"
+    unsupported = parsed["message"].split("Supported:")[0]
+    assert "ply" in unsupported
+    assert "fbx" in unsupported
+    assert "stl" not in unsupported
+
+
+def test_run_rejects_unsupported_export_format_for_cad_file_input(
+    runner, isolated_dir
+):
+    """CAD-file inputs suffix-dispatch to `agentcad import` before _run_impl,
+    so --export validation must happen before that dispatch — otherwise
+    `run model.step --export ply` silently imports instead of erroring."""
+    _init_project(runner)
+    (isolated_dir / "model.step").write_text("not real step data")
+    result = runner.invoke(
+        cli, ["run", "model.step", "--output", "test", "--export", "ply"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "ply" in parsed["message"]
+    # Dispatch to import never happened — no version consumed.
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+
+
 def test_run_creates_version_directory(runner, isolated_dir):
     _init_project(runner)
     _write_script(isolated_dir)
@@ -461,6 +523,41 @@ def test_run_without_render_no_renders_key(runner, isolated_dir):
     assert "renders" not in meta
 
 
+def test_run_invalid_render_spec_returns_clean_error(runner, isolated_dir):
+    """agentcad run --render <invalid> must fail fast with a clean JSON
+    error, not execute the script or leave an orphaned version directory."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "label", "--render", "notaview"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "Invalid view spec" in parsed["message"]
+    assert "notaview" in parsed["message"]
+    assert "traceback" not in result.output.lower()
+    assert not (isolated_dir / "v1_label").exists()
+
+
+def test_run_invalid_render_spec_mixed_returns_clean_error(runner, isolated_dir):
+    """A bad token inside a mixed view spec (named + angle + bad) must also
+    fail fast with a clean JSON error before any disk writes."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "label", "--render", "front,45:30,notaview"]
+    )
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "notaview" in parsed["message"]
+    assert "traceback" not in result.output.lower()
+    assert not (isolated_dir / "v1_label").exists()
+
+
 # --- Export integration tests ---
 
 
@@ -491,6 +588,22 @@ def test_run_with_export_multiple(runner, isolated_dir):
     assert result.exit_code == 0
     assert (isolated_dir / "v1_label" / "output.stl").exists()
     assert (isolated_dir / "v1_label" / "output.glb").exists()
+
+
+def test_run_rejects_unsupported_export_format_without_consuming_version(runner, isolated_dir):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", "ply"])
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "Unsupported format(s): ply" in parsed["message"]
+    assert "Supported: stl, glb, obj" in parsed["message"]
+
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+    assert not any(isolated_dir.glob("v1_*"))
 
 
 def test_run_with_export_and_render(runner, isolated_dir):
@@ -1580,6 +1693,37 @@ def test_run_second_run_viewer_defaults_to_side_by_side(runner, isolated_dir):
 
     viewer_html = (isolated_dir / "v2" / "viewer.html").read_text()
     assert 'DEFAULT_MODE = "side-by-side"' in viewer_html
+    assert 'LABEL_A = "v1"' in viewer_html
+    assert 'LABEL_B = "v2"' in viewer_html
+
+
+def test_run_opens_generated_viewer_by_default(runner, isolated_dir, monkeypatch):
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    result = runner.invoke(cli, ["run", "script.py", "--output", "v1"])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["viewer_opened"] is True
+    assert opened == [(isolated_dir / "v1" / "viewer.html").as_uri()]
+
+
+def test_run_no_view_suppresses_browser_launch(runner, isolated_dir, monkeypatch):
+    opened = []
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    result = runner.invoke(
+        cli, ["run", "script.py", "--output", "v1", "--no-view"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["viewer_opened"] is False
+    assert opened == []
 
 
 def test_run_first_run_emits_hint_in_json(runner, isolated_dir):
@@ -1624,7 +1768,7 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert "className = 'swatch'" in viewer_html
     assert "swatch.style.background = part.color" in viewer_html
     assert "registerPartMeshes(m)" in viewer_html
-    assert "attach(sceneA_single, MODEL_A_URL, { onMesh:" in viewer_html
+    assert "attach(sceneA_single, MODEL_A_URL" in viewer_html
     assert "partMatchesNameExact" in viewer_html
     assert "Longest IDs first avoids" in viewer_html
     assert "&& !partState.ghostRest" in viewer_html
@@ -1641,6 +1785,47 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert red_pixels > 100
     assert blue_pixels > 100
 
+
+def test_run_second_viewer_summarizes_part_changes(runner, isolated_dir):
+    first = """\
+import cadquery as cq
+deck = cq.Workplane("XY").box(10, 10, 2)
+pin = cq.Workplane("XY").circle(1).extrude(5)
+show_object(deck, id="deck", name="Deck", options={"color": "gray"})
+show_object(pin, id="pin", name="Pin")
+"""
+    second = """\
+import cadquery as cq
+deck = cq.Workplane("XY").box(12, 10, 2)
+arm = cq.Workplane("XY").box(8, 2, 1).translate((0, 5, 0))
+show_object(deck, id="deck", name="Main Deck", options={"color": "blue"})
+show_object(arm, id="arm", name="Arm")
+"""
+    _init_project(runner)
+    _write_script(isolated_dir, content=first)
+    first_result = runner.invoke(cli, ["run", "script.py", "--output", "first"])
+    assert first_result.exit_code == 0, first_result.output
+    _write_script(isolated_dir, content=second)
+    second_result = runner.invoke(cli, ["run", "script.py", "--output", "second"])
+    assert second_result.exit_code == 0, second_result.output
+
+    viewer_html = (isolated_dir / "v2_second" / "viewer.html").read_text()
+    import re
+    match = re.search(r"const PART_CHANGES = (\{.*?\});", viewer_html)
+    assert match, "PART_CHANGES const not found in viewer.html"
+    changes = json.loads(match.group(1))
+    assert changes["against"] == "first"
+    assert changes["added"] == [{"id": "arm", "name": "Arm"}]
+    assert changes["removed"] == [{"id": "pin", "name": "Pin"}]
+    assert changes["renamed"] == [
+        {"id": "deck", "from": "Deck", "to": "Main Deck"}
+    ]
+    assert changes["changed"] == [
+        {"id": "deck", "name": "Main Deck", "fields": ["geometry", "color"]}
+    ]
+    assert changes["summary"] == "1 added · 1 removed · 1 renamed · 1 changed"
+    assert 'PARTS_MODEL = "b"' in viewer_html
+    assert 'id="parts-changes"' in viewer_html
 
 def test_run_viewer_embeds_part_groups(runner, isolated_dir):
     _init_project(runner)
