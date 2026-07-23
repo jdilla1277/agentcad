@@ -26,9 +26,9 @@ SECTIONS = {
         "  Run 'agentcad docs' to see full documentation.\n"
     ),
     "quickstart": (
-        "Quickstart:\n"
-        "  1. Initialize a project:\n"
-        "     agentcad init --name myproject\n"
+        "Quickstart (CadQuery compatibility mode):\n"
+        "  1. Initialize a project explicitly pinned to CadQuery:\n"
+        "     agentcad init --name myproject --runtime cadquery\n"
         "\n"
         "  2. Write a script (no imports needed — cq is pre-injected):\n"
         "     box = cq.Workplane('XY').box(10, 20, 5)\n"
@@ -61,7 +61,8 @@ SECTIONS = {
     "commands": (
         "agentcad commands:\n"
         "  init    — Initialize a new agentcad project (creates agentcad.json).\n"
-        "  run     — Execute a build123d or CadQuery script, produce versioned STEP output.\n"
+        "  run     — Execute a build123d script (or explicit CadQuery compatibility\n"
+        "            script), producing versioned STEP output.\n"
         "            Always produces: STEP, GLB, viewer.html, and (from v2) diff PNGs.\n"
         "            Opens viewer.html after success; --no-view opts out. From v2,\n"
         "            the viewer preloads A=previous and B=current for comparison.\n"
@@ -748,9 +749,9 @@ SECTIONS = {
         "  metrics cover each shape individually.\n"
     ),
     "workflow": (
-        "Typical workflow:\n"
-        "  1. agentcad init --name myproject\n"
-        "  2. Write a build123d or CadQuery script (script.py) with show_object().\n"
+        "Typical workflow (CadQuery compatibility project):\n"
+        "  1. agentcad init --name myproject --runtime cadquery\n"
+        "  2. Write a CadQuery script (script.py) with show_object().\n"
         "  3. agentcad run script.py --output label [--render iso] [--export stl,glb]\n"
         "     The browser viewer opens automatically. On later runs, review\n"
         "     A=previous and B=current using A/B, side-by-side, overlay, and Parts.\n"
@@ -787,7 +788,8 @@ SECTIONS = {
         '       {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}\n'
         "\n"
         "  Available tools:\n"
-        "    run       Execute a build123d or CadQuery script, produce STEP + metrics\n"
+        "    run       Execute a build123d script (or explicit CadQuery compatibility\n"
+        "              script), producing STEP + metrics\n"
         "    render    Render PNG views of a STEP file\n"
         "    export    Export STEP to mesh formats (stl, glb, obj)\n"
         "    measure   Dimensional report (overall metrics and feature sizes)\n"
@@ -848,7 +850,7 @@ SECTIONS = {
     ),
     "build123d": (
         "build123d runtime — overview pointer:\n"
-        "  build123d is the recommended runtime for new agentcad projects. This\n"
+        "  build123d is the default runtime for new agentcad projects. This\n"
         "  topic is just a pointer; the real content lives in the runtime-aware\n"
         "  topics below (each shows build123d content when the project's runtime\n"
         "  is build123d, or when you pass `--runtime build123d`).\n"
@@ -862,8 +864,8 @@ SECTIONS = {
         "    agentcad docs examples      — worked examples (plate, bracket, gear)\n"
         "    agentcad docs parts         — current per-part limitation (issue #69)\n"
         "\n"
-        "  To make a new project default to build123d:\n"
-        "    agentcad init --name myproject --runtime build123d\n"
+        "  Start a new build123d project (no runtime flag needed):\n"
+        "    agentcad init --name myproject\n"
         "\n"
         "  To get build123d docs without a project pinned to it:\n"
         "    agentcad docs <section> --runtime build123d\n"
@@ -1016,8 +1018,8 @@ BUILD123D_OVERLAY = {
     ),
     "quickstart": (
         "Quickstart (build123d):\n"
-        "  1. Initialize a project pinned to build123d:\n"
-        "     agentcad init --name myproject --runtime build123d\n"
+        "  1. Initialize a project. New projects use build123d by default:\n"
+        "     agentcad init --name myproject\n"
         "\n"
         "  2. Write a script. The build123d API is pre-injected — write\n"
         "     primitives directly, no imports needed:\n"
@@ -1272,7 +1274,7 @@ BUILD123D_OVERLAY = {
     ),
     "workflow": (
         "Typical workflow (build123d project):\n"
-        "  1. agentcad init --name myproject --runtime build123d\n"
+        "  1. agentcad init --name myproject\n"
         "  2. Write a script (script.py) using build123d primitives — see\n"
         "     'agentcad docs preamble' for what's pre-injected and\n"
         "     'agentcad docs quickstart' for examples.\n"
