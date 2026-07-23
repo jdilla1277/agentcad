@@ -14,7 +14,10 @@ show_object(result)
 
 
 def _init_project(runner):
-    runner.invoke(cli, ["init", "--name", "test_project"])
+    runner.invoke(
+        cli,
+        ["init", "--name", "test_project", "--runtime", "cadquery"],
+    )
 
 
 def _create_step(runner, isolated_dir):

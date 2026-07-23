@@ -67,7 +67,10 @@ def _canvas_pixel_summary(page):
 def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir):
     sync_playwright = _require_playwright()
 
-    init_result = runner.invoke(cli, ["init", "--name", "browser_smoke"])
+    init_result = runner.invoke(
+        cli,
+        ["init", "--name", "browser_smoke", "--runtime", "cadquery"],
+    )
     assert init_result.exit_code == 0, init_result.output
     script = isolated_dir / "script.py"
     script.write_text(GROUPED_PARTS_SCRIPT)

@@ -33,7 +33,10 @@ RENDER_KEY_HINTS = {"iso", "front", "back", "left", "right", "top", "bottom"}
 
 
 def _init(runner):
-    return runner.invoke(cli, ["init", "--name", "p"])
+    return runner.invoke(
+        cli,
+        ["init", "--name", "p", "--runtime", "cadquery"],
+    )
 
 
 def _make_step(runner, isolated_dir):

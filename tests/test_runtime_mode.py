@@ -22,11 +22,12 @@ from agentcad.runners import dispatch
 # ---------- init --runtime ----------
 
 class TestInitRuntime:
-    def test_init_without_runtime_omits_field(self, runner, isolated_dir):
+    def test_init_without_runtime_stamps_build123d(self, runner, isolated_dir):
         result = runner.invoke(cli, ["init", "--name", "p"])
         assert result.exit_code == 0
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
-        assert "runtime" not in manifest
+        assert manifest["runtime"] == "build123d"
+        assert json.loads(result.stdout)["runtime"] == "build123d"
 
     def test_init_with_cadquery_stamps_field(self, runner, isolated_dir):
         result = runner.invoke(cli, ["init", "--name", "p", "--runtime", "cadquery"])
@@ -119,10 +120,18 @@ class TestResolvePrecedence:
         name, _ = dispatch.resolve("show_object(None)\n", project_default="build123d")
         assert name == "build123d"
 
-    def test_explicit_imports_beat_project_default(self):
-        """An import-cadquery script in a b3d project still routes cadquery."""
-        name, _ = dispatch.resolve("import cadquery\n", project_default="build123d")
-        assert name == "cadquery"
+    def test_project_default_rejects_conflicting_import(self):
+        """A pinned project presents one API unless the user overrides it."""
+        with pytest.raises(ValueError, match="project uses build123d") as exc:
+            dispatch.resolve("import cadquery\n", project_default="build123d")
+        assert "--runtime cadquery" in str(exc.value)
+
+    def test_cadquery_project_rejects_build123d_import(self):
+        with pytest.raises(ValueError, match="project uses cadquery") as exc:
+            dispatch.resolve(
+                "from build123d import Box\n", project_default="cadquery"
+            )
+        assert "--runtime build123d" in str(exc.value)
 
     def test_override_beats_project_default(self):
         name, _ = dispatch.resolve("show_object(None)\n",
@@ -331,8 +340,10 @@ class TestRunFollowsProjectMode:
         parsed = json.loads(result.stdout)
         assert parsed["runtime"] == dispatch.DEFAULT_RUNTIME
 
-    def test_explicit_cadquery_import_wins_in_b3d_project(self, runner, isolated_dir):
-        """Escape hatch: explicit imports always beat project mode."""
+    def test_explicit_cadquery_import_requires_override_in_b3d_project(
+        self, runner, isolated_dir
+    ):
+        """A project/script mismatch fails before allocating a version."""
         runner.invoke(cli, ["init", "--name", "p", "--runtime", "build123d"])
         (isolated_dir / "cq.py").write_text(
             "import cadquery as cq\nshow_object(cq.Workplane('XY').box(1, 2, 3))\n"
@@ -340,6 +351,29 @@ class TestRunFollowsProjectMode:
 
         result = runner.invoke(cli, ["run", "cq.py", "--output", "v1", "--dry-run"])
         parsed = json.loads(result.stdout)
+        assert result.exit_code == 1
+        assert parsed["status"] == "error"
+        assert "project uses build123d" in parsed["message"]
+        assert "--runtime cadquery" in parsed["message"]
+        assert not any(p.name.startswith("v1_") for p in isolated_dir.iterdir())
+
+    def test_explicit_override_runs_cadquery_in_b3d_project(
+        self, runner, isolated_dir
+    ):
+        runner.invoke(cli, ["init", "--name", "p", "--runtime", "build123d"])
+        (isolated_dir / "cq.py").write_text(
+            "import cadquery as cq\nshow_object(cq.Workplane('XY').box(1, 2, 3))\n"
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run", "cq.py", "--output", "v1", "--dry-run",
+                "--runtime", "cadquery",
+            ],
+        )
+        parsed = json.loads(result.stdout)
+        assert result.exit_code == 0, result.output
         assert parsed["runtime"] == "cadquery"
 
     def test_meta_json_records_runtime_in_b3d_project(self, runner, isolated_dir):

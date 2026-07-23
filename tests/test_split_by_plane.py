@@ -164,7 +164,13 @@ below, above = split_by_plane(base, "XY")
 show_object(below)
 '''
         )
-        result = runner.invoke(cli, ["run", "edit.py", "--output", "should_fail"])
+        result = runner.invoke(
+            cli,
+            [
+                "run", "edit.py", "--output", "should_fail",
+                "--runtime", "cadquery",
+            ],
+        )
         assert result.exit_code != 0
         text = result.output.lower()
         assert "split_by_plane" in text

@@ -232,6 +232,8 @@ class TestImportInitFlag:
         result = runner.invoke(cli, ["import", "--init", str(step)])
         assert result.exit_code == 0, result.output
         assert (isolated_dir / "agentcad.json").exists()
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "success"
 
