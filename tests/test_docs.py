@@ -248,6 +248,22 @@ def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
     assert default_pos >= 0, "must mention build123d as the global default"
 
 
+def test_docs_runtimes_positions_build123d_before_cadquery(runner):
+    result = runner.invoke(cli, ["docs", "runtimes"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+
+    assert content.startswith(
+        "Choosing a runtime — build123d default, CadQuery compatibility:"
+    )
+    assert content.find("    build123d:") < content.find(
+        "    CadQuery compatibility:"
+    )
+    assert "geometry and metrics are identical" not in content
+    assert "agentcad init --runtime cadquery" in content
+    assert "--runtime cadquery" in content
+
+
 def test_docs_works_without_project(runner, isolated_dir):
     # No agentcad.json in isolated_dir
     result = runner.invoke(cli, ["docs"])
