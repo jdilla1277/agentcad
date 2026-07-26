@@ -642,6 +642,24 @@ class TestExportFlag:
         assert manifest["versions"] == []
         assert not any(isolated_dir.glob("v1_*"))
 
+    def test_rejects_empty_string_export_format_list_without_consuming_version(
+        self, runner, isolated_dir
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--output", "label", "--export", "",
+                 "--no-preview")
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["command"] == "run"
+        assert parsed["status"] == "error"
+        assert "No export formats specified" in parsed["message"]
+        assert "Supported: stl, glb, obj" in parsed["message"]
+
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["versions"] == []
+        assert not any(isolated_dir.glob("v1_*"))
+
     def test_still_accepts_a_trailing_comma(self, runner, isolated_dir):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)

@@ -481,7 +481,7 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
     # routing, version allocation, or any disk artifacts — so `run --export`
     # matches `agentcad export` instead of silently ignoring unknown formats.
-    if export:
+    if export is not None:
         # An all-blank value (e.g. `--export ","`) parses to an empty list.
         # Without this the run would execute the whole script and consume a
         # version number, then export nothing and still report success.

@@ -624,6 +624,24 @@ def test_run_rejects_empty_export_format_list_without_consuming_version(runner, 
     assert not any(isolated_dir.glob("v1_*"))
 
 
+def test_run_rejects_empty_string_export_format_list_without_consuming_version(runner, isolated_dir):
+    """`--export ""` is still an explicitly provided empty format list and
+    should fail the same way as an all-blank comma list."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "label", "--export", ""])
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "run"
+    assert parsed["status"] == "error"
+    assert "No export formats specified" in parsed["message"]
+    assert "Supported: stl, glb, obj" in parsed["message"]
+
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+    assert not any(isolated_dir.glob("v1_*"))
+
+
 def test_run_still_accepts_a_trailing_comma(runner, isolated_dir):
     """The other side of the fix: a trailing comma must still trim cleanly
     instead of being caught by the new empty-list check."""
