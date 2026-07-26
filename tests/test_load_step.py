@@ -104,7 +104,13 @@ class TestLoadStepInCadqueryScriptFails:
             "base = load_step('v1_bracket/output.step')\n"
             "show_object(base)\n"
         )
-        result = runner.invoke(cli, ["run", str(script), "--output", "should_fail"])
+        result = runner.invoke(
+            cli,
+            [
+                "run", str(script), "--output", "should_fail",
+                "--runtime", "cadquery",
+            ],
+        )
         # Validation or execution error — either way, not silent success.
         assert result.exit_code != 0
         # Error message must point at the kernel-neutral path.

@@ -24,6 +24,15 @@ def _init(runner, isolated_dir):
     assert result.exit_code == 0, result.output
 
 
+def _init_unpinned_legacy_project(isolated_dir):
+    """Write the pre-M66 manifest shape: initialized, but no runtime field."""
+    (isolated_dir / "agentcad.json").write_text(json.dumps({
+        "name": "legacy",
+        "version": "0.1.0",
+        "versions": [],
+    }))
+
+
 def _write(isolated_dir, name, body):
     (isolated_dir / name).write_text(body)
 
@@ -33,8 +42,25 @@ def _run(runner, *args):
 
 
 def test_dispatch_cadquery_script_via_imports(runner, isolated_dir):
-    _init(runner, isolated_dir)
+    _init_unpinned_legacy_project(isolated_dir)
     _write(isolated_dir, "box.py", "import cadquery as cq\nshow_object(cq.Workplane('XY').box(1, 2, 3))\n")
+
+    result = _run(runner, "box.py", "--output", "cq1", "--dry-run")
+    parsed = json.loads(result.stdout)
+
+    assert result.exit_code == 0, result.output
+    assert parsed["status"] == "success"
+    assert parsed["runtime"] == "cadquery"
+    assert parsed["metrics"]["volume"] == 6.0
+
+
+def test_dispatch_legacy_zero_import_cadquery_script(runner, isolated_dir):
+    _init_unpinned_legacy_project(isolated_dir)
+    _write(
+        isolated_dir,
+        "box.py",
+        "show_object(cq.Workplane('XY').box(1, 2, 3))\n",
+    )
 
     result = _run(runner, "box.py", "--output", "cq1", "--dry-run")
     parsed = json.loads(result.stdout)

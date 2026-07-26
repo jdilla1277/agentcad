@@ -16,9 +16,10 @@ from agentcad.manifest import MANIFEST_FILE
     type=click.Choice(["cadquery", "build123d"]),
     help=(
         "Default CAD engine for `agentcad run` in this project. "
-        "Sets the project mode — scripts that don't import either library "
-        "are routed to this engine, and `agentcad docs` shows engine-specific "
-        "content. Defaults to cadquery (omitted from manifest)."
+        "Pins the project mode; scripts written for the other engine require "
+        "an explicit `agentcad run --runtime` override. Engine-specific docs "
+        "follow this mode. Defaults to build123d and is recorded in the "
+        "manifest."
     ),
 )
 @click.option(
@@ -49,23 +50,23 @@ def init(name, runtime, force):
         "command": "init",
         "status": "success",
         "project": project_name,
+        "runtime": manifest["runtime"],
     }
-    if runtime is not None:
-        response["runtime"] = runtime
     if force:
         response["overwrote_existing"] = True
     click.echo(json.dumps(response))
 
 
 def _build_manifest(project_name: str, runtime: str | None) -> dict:
+    from agentcad.runners import dispatch
+
     manifest = {
         "name": project_name,
         "version": "0.1.0",
         "created": datetime.now(timezone.utc).isoformat(),
+        "runtime": runtime or dispatch.DEFAULT_RUNTIME,
         "versions": [],
     }
-    if runtime is not None:
-        manifest["runtime"] = runtime
     return manifest
 
 

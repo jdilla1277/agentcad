@@ -89,7 +89,10 @@ show_object(pin, id="locator_pin", name="Locator Pin", options={"group_color": "
 
 
 def _init_project(runner):
-    runner.invoke(cli, ["init", "--name", "test_project"])
+    runner.invoke(
+        cli,
+        ["init", "--name", "test_project", "--runtime", "cadquery"],
+    )
 
 
 def _write_script(directory, content=SIMPLE_BOX_SCRIPT, filename="script.py"):
@@ -702,7 +705,10 @@ def test_run_with_export_obj(runner, isolated_dir):
 def test_end_to_end_workflow(runner, isolated_dir):
     """Full workflow: init -> run -> render -> export -> context -> diff."""
     # 1. init
-    r = runner.invoke(cli, ["init", "--name", "e2e_test"])
+    r = runner.invoke(
+        cli,
+        ["init", "--name", "e2e_test", "--runtime", "cadquery"],
+    )
     assert r.exit_code == 0
     assert json.loads(r.stdout)["status"] == "success"
 

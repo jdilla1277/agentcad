@@ -9,7 +9,10 @@ from agentcad.validate import validate_script
 
 
 def _init_project(runner):
-    runner.invoke(cli, ["init", "--name", "test_project"])
+    runner.invoke(
+        cli,
+        ["init", "--name", "test_project", "--runtime", "cadquery"],
+    )
 
 
 def _write_script(directory, content, filename="script.py"):
