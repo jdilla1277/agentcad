@@ -241,6 +241,22 @@ def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
     assert "Global default: build123d" in content
 
 
+def test_docs_runtimes_positions_build123d_before_cadquery(runner):
+    result = runner.invoke(cli, ["docs", "runtimes"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+
+    assert content.startswith(
+        "Choosing a runtime — build123d default, CadQuery compatibility:"
+    )
+    assert content.find("    build123d:") < content.find(
+        "    CadQuery compatibility:"
+    )
+    assert "geometry and metrics are identical" not in content
+    assert "agentcad init --runtime cadquery" in content
+    assert "--runtime cadquery" in content
+
+
 def test_docs_works_without_project(runner, isolated_dir):
     # No agentcad.json in isolated_dir
     result = runner.invoke(cli, ["docs"])
@@ -253,13 +269,40 @@ def test_docs_works_without_project(runner, isolated_dir):
 
 
 def test_docs_quickstart_section(runner):
-    # Pinned cq — quickstart shows cq.Workplane idiom on this side.
+    # Explicit CQ compatibility docs show both the project flag and CQ idiom.
     result = runner.invoke(cli, ["docs", "quickstart", "--runtime", "cadquery"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     content = data["content"]
     assert "show_object" in content
     assert "cq.Workplane" in content
+    assert "agentcad init --name myproject --runtime cadquery" in content
+
+
+def test_docs_default_quickstart_uses_build123d_without_runtime_flag(runner):
+    result = runner.invoke(cli, ["docs", "quickstart"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "Quickstart (build123d)" in content
+    assert "agentcad init --name myproject" in content
+    assert "--runtime build123d" not in content
+    assert "Box(10, 20, 5)" in content
+
+
+def test_docs_default_workflow_does_not_require_build123d_flag(runner):
+    result = runner.invoke(cli, ["docs", "workflow"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "agentcad init --name myproject" in content
+    assert "--runtime build123d" not in content
+
+
+def test_docs_cadquery_workflow_pins_compatibility_mode(runner):
+    result = runner.invoke(cli, ["docs", "workflow", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "CadQuery compatibility project" in content
+    assert "agentcad init --name myproject --runtime cadquery" in content
 
 
 def test_docs_quickstart_shows_multi_show_object(runner):
