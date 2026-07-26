@@ -260,13 +260,11 @@ def test_help_example_runtime_follows_cadquery_project(runner, isolated_dir):
     assert result.exit_code == 0
     assert '"runtime": "cadquery"' in result.output
     assert '"runtime": "build123d"' not in result.output
+    assert "--runtime cadquery" in result.output
 
 
-def test_help_example_init_step_matches_run_runtime(runner, isolated_dir):
-    """The `agentcad init` line inside EXAMPLE SESSION must pin the same
-    runtime as the run JSON below it. An agent who copy-paste-replays the
-    example shouldn't end up in a different runtime than the example
-    advertised — the init and run lines are read together."""
+def test_help_example_uses_default_build123d_init(runner, isolated_dir):
+    """The default example should demonstrate that build123d needs no flag."""
     runner.invoke(cli, ["init", "--name", "b3d_consistency", "--runtime", "build123d"])
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
@@ -276,6 +274,5 @@ def test_help_example_init_step_matches_run_runtime(runner, isolated_dir):
         "Version directory layout", 1
     )[0]
     assert "agentcad init" in example_block
-    assert "--runtime build123d" in example_block
-    # Run-line still reflects the same runtime.
+    assert "--runtime" not in example_block
     assert '"runtime": "build123d"' in example_block

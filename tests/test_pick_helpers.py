@@ -81,7 +81,10 @@ class TestPickFaceInBuild123d:
             "f = pick_face(base, 9999)\n"
             "show_object(base)\n"
         )
-        result = runner.invoke(cli, ["run", str(script), "--output", "should_fail"])
+        result = runner.invoke(
+            cli,
+            ["run", str(script), "--output", "should_fail"],
+        )
         # Failure is OK; what matters is no traceback in the JSON output.
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
@@ -120,7 +123,13 @@ class TestPickHelpersInCadqueryScriptFails:
             "f = pick_face(base, 1)\n"
             "show_object(base)\n"
         )
-        result = runner.invoke(cli, ["run", str(script), "--output", "should_fail"])
+        result = runner.invoke(
+            cli,
+            [
+                "run", str(script), "--output", "should_fail",
+                "--runtime", "cadquery",
+            ],
+        )
         assert result.exit_code != 0
         text = result.output.lower()
         assert "pick_face" in text

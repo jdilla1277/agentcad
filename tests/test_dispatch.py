@@ -36,6 +36,12 @@ class TestDetect:
     def test_nested_from_import_cadquery(self):
         assert dispatch.detect("from cadquery.occ_impl.shapes import Solid\n") == "cadquery"
 
+    def test_legacy_zero_import_cq_workplane(self):
+        assert dispatch.detect("show_object(cq.Workplane('XY').box(1, 2, 3))\n") == "cadquery"
+
+    def test_unrelated_cq_string_does_not_trigger(self):
+        assert dispatch.detect('message = "cq.Workplane"\n') == dispatch.DEFAULT_RUNTIME
+
     def test_plain_import_build123d(self):
         assert dispatch.detect("import build123d\n") == "build123d"
 
@@ -120,3 +126,10 @@ class TestResolve:
     def test_override_none_is_ignored(self):
         name, _ = dispatch.resolve("from build123d import Box\n", override=None)
         assert name == "build123d"
+
+    def test_project_runtime_rejects_detected_mismatch(self):
+        with pytest.raises(ValueError, match="--runtime cadquery"):
+            dispatch.resolve(
+                "show_object(cq.Workplane('XY').box(1, 2, 3))\n",
+                project_default="build123d",
+            )

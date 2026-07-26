@@ -216,36 +216,29 @@ def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
 
     Precedence per dispatch.py:14 (highest to lowest):
       1. --runtime CLI flag
-      2. Script imports
-      3. Project manifest
+      2. Project manifest
+      3. Legacy source detection for unpinned projects
       4. Global default (build123d, post-#163)
-
-    The earlier text claimed the project manifest "wins if set" — that
-    contradicts the dispatcher, and three sub-agents in the batch-2 side-by-side
-    independently noticed and reported it. This test pins the contract.
     """
     result = runner.invoke(cli, ["docs", "runtimes"])
     assert result.exit_code == 0
     content = json.loads(result.stdout)["content"]
 
-    # Must NOT contain the false claim that the project pin wins unconditionally.
-    assert "wins if set" not in content, (
-        "project pin does NOT win unconditionally — script imports beat it"
-    )
+    assert "Beats the project manifest" not in content
     # Must NOT still advertise cadquery as the global default (post-#163 it's build123d).
     assert "will flip after Phase 6" not in content, (
         "Phase 6 already shipped; the default is build123d"
     )
 
-    # Must teach the correct precedence: --runtime > imports > manifest > default.
+    # Must teach the correct precedence: override > manifest > legacy > default.
     runtime_pos = content.find("--runtime")
-    imports_pos = content.find("Script imports")
-    manifest_pos = content.find("agentcad.json")
-    default_pos = content.find("build123d")
+    manifest_pos = content.find("Project manifest")
+    legacy_pos = content.find("Legacy projects")
+    default_pos = content.find("Global default")
     assert (
-        0 <= runtime_pos < imports_pos < manifest_pos
+        0 <= runtime_pos < manifest_pos < legacy_pos < default_pos
     ), "dispatch precedence should be listed in order"
-    assert default_pos >= 0, "must mention build123d as the global default"
+    assert "Global default: build123d" in content
 
 
 def test_docs_works_without_project(runner, isolated_dir):

@@ -454,7 +454,16 @@ def _assign_part_identity(raw_parts):
 @click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
-@click.option("--runtime", default=None, type=click.Choice(["cadquery", "build123d"]), help="Force a runtime. Default: auto-detect from script imports, then project runtime, then build123d.")
+@click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["cadquery", "build123d"]),
+    help=(
+        "One-off runtime override. Without it, the project runtime is "
+        "authoritative; legacy unpinned projects detect source syntax, then "
+        "fall back to build123d."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
 def run(ctx, script, output, render, export, preview, open_view, params, dry_run, runtime, no_daemon):
@@ -601,7 +610,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         sys.exit(1)
 
     # Dispatch to the right runner. Precedence:
-    #   --runtime flag > script imports > project mode (agentcad.json) > default
+    #   --runtime flag > project mode > legacy source detection > default
     from agentcad.runners import dispatch
 
     raw_source = script_path.read_text()
@@ -612,7 +621,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             raw_source, override=runtime, project_default=project_default
         )
     except ValueError as e:
-        # Ambiguous imports or unknown --runtime — surface cleanly.
+        # Ambiguous/mismatched source or unknown --runtime — surface cleanly.
         click.echo(json.dumps({
             "command": "run",
             "status": "error",

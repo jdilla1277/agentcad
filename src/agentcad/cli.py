@@ -58,14 +58,16 @@ CHOOSING A RUNTIME
   operators for booleans). cadquery is the legacy supported runtime — pick it when
   porting existing scripts.
 
-  Dispatch order: --runtime flag > script imports (`import cadquery` /
-  `from build123d`) > project's agentcad.json `runtime` > build123d
-  (global default). See `agentcad docs runtimes` for the full picture.
+  A project's agentcad.json pins one authoring API. Use `--runtime` for a
+  one-off run with the other engine. Legacy unpinned projects still detect
+  explicit imports and `cq.*` usage; otherwise the default is build123d.
+  See `agentcad docs runtimes` for the full picture.
 
 \b
 EXAMPLE SESSION
-  $ agentcad init --name myproject --runtime __RUNTIME__
-  {"command": "init", "status": "success", "project": "myproject"}
+  $ agentcad init --name myproject__INIT_RUNTIME__
+  {"command": "init", "status": "success", "project": "myproject",
+   "runtime": "__RUNTIME__"}
 \b
   # Write script.py (see 'agentcad docs quickstart'), then:
   $ agentcad run script.py --output first --render iso
@@ -220,7 +222,12 @@ MCP INTEGRATION
 
 
 def _build_briefing(runtime: str = "build123d") -> str:
-    return _BRIEFING_TEMPLATE.replace("__RUNTIME__", runtime)
+    init_runtime = "" if runtime == "build123d" else f" --runtime {runtime}"
+    return (
+        _BRIEFING_TEMPLATE
+        .replace("__RUNTIME__", runtime)
+        .replace("__INIT_RUNTIME__", init_runtime)
+    )
 
 
 class _LoggingGroup(click.Group):

@@ -391,7 +391,10 @@ def _init_project_with_two_runs(runner, isolated_dir):
 
     Scripts explicitly import cadquery — post-Phase-6 the no-import path
     defaults to b3d, which doesn't inject ``cq``."""
-    runner.invoke(cli, ["init", "--name", "diffproj"])
+    runner.invoke(
+        cli,
+        ["init", "--name", "diffproj", "--runtime", "cadquery"],
+    )
     script_a = isolated_dir / "a.py"
     script_a.write_text(
         "import cadquery as cq\n"

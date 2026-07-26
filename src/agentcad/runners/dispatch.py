@@ -1,11 +1,11 @@
 """Runtime dispatcher — pick a runner by reading what the script imports.
 
-The CLI stays a single ``agentcad run`` command. Dispatch is invisible
-to users: a script that writes ``import cadquery as cq`` gets the
-CadQuery runner, one that writes ``from build123d import Box`` gets
-the build123d runner, and a script that imports neither falls back to
-the project's default runtime (or ``build123d`` if no project mode is
-set), preserving every existing agentcad script on disk.
+The CLI stays a single ``agentcad run`` command. A pinned project presents
+one authoring API; scripts that clearly use the other API fail with an
+actionable override instead of silently changing engines. For legacy projects
+without a runtime field, explicit imports and the old zero-import
+``cq.Workplane(...)`` preamble select CadQuery. Everything else defaults to
+build123d.
 
 Scripts that somehow import *both* are rejected — silently guessing
 would be worse than a loud error. A ``--runtime`` CLI flag bypasses
@@ -13,8 +13,8 @@ detection entirely when the agent needs to force a choice.
 
 Precedence (highest to lowest):
   1. ``--runtime`` CLI flag (one-off override)
-  2. Explicit script imports (``import cadquery`` / ``from build123d ...``)
-  3. Project mode (``runtime`` field in ``agentcad.json``)
+  2. Project mode (``runtime`` field in ``agentcad.json``)
+  3. Legacy source detection for unpinned projects
   4. Global default (``build123d``)
 """
 
@@ -82,10 +82,50 @@ def _imports(tree: ast.AST) -> set[str]:
     return names
 
 
+def _attribute_root_name(node: ast.AST) -> str | None:
+    """Return the root name of an attribute chain such as ``cq.Workplane``."""
+    current = node
+    while isinstance(current, ast.Attribute):
+        current = current.value
+    return current.id if isinstance(current, ast.Name) else None
+
+
+def _declared_runtime(source: str) -> RuntimeName | None:
+    """Return the runtime clearly declared by script syntax, if any.
+
+    Besides imports, recognize ``cq.<name>`` attribute access for scripts from
+    the original zero-import CadQuery preamble. Syntax errors deliberately
+    return ``None`` so the selected runner's validator can report them using
+    the normal structured contract.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    imported = _imports(tree)
+    has_cq = "cadquery" in imported or any(
+        isinstance(node, ast.Attribute) and _attribute_root_name(node) == "cq"
+        for node in ast.walk(tree)
+    )
+    has_b3d = "build123d" in imported
+    if has_cq and has_b3d:
+        raise ValueError(
+            "runtime ambiguous: script references both cadquery and build123d. "
+            "Remove one, or pass --runtime=<cadquery|build123d> to force a choice."
+        )
+    if has_b3d:
+        return "build123d"
+    if has_cq:
+        return "cadquery"
+    return None
+
+
 def detect(source: str, default: RuntimeName | None = None) -> RuntimeName:
-    """Pick a runtime based on imports in ``source``.
+    """Pick a runtime based on declarations in ``source``.
 
     * ``cadquery`` imports → ``"cadquery"``
+    * legacy ``cq.<name>`` access → ``"cadquery"``
     * ``build123d`` imports → ``"build123d"``
     * Both → ``ValueError`` (ambiguous)
     * Neither → ``default`` if given, else ``DEFAULT_RUNTIME``
@@ -97,23 +137,7 @@ def detect(source: str, default: RuntimeName | None = None) -> RuntimeName:
     Raising would bypass that path.
     """
     fallback: RuntimeName = default if default is not None else DEFAULT_RUNTIME
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return fallback
-    imported = _imports(tree)
-    has_cq = "cadquery" in imported
-    has_b3d = "build123d" in imported
-    if has_cq and has_b3d:
-        raise ValueError(
-            "runtime ambiguous: script imports both cadquery and build123d. "
-            "Remove one, or pass --runtime=<cadquery|build123d> to force a choice."
-        )
-    if has_b3d:
-        return "build123d"
-    if has_cq:
-        return "cadquery"
-    return fallback
+    return _declared_runtime(source) or fallback
 
 
 def get_runner(name: RuntimeName):
@@ -140,7 +164,9 @@ def resolve(
 ) -> tuple[RuntimeName, object]:
     """Pick a runtime and return ``(name, runner_module)``.
 
-    Precedence: ``override`` > script imports > ``project_default`` > ``DEFAULT_RUNTIME``.
+    Precedence: ``override`` > ``project_default`` > legacy source detection >
+    ``DEFAULT_RUNTIME``. A declaration that conflicts with a pinned project is
+    an error with a one-off override recovery.
     Callers (i.e. ``commands/run.py``) typically populate ``project_default``
     from :func:`project_runtime`.
     """
@@ -151,5 +177,15 @@ def resolve(
             )
         name: RuntimeName = override  # type: ignore[assignment]
     else:
-        name = detect(source, default=project_default)
+        declared = _declared_runtime(source)
+        if project_default is not None:
+            if declared is not None and declared != project_default:
+                raise ValueError(
+                    f"runtime mismatch: project uses {project_default}, but the "
+                    f"script uses {declared}. Pass --runtime {declared} for a "
+                    "one-off run, or update the runtime in agentcad.json."
+                )
+            name = project_default
+        else:
+            name = declared or DEFAULT_RUNTIME
     return name, get_runner(name)
