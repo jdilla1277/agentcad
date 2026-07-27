@@ -93,7 +93,7 @@ SECTIONS = {
         "[--msaa N] [--name label] [--focus x,y,z] [--no-fit]\n"
         "\n"
         "  --view   Named views (front, back, left, right, top, bottom, iso),\n"
-        "           comma-separated, 'all', or custom 'azimuth,elevation'.\n"
+        "           comma-separated, 'all', custom 'azimuth:elevation', or a mix.\n"
         "  --zoom   Zoom factor applied after FitAll (default 1.0).\n"
         "  --size   Output resolution as WIDTHxHEIGHT (default 800x600).\n"
         "  --msaa   Antialiasing samples, 0-16 (default 0). Nonzero values also\n"

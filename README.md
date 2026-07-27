@@ -34,7 +34,7 @@ agentcad skill install
 agentcad --help
 agentcad init --name phone-stand
 
-Read the --help output — it's your operational briefing.
+Read the --help output — it's your guide to creating, checking, and sharing a model.
 Use the default build123d runtime unless the task explicitly requires
 CadQuery compatibility.
 
@@ -49,7 +49,7 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **Automatic review viewer** — successful runs open `viewer.html`; from v2,
   A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
   Parts-tab change review (`--no-view` opts out)
-- **`agentcad run ... --preview`** — four-view PNG for visual verification; the viewer can export an on-demand turntable GIF
+- **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
@@ -60,7 +60,7 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
 - **`agentcad diff 1 2`** — compare versions (metrics, outputs, parameters)
 - **`agentcad view old.step new.step`** — open an explicit synchronized A/B comparison
-- **`agentcad docs [section]`** — 17 sections of built-in documentation
+- **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
 
 ## No boilerplate
 

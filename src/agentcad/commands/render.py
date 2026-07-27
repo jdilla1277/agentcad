@@ -62,7 +62,14 @@ def _parse_size(_ctx, _param, value):
 
 @click.command()
 @click.argument("step_file")
-@click.option("--view", required=True, help="View spec: named view(s), 'all', or 'azimuth,elevation'.")
+@click.option(
+    "--view",
+    required=True,
+    help=(
+        "Named view(s), 'all', custom azimuth:elevation, or a mix such as "
+        "front,45:30. A legacy single 'azimuth,elevation' pair is also accepted."
+    ),
+)
 @click.option("--zoom", default=1.0, type=float, help="Zoom factor (applied after FitAll).")
 @click.option("--size", default="800x600", callback=_parse_size, metavar="WIDTHxHEIGHT",
               help="Output resolution (default: 800x600).")
