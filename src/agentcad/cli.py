@@ -25,130 +25,193 @@ from agentcad.commands.subscribe import subscribe
 from agentcad.commands.view import view
 
 
-# Runtime placeholders keep the operational briefing aligned with the current
-# project. A fresh/default project gets one build123d authoring guide; a
-# CadQuery-pinned project gets a compatibility-only guide.
-_BRIEFING_TEMPLATE = """\
+# Runtime placeholders keep the how-to guide aligned with the current project.
+# A fresh/default project gets one build123d authoring guide; a CadQuery-pinned
+# project gets a compatibility-only guide.
+_GUIDE_TEMPLATE = """\
 __AUTHORING_GUIDE__
+
+QUICK START WORKFLOW
+  1. Write script.py using the authoring API above and surface geometry with
+     show_object(). Check metrics without consuming a version:
+       $ agentcad run script.py --output test --dry-run
+  2. Run for real. The interactive review viewer opens automatically:
+       $ agentcad run script.py --output first --render iso
+  3. Verify dimensions and feature sizes from the generated STEP:
+       $ agentcad measure v1_first/output.step
+  4. Iterate with a new label and review the automatic previous/current diff.
+
+NAMED PARTS AND GROUPS
+  Named outputs become stable reviewable parts:
+    show_object(wheel, id="wheel_left", name="Left wheel",
+                options={"color": "red", "part_of": "wheels"})
+  Use `agentcad parts` after a run to list, isolate, hide, ghost, or focus
+  captured parts and groups. Run `agentcad docs parts` for the full API.
 
 EXAMPLE SESSION
   $ agentcad init --name myproject__INIT_RUNTIME__
   {"command": "init", "status": "success", "project": "myproject",
    "runtime": "__RUNTIME__"}
-  # Write script.py (see 'agentcad docs quickstart'), then:
+  # Write script.py (see `agentcad docs quickstart`), then:
   $ agentcad run script.py --output first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
-   "output_type": "single_part",
-   "version": 1, "label": "first",
+   "output_type": "single_part", "version": 1, "label": "first",
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
    "viewer": "v1_first/viewer.html", "viewer_glb": "v1_first/output.glb",
    "metrics": {"dimensions": {"x": 10.0, "y": 20.0, "z": 5.0},
                "volume": 1000.0, "is_valid": true, ...},
    "preview": "v1_first/preview.png"}
 
-  Version directory layout:
+VERSION OUTPUTS
+  A successful first run creates:
     v1_first/
       output.step       STEP geometry
       output.glb        GLB backing viewer.html (always)
       script.py         copy of the executed script
-      meta.json         full run metadata (includes "runtime" field)
-      preview.png       4-view composite (front/right/top/iso, 1024x1068)
-      diff_side.png     side-by-side vs. prior version (from v2 onward)
-      diff_overlay.png  tinted overlay vs. prior version (from v2 onward)
-      viewer.html       interactive 3D review viewer (opens automatically;
+      meta.json         full run metadata, including runtime and parts
+      preview.png       4-view composite: front, right, top, iso
+      diff_side.png     side-by-side vs. prior success (from v2 onward)
+      diff_overlay.png  tinted overlay vs. prior success (from v2 onward)
+      viewer.html       interactive review viewer (opens automatically;
                         from v2: A=previous, B=current)
-      renders/          PNG views (when --render used)
+      renders/          requested PNG views
 
-COMMANDS
-  agentcad init [--name NAME]__INIT_RUNTIME_OPTION__
+  The viewer can inspect parts and groups, compare versions, and export an
+  on-demand turntable GIF. `--no-preview` skips only preview.png and per-part
+  previews; viewer.html, its GLB, and diff PNGs still generate. `--no-view`
+  prevents the automatic browser launch without removing viewer artifacts.
+
+COMMAND REFERENCE: CREATE AND IMPORT
+  agentcad init [--name NAME]__INIT_RUNTIME_OPTION__ [--force]
     __INIT_COMMAND_DESCRIPTION__
+    --force replaces an existing manifest.
 
-  agentcad run SCRIPT --output LABEL [flags]
-    Execute script, produce versioned STEP + metrics.
-    --render VIEWS   PNG views: front,back,left,right,top,bottom,iso,
-                     'all', custom angle az:el (e.g. 45:30),
-                     or mixed (front,right,45:30).
-    --export FMT     Mesh export: stl, glb (GLB auto-colors per-solid).
-                     `outputs.glb` appears only for explicit --export glb;
-                     `viewer_glb` always points at viewer.html's GLB.
+  agentcad run SCRIPT --output LABEL [OPTIONS]
+    Execute a script and produce a versioned STEP, metrics, viewer, and preview.
+    Passing a STEP/STP/BREP path dispatches to `agentcad import` automatically.
+    --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
+                         front,right,45:30
+    --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
+                         outputs.glb; viewer_glb is always generated.
     --preview / --no-preview
-                     4-view composite PNG + per-part previews (default on,
-                     ~2-4s). viewer.html, GLB, and diff PNGs always
-                     generate regardless — --no-preview only skips the
-                     composite render. Turntable GIFs are on-demand via
-                     the Export GIF button in viewer.html.
-    --view / --no-view Open the generated review viewer after success
-                     (default on). From v2, A/B, side-by-side, overlay,
-                     diff images, and part changes are preloaded.
-    --params K=V,..  Override top-level script constants.
+                         Generate or skip the agent-readable composite and
+                         per-part previews. Preview is on by default (~2-4s).
+    --view / --no-view   Open the review viewer after success (default on).
+                         From v2, previous/current comparison is preloaded.
+    --params K=V,...     Override top-level constants; values may be numbers,
+                         booleans, or strings.
     __RUN_RUNTIME_HELP__
-    --dry-run        Metrics only — no version consumed, no disk artifacts.
+    --dry-run            Return validation and metrics without consuming a
+                         version or writing artifacts.
 
-  agentcad render STEP --view SPEC [--zoom N] [--size WxH] [--msaa N] [--focus x,y,z] [--no-fit] [--name LABEL]
-    Render PNG views of an existing STEP file. Same view spec as --render.
+  agentcad import FILE [--label LABEL] [--init]
+    Adopt STEP/STP/BREP as a versioned baseline with provenance. --init creates
+    a manifest when needed. Later render, view, measure, parts, and diff commands
+    work on an imported version like a scripted one.
+
+COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
+  agentcad render STEP --view SPEC [OPTIONS]
+    Render PNGs after a run. SPEC accepts named views, `all`, custom
+    azimuth:elevation, or a mix. Camera options: --zoom N, --size WxH,
+    --msaa N, --focus x,y,z, --no-fit, and --name LABEL (single view only).
 
   agentcad export STEP --format stl,glb,obj
-    Export STEP to mesh formats. GLB auto-colors individual solids.
+    Export one or more mesh formats. GLB auto-colors individual solids.
 
-  agentcad inspect STEP [--ids|--summary] [--limit N|--no-limit]
-    Topology report: solid_count, shell_count, shells (open/closed + face
-    count per shell), face_count, face_orientations (forward/reversed),
-    edge_count, free_edge_count, is_valid. --ids is capped by default.
+  agentcad view FILE [FILE_B] [--overlay] [--measure] [--spec spec.json]
+    Open an explicit browser review for STEP/STP or GLB; STEP auto-converts.
+    A second file opens synchronized A/B comparison, or a red/green overlay
+    with --overlay. --measure embeds geometry measurements; --spec runs the
+    checklist and opens Spec check mode. Measurement and spec review require
+    STEP/STP source geometry.
 
-  agentcad measure STEP [--features] [--cylinders-only] [--limit N|--no-limit]
-    Dimensional report: overall metrics plus compact feature measurements
-    (edge lengths, face areas, circular/cylindrical radii and diameters).
-    Full feature lists are capped by default; use --no-limit only when needed.
+  agentcad diff REF1 REF2 [--visual] [--overlay]
+    Compare version metrics, outputs, parameters, and parts. Refs may be version
+    numbers or labels. --visual opens the browser comparison; --overlay selects
+    its tinted overlay mode.
 
-  agentcad check-spec STEP SPEC.json
-    Compare measured cylindrical features against an explicit JSON spec.
-    Reports pass/fail, matched features, missing features, and count errors.
+  agentcad parts list REF
+  agentcad parts show REF PART_ID
+    List captured parts/groups or return one stable part record. REF may be a
+    number, vN, label, version directory, current, or latest.
 
-  agentcad parts list REF       List named/captured parts for a version.
-  agentcad parts show REF ID    Show one part from that version by stable id.
   agentcad parts view REF [--isolate ID] [--hide ID] [--ghost-rest] [--focus ID]
                           [--isolate-group GROUP] [--hide-group GROUP]
-                          [--label TEXT] [--note TEXT]
-                                Generate a temporary part review handoff viewer.
-                                Browser changes are not saved.
-  agentcad view FILE [FILE_B] [--overlay] [--measure] [--spec spec.json]
-                                Open GLB/STEP in browser. Two files preload
-                                synchronized A/B and overlay comparison.
-                                Review mode needs STEP/STP source geometry.
-  agentcad diff REF1 REF2        Compare versions (by number or label).
-  agentcad context               Project state: versions, current, tool_version.
+                          [--focus-group GROUP] [--label TEXT] [--note TEXT]
+                          [--no-open]
+    Create a temporary part review handoff viewer. Repeat --isolate/--hide for parts,
+    or --isolate-group/--hide-group for groups; use --ghost-rest, --focus,
+    --focus-group, --label, --note, and --no-open as needed.
+    Browser changes are not saved; generate another viewer to change the state.
+
+COMMAND REFERENCE: VERIFY AND DEBUG
+  agentcad measure FILE [OPTIONS]
+    Return dimensions, metrics, and compact feature summaries for STEP/STP/BREP.
+    --features includes full solid/face/edge lists; --cylinders-only trims the
+    response. Filter cylinder buckets with --diameter N [--tolerance N] and
+    --axis +/-x|+/-y|+/-z|other. Lists are capped; use --limit or --no-limit.
+
+  agentcad check-spec FILE SPEC.json
+    Compare cylindrical features to an explicit checklist. Example:
+      {"features":[{"name":"bolt_holes","type":"cylinder",
+                    "diameter_mm":6,"count":4}]}
+    `status: success` means the check ran; inspect `passed` to determine whether
+    the model meets the spec. Results include matches, missing features, and
+    count errors. Specs may set diameter/count tolerances and an axis.
+
+  agentcad inspect FILE [--ids] [--summary] [--limit N|--no-limit]
+    Report recognized format and, for STEP/STP/BREP, solids, shells, face
+    orientations, edges, free edges, and validity. --summary clusters topology;
+    --ids returns 1-indexed feature IDs used by editing helpers. Lists are capped
+    unless --no-limit is requested.
+
+COMMAND REFERENCE: PROJECT AND INTEGRATIONS
+  agentcad context
+    Return project name, current version, version history, and tool version.
+
   agentcad docs [SECTION] [--runtime ENGINE]
-                                 Engine-specific docs. Defaults to project runtime.
+    Read the full built-in documentation or one section. Useful sections include
+    quickstart, preamble, commands, workflow, render, measure, check-spec,
+    inspect, parts, editing, helpers, patterns, runtimes, feedback, and mcp.
 
-RESPONSE SCHEMA
-  Every command returns JSON with "command" and "status" keys.
-  Successful `run` responses also record the project authoring runtime.
-    "success"          — completed normally.
-    "failed"           — script error. Version IS consumed. Creates v{N}_{label}_failed/.
-    "error"            — CLI error (bad args, missing file, ambiguous runtime).
-                         No version consumed. No disk artifacts.
-    "validation_error" — static check failed (syntax, missing show_object, bad import).
-                         No version consumed. No disk artifacts. Instant (<100ms).
+  agentcad skill install
+  agentcad skill show
+    Install the Claude Code skill in the current project, or return its content
+    as JSON for another agent integration.
 
-METRICS (in every successful run response)
-  bounding_box   {x: [min,max], y: [min,max], z: [min,max]}
-  dimensions     {x, y, z}       bbox extents
-  volume         float            unit-agnostic (mm defaults -> mm^3)
-  surface_area   float
-  center_of_mass {x, y, z}
-  face_count     int              unique faces
-  edge_count     int              unique edges
-  is_valid       bool             BRepCheck shape validity
-  Tip: verify geometry from metrics alone — check volume, dimensions, face_count
-  before rendering. Use 'agentcad diff' to compare metrics across versions.
+  agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
+    Save a diagnostic bundle under .agentcad/feedback and, unless --local-only,
+    send it to the agentcad team. The bundle includes recent session context.
+
+  agentcad subscribe EMAIL
+    Request product updates. Subscription uses email confirmation (double opt-in).
+
+JSON RESPONSE CONTRACT
+  Agent-facing command results are JSON with "command" and "status" keys.
+  Successful `run` results also include "runtime". Run-specific statuses:
+    "success"          completed normally
+    "failed"           script execution failed; consumes a version and creates
+                       v{N}_{label}_failed/ with the script and metadata
+    "error"            CLI/input error; no version or artifacts
+    "validation_error" static script check failed; no version or artifacts
+
+  Successful run metrics include bounding_box, dimensions, volume, surface_area,
+  center_of_mass, face_count, edge_count, and is_valid. Check metrics before
+  rendering; visual appearance alone does not prove dimensional correctness.
 
 SPEC AND MEASUREMENT CHECKS
-  Visual renders are not enough for dimensional work. When the prompt has
-  explicit holes, bores, diameters, counts, or overall dimensions:
-    1. Run normally and inspect the generated STEP.
-    2. Use `agentcad measure` to read dimensions and feature buckets from CAD.
-    3. Use `agentcad check-spec` when you have an explicit JSON checklist.
-    4. Revise before marking the model done if measurements or spec rows fail.
+  When requirements include explicit holes, bores, diameters, counts, or
+  overall dimensions:
+    1. Check run.metrics: dimensions, volume, face_count, and is_valid.
+    2. Read preview.png and, when iterating, diff_side.png.
+    3. Run `agentcad measure` on output.step.
+    4. Run `agentcad check-spec` for explicit cylindrical requirements.
+       Revise before marking the model done when `passed` is false.
+    5. Run `agentcad inspect` when geometry is invalid or topology looks wrong.
+       free_edge_count > 0 suggests an open shell; face_orientations helps find
+       inverted faces.
+    6. Review the automatically opened viewer with the user. Use
+       `agentcad view old.step new.step` for an explicit non-adjacent comparison.
 
 DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
@@ -162,13 +225,13 @@ DEBUGGING
   $ agentcad render v1_test/output.step --view all        # visual from 4 angles
 
 MCP INTEGRATION
-  For native tool integration with Claude Code, Cursor, Windsurf, or any
-  MCP-compatible agent, install the MCP extra and add to your .mcp.json:
+  Install the extra and add agentcad to .mcp.json for Claude Code, Cursor,
+  Windsurf, or another MCP-compatible agent:
 
-    pip install agentcad[mcp]
+    $ pip install 'agentcad[mcp]'
     {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
 
-  This exposes all agentcad commands as native agent tools.
+  This exposes agentcad operations as native agent tools.
 """
 
 
@@ -211,7 +274,7 @@ _CADQUERY_AUTHORING_GUIDE = """CADQUERY COMPATIBILITY AUTHORING
 """
 
 
-def _build_briefing(runtime: str = "build123d") -> str:
+def _build_guide(runtime: str = "build123d") -> str:
     init_runtime = "" if runtime == "build123d" else f" --runtime {runtime}"
     authoring_guide = (
         _CADQUERY_AUTHORING_GUIDE
@@ -239,7 +302,7 @@ def _build_briefing(runtime: str = "build123d") -> str:
             "`agentcad docs runtimes`."
         )
     return (
-        _BRIEFING_TEMPLATE
+        _GUIDE_TEMPLATE
         .replace("__AUTHORING_GUIDE__", authoring_guide)
         .replace("__INIT_RUNTIME_OPTION__", init_runtime_option)
         .replace("__INIT_COMMAND_DESCRIPTION__", init_description)
@@ -253,13 +316,14 @@ class _LoggingGroup(click.Group):
     """Click Group that auto-logs every command invocation to session.jsonl."""
 
     def format_epilog(self, ctx, formatter):
-        # Pin EXAMPLE SESSION's runtime to the project's runtime or global
-        # default. Mirrors `agentcad docs`'s detection
-        # so --help and docs stay in sync from a fresh agent's perspective.
+        # Write the guide verbatim rather than passing it through Click's
+        # paragraph wrapper. Shell snippets and JSON examples must retain their
+        # line breaks to work as an agent-readable docs page.
         from agentcad.runners.dispatch import project_runtime, DEFAULT_RUNTIME
         rt = project_runtime() or DEFAULT_RUNTIME
         formatter.write("\n")
-        formatter.write(_build_briefing(rt))
+        formatter.write(_build_guide(rt))
+        formatter.write("\n")
 
     def invoke(self, ctx):
         captured = []
@@ -303,11 +367,11 @@ class _LoggingGroup(click.Group):
 
 @click.group(
     cls=_LoggingGroup,
-    epilog=_BRIEFING_TEMPLATE,  # Replaced by format_epilog at render time.
+    epilog=_GUIDE_TEMPLATE,  # Replaced by format_epilog at render time.
     context_settings=dict(max_content_width=120),
 )
 def cli():
-    """agentcad — CLI CAD tool for AI agents. All output is JSON."""
+    """agentcad — CLI CAD tool for AI agents. Command results are JSON."""
 
 
 cli.add_command(context)

@@ -28,7 +28,7 @@ geometry. All output is JSON. Every command returns `"command"` and `"status"` k
 
 ```bash
 agentcad init --name <project_name>
-agentcad --help   # Read this — it is your complete operational briefing
+agentcad --help   # Read the built-in how-to guide and command reference
 ```
 
 ## Core workflow
@@ -137,7 +137,7 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
-| `agentcad docs [SECTION]` | Deep-dive docs (17 sections) |
+| `agentcad docs [SECTION]` | Runtime-aware built-in documentation |
 | `agentcad view FILE [FILE_B]` | Open one model or an explicit synchronized A/B comparison |
 
 ## Debugging playbook
@@ -225,12 +225,12 @@ def _cadquery_skill_content() -> str:
         "## First-time setup\n\n"
         "```bash\n"
         "agentcad init --name <project_name>\n"
-        "agentcad --help   # Read this — it is your complete operational briefing\n"
+        "agentcad --help   # Read the built-in how-to guide and command reference\n"
         "```",
         "## CadQuery compatibility setup\n\n"
         "```bash\n"
         "agentcad init --name <project_name> --runtime cadquery\n"
-        "agentcad --help   # Read the project-scoped compatibility briefing\n"
+        "agentcad --help   # Read the project-scoped compatibility how-to guide\n"
         "```",
     )
     content = content.replace(

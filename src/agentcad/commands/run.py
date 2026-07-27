@@ -452,9 +452,25 @@ def _assign_part_identity(raw_parts):
 @click.command()
 @click.argument("script")
 @click.option("--output", required=True, help="Label for this version.")
-@click.option("--render", default=None, help="Comma-separated views to render (front,back,left,right,top,bottom,iso). 'all' renders front,right,top,iso.")
+@click.option(
+    "--render",
+    default=None,
+    help=(
+        "Comma-separated named views, 'all' (front,right,top,iso), custom "
+        "azimuth:elevation angles, or a mix such as front,45:30."
+    ),
+)
 @click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb, obj).")
-@click.option("--preview/--no-preview", default=True, help="4-view composite PNG + per-part previews (default on, ~2-4s). The viewer.html, GLB, and diff PNGs always generate regardless — --no-preview only skips the composite render. Use it when you don't need the agent-readable PNG this iteration.")
+@click.option(
+    "--preview/--no-preview",
+    default=True,
+    help=(
+        "4-view composite PNG + per-part previews (default on, ~2-4s). "
+        "The viewer.html, GLB, and diff PNGs always generate regardless — "
+        "--no-preview skips the composite and per-part previews. Use it when "
+        "you don't need agent-readable PNGs this iteration."
+    ),
+)
 @click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
