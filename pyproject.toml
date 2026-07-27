@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentcad"
 version = "0.4.0"
-description = "CLI CAD tool for AI agents. Write CadQuery scripts, get STEP files, renders, and metrics."
+description = "CLI CAD tool for AI agents. Write build123d scripts, with CadQuery compatibility, and get STEP files, renders, and metrics."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = "Apache-2.0"
 authors = [{name = "James Dillard"}]
-keywords = ["cad", "agent", "cadquery", "3d", "geometry", "ai", "mcp"]
+keywords = ["cad", "agent", "build123d", "cadquery", "3d", "geometry", "ai", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -46,12 +46,11 @@ agentcad = "agentcad.cli:cli"
 where = ["src"]
 
 [tool.pytest.ini_options]
-# Both suites are part of "running the tests" — `tests/` covers the
-# cadquery path, `tests_b3d/` covers the build123d path. Listing both
-# here means bare `pytest` (no args) collects from both, so it's not
-# possible to run one and silently skip the other. PR #142 shipped a
-# b3d-runner regression because the pre-merge check was `pytest tests/`
-# only; this prevents the recurrence at the config layer.
+# Both suites are part of "running the tests": `tests_b3d/` is the primary
+# build123d integration suite, while `tests/` covers shared behavior and the
+# focused CadQuery compatibility contract. Listing both here means bare
+# `pytest` cannot silently skip the primary runtime. PR #142 shipped a
+# build123d-runner regression after only `tests/` ran; this prevents recurrence.
 testpaths = ["tests", "tests_b3d"]
 # Hard per-test timeout so a wedged test (e.g. a daemon fork that
 # never completes, a hung subprocess holding a socket) fails loudly

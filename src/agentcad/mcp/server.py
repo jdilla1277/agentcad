@@ -69,7 +69,10 @@ def run(
     params: str | None = None,
     dry_run: bool = False,
 ) -> dict:
-    """Execute a build123d or CadQuery script and produce a versioned STEP file with metrics.
+    """Execute a build123d script and produce a versioned STEP file with metrics.
+
+    New projects use build123d. Existing CadQuery compatibility projects follow
+    the runtime pinned in their agentcad.json.
 
     Args:
         script: Path to the Python CAD script.
@@ -230,15 +233,22 @@ def check_spec(file: str, spec_file: str, cwd: str) -> dict:
 
 
 @mcp.tool()
-def docs(section: str | None = None) -> dict:
-    """Show agentcad documentation. No project directory needed.
+def docs(
+    section: str | None = None,
+    runtime: str | None = None,
+) -> dict:
+    """Show build123d documentation, or explicit CadQuery compatibility docs.
 
     Args:
         section: Optional section name (quickstart, commands, helpers, patterns, etc).
+        runtime: Optional runtime override. Pass ``cadquery`` to retrieve the
+            same compatibility docs as ``agentcad docs --runtime cadquery``.
     """
     args = ["docs"]
     if section:
         args.append(section)
+    if runtime:
+        args.extend(["--runtime", runtime])
     return _invoke(args)
 
 

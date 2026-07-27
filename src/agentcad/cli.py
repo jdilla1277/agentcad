@@ -25,50 +25,16 @@ from agentcad.commands.subscribe import subscribe
 from agentcad.commands.view import view
 
 
-# Use __RUNTIME__ as a placeholder so the EXAMPLE SESSION's `"runtime": "..."`
-# line can be substituted at help-render time. _LoggingGroup.format_epilog
-# detects the project's runtime via dispatch.project_runtime() and inserts
-# either "cadquery" or "build123d" so a fresh agent in a build123d project
-# doesn't read this and write `cq.Workplane(...)` syntax that won't work.
-_BRIEFING_TEMPLATE = """\b
-SCRIPT WRITING
-  agentcad runs Python scripts that call show_object() to surface geometry.
-  In build123d projects, use show_assembly() for intentional multi-body
-  ShapeList/list output.
-  The script-writing API depends on the project's engine (cadquery or
-  build123d). Run:
+# Runtime placeholders keep the operational briefing aligned with the current
+# project. A fresh/default project gets one build123d authoring guide; a
+# CadQuery-pinned project gets a compatibility-only guide.
+_BRIEFING_TEMPLATE = """\
+__AUTHORING_GUIDE__
 
-    $ agentcad init --name myproject [--runtime cadquery|build123d]
-    $ agentcad docs preamble     # what names are pre-injected into scripts
-    $ agentcad docs quickstart   # first-script walkthrough
-    $ agentcad docs examples     # worked examples (build123d projects only)
-    $ agentcad docs patterns     # idioms + footguns
-
-  The docs follow the project's --runtime automatically. Pass --runtime
-  to docs for a one-off override. With no project pinned, docs use the
-  global default (build123d).
-
-\b
-CHOOSING A RUNTIME
-  Same shape, both ways:
-    cadquery:    box = cq.Workplane('XY').box(10, 20, 5); show_object(box)
-    build123d:   box = Box(10, 20, 5); show_object(box)
-
-  build123d is recommended for new projects (direct primitives, Python
-  operators for booleans). cadquery is the legacy supported runtime — pick it when
-  porting existing scripts.
-
-  A project's agentcad.json pins one authoring API. Use `--runtime` for a
-  one-off run with the other engine. Legacy unpinned projects still detect
-  explicit imports and `cq.*` usage; otherwise the default is build123d.
-  See `agentcad docs runtimes` for the full picture.
-
-\b
 EXAMPLE SESSION
   $ agentcad init --name myproject__INIT_RUNTIME__
   {"command": "init", "status": "success", "project": "myproject",
    "runtime": "__RUNTIME__"}
-\b
   # Write script.py (see 'agentcad docs quickstart'), then:
   $ agentcad run script.py --output first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
@@ -80,7 +46,6 @@ EXAMPLE SESSION
                "volume": 1000.0, "is_valid": true, ...},
    "preview": "v1_first/preview.png"}
 
-\b
   Version directory layout:
     v1_first/
       output.step       STEP geometry
@@ -94,13 +59,10 @@ EXAMPLE SESSION
                         from v2: A=previous, B=current)
       renders/          PNG views (when --render used)
 
-\b
 COMMANDS
-  agentcad init [--name NAME] [--runtime cadquery|build123d]
-    Initialize project. --runtime pins the CAD engine for this project so
-    subsequent `agentcad run` and `agentcad docs` default to it.
+  agentcad init [--name NAME]__INIT_RUNTIME_OPTION__
+    __INIT_COMMAND_DESCRIPTION__
 
-\b
   agentcad run SCRIPT --output LABEL [flags]
     Execute script, produce versioned STEP + metrics.
     --render VIEWS   PNG views: front,back,left,right,top,bottom,iso,
@@ -119,35 +81,29 @@ COMMANDS
                      (default on). From v2, A/B, side-by-side, overlay,
                      diff images, and part changes are preloaded.
     --params K=V,..  Override top-level script constants.
-    --runtime ENGINE Force cadquery or build123d (beats project default).
+    __RUN_RUNTIME_HELP__
     --dry-run        Metrics only — no version consumed, no disk artifacts.
 
-\b
   agentcad render STEP --view SPEC [--zoom N] [--size WxH] [--msaa N] [--focus x,y,z] [--no-fit] [--name LABEL]
     Render PNG views of an existing STEP file. Same view spec as --render.
 
-\b
   agentcad export STEP --format stl,glb,obj
     Export STEP to mesh formats. GLB auto-colors individual solids.
 
-\b
   agentcad inspect STEP [--ids|--summary] [--limit N|--no-limit]
     Topology report: solid_count, shell_count, shells (open/closed + face
     count per shell), face_count, face_orientations (forward/reversed),
     edge_count, free_edge_count, is_valid. --ids is capped by default.
 
-\b
   agentcad measure STEP [--features] [--cylinders-only] [--limit N|--no-limit]
     Dimensional report: overall metrics plus compact feature measurements
     (edge lengths, face areas, circular/cylindrical radii and diameters).
     Full feature lists are capped by default; use --no-limit only when needed.
 
-\b
   agentcad check-spec STEP SPEC.json
     Compare measured cylindrical features against an explicit JSON spec.
     Reports pass/fail, matched features, missing features, and count errors.
 
-\b
   agentcad parts list REF       List named/captured parts for a version.
   agentcad parts show REF ID    Show one part from that version by stable id.
   agentcad parts view REF [--isolate ID] [--hide ID] [--ghost-rest] [--focus ID]
@@ -164,10 +120,9 @@ COMMANDS
   agentcad docs [SECTION] [--runtime ENGINE]
                                  Engine-specific docs. Defaults to project runtime.
 
-\b
 RESPONSE SCHEMA
   Every command returns JSON with "command" and "status" keys.
-  Successful `run` responses also include "runtime" (cadquery or build123d).
+  Successful `run` responses also record the project authoring runtime.
     "success"          — completed normally.
     "failed"           — script error. Version IS consumed. Creates v{N}_{label}_failed/.
     "error"            — CLI error (bad args, missing file, ambiguous runtime).
@@ -175,7 +130,6 @@ RESPONSE SCHEMA
     "validation_error" — static check failed (syntax, missing show_object, bad import).
                          No version consumed. No disk artifacts. Instant (<100ms).
 
-\b
 METRICS (in every successful run response)
   bounding_box   {x: [min,max], y: [min,max], z: [min,max]}
   dimensions     {x, y, z}       bbox extents
@@ -188,7 +142,6 @@ METRICS (in every successful run response)
   Tip: verify geometry from metrics alone — check volume, dimensions, face_count
   before rendering. Use 'agentcad diff' to compare metrics across versions.
 
-\b
 SPEC AND MEASUREMENT CHECKS
   Visual renders are not enough for dimensional work. When the prompt has
   explicit holes, bores, diameters, counts, or overall dimensions:
@@ -197,7 +150,6 @@ SPEC AND MEASUREMENT CHECKS
     3. Use `agentcad check-spec` when you have an explicit JSON checklist.
     4. Revise before marking the model done if measurements or spec rows fail.
 
-\b
 DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
   $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
@@ -209,7 +161,6 @@ DEBUGGING
     Invalid?          -> is_valid: false
   $ agentcad render v1_test/output.step --view all        # visual from 4 angles
 
-\b
 MCP INTEGRATION
   For native tool integration with Claude Code, Cursor, Windsurf, or any
   MCP-compatible agent, install the MCP extra and add to your .mcp.json:
@@ -221,10 +172,78 @@ MCP INTEGRATION
 """
 
 
+_BUILD123D_AUTHORING_GUIDE = """BUILD123D AUTHORING
+  New agentcad projects use build123d. Scripts call show_object() to surface
+  geometry; use show_assembly() for intentional multi-body ShapeList/list
+  output. build123d primitives and agentcad edit helpers are pre-injected:
+
+    box = Box(10, 20, 5)
+    show_object(box)
+
+  Start here:
+
+    $ agentcad init --name myproject
+    $ agentcad docs preamble     # pre-injected build123d names
+    $ agentcad docs quickstart   # first-script walkthrough
+    $ agentcad docs examples     # worked build123d examples
+    $ agentcad docs patterns     # idioms + footguns
+
+  CadQuery compatibility remains available for existing projects and scripts.
+  See `agentcad docs runtimes` for the explicit compatibility workflow.
+"""
+
+
+_CADQUERY_AUTHORING_GUIDE = """CADQUERY COMPATIBILITY AUTHORING
+  This project is pinned to the CadQuery compatibility runtime. Scripts call
+  show_object() to surface geometry, and the CadQuery preamble is pre-injected:
+
+    box = cq.Workplane('XY').box(10, 20, 5)
+    show_object(box)
+
+  Use the project-scoped compatibility docs:
+
+    $ agentcad docs preamble
+    $ agentcad docs quickstart
+    $ agentcad docs patterns
+
+  Keep this project on one authoring API. A one-off build123d run requires an
+  explicit runtime override; new projects use build123d by default.
+"""
+
+
 def _build_briefing(runtime: str = "build123d") -> str:
     init_runtime = "" if runtime == "build123d" else f" --runtime {runtime}"
+    authoring_guide = (
+        _CADQUERY_AUTHORING_GUIDE
+        if runtime == "cadquery"
+        else _BUILD123D_AUTHORING_GUIDE
+    )
+    if runtime == "cadquery":
+        init_runtime_option = " --runtime cadquery"
+        init_description = (
+            "Initialize a CadQuery compatibility project. The runtime pin keeps "
+            "run, docs, help, and skill on the same API."
+        )
+        run_runtime_help = (
+            "--runtime ENGINE Explicit one-off override of this compatibility "
+            "project's runtime."
+        )
+    else:
+        init_runtime_option = ""
+        init_description = (
+            "Initialize a build123d project. Subsequent run, docs, help, and "
+            "skill commands follow that project mode."
+        )
+        run_runtime_help = (
+            "--runtime ENGINE Explicit compatibility override; see "
+            "`agentcad docs runtimes`."
+        )
     return (
         _BRIEFING_TEMPLATE
+        .replace("__AUTHORING_GUIDE__", authoring_guide)
+        .replace("__INIT_RUNTIME_OPTION__", init_runtime_option)
+        .replace("__INIT_COMMAND_DESCRIPTION__", init_description)
+        .replace("__RUN_RUNTIME_HELP__", run_runtime_help)
         .replace("__RUNTIME__", runtime)
         .replace("__INIT_RUNTIME__", init_runtime)
     )
@@ -239,12 +258,8 @@ class _LoggingGroup(click.Group):
         # so --help and docs stay in sync from a fresh agent's perspective.
         from agentcad.runners.dispatch import project_runtime, DEFAULT_RUNTIME
         rt = project_runtime() or DEFAULT_RUNTIME
-        original = self.epilog
-        try:
-            self.epilog = _build_briefing(rt)
-            super().format_epilog(ctx, formatter)
-        finally:
-            self.epilog = original
+        formatter.write("\n")
+        formatter.write(_build_briefing(rt))
 
     def invoke(self, ctx):
         captured = []

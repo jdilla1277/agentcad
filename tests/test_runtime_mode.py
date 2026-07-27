@@ -257,11 +257,11 @@ class TestDocsRuntimeAware:
         assert "parallel to the Z axis" in parsed["content"].lower() or "PARALLEL to the Z axis" in parsed["content"]
         assert "e.center().Z" in parsed["content"]
 
-    def test_docs_outside_project_surfaces_runtime_hint(self, isolated_dir):
-        """Fresh user running docs with no project pinned gets a hint that the
-        other runtime is available. Prevents silently landing on wrong-engine
-        docs. Tracks ``dispatch.DEFAULT_RUNTIME`` rather than hardcoding so the
-        Phase 6 flip carries this test along automatically."""
+    def test_docs_outside_project_uses_default_without_alternative_hint(
+        self, isolated_dir
+    ):
+        """Fresh agents should receive one default API, not an unsolicited
+        prompt to compare runtimes."""
         from click.testing import CliRunner
         from agentcad.runners import dispatch
         r = CliRunner()
@@ -269,10 +269,8 @@ class TestDocsRuntimeAware:
         result = r.invoke(cli, ["docs", "preamble"])
         parsed = json.loads(result.stdout)
         expected_default = dispatch.DEFAULT_RUNTIME
-        expected_other = "build123d" if expected_default == "cadquery" else "cadquery"
         assert parsed["runtime"] == expected_default
-        assert "runtime_hint" in parsed
-        assert expected_other in parsed["runtime_hint"]
+        assert "runtime_hint" not in parsed
 
 
     def test_docs_default_runtime_follows_dispatch_default(self, monkeypatch, isolated_dir):
@@ -287,16 +285,47 @@ class TestDocsRuntimeAware:
         result = r.invoke(cli, ["docs", "preamble"])
         parsed = json.loads(result.stdout)
         assert parsed["runtime"] == "build123d"
-        # Hint should now point at cadquery as the alternative.
-        assert "cadquery" in parsed["runtime_hint"]
+        assert "runtime_hint" not in parsed
 
     def test_docs_in_pinned_project_has_no_hint(self, runner, isolated_dir):
-        """Hint only appears when there's genuine ambiguity — suppress it once
-        the project has committed to a runtime."""
         runner.invoke(cli, ["init", "--name", "p", "--runtime", "cadquery"])
         result = runner.invoke(cli, ["docs", "preamble"])
         parsed = json.loads(result.stdout)
         assert "runtime_hint" not in parsed
+
+    def test_default_full_docs_do_not_mix_cadquery_code(
+        self, runner, isolated_dir
+    ):
+        result = runner.invoke(cli, ["docs"])
+        parsed = json.loads(result.stdout)
+
+        assert parsed["runtime"] == "build123d"
+        assert "runtimes" in parsed["sections"]
+        assert "Box(10, 20, 5)" in parsed["content"]
+        assert "cq.Workplane" not in parsed["content"]
+
+    def test_cadquery_full_docs_do_not_mix_build123d_examples(
+        self, runner, isolated_dir
+    ):
+        runner.invoke(
+            cli,
+            ["init", "--name", "legacy", "--runtime", "cadquery"],
+        )
+        result = runner.invoke(cli, ["docs"])
+        parsed = json.loads(result.stdout)
+
+        assert parsed["runtime"] == "cadquery"
+        assert "build123d" not in parsed["sections"]
+        assert "cq.Workplane" in parsed["content"]
+        assert "box = Box(10, 20, 5)" not in parsed["content"]
+
+    def test_runtime_comparison_remains_explicitly_discoverable(
+        self, runner, isolated_dir
+    ):
+        result = runner.invoke(cli, ["docs", "runtimes"])
+        content = json.loads(result.stdout)["content"]
+        assert "Box(10, 20, 5)" in content
+        assert "cq.Workplane" in content
 
 
 # ---------- run command honors project mode ----------

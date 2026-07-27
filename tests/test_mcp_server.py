@@ -5,7 +5,13 @@ import os
 
 import pytest
 
-from agentcad.mcp.server import mcp, _invoke, _format_result, check_spec
+from agentcad.mcp import server
+from agentcad.mcp.server import (
+    mcp,
+    _invoke,
+    _format_result,
+    check_spec,
+)
 
 
 # --- Tool registration ---
@@ -79,6 +85,37 @@ def test_docs_tool_returns_content():
     result = _invoke(["docs", "quickstart"])
     assert result["status"] == "success"
     assert len(result["content"]) > 0
+
+
+def test_docs_mcp_accepts_runtime_override(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, cwd=None):
+        calls.append((args, cwd))
+        return {"status": "success", "runtime": "cadquery"}
+
+    monkeypatch.setattr(server, "_invoke", fake_invoke)
+    result = server.docs("preamble", "cadquery")
+
+    assert result["runtime"] == "cadquery"
+    assert calls == [(
+        ["docs", "preamble", "--runtime", "cadquery"],
+        None,
+    )]
+
+
+def test_docs_mcp_runtime_override_returns_cadquery_content():
+    result = server.docs("quickstart", "cadquery")
+
+    assert result["status"] == "success"
+    assert result["runtime"] == "cadquery"
+    assert "cq.Workplane" in result["content"]
+
+
+def test_mcp_descriptions_are_build123d_forward():
+    assert "build123d" in server.run.__doc__
+    assert "build123d or CadQuery" not in server.run.__doc__
+    assert "--runtime cadquery" in server.docs.__doc__
 
 
 def test_context_tool_error_without_manifest():

@@ -5,22 +5,24 @@ from pathlib import Path
 
 import click
 
+from agentcad.runners import dispatch
+
 
 SKILL_CONTENT = """\
 ---
 name: agentcad
 description: >
   CAD tool for AI agents. Use when the user asks you to design, model, or build
-  a 3D object. agentcad executes build123d or CadQuery Python scripts and
-  produces STEP files, PNG renders, mesh exports (STL/GLB/OBJ), and geometric metrics.
+  a 3D object. agentcad executes build123d Python scripts and produces STEP
+  files, PNG renders, mesh exports (STL/GLB/OBJ), and geometric metrics.
 compatibility: Requires Python 3.10-3.12 and agentcad installed (pip install agentcad).
 allowed-tools: Bash(agentcad:*)
 ---
 
 # agentcad — CAD tool for AI agents
 
-You have access to `agentcad`, a CLI that turns build123d or CadQuery Python scripts into
-3D geometry. All output is JSON. Every command returns `"command"` and `"status"` keys.
+You have access to `agentcad`, a CLI that turns build123d Python scripts into 3D
+geometry. All output is JSON. Every command returns `"command"` and `"status"` keys.
 
 ## First-time setup
 
@@ -110,20 +112,9 @@ agentcad --help   # Read this — it is your complete operational briefing
                          outer_diameter=80, height=7, z=5)
   show_object(Compound(result))
   ```
-- CadQuery remains supported. Use `import cadquery as cq`, initialize with
-  `agentcad init --runtime cadquery`, or pass `--runtime cadquery`.
-- CadQuery helper paths operate on `TopoDS_Shape`. Bridge with `.val().wrapped`:
-  ```python
-  import cadquery as cq
-  part = cq.Workplane('XY').box(10, 20, 5).val().wrapped
-  moved = translate(part, 50, 0, 0)
-  ```
-- To show helper output:
-  ```python
-  import cadquery as cq
-  show_object(cq.Workplane('XY').newObject([cq.Shape.cast(topo_shape)]))
-  ```
 - For OCP internals (`gp_Pnt`, `BRepPrimAPI`, etc.), import manually.
+- CadQuery compatibility remains available for existing projects. See
+  `agentcad docs runtimes` for that separate workflow.
 
 ## Key commands
 
@@ -167,8 +158,8 @@ agentcad --help   # Read this — it is your complete operational briefing
 
 - **Build at origin, then position:** Create geometry at origin, use `translate()`
   and `rotate()` to place it.
-- **Compound vs Union:** `makeCompound()` for assemblies (parts stay separate),
-  `.union()` for boolean fuse into one solid.
+- **Compound vs fuse:** `Compound([...])` keeps assembly parts separate; use
+  build123d's `+` operator to boolean-fuse solids.
 - **Parametric scripts:** Top-level variable assignments become overridable via
   `--params`. Use this for iteration.
 - **Named parts:** `show_object(shape, id="wheel_left", name="Left wheel",
@@ -177,32 +168,150 @@ agentcad --help   # Read this — it is your complete operational briefing
 """
 
 
+_CADQUERY_SCRIPT_RULES = """## Script writing rules
+
+- This is a CadQuery compatibility project. Keep scripts on the CadQuery API.
+- `show_object(result)` is required — at least one call.
+- `cq`, `show_object`, and compatibility helpers are pre-injected, so a basic
+  script needs no import:
+  ```python
+  part = cq.Workplane('XY').box(10, 20, 5)
+  show_object(part)
+  ```
+- Helpers that operate on `TopoDS_Shape` use `.val().wrapped` as the bridge:
+  ```python
+  part = cq.Workplane('XY').box(10, 20, 5).val().wrapped
+  moved = translate(part, 50, 0, 0)
+  ```
+- To show raw helper output:
+  ```python
+  show_object(cq.Workplane('XY').newObject([cq.Shape.cast(topo_shape)]))
+  ```
+- For OCP internals (`gp_Pnt`, `BRepPrimAPI`, etc.), import manually.
+
+"""
+
+
+_CADQUERY_PATTERNS = """## Patterns
+
+- **Build at origin, then position:** Create geometry at origin, use
+  `translate()` and `rotate()` to place it.
+- **Compound vs union:** `makeCompound()` keeps assembly parts separate;
+  `.union()` boolean-fuses solids.
+- **Parametric scripts:** Top-level variable assignments become overridable via
+  `--params`. Use this for iteration.
+- **Named parts:** `show_object(shape, id="wheel_left", name="Left wheel",
+  options={"color": "red"})` creates stable part handles, per-part metrics, and
+  colored GLB output.
+"""
+
+
+def _cadquery_skill_content() -> str:
+    """Create a CadQuery-only compatibility skill from the shared workflow."""
+    content = SKILL_CONTENT
+    content = content.replace(
+        "a 3D object. agentcad executes build123d Python scripts and produces STEP\n"
+        "  files, PNG renders, mesh exports (STL/GLB/OBJ), and geometric metrics.",
+        "a 3D object in an existing CadQuery compatibility project. agentcad\n"
+        "  produces STEP files, PNG renders, mesh exports (STL/GLB/OBJ), and metrics.",
+    )
+    content = content.replace(
+        "You have access to `agentcad`, a CLI that turns build123d Python scripts into 3D\n"
+        "geometry.",
+        "You have access to `agentcad` in a CadQuery compatibility project. The CLI\n"
+        "turns CadQuery Python scripts into 3D geometry.",
+    )
+    content = content.replace(
+        "## First-time setup\n\n"
+        "```bash\n"
+        "agentcad init --name <project_name>\n"
+        "agentcad --help   # Read this — it is your complete operational briefing\n"
+        "```",
+        "## CadQuery compatibility setup\n\n"
+        "```bash\n"
+        "agentcad init --name <project_name> --runtime cadquery\n"
+        "agentcad --help   # Read the project-scoped compatibility briefing\n"
+        "```",
+    )
+    content = content.replace(
+        "1. **Write a script.** No imports needed — build123d primitives,\n"
+        "   `show_object`, and agentcad edit helpers are pre-injected by default.\n"
+        "   `show_object(result)` is required.",
+        "1. **Write a script.** No imports needed — `cq`, `show_object`, and\n"
+        "   CadQuery compatibility helpers are pre-injected. At least one\n"
+        "   `show_object(result)` call is required.",
+    )
+    rules_start = content.index("## Script writing rules")
+    commands_start = content.index("## Key commands")
+    content = (
+        content[:rules_start]
+        + _CADQUERY_SCRIPT_RULES
+        + content[commands_start:]
+    )
+    content = content.replace(
+        "| `agentcad init --name NAME` | Initialize project |",
+        "| `agentcad init --name NAME --runtime cadquery` | Initialize compatibility project |",
+    )
+    patterns_start = content.index("## Patterns")
+    return content[:patterns_start] + _CADQUERY_PATTERNS
+
+
+def _effective_runtime(runtime: str | None) -> str:
+    return (
+        runtime
+        or dispatch.project_runtime(search_parents=True)
+        or dispatch.DEFAULT_RUNTIME
+    )
+
+
+def _skill_content(runtime: str) -> str:
+    if runtime == "cadquery":
+        return _cadquery_skill_content()
+    return SKILL_CONTENT
+
+
 @click.group()
 def skill():
     """Manage the agentcad agent skill."""
 
 
 @skill.command()
-def show():
+@click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["cadquery", "build123d"]),
+    help="Show the skill for an explicit runtime instead of the project mode.",
+)
+def show(runtime):
     """Print the skill file content as JSON."""
+    effective_runtime = _effective_runtime(runtime)
     click.echo(json.dumps({
         "command": "skill show",
         "status": "success",
-        "content": SKILL_CONTENT,
+        "runtime": effective_runtime,
+        "content": _skill_content(effective_runtime),
     }))
 
 
 @skill.command()
-def install():
+@click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["cadquery", "build123d"]),
+    help="Install the skill for an explicit runtime instead of the project mode.",
+)
+def install(runtime):
     """Install the agent skill to .claude/skills/agentcad/SKILL.md."""
+    effective_runtime = _effective_runtime(runtime)
     skill_dir = Path.cwd() / ".claude" / "skills" / "agentcad"
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_path = skill_dir / "SKILL.md"
-    skill_path.write_text(SKILL_CONTENT)
+    skill_path.write_text(_skill_content(effective_runtime))
 
     click.echo(json.dumps({
         "command": "skill install",
         "status": "success",
+        "runtime": effective_runtime,
         "path": str(skill_path),
         "message": "Skill installed. Claude Code will auto-discover it in this project.",
     }))

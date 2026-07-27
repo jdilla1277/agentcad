@@ -1434,7 +1434,9 @@ def get_sections(runtime):
         merged = dict(SECTIONS)
         merged.update(BUILD123D_OVERLAY)
         return merged
-    return SECTIONS
+    compatibility = dict(SECTIONS)
+    compatibility.pop("build123d", None)
+    return compatibility
 
 
 @click.command()
@@ -1454,20 +1456,8 @@ def docs(section, runtime):
     # invoked from a subdir. Other commands (`run`, `inspect`) keep cwd-only
     # semantics since they write artifacts relative to cwd.
     project_rt = dispatch.project_runtime(search_parents=True)
-    # "Implicit default" == we're about to show whatever the global default
-    # is purely because there's nothing telling us otherwise. Surface a hint
-    # so fresh users don't silently read wrong-engine docs for a project
-    # they just haven't cd'd into yet.
-    implicit_default = runtime is None and project_rt is None
     effective_runtime = runtime or project_rt or dispatch.DEFAULT_RUNTIME
     sections = get_sections(effective_runtime)
-
-    other_runtime = "build123d" if effective_runtime == "cadquery" else "cadquery"
-    runtime_hint = (
-        f"Showing {effective_runtime} docs (default outside a pinned project). "
-        f"For {other_runtime}, run from a project initialized with "
-        f"'agentcad init --runtime {other_runtime}' or pass '--runtime {other_runtime}'."
-    ) if implicit_default else None
 
     if section is not None:
         if section not in sections:
@@ -1478,8 +1468,6 @@ def docs(section, runtime):
                 "message": f"Unknown section '{section}'. "
                            f"Available: {', '.join(sorted(sections))}",
             }
-            if runtime_hint:
-                response["runtime_hint"] = runtime_hint
             click.echo(json.dumps(response))
             sys.exit(1)
 
@@ -1490,13 +1478,17 @@ def docs(section, runtime):
             "section": section,
             "content": sections[section],
         }
-        if runtime_hint:
-            response["runtime_hint"] = runtime_hint
         click.echo(json.dumps(response))
         return
 
-    # No section — return full documentation
-    full_content = "\n".join(sections.values())
+    # The runtime-comparison topic is explicitly discoverable but not mixed
+    # into the default full-doc rollup. Agents only see side-by-side APIs when
+    # they deliberately request `agentcad docs runtimes`.
+    full_content = "\n".join(
+        content
+        for name, content in sections.items()
+        if name != "runtimes"
+    )
 
     response = {
         "command": "docs",
@@ -1505,6 +1497,4 @@ def docs(section, runtime):
         "sections": sorted(sections.keys()),
         "content": full_content,
     }
-    if runtime_hint:
-        response["runtime_hint"] = runtime_hint
     click.echo(json.dumps(response))

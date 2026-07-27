@@ -29,6 +29,47 @@ def test_help_points_at_docs_for_preamble(runner):
     assert "pre-injected" in output
 
 
+def test_default_help_teaches_one_build123d_authoring_api(runner, isolated_dir):
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    output = result.output
+
+    assert "BUILD123D AUTHORING" in output
+    assert "box = Box(10, 20, 5)" in output
+    assert "CadQuery compatibility" in output
+    assert "CHOOSING A RUNTIME" not in output
+    assert "cq.Workplane" not in output
+    assert "build123d or CadQuery" not in output
+    assert "CadQuery or build123d" not in output
+    assert "cadquery|build123d" not in output
+    assert "cadquery or build123d" not in output
+    assert "\x08" not in output
+    assert "    $ agentcad docs preamble" in output
+    assert "    $ agentcad docs quickstart" in output
+
+
+def test_cadquery_project_help_teaches_only_compatibility_api(
+    runner, isolated_dir
+):
+    init_result = runner.invoke(
+        cli,
+        ["init", "--name", "legacy", "--runtime", "cadquery"],
+    )
+    assert init_result.exit_code == 0
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    output = result.output
+
+    assert "CADQUERY COMPATIBILITY AUTHORING" in output
+    assert "box = cq.Workplane" in output
+    assert "box = Box(10, 20, 5)" not in output
+    assert "run         Execute a build123d script" not in output
+    assert "run         Execute the project's CAD script" in output
+    assert "CHOOSING A RUNTIME" not in output
+    assert "\x08" not in output
+
+
 def test_cadquery_preamble_docs_list_helpers(runner, isolated_dir):
     """The CadQuery preamble docs must list the helpers
     that --help used to enumerate directly."""
