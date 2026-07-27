@@ -116,6 +116,21 @@ def test_export_invalid_format_error(runner, isolated_dir):
     assert parsed["status"] == "error"
 
 
+def test_export_empty_format_list_error(runner, isolated_dir):
+    """`--format ","` trims down to no formats at all. It must error rather than
+    report success with an empty outputs map."""
+    # File contents are never read: format validation precedes the CAD import.
+    step_path = isolated_dir / "model.step"
+    step_path.write_text("")
+    result = runner.invoke(cli, ["export", str(step_path), "--format", ","])
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "export"
+    assert parsed["status"] == "error"
+    assert "No export formats specified" in parsed["message"]
+    assert "Supported: stl, glb, obj" in parsed["message"]
+
+
 def test_export_obj_produces_file(runner, isolated_dir):
     step_path = _create_step(runner, isolated_dir)
     result = runner.invoke(cli, ["export", str(step_path), "--format", "obj"])

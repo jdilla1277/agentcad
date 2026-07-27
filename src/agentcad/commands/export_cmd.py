@@ -27,6 +27,13 @@ def unsupported_export_formats(formats: str) -> list[str]:
     return [f for f in parse_export_formats(formats) if f not in VALID_FORMATS]
 
 
+# Shared so ``export`` and ``run --export`` report an all-blank format list
+# identically. Dropping blanks makes ``stl,`` trim cleanly, but when EVERY entry
+# is blank (``--format ","``) the result is an empty list, which would otherwise
+# export nothing and still report success.
+NO_FORMATS_MESSAGE = "No export formats specified. Supported: stl, glb, obj"
+
+
 def _is_version_dir(directory):
     """Check if directory matches v\\d+_\\w+ pattern and contains meta.json."""
     return bool(re.match(r"v\d+_\w+", directory.name)) and (directory / "meta.json").exists()
@@ -55,6 +62,13 @@ def export_cmd(step_file, formats, no_daemon):
 
     # Parse and validate formats
     fmt_list = parse_export_formats(formats)
+    if not fmt_list:
+        click.echo(json.dumps({
+            "command": "export",
+            "status": "error",
+            "message": NO_FORMATS_MESSAGE,
+        }))
+        sys.exit(1)
     invalid = unsupported_export_formats(formats)
     if invalid:
         click.echo(json.dumps({

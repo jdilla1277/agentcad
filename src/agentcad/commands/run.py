@@ -15,7 +15,11 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
-from agentcad.commands.export_cmd import parse_export_formats, unsupported_export_formats
+from agentcad.commands.export_cmd import (
+    NO_FORMATS_MESSAGE,
+    parse_export_formats,
+    unsupported_export_formats,
+)
 from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
 
 
@@ -480,7 +484,17 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
     # routing, version allocation, or any disk artifacts — so `run --export`
     # matches `agentcad export` instead of silently ignoring unknown formats.
-    if export:
+    if export is not None:
+        # An all-blank value (e.g. `--export ","`) parses to an empty list.
+        # Without this the run would execute the whole script and consume a
+        # version number, then export nothing and still report success.
+        if not parse_export_formats(export):
+            click.echo(json.dumps({
+                "command": "run",
+                "status": "error",
+                "message": NO_FORMATS_MESSAGE,
+            }))
+            sys.exit(1)
         invalid = unsupported_export_formats(export)
         if invalid:
             click.echo(json.dumps({
