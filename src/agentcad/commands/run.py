@@ -467,7 +467,10 @@ def _assign_part_identity(raw_parts):
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
 def run(ctx, script, output, render, export, preview, open_view, params, dry_run, runtime, no_daemon):
-    """Execute a CadQuery or build123d script and produce a versioned STEP file.
+    """Execute a build123d script and produce a versioned STEP file.
+
+    CadQuery scripts remain supported in projects explicitly pinned to the
+    CadQuery compatibility runtime or through ``--runtime cadquery``.
 
     If `script` is a CAD file (.step / .stp / .brep), dispatches to
     `agentcad import` instead — agents who instinctively reach for `run`
