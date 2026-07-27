@@ -104,6 +104,14 @@ def test_docs_mcp_accepts_runtime_override(monkeypatch):
     )]
 
 
+def test_docs_mcp_runtime_override_returns_cadquery_content():
+    result = server.docs("quickstart", "cadquery")
+
+    assert result["status"] == "success"
+    assert result["runtime"] == "cadquery"
+    assert "cq.Workplane" in result["content"]
+
+
 def test_mcp_descriptions_are_build123d_forward():
     assert "build123d" in server.run.__doc__
     assert "build123d or CadQuery" not in server.run.__doc__
