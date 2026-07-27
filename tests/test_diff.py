@@ -1,7 +1,15 @@
 import json
 
+import cadquery as cq
+from cadquery import exporters
 from click.testing import CliRunner
 from agentcad.cli import cli
+
+
+def _write_box_step(path, size):
+    box = cq.Workplane("XY").box(size, size, size)
+    exporters.export(box, str(path))
+    return path
 
 
 def _setup_two_versions(isolated_dir):
@@ -52,6 +60,36 @@ def test_diff_no_manifest_error(runner, isolated_dir):
     data = json.loads(result.stdout)
     assert data["command"] == "diff"
     assert data["status"] == "error"
+
+
+def test_diff_accepts_standalone_step_paths_without_manifest(runner, isolated_dir):
+    input_step = _write_box_step(isolated_dir / "input.step", 10)
+    output_step = _write_box_step(isolated_dir / "output.step", 20)
+
+    result = runner.invoke(cli, ["diff", str(input_step), str(output_step)])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert data["v1"]["file"] == "input.step"
+    assert data["v2"]["file"] == "output.step"
+    assert data["changes"]["metrics"]["volume"] == {"from": 1000.0, "to": 8000.0}
+    assert data["changes"]["metrics"]["dimensions"] == {
+        "from": {"x": 10.0, "y": 10.0, "z": 10.0},
+        "to": {"x": 20.0, "y": 20.0, "z": 20.0},
+    }
+
+
+def test_diff_standalone_step_path_missing_file_error(runner, isolated_dir):
+    input_step = _write_box_step(isolated_dir / "input.step", 10)
+
+    result = runner.invoke(cli, ["diff", str(input_step), "missing.step"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.stdout)
+    assert data["command"] == "diff"
+    assert data["status"] == "error"
+    assert data["message"] == "File 'missing.step' not found."
 
 
 def test_diff_by_version_number(runner, isolated_dir):

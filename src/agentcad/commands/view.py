@@ -1988,7 +1988,15 @@ def _render_single(glb_path, *, review=None):
     return html_path, html_path.as_uri()
 
 
-def _render_diff(glb_a, glb_b, overlay=False, out_dir=None, review=None):
+def _render_diff(
+    glb_a,
+    glb_b,
+    overlay=False,
+    out_dir=None,
+    review=None,
+    diff_side_png=None,
+    diff_overlay_png=None,
+):
     """Write diff viewer HTML (with side-by-side or overlay as default).
 
     Returns (html_path, url, mode).
@@ -2004,17 +2012,23 @@ def _render_diff(glb_a, glb_b, overlay=False, out_dir=None, review=None):
         label_a=glb_a.name,
         label_b=glb_b.name,
         default_mode=mode,
+        diff_side_png=diff_side_png,
+        diff_overlay_png=diff_overlay_png,
         review=review,
     )
     return html_path, html_path.as_uri(), mode
+
+
+def _diff_png_path(glb_a, glb_b, out_dir):
+    label_a, label_b = _diff_name_parts(glb_a, glb_b)
+    return out_dir / f"diff_{label_a}_{label_b}.png"
 
 
 def _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir):
     """Render the side-by-side comparison PNG next to the diff HTML."""
     from agentcad.render import render_diff_side_by_side
 
-    label_a, label_b = _diff_name_parts(glb_a, glb_b)
-    png_path = out_dir / f"diff_{label_a}_{label_b}.png"
+    png_path = _diff_png_path(glb_a, glb_b, out_dir)
     render_diff_side_by_side(shape_a, shape_b, glb_a.name, glb_b.name, png_path)
     return png_path
 
@@ -2155,7 +2169,18 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if err:
         _error(err)
 
-    html_path, url, mode = _render_diff(glb_a, glb_b, overlay=overlay, review=review)
+    out_dir = glb_a.parent
+    png_path = None
+    if shape_a is not None and shape_b is not None and not overlay:
+        png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir)
+
+    html_path, url, mode = _render_diff(
+        glb_a,
+        glb_b,
+        overlay=overlay,
+        review=review,
+        diff_side_png=png_path,
+    )
 
     response = {
         "command": "view",
@@ -2168,9 +2193,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if review:
         response["review"] = True
 
-    # Agent-facing PNG composite (only when we have TopoDS shapes from STEP inputs)
-    if shape_a is not None and shape_b is not None and not overlay:
-        png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, html_path.parent)
+    if png_path is not None:
         response["png"] = str(png_path)
 
     _open_browser(url)

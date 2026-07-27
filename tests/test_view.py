@@ -189,6 +189,8 @@ def test_view_two_files_step_auto_converts(runner, isolated_dir, monkeypatch):
     png_path = Path(parsed["png"])
     assert png_path.exists()
     assert png_path.stat().st_size > 0
+    html = (isolated_dir / "diff_a_b.html").read_text()
+    assert "data:image/png;base64," in html
 
 
 def test_view_two_glbs_no_png(runner, isolated_dir, monkeypatch):
@@ -427,6 +429,7 @@ def test_diff_visual_flag_produces_diff_html_and_png(runner, isolated_dir, monke
     assert html_path.exists()
     html = html_path.read_text()
     assert html.count("data:application/octet-stream;base64,") == 2
+    assert "data:image/png;base64," in html
 
     # Agent-facing PNG — the whole point of this feature
     assert "png" in parsed["visual"]
