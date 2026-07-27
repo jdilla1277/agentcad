@@ -24,8 +24,8 @@ jobs:
       - name: Collect tests
         run: pytest --collect-only -q
 
-      - name: Run OCP-free guardrails
-        run: pytest tests_b3d/test_parity_guardrail.py -q
+      - name: Run OCP-free interface guardrails
+        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py -q
 
   windows-platform:
     runs-on: windows-latest
@@ -46,7 +46,7 @@ jobs:
         run: pytest --collect-only -q
 
       - name: Run Windows-relevant guardrails
-        run: pytest tests/test_daemon_platform.py tests_b3d/test_parity_guardrail.py -q
+        run: pytest tests/test_daemon_platform.py tests/test_package_positioning.py -q
 
   browser-smoke:
     runs-on: ubuntu-22.04
