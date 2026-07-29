@@ -1,4 +1,4 @@
-"""Tests for the agentcad --help operational briefing."""
+"""Tests for the agentcad --help how-to guide and command reference."""
 import json
 
 from agentcad.cli import cli
@@ -29,6 +29,47 @@ def test_help_points_at_docs_for_preamble(runner):
     assert "pre-injected" in output
 
 
+def test_default_help_teaches_one_build123d_authoring_api(runner, isolated_dir):
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    output = result.output
+
+    assert "BUILD123D AUTHORING" in output
+    assert "box = Box(10, 20, 5)" in output
+    assert "CadQuery compatibility" in output
+    assert "CHOOSING A RUNTIME" not in output
+    assert "cq.Workplane" not in output
+    assert "build123d or CadQuery" not in output
+    assert "CadQuery or build123d" not in output
+    assert "cadquery|build123d" not in output
+    assert "cadquery or build123d" not in output
+    assert "\x08" not in output
+    assert "    $ agentcad docs preamble" in output
+    assert "    $ agentcad docs quickstart" in output
+
+
+def test_cadquery_project_help_teaches_only_compatibility_api(
+    runner, isolated_dir
+):
+    init_result = runner.invoke(
+        cli,
+        ["init", "--name", "legacy", "--runtime", "cadquery"],
+    )
+    assert init_result.exit_code == 0
+
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    output = result.output
+
+    assert "CADQUERY COMPATIBILITY AUTHORING" in output
+    assert "box = cq.Workplane" in output
+    assert "box = Box(10, 20, 5)" not in output
+    assert "run         Execute a build123d script" not in output
+    assert "run         Execute the project's CAD script" in output
+    assert "CHOOSING A RUNTIME" not in output
+    assert "\x08" not in output
+
+
 def test_cadquery_preamble_docs_list_helpers(runner, isolated_dir):
     """The CadQuery preamble docs must list the helpers
     that --help used to enumerate directly."""
@@ -45,9 +86,11 @@ def test_help_documents_all_commands(runner):
     `test_help_does_not_advertise_daemon` below."""
     result = runner.invoke(cli, ["--help"])
     output = result.output
-    for cmd in ["init", "run", "render", "export", "measure", "check-spec",
-                "inspect", "parts", "diff", "context", "view", "docs"]:
-        assert cmd in output
+    guide = output.split("QUICK START", 1)[1]
+    for cmd in ["init", "run", "import", "render", "export", "measure",
+                "check-spec", "inspect", "parts", "diff", "context", "view",
+                "docs", "skill", "feedback", "subscribe"]:
+        assert f"agentcad {cmd}" in guide
     assert "parts view" in output
     assert "--spec spec.json" in output
 
@@ -79,6 +122,30 @@ def test_help_mentions_part_review_views(runner):
     assert "--ghost-rest" in output
     assert "temporary part review handoff viewer" in output
     assert "Browser changes are not saved" in output
+
+
+def test_help_preserves_docs_page_layout(runner):
+    """Examples stay copyable instead of being reflowed into one paragraph."""
+    result = runner.invoke(cli, ["--help"])
+    output = result.output
+    assert "\x08" not in output
+    assert "    $ agentcad docs quickstart" in output
+    assert "    $ agentcad docs preamble" in output
+    assert "\n    {\"agentcad\": {\"command\": \"python\"" in output
+
+
+def test_help_documents_feature_flags_missing_from_old_guide(runner):
+    result = runner.invoke(cli, ["--help"])
+    output = result.output
+    for flag in [
+        "--force", "--label LABEL", "--init", "--diameter N",
+        "--tolerance N", "--axis", "--visual", "--overlay", "--measure",
+        "--spec spec.json", "--focus-group GROUP", "--no-open",
+        "--max-entries N", "--local-only",
+    ]:
+        assert flag in output
+    assert "Passing a STEP/STP/BREP path dispatches" in output
+    assert "stl, glb, obj" in output
 
 
 def test_help_documents_status_values(runner):
@@ -208,17 +275,28 @@ def test_help_no_preview_scoped_to_composite_only(runner):
     assert "Quick 256" not in output
 
 
-def test_run_subcommand_help_no_preview_scoped_to_composite_only(runner):
-    """Same framing reaches `agentcad run --help` directly — agents
-    discovering the flag through subcommand help also see the scoped
-    description, not the old 'sub-second' invitation."""
+def test_run_subcommand_help_no_preview_scoped_to_preview_pngs(runner):
+    """Subcommand help says both kinds of preview PNG are skipped while
+    viewer, GLB, and diff artifacts remain enabled."""
     result = runner.invoke(cli, ["run", "--help"])
     output = result.output
     assert "no-preview" in output
     assert "4-view composite" in output
+    assert "per-part previews" in output
+    assert "viewer.html" in output
     # Old "iterating to keep runs sub-second" framing is gone.
     assert "sub-second" not in output
     assert "256x256" not in output
+
+
+def test_help_presents_automatic_previous_current_review(runner):
+    full_help = runner.invoke(cli, ["--help"]).output
+    run_help = runner.invoke(cli, ["run", "--help"]).output
+
+    assert "A=previous, B=current" in full_help
+    assert "--view / --no-view" in full_help
+    assert "--view / --no-view" in run_help
+    assert "previous/current A/B comparison" in run_help
 
 
 def test_help_example_runtime_defaults_to_dispatch_default(runner, isolated_dir):
@@ -250,22 +328,19 @@ def test_help_example_runtime_follows_cadquery_project(runner, isolated_dir):
     assert result.exit_code == 0
     assert '"runtime": "cadquery"' in result.output
     assert '"runtime": "build123d"' not in result.output
+    assert "--runtime cadquery" in result.output
 
 
-def test_help_example_init_step_matches_run_runtime(runner, isolated_dir):
-    """The `agentcad init` line inside EXAMPLE SESSION must pin the same
-    runtime as the run JSON below it. An agent who copy-paste-replays the
-    example shouldn't end up in a different runtime than the example
-    advertised — the init and run lines are read together."""
+def test_help_example_uses_default_build123d_init(runner, isolated_dir):
+    """The default example should demonstrate that build123d needs no flag."""
     runner.invoke(cli, ["init", "--name", "b3d_consistency", "--runtime", "build123d"])
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
     output = result.output
     assert "EXAMPLE SESSION" in output
     example_block = output.split("EXAMPLE SESSION", 1)[1].split(
-        "Version directory layout", 1
+        "VERSION OUTPUTS", 1
     )[0]
     assert "agentcad init" in example_block
-    assert "--runtime build123d" in example_block
-    # Run-line still reflects the same runtime.
+    assert "--runtime" not in example_block
     assert '"runtime": "build123d"' in example_block

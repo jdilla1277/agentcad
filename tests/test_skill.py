@@ -11,9 +11,54 @@ def test_skill_show_returns_content(runner):
     assert result.exit_code == 0
     parsed = json.loads(result.stdout)
     assert parsed["status"] == "success"
+    assert parsed["runtime"] == "build123d"
     assert "content" in parsed
     assert "name: agentcad" in parsed["content"]
     assert "description:" in parsed["content"]
+
+
+def test_default_skill_is_build123d_only(runner, isolated_dir):
+    result = runner.invoke(cli, ["skill", "show"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    content = parsed["content"]
+
+    assert parsed["runtime"] == "build123d"
+    assert "build123d primitives" in content
+    assert "CadQuery compatibility" in content
+    assert "cq.Workplane" not in content
+    assert "build123d or CadQuery" not in content
+
+
+def test_cadquery_project_skill_is_compatibility_only(runner, isolated_dir):
+    init_result = runner.invoke(
+        cli,
+        ["init", "--name", "legacy", "--runtime", "cadquery"],
+    )
+    assert init_result.exit_code == 0
+
+    result = runner.invoke(cli, ["skill", "show"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    content = parsed["content"]
+
+    assert parsed["runtime"] == "cadquery"
+    assert "CadQuery compatibility project" in content
+    assert "agentcad init --name <project_name> --runtime cadquery" in content
+    assert "cq.Workplane" in content
+    assert "build123d" not in content.lower()
+    assert "Box(10, 20, 5)" not in content
+
+
+def test_skill_runtime_flag_selects_cadquery_compatibility(runner, isolated_dir):
+    result = runner.invoke(
+        cli,
+        ["skill", "show", "--runtime", "cadquery"],
+    )
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["runtime"] == "cadquery"
+    assert "cq.Workplane" in parsed["content"]
 
 
 def test_skill_show_content_has_frontmatter(runner):
@@ -43,11 +88,30 @@ def test_skill_install_creates_file(runner, isolated_dir):
     assert result.exit_code == 0
     parsed = json.loads(result.stdout)
     assert parsed["status"] == "success"
+    assert parsed["runtime"] == "build123d"
 
     skill_path = isolated_dir / ".claude" / "skills" / "agentcad" / "SKILL.md"
     assert skill_path.exists()
     content = skill_path.read_text()
     assert "name: agentcad" in content
+
+
+def test_skill_install_follows_cadquery_project(runner, isolated_dir):
+    init_result = runner.invoke(
+        cli,
+        ["init", "--name", "legacy", "--runtime", "cadquery"],
+    )
+    assert init_result.exit_code == 0
+
+    result = runner.invoke(cli, ["skill", "install"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["runtime"] == "cadquery"
+
+    skill_path = isolated_dir / ".claude" / "skills" / "agentcad" / "SKILL.md"
+    content = skill_path.read_text()
+    assert "cq.Workplane" in content
+    assert "build123d" not in content.lower()
 
 
 def test_skill_install_path_in_output(runner, isolated_dir):

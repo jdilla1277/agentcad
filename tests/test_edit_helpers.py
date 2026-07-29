@@ -225,7 +225,13 @@ result = {helper}(base, 1, 0.5)
 show_object(result)
 """
         )
-        result = runner.invoke(cli, ["run", "edit.py", "--output", "should_fail"])
+        result = runner.invoke(
+            cli,
+            [
+                "run", "edit.py", "--output", "should_fail",
+                "--runtime", "cadquery",
+            ],
+        )
         assert result.exit_code != 0
         text = result.output.lower()
         assert helper in text

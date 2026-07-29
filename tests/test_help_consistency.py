@@ -2,7 +2,7 @@
 default runtime match ``dispatch.DEFAULT_RUNTIME``.
 
 Without this guardrail, stale text survives default-flips silently —
-post-#163's flip to build123d, `cli.py`'s ``_BRIEFING`` still said
+post-#163's flip to build123d, `cli.py`'s help guide still said
 "docs default to cadquery" and `docs runtimes` still said "will flip
 after Phase 6," and the 40 sub-agent friction trials in PR #194 had
 to surface it. A doc-vs-constant test in CI catches the same class

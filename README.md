@@ -2,7 +2,9 @@
 
 **CAD tool for AI agents.** Give your coding agent the ability to design 3D models.
 
-Your agent writes CadQuery or build123d Python scripts. agentcad handles execution, STEP export, PNG rendering, mesh export (STL/GLB/OBJ), geometric metrics, validation, diffing, and browser preview. All command output is structured JSON.
+Your agent writes build123d Python scripts by default. agentcad handles execution, STEP export, PNG rendering, mesh export (STL/GLB/OBJ), geometric metrics, validation, diffing, and browser preview. CadQuery remains available as an explicit compatibility mode. Each command's final response is structured JSON on stdout.
+
+> **Reading the output:** the JSON response is written to **stdout**; human-readable progress and diagnostics go to **stderr**. Parse stdout as JSON and treat stderr as plain text — don't merge the streams with `2>&1` before a JSON parser, or the progress lines will break parsing. If you need both, capture them separately.
 
 agentcad is open source under the Apache License 2.0. It runs locally and requires no signup.
 
@@ -14,10 +16,11 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-> **New: specs and measurements**
-> - `agentcad measure` reads the actual STEP geometry: dimensions, cylindrical feature buckets, diameters, and counts.
-> - `agentcad check-spec` compares the model against explicit feature requirements before the agent says it is done.
-> - `agentcad view --spec spec.json` opens a Spec check review mode so humans can inspect pass/fail results in the browser.
+### Introducing parts
+
+[![Watch agentcad parts rebuild a toy assembly](https://img.youtube.com/vi/VdMhRUiCaNU/maxresdefault.jpg)](https://youtu.be/VdMhRUiCaNU)
+
+Parts let an agent build CAD as named, color-coded pieces and groups, then hand back a viewer a human can inspect. Watch the demo on [YouTube](https://youtu.be/VdMhRUiCaNU) or read the story at [agentcad.dev/parts](https://agentcad.dev/parts).
 
 ## Quick start
 
@@ -30,8 +33,11 @@ pip install agentcad
 agentcad skill install
 agentcad instructions install
 agentcad --help
+agentcad init --name phone-stand
 
-Read the --help output — it's your operational briefing.
+Read the --help output — it's your guide to creating, checking, and sharing a model.
+Use the default build123d runtime unless the task explicitly requires
+CadQuery compatibility.
 
 Then design me a phone stand: a simple angled cradle that holds a phone
 at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
@@ -40,16 +46,22 @@ to keep the phone from sliding. Show me a preview when you're done.
 
 ## What it does
 
-- **`agentcad run script.py --output label`** — execute a build123d or CadQuery script, produce versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
-- **`agentcad run ... --preview`** — four-view PNG + turntable GIF for visual verification
+- **`agentcad run script.py --output label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+- **Automatic review viewer** — successful runs open `viewer.html`; from v2,
+  A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
+  Parts-tab change review (`--no-view` opts out)
+- **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
 - **`agentcad inspect output.step`** — topology deep-dive (shells, free edges, validity)
+- **`agentcad parts list REF`** — list named/captured parts for a version
+- **`agentcad parts show REF ID`** — show one versioned part by stable id
+- **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
 - **`agentcad diff 1 2`** — compare versions (metrics, outputs, parameters)
-- **`agentcad view output.step`** — open STEP/GLB output in a browser preview viewer
-- **`agentcad docs [section]`** — 17 sections of built-in documentation
+- **`agentcad view old.step new.step`** — open an explicit synchronized A/B comparison
+- **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
 
 ## No boilerplate
 
@@ -60,7 +72,32 @@ box = Box(10, 20, 5)
 show_object(box)
 ```
 
-CadQuery remains supported via `import cadquery as cq`, `agentcad init --runtime cadquery`, or `agentcad run --runtime cadquery`. Run `agentcad docs runtimes` for the dispatch rules.
+`agentcad init` records build123d as the project runtime. That keeps the
+script API, built-in docs, and subsequent runs on one clear default.
+
+## CadQuery compatibility
+
+CadQuery remains supported for existing scripts and projects, but it is not
+the default authoring path.
+
+For a CadQuery project:
+
+```bash
+agentcad init --name legacy-model --runtime cadquery
+agentcad docs quickstart --runtime cadquery
+agentcad run script.py --output first
+```
+
+For a one-off CadQuery script inside a build123d project:
+
+```bash
+agentcad docs preamble --runtime cadquery
+agentcad run legacy.py --output legacy --runtime cadquery
+```
+
+Keep each script on one CAD API. If a script clearly targets the other engine,
+agentcad reports the mismatch and the exact one-off override. Run
+`agentcad docs runtimes` for the complete dispatch contract.
 
 ## MCP integration
 

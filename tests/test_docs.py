@@ -74,6 +74,18 @@ def test_docs_schema_section(runner):
     assert "outputs.glb appears only when --export glb" in content
 
 
+def test_docs_schema_documents_stdout_vs_stderr(runner):
+    """Agents learn the CLI contract from `docs schema`; it must spell out that
+    JSON goes to stdout and progress to stderr, and warn against merging the
+    streams with 2>&1 before a JSON parser (a real parse-corruption footgun)."""
+    result = runner.invoke(cli, ["docs", "schema"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "stdout" in content
+    assert "stderr" in content
+    assert "2>&1" in content
+
+
 def test_docs_schema_lists_current_inspect_measure_fields(runner):
     result = runner.invoke(cli, ["docs", "schema"])
     assert result.exit_code == 0
@@ -97,6 +109,22 @@ def test_docs_workflow_section(runner):
     assert "init" in content
     assert "run" in content
     assert "check-spec" in content
+    assert "A=previous and B=current" in content
+    assert "opens automatically" in content
+
+
+def test_docs_and_skill_present_viewer_as_default_review_path(runner):
+    commands = json.loads(runner.invoke(cli, ["docs", "commands"]).stdout)["content"]
+    parts = json.loads(runner.invoke(cli, ["docs", "parts"]).stdout)["content"]
+    skill_result = runner.invoke(cli, ["skill", "show"])
+    skill_content = json.loads(skill_result.stdout)["content"]
+
+    assert "--no-view" in commands
+    assert "A=previous and B=current" in commands
+    assert "What changed" in parts
+    assert "added, removed, renamed" in parts
+    assert "opens automatically" in skill_content
+    assert "A=previous and B=current" in skill_content
 
 
 def test_docs_check_spec_section(runner):
@@ -109,6 +137,8 @@ def test_docs_check_spec_section(runner):
     assert "missing_features" in content
     assert "Read passed" in content
     assert "cylindrical_features[].axis" in content
+    assert "validity" in content
+    assert "metrics" in content
 
 
 def test_docs_export_section(runner):
@@ -186,36 +216,45 @@ def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
 
     Precedence per dispatch.py:14 (highest to lowest):
       1. --runtime CLI flag
-      2. Script imports
-      3. Project manifest
+      2. Project manifest
+      3. Legacy source detection for unpinned projects
       4. Global default (build123d, post-#163)
-
-    The earlier text claimed the project manifest "wins if set" — that
-    contradicts the dispatcher, and three sub-agents in the batch-2 side-by-side
-    independently noticed and reported it. This test pins the contract.
     """
     result = runner.invoke(cli, ["docs", "runtimes"])
     assert result.exit_code == 0
     content = json.loads(result.stdout)["content"]
 
-    # Must NOT contain the false claim that the project pin wins unconditionally.
-    assert "wins if set" not in content, (
-        "project pin does NOT win unconditionally — script imports beat it"
-    )
+    assert "Beats the project manifest" not in content
     # Must NOT still advertise cadquery as the global default (post-#163 it's build123d).
     assert "will flip after Phase 6" not in content, (
         "Phase 6 already shipped; the default is build123d"
     )
 
-    # Must teach the correct precedence: --runtime > imports > manifest > default.
+    # Must teach the correct precedence: override > manifest > legacy > default.
     runtime_pos = content.find("--runtime")
-    imports_pos = content.find("Script imports")
-    manifest_pos = content.find("agentcad.json")
-    default_pos = content.find("build123d")
+    manifest_pos = content.find("Project manifest")
+    legacy_pos = content.find("Legacy projects")
+    default_pos = content.find("Global default")
     assert (
-        0 <= runtime_pos < imports_pos < manifest_pos
+        0 <= runtime_pos < manifest_pos < legacy_pos < default_pos
     ), "dispatch precedence should be listed in order"
-    assert default_pos >= 0, "must mention build123d as the global default"
+    assert "Global default: build123d" in content
+
+
+def test_docs_runtimes_positions_build123d_before_cadquery(runner):
+    result = runner.invoke(cli, ["docs", "runtimes"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+
+    assert content.startswith(
+        "Choosing a runtime — build123d default, CadQuery compatibility:"
+    )
+    assert content.find("    build123d:") < content.find(
+        "    CadQuery compatibility:"
+    )
+    assert "geometry and metrics are identical" not in content
+    assert "agentcad init --runtime cadquery" in content
+    assert "--runtime cadquery" in content
 
 
 def test_docs_works_without_project(runner, isolated_dir):
@@ -230,13 +269,40 @@ def test_docs_works_without_project(runner, isolated_dir):
 
 
 def test_docs_quickstart_section(runner):
-    # Pinned cq — quickstart shows cq.Workplane idiom on this side.
+    # Explicit CQ compatibility docs show both the project flag and CQ idiom.
     result = runner.invoke(cli, ["docs", "quickstart", "--runtime", "cadquery"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     content = data["content"]
     assert "show_object" in content
     assert "cq.Workplane" in content
+    assert "agentcad init --name myproject --runtime cadquery" in content
+
+
+def test_docs_default_quickstart_uses_build123d_without_runtime_flag(runner):
+    result = runner.invoke(cli, ["docs", "quickstart"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "Quickstart (build123d)" in content
+    assert "agentcad init --name myproject" in content
+    assert "--runtime build123d" not in content
+    assert "Box(10, 20, 5)" in content
+
+
+def test_docs_default_workflow_does_not_require_build123d_flag(runner):
+    result = runner.invoke(cli, ["docs", "workflow"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "agentcad init --name myproject" in content
+    assert "--runtime build123d" not in content
+
+
+def test_docs_cadquery_workflow_pins_compatibility_mode(runner):
+    result = runner.invoke(cli, ["docs", "workflow", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "CadQuery compatibility project" in content
+    assert "agentcad init --name myproject --runtime cadquery" in content
 
 
 def test_docs_quickstart_shows_multi_show_object(runner):
@@ -440,7 +506,8 @@ def test_docs_measure_section(runner):
     assert "cylindrical_features" in content
     assert "not a manufacturing tolerance" in content
     assert "--features" in content
-    assert "validity" in content
+    assert "metrics.is_valid" in content
+    assert "validity         {is_valid}" not in content
     assert "query" in content
     assert "features" in content
     assert "direction?" in content

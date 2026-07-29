@@ -315,7 +315,7 @@ class TestDaemonServer:
         # Set up a agentcad project
         from agentcad.cli import cli
         runner = CliRunner()
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
 
         # Write a simple script
         script = isolated_dir / "box.py"
@@ -387,7 +387,7 @@ class TestDaemonServer:
         runner = CliRunner()
         old_cwd = os.getcwd()
         os.chdir(project_dir)
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
         os.chdir(old_cwd)
 
         script = project_dir / "box.py"
@@ -839,7 +839,7 @@ class TestRunRouting:
 
         # Set up project
         runner = CliRunner()
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
         script = isolated_dir / "box.py"
         script.write_text("import cadquery as cq\nresult = cq.Workplane('XY').box(10, 20, 5)\nshow_object(result)\n")
 
@@ -890,7 +890,7 @@ class TestRunRouting:
             lambda **kwargs: {"spawned": False, "reason": "test"},
         )
 
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
         script = isolated_dir / "box.py"
         script.write_text("import cadquery as cq\nresult = cq.Workplane('XY').box(10, 20, 5)\nshow_object(result)\n")
 
@@ -919,7 +919,7 @@ class TestRunRouting:
             0.03,
         )
 
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
         direct_marker = isolated_dir / "direct-execution.txt"
         script = isolated_dir / "slow.py"
         script.write_text(
@@ -958,7 +958,7 @@ class TestRunRouting:
 
         # Set up project
         runner = CliRunner()
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
         script = isolated_dir / "box.py"
         script.write_text("import cadquery as cq\nresult = cq.Workplane('XY').box(10, 20, 5)\nshow_object(result)\n")
 
@@ -995,7 +995,7 @@ class TestRunRouting:
         old_cwd = os.getcwd()
         os.chdir(project_dir)
         runner = CliRunner()
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
         os.chdir(old_cwd)
 
         script = project_dir / "box.py"
@@ -1509,7 +1509,7 @@ class TestNoDaemonFlag:
         sock_path, pid_path = daemon_paths
 
         runner = CliRunner()
-        runner.invoke(cli, ["init", "--name", "test"])
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "cadquery"])
         script = isolated_dir / "box.py"
         script.write_text(
             "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 20, 5)\nshow_object(result)\n"
@@ -1901,7 +1901,10 @@ class TestRunSpawnsDaemonForNextInvocation:
         )
         env = self._agentcad_env(sock_path, pid_path)
         subprocess.run(
-            [str(pathlib.Path(sys.executable).parent / "agentcad"), "init", "--name", "test"],
+            [
+                str(pathlib.Path(sys.executable).parent / "agentcad"),
+                "init", "--name", "test", "--runtime", "cadquery",
+            ],
             cwd=tmp_path, env=env, check=True, capture_output=True,
         )
 
@@ -1992,7 +1995,7 @@ class TestRunSpawnsDaemonForNextInvocation:
         env = self._agentcad_env(sock_path, pid_path)
         agentcad_exe = str(pathlib.Path(sys.executable).parent / "agentcad")
         subprocess.run(
-            [agentcad_exe, "init", "--name", "tbb_test"],
+            [agentcad_exe, "init", "--name", "tbb_test", "--runtime", "cadquery"],
             cwd=tmp_path, env=env, check=True, capture_output=True,
         )
 
@@ -2135,7 +2138,7 @@ class TestRunSpawnsDaemonForNextInvocation:
         env = self._agentcad_env(sock_path, pid_path)
         agentcad_exe = str(pathlib.Path(sys.executable).parent / "agentcad")
         subprocess.run(
-            [agentcad_exe, "init", "--name", "iter_test"],
+            [agentcad_exe, "init", "--name", "iter_test", "--runtime", "cadquery"],
             cwd=tmp_path, env=env, check=True, capture_output=True,
         )
 
@@ -2192,7 +2195,10 @@ class TestRunSpawnsDaemonForNextInvocation:
         )
         env = self._agentcad_env(sock_path, pid_path)
         subprocess.run(
-            [str(pathlib.Path(sys.executable).parent / "agentcad"), "init", "--name", "test"],
+            [
+                str(pathlib.Path(sys.executable).parent / "agentcad"),
+                "init", "--name", "test", "--runtime", "cadquery",
+            ],
             cwd=tmp_path, env=env, check=True, capture_output=True,
         )
 
@@ -2248,7 +2254,7 @@ class TestDaemonDeathRecovery:
             "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 20, 5)\nshow_object(result)\n"
         )
         subprocess.run(
-            [agentcad_exe, "init", "--name", "deathtest"],
+            [agentcad_exe, "init", "--name", "deathtest", "--runtime", "cadquery"],
             cwd=tmp_path, env=env, check=True, capture_output=True,
         )
 
@@ -2512,7 +2518,10 @@ class TestRoutingStalenessWarning:
         monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
 
         runner = CliRunner()
-        runner.invoke(cli, ["init", "--name", "stale_warn"])
+        runner.invoke(
+            cli,
+            ["init", "--name", "stale_warn", "--runtime", "cadquery"],
+        )
         script = isolated_dir / "box.py"
         script.write_text(
             "import cadquery as cq\n"
@@ -2571,7 +2580,10 @@ class TestRoutingStalenessWarning:
         monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
 
         runner = CliRunner()
-        runner.invoke(cli, ["init", "--name", "fresh_no_warn"])
+        runner.invoke(
+            cli,
+            ["init", "--name", "fresh_no_warn", "--runtime", "cadquery"],
+        )
         script = isolated_dir / "box.py"
         script.write_text(
             "import cadquery as cq\n"
@@ -2642,7 +2654,7 @@ class TestPreforkedArchitecture:
             "show_object(result)\n"
         )
         subprocess.run(
-            [agentcad_exe, "init", "--name", "crash_iso"],
+            [agentcad_exe, "init", "--name", "crash_iso", "--runtime", "cadquery"],
             cwd=tmp_path, env=env, check=True, capture_output=True,
         )
         subprocess.run(
@@ -2730,7 +2742,7 @@ class TestPreforkedArchitecture:
         for d in (dir_a, dir_b):
             d.mkdir()
             subprocess.run(
-                [agentcad_exe, "init", "--name", d.name],
+                [agentcad_exe, "init", "--name", d.name, "--runtime", "cadquery"],
                 cwd=d, env=env, check=True, capture_output=True,
             )
             (d / "box.py").write_text(

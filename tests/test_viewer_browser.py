@@ -67,7 +67,10 @@ def _canvas_pixel_summary(page):
 def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir):
     sync_playwright = _require_playwright()
 
-    init_result = runner.invoke(cli, ["init", "--name", "browser_smoke"])
+    init_result = runner.invoke(
+        cli,
+        ["init", "--name", "browser_smoke", "--runtime", "cadquery"],
+    )
     assert init_result.exit_code == 0, init_result.output
     script = isolated_dir / "script.py"
     script.write_text(GROUPED_PARTS_SCRIPT)
@@ -201,5 +204,45 @@ def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir
             assert "The agent did not ask for a preview on this run." in page.locator(
                 "#panel-agent-images-empty"
             ).inner_text()
+        finally:
+            browser.close()
+
+
+def test_previous_current_modes_preserve_camera_orientation(runner, isolated_dir):
+    sync_playwright = _require_playwright()
+    init_result = runner.invoke(
+        cli,
+        ["init", "--name", "camera_smoke", "--runtime", "cadquery"],
+    )
+    assert init_result.exit_code == 0, init_result.output
+    script = isolated_dir / "script.py"
+    script.write_text(GROUPED_PARTS_SCRIPT)
+    first = runner.invoke(
+        cli,
+        ["run", "script.py", "--output", "first", "--no-preview", "--no-view", "--no-daemon"],
+    )
+    assert first.exit_code == 0, first.output
+    second = runner.invoke(
+        cli,
+        ["run", "script.py", "--output", "second", "--no-preview", "--no-view", "--no-daemon"],
+    )
+    assert second.exit_code == 0, second.output
+    viewer_url = (isolated_dir / "v2_second" / "viewer.html").as_uri()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        try:
+            page.goto(viewer_url, wait_until="domcontentloaded")
+            page.wait_for_function(
+                "() => window.agentcadViewer?.debugState().ready === true",
+                timeout=45_000,
+            )
+            page.click("#pause-btn")
+            before = page.evaluate("window.agentcadViewer.debugState().camera")
+            for button in ("#btn-single-a", "#btn-single-b", "#btn-overlay", "#btn-side"):
+                page.click(button)
+                after = page.evaluate("window.agentcadViewer.debugState().camera")
+                assert after == before
         finally:
             browser.close()

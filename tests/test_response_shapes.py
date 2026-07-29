@@ -33,7 +33,10 @@ RENDER_KEY_HINTS = {"iso", "front", "back", "left", "right", "top", "bottom"}
 
 
 def _init(runner):
-    return runner.invoke(cli, ["init", "--name", "p"])
+    return runner.invoke(
+        cli,
+        ["init", "--name", "p", "--runtime", "cadquery"],
+    )
 
 
 def _make_step(runner, isolated_dir):
@@ -148,11 +151,13 @@ def test_measure_response_shape(runner, isolated_dir):
     assert r.exit_code == 0, r.output
     parsed = json.loads(r.stdout)
     for key in (
-        "command", "status", "file", "metrics", "validity",
+        "command", "status", "file", "metrics",
         "cylindrical_features", "feature_summary",
     ):
         assert key in parsed, f"`measure` missing required field: {key}"
     assert parsed["command"] == "measure"
+    assert "is_valid" in parsed["metrics"]
+    assert "validity" not in parsed
     # measure reports data only; it produces no artifacts
     assert "outputs" not in parsed
     assert "renders" not in parsed

@@ -5,14 +5,21 @@ import os
 
 import pytest
 
-from agentcad.mcp.server import mcp, _invoke, _format_result
+from agentcad.mcp import server
+from agentcad.mcp.server import (
+    mcp,
+    _invoke,
+    _format_result,
+    check_spec,
+)
 
 
 # --- Tool registration ---
 
 
 EXPECTED_TOOLS = {
-    "run", "render", "export", "measure", "inspect", "docs", "context", "diff", "view",
+    "run", "render", "export", "measure", "inspect", "check_spec",
+    "docs", "context", "diff", "view",
 }
 
 
@@ -80,6 +87,37 @@ def test_docs_tool_returns_content():
     assert len(result["content"]) > 0
 
 
+def test_docs_mcp_accepts_runtime_override(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, cwd=None):
+        calls.append((args, cwd))
+        return {"status": "success", "runtime": "cadquery"}
+
+    monkeypatch.setattr(server, "_invoke", fake_invoke)
+    result = server.docs("preamble", "cadquery")
+
+    assert result["runtime"] == "cadquery"
+    assert calls == [(
+        ["docs", "preamble", "--runtime", "cadquery"],
+        None,
+    )]
+
+
+def test_docs_mcp_runtime_override_returns_cadquery_content():
+    result = server.docs("quickstart", "cadquery")
+
+    assert result["status"] == "success"
+    assert result["runtime"] == "cadquery"
+    assert "cq.Workplane" in result["content"]
+
+
+def test_mcp_descriptions_are_build123d_forward():
+    assert "build123d" in server.run.__doc__
+    assert "build123d or CadQuery" not in server.run.__doc__
+    assert "--runtime cadquery" in server.docs.__doc__
+
+
 def test_context_tool_error_without_manifest():
     result = _invoke(["context"])
     assert result["status"] == "error"
@@ -122,6 +160,21 @@ def test_measure_tool_missing_file_error():
     result = _invoke(["measure", "/tmp/nonexistent.step"])
     assert result["_exit_code"] != 0
     assert result["command"] == "measure"
+
+
+def test_check_spec_tool_missing_file_error(tmp_path):
+    """The check_spec MCP tool routes to `agentcad check-spec` and surfaces
+    its structured error for a missing STEP file (a valid spec is present, so
+    this reaches the file check rather than a spec-load error)."""
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps({"features": [{"name": "hole", "type": "cylinder",
+                                  "diameter_mm": 6, "count": 1}]})
+    )
+    result = check_spec(str(tmp_path / "nonexistent.step"), str(spec), str(tmp_path))
+    assert result["_exit_code"] != 0
+    assert result["command"] == "check-spec"
+    assert "not found" in result.get("message", "").lower()
 
 
 def test_format_result_surfaces_exception_traceback():

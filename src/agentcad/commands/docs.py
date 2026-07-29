@@ -26,9 +26,9 @@ SECTIONS = {
         "  Run 'agentcad docs' to see full documentation.\n"
     ),
     "quickstart": (
-        "Quickstart:\n"
-        "  1. Initialize a project:\n"
-        "     agentcad init --name myproject\n"
+        "Quickstart (CadQuery compatibility mode):\n"
+        "  1. Initialize a project explicitly pinned to CadQuery:\n"
+        "     agentcad init --name myproject --runtime cadquery\n"
         "\n"
         "  2. Write a script (no imports needed — cq is pre-injected):\n"
         "     box = cq.Workplane('XY').box(10, 20, 5)\n"
@@ -37,7 +37,11 @@ SECTIONS = {
         "  3. Run it:\n"
         "     agentcad run script.py --output first_box\n"
         "     The default --preview produces a 4-view composite PNG (preview.png)\n"
-        "     and viewer.html; --render is only needed for extra camera angles.\n"
+        "     and viewer.html; the review viewer opens automatically. From v2,\n"
+        "     it preloads A=previous and B=current with synchronized A/B,\n"
+        "     side-by-side, overlay, diff images, and part-change review.\n"
+        "     Use --no-view to suppress browser launch; --render is only needed\n"
+        "     for extra camera angles.\n"
         "\n"
         "  Multi-part example (multiple show_object() calls):\n"
         "     base = cq.Workplane('XY').box(50, 50, 5)\n"
@@ -57,8 +61,11 @@ SECTIONS = {
     "commands": (
         "agentcad commands:\n"
         "  init    — Initialize a new agentcad project (creates agentcad.json).\n"
-        "  run     — Execute a build123d or CadQuery script, produce versioned STEP output.\n"
+        "  run     — Execute a build123d script (or explicit CadQuery compatibility\n"
+        "            script), producing versioned STEP output.\n"
         "            Always produces: STEP, GLB, viewer.html, and (from v2) diff PNGs.\n"
+        "            Opens viewer.html after success; --no-view opts out. From v2,\n"
+        "            the viewer preloads A=previous and B=current for comparison.\n"
         "            Options: --render, --export, --no-preview (skips only the 4-view composite)\n"
         "  render  — Render PNG views of an existing STEP file.\n"
         "  export  — Export an existing STEP file to mesh formats (STL, GLB).\n"
@@ -68,7 +75,8 @@ SECTIONS = {
         "          — Compare measured cylindrical features against an explicit JSON spec.\n"
         "  parts   — List/show parts captured for a version snapshot, or generate\n"
         "            part review viewers with hide/isolate/ghost/focus state.\n"
-        "  view    — Open a GLB or STEP file in the browser (three.js viewer).\n"
+        "  view    — Open one GLB/STEP model, or two models as synchronized A/B.\n"
+        "            Pass --overlay to start a two-model review in tinted overlay mode.\n"
         "            Use --measure or --spec spec.json for read-only measurement review.\n"
         "  context — Show the current project state (versions, current label).\n"
         "  docs    — Show this documentation.\n"
@@ -85,7 +93,7 @@ SECTIONS = {
         "[--msaa N] [--name label] [--focus x,y,z] [--no-fit]\n"
         "\n"
         "  --view   Named views (front, back, left, right, top, bottom, iso),\n"
-        "           comma-separated, 'all', or custom 'azimuth,elevation'.\n"
+        "           comma-separated, 'all', custom 'azimuth:elevation', or a mix.\n"
         "  --zoom   Zoom factor applied after FitAll (default 1.0).\n"
         "  --size   Output resolution as WIDTHxHEIGHT (default 800x600).\n"
         "  --msaa   Antialiasing samples, 0-16 (default 0). Nonzero values also\n"
@@ -97,6 +105,13 @@ SECTIONS = {
     "schema": (
         "Response schema:\n"
         "  All commands return JSON with 'command' and 'status' fields.\n"
+        "\n"
+        "  Streams:\n"
+        "    stdout carries the JSON response — parse this.\n"
+        "    stderr carries human-readable progress/diagnostics — not JSON.\n"
+        "    Do NOT merge the streams with '2>&1' before a JSON parser, or the\n"
+        "    progress lines will corrupt the parse. If you must capture both,\n"
+        "    redirect them to separate destinations.\n"
         "\n"
         "  Status values:\n"
         "    success — The command completed normally. Per-command fields below.\n"
@@ -122,7 +137,7 @@ SECTIONS = {
         "  Per-command response fields (on status='success'):\n"
         "    init     project, runtime?\n"
         "    run      runtime, output_type, version, label, outputs, metrics, params?, warnings?,\n"
-        "             preview?, diff?, viewer?, viewer_glb?, renders?, timings\n"
+        "             preview?, diff?, viewer?, viewer_glb?, viewer_opened?, renders?, timings\n"
         "    export   outputs                          (3D mesh formats only)\n"
         "    render   renders                          (PNG views only)\n"
         "    inspect  file, format_detected, extension, size_bytes,\n"
@@ -132,7 +147,7 @@ SECTIONS = {
         "             solids?/faces?/edges? (--ids), summary? (--summary),\n"
         "             truncation?, edit_risk?/risk_reasons?/recommended_workflow?\n"
         "    measure  file, format_detected, extension, size_bytes, metrics,\n"
-        "             validity, cylindrical_features, feature_summary?,\n"
+        "             cylindrical_features, feature_summary?,\n"
         "             features? (--features only), query?, truncation?,\n"
         "             next_actions, more_at, notes?,\n"
         "             edit_risk?/risk_reasons?/recommended_workflow?\n"
@@ -245,8 +260,9 @@ SECTIONS = {
         "    metrics          Same aggregate metrics as run: bounding_box,\n"
         "                     dimensions, volume, surface_area, center_of_mass,\n"
         "                     face_count, edge_count, is_valid.\n"
-        "    validity         {is_valid}; detailed validity_errors and warnings live\n"
-        "                     under metrics when present.\n"
+        "                     metrics.is_valid is the authoritative shape\n"
+        "                     validity bit; validity_errors and warnings also\n"
+        "                     live under metrics when present.\n"
         "    cylindrical_features\n"
         "                     Neutral cylinder inventory grouped by diameter and\n"
         "                     axis: diameter_mm, count, axis (+x/+y/+z/other),\n"
@@ -337,6 +353,8 @@ SECTIONS = {
         "    missing_features       Rows with no measured bucket within diameter/axis tolerance.\n"
         "    total_abs_count_error  Sum of absolute count errors; missing rows count as\n"
         "                           the full expected count.\n"
+        "    validity               Shape validity summary derived from measured metrics.\n"
+        "    metrics                Same aggregate metrics returned by measure.\n"
         "\n"
         "  check-spec is stricter than eyeballing measure output: it does not\n"
         "  nearest-match unrelated diameters, and it reports missing features as\n"
@@ -702,6 +720,9 @@ SECTIONS = {
         "  Diffing parts:\n"
         "    'agentcad diff' reports per-part changes. New parts-schema\n"
         "    versions are matched by id so display names can change.\n"
+        "    From v2, viewer.html also shows a compact What changed summary in\n"
+        "    the Parts tab: added, removed, renamed, and geometry/group/color\n"
+        "    changes matched by stable part id.\n"
         "\n"
         "  Reading parts from existing versions:\n"
         "    agentcad parts list v3\n"
@@ -728,16 +749,18 @@ SECTIONS = {
         "  metrics cover each shape individually.\n"
     ),
     "workflow": (
-        "Typical workflow:\n"
-        "  1. agentcad init --name myproject\n"
-        "  2. Write a build123d or CadQuery script (script.py) with show_object().\n"
+        "Typical workflow (CadQuery compatibility project):\n"
+        "  1. agentcad init --name myproject --runtime cadquery\n"
+        "  2. Write a CadQuery script (script.py) with show_object().\n"
         "  3. agentcad run script.py --output label [--render iso] [--export stl,glb]\n"
+        "     The browser viewer opens automatically. On later runs, review\n"
+        "     A=previous and B=current using A/B, side-by-side, overlay, and Parts.\n"
         "  4. agentcad measure v1_label/output.step — check dimensions and feature sizes.\n"
         "  5. agentcad check-spec v1_label/output.step spec.json — compare against intent.\n"
         "  6. agentcad render v1_label/output.step --view front,top --zoom 1.5\n"
         "  7. agentcad export v1_label/output.step --format stl,glb\n"
         "  8. agentcad context — review project state.\n"
-        "  9. agentcad diff 1 2 — compare versions.\n"
+        "  9. agentcad diff 1 2 — inspect a non-adjacent or machine-readable diff.\n"
     ),
     "feedback": (
         "Feedback:\n"
@@ -765,11 +788,13 @@ SECTIONS = {
         '       {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}\n'
         "\n"
         "  Available tools:\n"
-        "    run       Execute a build123d or CadQuery script, produce STEP + metrics\n"
+        "    run       Execute a build123d script (or explicit CadQuery compatibility\n"
+        "              script), producing STEP + metrics\n"
         "    render    Render PNG views of a STEP file\n"
         "    export    Export STEP to mesh formats (stl, glb, obj)\n"
         "    measure   Dimensional report (overall metrics and feature sizes)\n"
         "    inspect   Topology report (solids, shells, faces, validity)\n"
+        "    check_spec Check a STEP against a JSON cylindrical-feature spec\n"
         "    docs      Show documentation (this command)\n"
         "    context   Project state (versions, current)\n"
         "    diff      Compare two versions\n"
@@ -784,40 +809,42 @@ SECTIONS = {
         "    - Native tool UI — agents see typed parameters, not raw argv.\n"
     ),
     "runtimes": (
-        "Choosing a runtime — cadquery vs build123d:\n"
-        "  agentcad runs scripts on one of two CAD engines. Both compile to the\n"
-        "  same OCP (OpenCascade) kernel — the geometry and metrics are identical;\n"
-        "  only the script-writing API differs.\n"
+        "Choosing a runtime — build123d default, CadQuery compatibility:\n"
+        "  agentcad uses build123d for new projects. CadQuery remains available\n"
+        "  for existing scripts and explicit compatibility workflows. Both target\n"
+        "  the OCP (OpenCascade) kernel, but their script-writing APIs are distinct.\n"
         "\n"
         "  Same shape, both ways:\n"
-        "\n"
-        "    cadquery:\n"
-        "      box = cq.Workplane('XY').box(10, 20, 5)\n"
-        "      show_object(box)\n"
         "\n"
         "    build123d:\n"
         "      box = Box(10, 20, 5)\n"
         "      show_object(box)\n"
         "\n"
+        "    CadQuery compatibility:\n"
+        "      box = cq.Workplane('XY').box(10, 20, 5)\n"
+        "      show_object(box)\n"
+        "\n"
         "  When to pick which:\n"
-        "    build123d  Recommended for new projects. Direct primitives, Python\n"
+        "    build123d  Default for new projects. Direct primitives, Python\n"
         "               operators for booleans (-, +, &), better composition for\n"
-        "               complex assemblies. The migration target.\n"
-        "    cadquery   Legacy supported runtime. Workplane-fluent API. Pick this if you're\n"
-        "               porting existing scripts or already comfortable with it.\n"
+        "               complex assemblies.\n"
+        "    cadquery   Explicit compatibility runtime with a Workplane-fluent API.\n"
+        "               Use it when maintaining or porting existing CadQuery scripts.\n"
         "\n"
         "  How dispatch works (highest precedence to lowest):\n"
         "    1. Explicit `--runtime` flag on `agentcad run` — beats everything.\n"
-        "    2. Script imports — `import cadquery` → cq runner; `from build123d`\n"
-        "       → b3d runner. Beats the project manifest.\n"
-        "    3. Project manifest (agentcad.json `runtime` key, set via\n"
-        "       `agentcad init --runtime build123d`).\n"
+        "    2. Project manifest (agentcad.json `runtime` key). New projects\n"
+        "       pin build123d by default. If a script clearly uses the other\n"
+        "       engine, the run fails with the exact `--runtime` override.\n"
+        "    3. Legacy projects without a runtime field detect explicit imports\n"
+        "       and zero-import `cq.*` usage for backward compatibility.\n"
         "    4. Global default: build123d.\n"
         "\n"
-        "  Switching runtimes mid-project:\n"
-        "    Edit `agentcad.json` and set `\"runtime\": \"build123d\"`, or pass\n"
-        "    `--runtime build123d` per-run. Existing version directories keep\n"
-        "    working — each meta.json records the runtime it was produced with.\n"
+        "  Using CadQuery compatibility:\n"
+        "    Initialize with `agentcad init --runtime cadquery`, edit the runtime\n"
+        "    in `agentcad.json`, or pass `--runtime cadquery` for a one-off run or\n"
+        "    docs lookup. Existing version directories keep working — meta.json\n"
+        "    records the runtime used.\n"
         "\n"
         "  See `agentcad docs preamble`, `quickstart`, `examples`, `patterns`,\n"
         "  `helpers` for runtime-specific guidance — those topics auto-route to\n"
@@ -825,13 +852,13 @@ SECTIONS = {
     ),
     "build123d": (
         "build123d runtime — overview pointer:\n"
-        "  build123d is the recommended runtime for new agentcad projects. This\n"
+        "  build123d is the default runtime for new agentcad projects. This\n"
         "  topic is just a pointer; the real content lives in the runtime-aware\n"
         "  topics below (each shows build123d content when the project's runtime\n"
         "  is build123d, or when you pass `--runtime build123d`).\n"
         "\n"
         "  Start here:\n"
-        "    agentcad docs runtimes      — cadquery vs build123d, when to pick\n"
+        "    agentcad docs runtimes      — build123d default and CadQuery compatibility\n"
         "    agentcad docs quickstart    — first script (build123d when applicable)\n"
         "    agentcad docs preamble      — pre-injected names in scripts\n"
         "    agentcad docs patterns      — booleans, edges, fillets, sketches\n"
@@ -839,8 +866,8 @@ SECTIONS = {
         "    agentcad docs examples      — worked examples (plate, bracket, gear)\n"
         "    agentcad docs parts         — current per-part limitation (issue #69)\n"
         "\n"
-        "  To make a new project default to build123d:\n"
-        "    agentcad init --name myproject --runtime build123d\n"
+        "  Start a new build123d project (no runtime flag needed):\n"
+        "    agentcad init --name myproject\n"
         "\n"
         "  To get build123d docs without a project pinned to it:\n"
         "    agentcad docs <section> --runtime build123d\n"
@@ -980,6 +1007,9 @@ BUILD123D_OVERLAY = {
         "    show_assembly(result, name=\"assembly_name\")\n"
         "\n"
         "  GLB export auto-colors per-part using the colors above when set.\n"
+        "  From v2, viewer.html shows a compact What changed summary in the\n"
+        "  Parts tab: added, removed, renamed, and geometry/group/color\n"
+        "  changes matched by stable part id.\n"
         "  Agents can generate temporary part review viewers with:\n"
         "    agentcad parts view v3 --isolate front_leg --ghost-rest --focus front_leg\n"
         "    agentcad parts view v3 --isolate-group frame --ghost-rest --focus-group frame\n"
@@ -990,8 +1020,8 @@ BUILD123D_OVERLAY = {
     ),
     "quickstart": (
         "Quickstart (build123d):\n"
-        "  1. Initialize a project pinned to build123d:\n"
-        "     agentcad init --name myproject --runtime build123d\n"
+        "  1. Initialize a project. New projects use build123d by default:\n"
+        "     agentcad init --name myproject\n"
         "\n"
         "  2. Write a script. The build123d API is pre-injected — write\n"
         "     primitives directly, no imports needed:\n"
@@ -1001,7 +1031,11 @@ BUILD123D_OVERLAY = {
         "  3. Run it:\n"
         "     agentcad run script.py --output first_box\n"
         "     The default --preview produces a 4-view composite PNG (preview.png)\n"
-        "     and viewer.html; --render is only needed for extra camera angles.\n"
+        "     and viewer.html; the review viewer opens automatically. From v2,\n"
+        "     it preloads A=previous and B=current with synchronized A/B,\n"
+        "     side-by-side, overlay, diff images, and part-change review.\n"
+        "     Use --no-view to suppress browser launch; --render is only needed\n"
+        "     for extra camera angles.\n"
         "\n"
         "  Booleans use Python operators:\n"
         "     plate = Box(60, 40, 5)\n"
@@ -1242,17 +1276,19 @@ BUILD123D_OVERLAY = {
     ),
     "workflow": (
         "Typical workflow (build123d project):\n"
-        "  1. agentcad init --name myproject --runtime build123d\n"
+        "  1. agentcad init --name myproject\n"
         "  2. Write a script (script.py) using build123d primitives — see\n"
         "     'agentcad docs preamble' for what's pre-injected and\n"
         "     'agentcad docs quickstart' for examples.\n"
         "  3. agentcad run script.py --output label [--render iso] [--export stl,glb]\n"
+        "     The browser viewer opens automatically. On later runs, review\n"
+        "     A=previous and B=current using A/B, side-by-side, overlay, and Parts.\n"
         "  4. agentcad measure v1_label/output.step — check dimensions and feature sizes.\n"
         "  5. agentcad check-spec v1_label/output.step spec.json — compare against intent.\n"
         "  6. agentcad render v1_label/output.step --view front,top --zoom 1.5\n"
         "  7. agentcad export v1_label/output.step --format stl,glb\n"
         "  8. agentcad context — review project state.\n"
-        "  9. agentcad diff 1 2 — compare versions.\n"
+        "  9. agentcad diff 1 2 — inspect a non-adjacent or machine-readable diff.\n"
     ),
     "examples": (
         "Worked examples (build123d):\n"
@@ -1398,7 +1434,9 @@ def get_sections(runtime):
         merged = dict(SECTIONS)
         merged.update(BUILD123D_OVERLAY)
         return merged
-    return SECTIONS
+    compatibility = dict(SECTIONS)
+    compatibility.pop("build123d", None)
+    return compatibility
 
 
 @click.command()
@@ -1418,20 +1456,8 @@ def docs(section, runtime):
     # invoked from a subdir. Other commands (`run`, `inspect`) keep cwd-only
     # semantics since they write artifacts relative to cwd.
     project_rt = dispatch.project_runtime(search_parents=True)
-    # "Implicit default" == we're about to show whatever the global default
-    # is purely because there's nothing telling us otherwise. Surface a hint
-    # so fresh users don't silently read wrong-engine docs for a project
-    # they just haven't cd'd into yet.
-    implicit_default = runtime is None and project_rt is None
     effective_runtime = runtime or project_rt or dispatch.DEFAULT_RUNTIME
     sections = get_sections(effective_runtime)
-
-    other_runtime = "build123d" if effective_runtime == "cadquery" else "cadquery"
-    runtime_hint = (
-        f"Showing {effective_runtime} docs (default outside a pinned project). "
-        f"For {other_runtime}, run from a project initialized with "
-        f"'agentcad init --runtime {other_runtime}' or pass '--runtime {other_runtime}'."
-    ) if implicit_default else None
 
     if section is not None:
         if section not in sections:
@@ -1442,8 +1468,6 @@ def docs(section, runtime):
                 "message": f"Unknown section '{section}'. "
                            f"Available: {', '.join(sorted(sections))}",
             }
-            if runtime_hint:
-                response["runtime_hint"] = runtime_hint
             click.echo(json.dumps(response))
             sys.exit(1)
 
@@ -1454,13 +1478,17 @@ def docs(section, runtime):
             "section": section,
             "content": sections[section],
         }
-        if runtime_hint:
-            response["runtime_hint"] = runtime_hint
         click.echo(json.dumps(response))
         return
 
-    # No section — return full documentation
-    full_content = "\n".join(sections.values())
+    # The runtime-comparison topic is explicitly discoverable but not mixed
+    # into the default full-doc rollup. Agents only see side-by-side APIs when
+    # they deliberately request `agentcad docs runtimes`.
+    full_content = "\n".join(
+        content
+        for name, content in sections.items()
+        if name != "runtimes"
+    )
 
     response = {
         "command": "docs",
@@ -1469,6 +1497,4 @@ def docs(section, runtime):
         "sections": sorted(sections.keys()),
         "content": full_content,
     }
-    if runtime_hint:
-        response["runtime_hint"] = runtime_hint
     click.echo(json.dumps(response))
