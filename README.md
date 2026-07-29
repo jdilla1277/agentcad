@@ -28,6 +28,7 @@ Create a Python 3.12 virtual environment, then:
 
 pip install agentcad
 agentcad skill install
+agentcad instructions install
 agentcad --help
 
 Read the --help output — it's your operational briefing.

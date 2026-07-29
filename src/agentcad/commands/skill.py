@@ -143,6 +143,7 @@ agentcad --help   # Read this — it is your complete operational briefing
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
 | `agentcad docs [SECTION]` | Deep-dive docs (17 sections) |
+| `agentcad instructions install` | Record a short project note so future agents read `agentcad --help` |
 | `agentcad view FILE` | **Run this after every successful build** — opens GLB/STEP in the user's browser |
 
 ## Debugging playbook
