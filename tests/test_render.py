@@ -6,7 +6,10 @@ from PIL import Image, ImageChops
 import pytest
 
 from agentcad.render import (
+    _comparison_frame_scales,
     _setup_render,
+    render_diff_overlay,
+    render_diff_side_by_side,
     render_shape,
     render_shape_batch,
     render_shape_custom,
@@ -82,6 +85,44 @@ def test_render_shape_different_views_differ(tmp_path):
     render_shape(shape, "iso", iso_path)
     render_shape(shape, "front", front_path)
     assert iso_path.read_bytes() != front_path.read_bytes()
+
+
+def test_render_diff_side_by_side_contains_four_views_per_shape(tmp_path):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
+    output = tmp_path / "diff_side.png"
+
+    render_diff_side_by_side(
+        shape_a, shape_b, "previous", "current", output, width=96, height=96
+    )
+
+    with Image.open(output) as image:
+        # Two 2x2 composites, plus one shared model-label bar.
+        assert image.size == (384, 288)
+
+
+def test_render_diff_overlay_contains_four_aligned_views(tmp_path):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).translate((0, 0, 50)).val().wrapped
+    shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
+    output = tmp_path / "diff_overlay.png"
+
+    render_diff_overlay(
+        shape_a, shape_b, "previous", "current", output, width=192, height=192
+    )
+
+    with Image.open(output) as image:
+        # A 2x2 grid of 96px overlays, with view labels and a shared legend.
+        assert image.size == (192, 324)
+
+
+def test_diff_overlay_preserves_relative_scale():
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(20, 20, 20).val().wrapped
+
+    scale_a, scale_b = _comparison_frame_scales(shape_a, shape_b, "top")
+
+    assert scale_a == pytest.approx(0.5)
+    assert scale_b == pytest.approx(1.0)
 
 
 def test_render_views_returns_dict(tmp_path):

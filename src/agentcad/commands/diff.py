@@ -283,6 +283,7 @@ def _add_visual_response(response, step_a, step_b, overlay):
     from agentcad.commands.view import (
         _open_browser,
         _render_diff,
+        _render_diff_overlay_png,
         _render_diff_png,
         _resolve_to_glb_and_shape,
     )
@@ -297,8 +298,12 @@ def _add_visual_response(response, step_a, step_b, overlay):
         sys.exit(1)
 
     png_path = None
-    if shape_a is not None and shape_b is not None and not overlay:
+    overlay_png_path = None
+    if shape_a is not None and shape_b is not None:
         png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, Path.cwd())
+        overlay_png_path = _render_diff_overlay_png(
+            shape_a, shape_b, glb_a, glb_b, Path.cwd()
+        )
 
     html_path, url, mode = _render_diff(
         glb_a,
@@ -306,6 +311,7 @@ def _add_visual_response(response, step_a, step_b, overlay):
         overlay=overlay,
         out_dir=Path.cwd(),
         diff_side_png=png_path,
+        diff_overlay_png=overlay_png_path,
     )
 
     visual_resp = {
@@ -316,6 +322,8 @@ def _add_visual_response(response, step_a, step_b, overlay):
 
     if png_path is not None:
         visual_resp["png"] = _relative_to_cwd(png_path)
+    if overlay_png_path is not None:
+        visual_resp["overlay_png"] = _relative_to_cwd(overlay_png_path)
 
     _open_browser(url)
     response["visual"] = visual_resp

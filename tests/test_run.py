@@ -1057,9 +1057,9 @@ def test_run_preview_is_4view_composite_1024(runner, isolated_dir):
     png = isolated_dir / "v1_label" / "preview.png"
     data = png.read_bytes()
     width, height = struct.unpack(">II", data[16:24])
-    # 2 panels wide × 512px = 1024, plus label bars stacked (2 × (512 + 22) = 1068)
+    # 2 panels wide x 512px, plus two 30px label bars.
     assert width == 1024
-    assert height == 1068
+    assert height == 1084
 
 
 def test_run_auto_diff_png_when_prior_success(runner, isolated_dir):
@@ -1818,7 +1818,7 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert "partMatchesNameExact" in viewer_html
     assert "Longest IDs first avoids" in viewer_html
     assert "&& !partState.ghostRest" in viewer_html
-    assert "attach(sceneA_split, MODEL_A_URL, {})" in viewer_html
+    assert "attach(sceneA_split, MODEL_A_URL, { alignToCenter: true })" in viewer_html
 
     from PIL import Image
     preview_img = Image.open(isolated_dir / "v1" / "preview.png").convert("RGB")

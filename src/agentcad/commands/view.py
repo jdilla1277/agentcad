@@ -309,11 +309,11 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <img id="img-preview">
   </div>
   <div class="panel" id="panel-diff-side" style="display:none;">
-    <h3>diff_side.png — side-by-side (A: previous, B: this run) the agent reads for "what changed"</h3>
+    <h3>diff_side.png — four matched views of A (previous) and B (this run)</h3>
     <img id="img-diff-side">
   </div>
   <div class="panel" id="panel-diff-overlay" style="display:none;">
-    <h3>diff_overlay.png — tinted overlay (green A, red B) for spotting subtle shifts</h3>
+    <h3>diff_overlay.png — four center-aligned overlays (green A, red B)</h3>
     <img id="img-diff-overlay">
   </div>
 </div>
@@ -1235,7 +1235,9 @@ function orientMarker(marker, axis) {
 }
 
 function cadPointToViewer(point) {
-  return new THREE.Vector3(Number(point.x), Number(point.z), -Number(point.y));
+  const viewerPoint = new THREE.Vector3(Number(point.x), Number(point.z), -Number(point.y));
+  if (reviewModelA) viewerPoint.add(reviewModelA.position);
+  return viewerPoint;
 }
 
 function reviewMetrics() {
@@ -1247,10 +1249,18 @@ function viewerBoundingBox() {
   const x = bbox.x || null;
   const y = bbox.y || null;
   const z = bbox.z || null;
+  const offset = reviewModelA ? reviewModelA.position : new THREE.Vector3();
+  const shifted = (range, amount) => (
+    Array.isArray(range) && range.length === 2
+      ? [Number(range[0]) + amount, Number(range[1]) + amount]
+      : null
+  );
   return {
-    x,
-    y: z,
-    z: Array.isArray(y) && y.length === 2 ? [-Number(y[1]), -Number(y[0])] : null,
+    x: shifted(x, offset.x),
+    y: shifted(z, offset.y),
+    z: Array.isArray(y) && y.length === 2
+      ? [-Number(y[1]) + offset.z, -Number(y[0]) + offset.z]
+      : null,
   };
 }
 
@@ -1504,13 +1514,19 @@ const combinedBox = new THREE.Box3();
 
 const loader = new GLTFLoader();
 
-function attach(scene, url, { material, onMesh }) {
+function attach(scene, url, { material, onMesh, alignToCenter=false }) {
   return new Promise(resolve => {
     if (!url) { resolve(null); return; }
     loader.load(url, gltf => {
       const model = gltf.scene;
       if (material) {
         model.traverse(c => { if (c.isMesh) c.material = material; });
+      }
+      if (alignToCenter) {
+        const sourceBox = new THREE.Box3().setFromObject(model);
+        const sourceCenter = sourceBox.getCenter(new THREE.Vector3());
+        model.position.sub(sourceCenter);
+        model.updateMatrixWorld(true);
       }
       scene.add(model);
 
@@ -1550,6 +1566,7 @@ function fitCamera() {
 // Load all scenes in parallel, then fit camera
 Promise.all([
   attach(sceneA_single, MODEL_A_URL, {
+    alignToCenter: hasB,
     onMesh: m => {
       reviewModelA = m;
       if (PARTS_MODEL === 'a') {
@@ -1559,12 +1576,21 @@ Promise.all([
     },
   }),
   hasB ? attach(sceneB_single, MODEL_B_URL, {
+    alignToCenter: true,
     onMesh: PARTS_MODEL === 'b' ? m => { registerPartMeshes(m); applyPartState(); } : null,
   }) : null,
-  hasB ? attach(sceneA_split, MODEL_A_URL, {}) : null,
-  hasB ? attach(sceneB_split, MODEL_B_URL, {}) : null,
-  hasB ? attach(sceneOverlay, MODEL_A_URL, { material: tintA, onMesh: m => overlayModelA = m }) : null,
-  hasB ? attach(sceneOverlay, MODEL_B_URL, { material: tintB, onMesh: m => overlayModelB = m }) : null,
+  hasB ? attach(sceneA_split, MODEL_A_URL, { alignToCenter: true }) : null,
+  hasB ? attach(sceneB_split, MODEL_B_URL, { alignToCenter: true }) : null,
+  hasB ? attach(sceneOverlay, MODEL_A_URL, {
+    material: tintA,
+    alignToCenter: true,
+    onMesh: m => overlayModelA = m,
+  }) : null,
+  hasB ? attach(sceneOverlay, MODEL_B_URL, {
+    material: tintB,
+    alignToCenter: true,
+    onMesh: m => overlayModelB = m,
+  }) : null,
 ].filter(Boolean)).then(() => {
   fitCamera();
   applyPartState();
@@ -2025,11 +2051,21 @@ def _diff_png_path(glb_a, glb_b, out_dir):
 
 
 def _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir):
-    """Render the side-by-side comparison PNG next to the diff HTML."""
+    """Render the four-view side-by-side comparison next to the diff HTML."""
     from agentcad.render import render_diff_side_by_side
 
     png_path = _diff_png_path(glb_a, glb_b, out_dir)
     render_diff_side_by_side(shape_a, shape_b, glb_a.name, glb_b.name, png_path)
+    return png_path
+
+
+def _render_diff_overlay_png(shape_a, shape_b, glb_a, glb_b, out_dir):
+    """Render the four-view center-aligned overlay next to the diff HTML."""
+    from agentcad.render import render_diff_overlay
+
+    label_a, label_b = _diff_name_parts(glb_a, glb_b)
+    png_path = out_dir / f"diff_{label_a}_{label_b}_overlay.png"
+    render_diff_overlay(shape_a, shape_b, glb_a.name, glb_b.name, png_path)
     return png_path
 
 
@@ -2171,8 +2207,12 @@ def view(file, file_b, overlay, with_measure, spec_file):
 
     out_dir = glb_a.parent
     png_path = None
-    if shape_a is not None and shape_b is not None and not overlay:
+    overlay_png_path = None
+    if shape_a is not None and shape_b is not None:
         png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir)
+        overlay_png_path = _render_diff_overlay_png(
+            shape_a, shape_b, glb_a, glb_b, out_dir
+        )
 
     html_path, url, mode = _render_diff(
         glb_a,
@@ -2180,6 +2220,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
         overlay=overlay,
         review=review,
         diff_side_png=png_path,
+        diff_overlay_png=overlay_png_path,
     )
 
     response = {
@@ -2195,6 +2236,8 @@ def view(file, file_b, overlay, with_measure, spec_file):
 
     if png_path is not None:
         response["png"] = str(png_path)
+    if overlay_png_path is not None:
+        response["overlay_png"] = str(overlay_png_path)
 
     _open_browser(url)
     click.echo(json.dumps(response))

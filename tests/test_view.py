@@ -166,6 +166,9 @@ def test_view_two_files_side_by_side_markers(runner, isolated_dir, monkeypatch):
     # Both model labels should appear in the UI
     assert "a.glb" in html
     assert "b.glb" in html
+    # Two-model scenes normalize unrelated source origins into one comparison frame.
+    assert "alignToCenter: true" in html
+    assert "model.position.sub(sourceCenter)" in html
 
 
 def test_view_two_files_step_auto_converts(runner, isolated_dir, monkeypatch):
@@ -184,13 +187,19 @@ def test_view_two_files_step_auto_converts(runner, isolated_dir, monkeypatch):
     # Both GLBs get written alongside the STEPs
     assert (isolated_dir / "a.glb").exists()
     assert (isolated_dir / "b.glb").exists()
-    # Agent-facing PNG — the composite an agent can actually look at
+    # Agent-facing PNGs: four matched A/B views plus four aligned overlays.
     assert "png" in parsed
     png_path = Path(parsed["png"])
     assert png_path.exists()
     assert png_path.stat().st_size > 0
+    assert "overlay_png" in parsed
+    overlay_png_path = Path(parsed["overlay_png"])
+    assert overlay_png_path.exists()
+    assert overlay_png_path.stat().st_size > 0
     html = (isolated_dir / "diff_a_b.html").read_text()
-    assert "data:image/png;base64," in html
+    assert html.count("data:image/png;base64,") == 2
+    assert "four matched views" in html
+    assert "four center-aligned overlays" in html
 
 
 def test_view_two_glbs_no_png(runner, isolated_dir, monkeypatch):
@@ -436,6 +445,10 @@ def test_diff_visual_flag_produces_diff_html_and_png(runner, isolated_dir, monke
     png_path = isolated_dir / parsed["visual"]["png"]
     assert png_path.exists()
     assert png_path.stat().st_size > 0
+    assert "overlay_png" in parsed["visual"]
+    overlay_png_path = isolated_dir / parsed["visual"]["overlay_png"]
+    assert overlay_png_path.exists()
+    assert overlay_png_path.stat().st_size > 0
 
 
 def test_diff_visual_with_overlay(runner, isolated_dir, monkeypatch):
@@ -447,8 +460,11 @@ def test_diff_visual_with_overlay(runner, isolated_dir, monkeypatch):
     assert result.exit_code == 0
     parsed = json.loads(result.stdout)
     assert parsed["visual"]["mode"] == "overlay"
+    assert "png" in parsed["visual"]
+    assert "overlay_png" in parsed["visual"]
     html = (isolated_dir / parsed["visual"]["html"]).read_text()
     assert 'id="opacity-a"' in html
+    assert html.count("data:image/png;base64,") == 2
 
 
 def test_diff_without_visual_unchanged(runner, isolated_dir):
