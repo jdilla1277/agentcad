@@ -181,7 +181,7 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
                     prev_shape, topo_shape, prev["label"], label,
                     side, width=512, height=512,
                 )
-                render_diff_overlay(
+                comparison = render_diff_overlay(
                     prev_shape, topo_shape, prev["label"], label,
                     overlay, width=1024, height=1024,
                 )
@@ -189,6 +189,7 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
                     "against": prev["label"],
                     "side_by_side": f"{dir_name}/diff_side.png",
                     "overlay": f"{dir_name}/diff_overlay.png",
+                    "comparison": comparison,
                 }
             except Exception:
                 # Diff is best-effort — never fail the whole import.

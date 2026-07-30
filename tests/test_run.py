@@ -981,6 +981,8 @@ def test_run_no_preview_second_run_still_writes_diff(runner, isolated_dir):
     parsed = json.loads(result.stdout)
     assert "diff" in parsed
     assert parsed["diff"]["against"] == "first"
+    assert parsed["diff"]["comparison"]["method"] == "four_view_image_mask"
+    assert "visual_overlap" in parsed["diff"]["comparison"]
     assert (isolated_dir / "v2_second" / "diff_side.png").exists()
     assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
 
@@ -1083,6 +1085,8 @@ def test_run_auto_diff_png_when_prior_success(runner, isolated_dir):
     assert p2["diff"]["against"] == "first"
     assert p2["diff"]["side_by_side"] == "v2_second/diff_side.png"
     assert p2["diff"]["overlay"] == "v2_second/diff_overlay.png"
+    assert p2["diff"]["comparison"]["alignment"]["mode"] == "bounding_box_center"
+    assert len(p2["diff"]["comparison"]["views"]) == 4
     assert (isolated_dir / "v2_second" / "diff_side.png").exists()
     assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
 

@@ -1,12 +1,13 @@
 from pathlib import Path
 
 import cadquery as cq
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 
 import pytest
 
 from agentcad.render import (
     _comparison_frame_scales,
+    _semantic_diff_panel,
     _setup_render,
     render_diff_overlay,
     render_diff_side_by_side,
@@ -106,13 +107,61 @@ def test_render_diff_overlay_contains_four_aligned_views(tmp_path):
     shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
     output = tmp_path / "diff_overlay.png"
 
-    render_diff_overlay(
+    comparison = render_diff_overlay(
         shape_a, shape_b, "previous", "current", output, width=192, height=192
     )
 
     with Image.open(output) as image:
         # A 2x2 grid of 96px overlays, with view labels and a shared legend.
-        assert image.size == (192, 324)
+        assert image.size == (192, 368)
+    assert comparison["method"] == "four_view_image_mask"
+    assert comparison["alignment"]["mode"] == "bounding_box_center"
+    assert comparison["visual_overlap"]["classification"] in {
+        "low", "moderate", "high",
+    }
+    assert len(comparison["views"]) == 4
+
+
+def test_render_diff_overlay_classifies_same_geometry_as_high_overlap(tmp_path):
+    shape_a = cq.Workplane("XY").box(10, 20, 5).val().wrapped
+    shape_b = (
+        cq.Workplane("XY").box(10, 20, 5).translate((100, -50, 25)).val().wrapped
+    )
+
+    comparison = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        tmp_path / "same_geometry.png",
+        width=192,
+        height=192,
+    )
+
+    assert comparison["visual_overlap"]["classification"] == "high"
+    assert comparison["visual_overlap"]["ratio"] > 0.95
+
+
+def test_semantic_diff_panel_classifies_shared_removed_and_added_pixels():
+    image_a = Image.new("RGB", (100, 100), (77, 77, 77))
+    image_b = Image.new("RGB", (100, 100), (77, 77, 77))
+    ImageDraw.Draw(image_a).rectangle((10, 20, 59, 79), fill=(180, 180, 180))
+    ImageDraw.Draw(image_b).rectangle((40, 20, 89, 79), fill=(180, 180, 180))
+
+    panel, stats = _semantic_diff_panel(image_a, image_b)
+
+    assert stats["overlap_ratio"] == pytest.approx(0.25)
+    assert stats["removed_ratio"] == pytest.approx(0.375)
+    assert stats["added_ratio"] == pytest.approx(0.375)
+    pixels = (
+        panel.get_flattened_data()
+        if hasattr(panel, "get_flattened_data")
+        else panel.getdata()
+    )
+    colors = set(pixels)
+    assert (210, 214, 220) in colors
+    assert (0, 114, 178) in colors
+    assert (230, 159, 0) in colors
 
 
 def test_diff_overlay_preserves_relative_scale():

@@ -318,6 +318,94 @@ def _scale_image_about_center(image, scale):
     return framed
 
 
+def _object_mask(image, threshold=8):
+    from PIL import Image, ImageChops
+
+    corners = [
+        image.getpixel((0, 0)),
+        image.getpixel((image.width - 1, 0)),
+        image.getpixel((0, image.height - 1)),
+        image.getpixel((image.width - 1, image.height - 1)),
+    ]
+    background = tuple(
+        round(sum(pixel[channel] for pixel in corners) / len(corners))
+        for channel in range(3)
+    )
+    difference = ImageChops.difference(
+        image, Image.new("RGB", image.size, background)
+    ).convert("L")
+    return difference.point(lambda value: 255 if value > threshold else 0)
+
+
+def _edge_mask(image, object_mask):
+    from PIL import ImageChops, ImageFilter
+
+    boundary = ImageChops.subtract(
+        object_mask.filter(ImageFilter.MaxFilter(5)),
+        object_mask.filter(ImageFilter.MinFilter(5)),
+    )
+    gradients = (
+        image.convert("L")
+        .filter(ImageFilter.GaussianBlur(radius=0.6))
+        .filter(ImageFilter.FIND_EDGES)
+        .point(lambda value: 255 if value > 18 else 0)
+    )
+    surface_edges = ImageChops.multiply(
+        gradients, object_mask.filter(ImageFilter.MaxFilter(3))
+    )
+    return ImageChops.lighter(boundary, surface_edges)
+
+
+def _mask_pixel_count(mask):
+    return mask.histogram()[255]
+
+
+def _semantic_diff_panel(image_a, image_b):
+    from PIL import Image, ImageChops
+
+    mask_a = _object_mask(image_a)
+    mask_b = _object_mask(image_b)
+    shared = ImageChops.multiply(mask_a, mask_b)
+    removed = ImageChops.subtract(mask_a, mask_b)
+    added = ImageChops.subtract(mask_b, mask_a)
+    union = ImageChops.lighter(mask_a, mask_b)
+
+    edge_a = _edge_mask(image_a, mask_a)
+    edge_b = _edge_mask(image_b, mask_b)
+    shared_edges = ImageChops.multiply(edge_a, edge_b)
+    removed_edges = ImageChops.subtract(edge_a, edge_b)
+    added_edges = ImageChops.subtract(edge_b, edge_a)
+
+    panel = Image.new("RGB", image_a.size, (255, 255, 255))
+    panel.paste((210, 214, 220), mask=shared)
+    panel.paste((0, 114, 178), mask=removed)
+    panel.paste((230, 159, 0), mask=added)
+    panel.paste((0, 62, 105), mask=removed_edges)
+    panel.paste((145, 82, 0), mask=added_edges)
+    panel.paste((55, 65, 81), mask=shared_edges)
+
+    union_pixels = _mask_pixel_count(union)
+    shared_pixels = _mask_pixel_count(shared)
+    removed_pixels = _mask_pixel_count(removed)
+    added_pixels = _mask_pixel_count(added)
+    denominator = union_pixels or 1
+    return panel, {
+        "overlap_ratio": round(shared_pixels / denominator, 4),
+        "removed_ratio": round(removed_pixels / denominator, 4),
+        "added_ratio": round(added_pixels / denominator, 4),
+        "_shared_pixels": shared_pixels,
+        "_union_pixels": union_pixels,
+    }
+
+
+def _overlap_classification(ratio):
+    if ratio >= 0.8:
+        return "high"
+    if ratio >= 0.5:
+        return "moderate"
+    return "low"
+
+
 def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
     """Render a 4-panel composite: top view + three iso angles spaced around the part.
 
@@ -359,21 +447,20 @@ def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
 def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
                         width=1024, height=1024, view_name="iso",
                         parts_a=None, parts_b=None):
-    """Render four center-aligned tinted overlays of A (green) and B (red).
+    """Render four center-aligned semantic difference maps.
 
-    Each shape is fit independently for the same camera direction, which
-    removes unrelated source-coordinate offsets before compositing. Depth
-    ordering is approximate because the two captures are alpha-blended.
+    Shared projection is gray, A-only geometry is blue, and B-only geometry is
+    orange. The return value describes the same masks used to make the image.
     """
     import tempfile
-    from PIL import Image, ImageChops, ImageDraw
+    from PIL import Image, ImageDraw
 
     del view_name  # Diff artifacts always use the standard four comparison views.
     labels = [view[0] for view in _COMPOSITE_VIEWS]
     specs = [view[1] for view in _COMPOSITE_VIEWS]
     per_view_size = max(64, min(width, height) // 2)
-    label_h = 30
-    legend_h = 72
+    label_h = 34
+    legend_h = 108
     label_font = _image_label_font(18)
     legend_font = _image_label_font(18)
 
@@ -397,20 +484,20 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
             parts=parts_b,
         )
 
-        def tint(img, tint_color):
-            tint_layer = Image.new("RGB", img.size, tint_color)
-            return ImageChops.multiply(img, tint_layer)
-
         panels = []
-        for a_path, b_path, spec in zip(a_paths, b_paths, specs):
+        view_stats = []
+        for label, a_path, b_path, spec in zip(labels, a_paths, b_paths, specs):
             a_img = Image.open(a_path).convert("RGB")
             b_img = Image.open(b_path).convert("RGB")
             scale_a, scale_b = _comparison_frame_scales(shape_a, shape_b, spec)
             a_img = _scale_image_about_center(a_img, scale_a)
             b_img = _scale_image_about_center(b_img, scale_b)
-            a_tinted = tint(a_img, (180, 255, 180))
-            b_tinted = tint(b_img, (255, 180, 180))
-            panels.append(Image.blend(a_tinted, b_tinted, 0.5))
+            panel, stats = _semantic_diff_panel(a_img, b_img)
+            panels.append(panel)
+            view_stats.append({
+                "view": label.lower().replace(" ", "_").replace("-", "_"),
+                **stats,
+            })
 
         panel_stride = per_view_size + label_h
         composite = Image.new(
@@ -428,22 +515,35 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
             composite.paste(panel, (x, y + label_h))
 
         draw = ImageDraw.Draw(composite)
-        draw.rectangle([(10, 9), (29, 28)], fill=(120, 200, 120))
+        draw.rectangle([(10, 9), (29, 28)], fill=(210, 214, 220))
         draw.text(
             (38, 8),
-            f"A (previous) · {label_a}",
+            "SHARED PROJECTION",
             fill=(40, 40, 40),
             font=legend_font,
         )
-        draw.rectangle([(10, 41), (29, 60)], fill=(220, 120, 120))
+        draw.rectangle([(10, 41), (29, 60)], fill=(0, 114, 178))
         draw.text(
             (38, 40),
-            f"B (current) · {label_b}",
+            f"REMOVED | A (previous) | {label_a}",
             fill=(40, 40, 40),
             font=legend_font,
         )
-        for (x, y), label in zip(positions, labels):
-            draw.text((x + 10, y + 4), label, fill=(40, 40, 40), font=label_font)
+        draw.rectangle([(10, 73), (29, 92)], fill=(230, 159, 0))
+        draw.text(
+            (38, 72),
+            f"ADDED | B (current) | {label_b}",
+            fill=(40, 40, 40),
+            font=legend_font,
+        )
+        for (x, y), label, stats in zip(positions, labels, view_stats):
+            overlap = round(stats["overlap_ratio"] * 100)
+            draw.text(
+                (x + 10, y + 5),
+                f"{label} | OVERLAP {overlap}%",
+                fill=(40, 40, 40),
+                font=label_font,
+            )
         divider_x = per_view_size
         divider_y = legend_h + panel_stride
         draw.line(
@@ -458,6 +558,23 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
         )
 
         composite.save(str(output_path))
+
+    shared_pixels = sum(stats.pop("_shared_pixels") for stats in view_stats)
+    union_pixels = sum(stats.pop("_union_pixels") for stats in view_stats)
+    overlap_ratio = round(shared_pixels / (union_pixels or 1), 4)
+    return {
+        "method": "four_view_image_mask",
+        "alignment": {
+            "mode": "bounding_box_center",
+            "rotation": "preserved",
+            "relative_scale": "preserved",
+        },
+        "visual_overlap": {
+            "ratio": overlap_ratio,
+            "classification": _overlap_classification(overlap_ratio),
+        },
+        "views": view_stats,
+    }
 
 
 def render_diff_side_by_side(shape_a, shape_b, label_a, label_b, output_path,

@@ -71,7 +71,7 @@ VERSION OUTPUTS
       meta.json         full run metadata, including runtime and parts
       preview.png       4-view composite: front, right, top, iso
       diff_side.png     side-by-side vs. prior success (from v2 onward)
-      diff_overlay.png  tinted overlay vs. prior success (from v2 onward)
+      diff_overlay.png  semantic added/removed map vs. prior (from v2 onward)
       viewer.html       interactive review viewer (opens automatically;
                         from v2: A=previous, B=current)
       renders/          requested PNG views

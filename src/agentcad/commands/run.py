@@ -1011,7 +1011,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                     width=512, height=512,
                     parts_b=glb_parts,
                 )
-                render_diff_overlay(
+                comparison = render_diff_overlay(
                     prev_shape, topo_shape_for_metrics,
                     prev["label"], label, overlay_path,
                     width=1024, height=1024,
@@ -1021,6 +1021,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                     "against": prev["label"],
                     "side_by_side": f"{dir_name}/diff_side.png",
                     "overlay": f"{dir_name}/diff_overlay.png",
+                    "comparison": comparison,
                 }
             except Exception as e:
                 warnings.append(

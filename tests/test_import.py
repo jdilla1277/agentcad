@@ -172,6 +172,8 @@ class TestImportAutoDiff:
         parsed = json.loads(result.stdout)
         assert "diff" in parsed
         assert parsed["diff"]["against"] == "rev_a"
+        assert parsed["diff"]["comparison"]["method"] == "four_view_image_mask"
+        assert "visual_overlap" in parsed["diff"]["comparison"]
         side = isolated_dir / "v2_rev_b" / "diff_side.png"
         assert side.exists()
 

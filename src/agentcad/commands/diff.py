@@ -299,9 +299,10 @@ def _add_visual_response(response, step_a, step_b, overlay):
 
     png_path = None
     overlay_png_path = None
+    comparison = None
     if shape_a is not None and shape_b is not None:
         png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, Path.cwd())
-        overlay_png_path = _render_diff_overlay_png(
+        overlay_png_path, comparison = _render_diff_overlay_png(
             shape_a, shape_b, glb_a, glb_b, Path.cwd()
         )
 
@@ -324,6 +325,8 @@ def _add_visual_response(response, step_a, step_b, overlay):
         visual_resp["png"] = _relative_to_cwd(png_path)
     if overlay_png_path is not None:
         visual_resp["overlay_png"] = _relative_to_cwd(overlay_png_path)
+    if comparison is not None:
+        visual_resp["comparison"] = comparison
 
     _open_browser(url)
     response["visual"] = visual_resp

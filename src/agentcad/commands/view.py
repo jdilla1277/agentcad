@@ -313,7 +313,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <img id="img-diff-side">
   </div>
   <div class="panel" id="panel-diff-overlay" style="display:none;">
-    <h3>diff_overlay.png — four center-aligned overlays (green A, red B)</h3>
+    <h3>diff_overlay.png — semantic difference map (shared gray, removed blue, added orange)</h3>
     <img id="img-diff-overlay">
   </div>
 </div>
@@ -2060,13 +2060,15 @@ def _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir):
 
 
 def _render_diff_overlay_png(shape_a, shape_b, glb_a, glb_b, out_dir):
-    """Render the four-view center-aligned overlay next to the diff HTML."""
+    """Render the four-view semantic difference map next to the diff HTML."""
     from agentcad.render import render_diff_overlay
 
     label_a, label_b = _diff_name_parts(glb_a, glb_b)
     png_path = out_dir / f"diff_{label_a}_{label_b}_overlay.png"
-    render_diff_overlay(shape_a, shape_b, glb_a.name, glb_b.name, png_path)
-    return png_path
+    comparison = render_diff_overlay(
+        shape_a, shape_b, glb_a.name, glb_b.name, png_path
+    )
+    return png_path, comparison
 
 
 def _review_error(message):
@@ -2208,9 +2210,10 @@ def view(file, file_b, overlay, with_measure, spec_file):
     out_dir = glb_a.parent
     png_path = None
     overlay_png_path = None
+    comparison = None
     if shape_a is not None and shape_b is not None:
         png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir)
-        overlay_png_path = _render_diff_overlay_png(
+        overlay_png_path, comparison = _render_diff_overlay_png(
             shape_a, shape_b, glb_a, glb_b, out_dir
         )
 
@@ -2238,6 +2241,8 @@ def view(file, file_b, overlay, with_measure, spec_file):
         response["png"] = str(png_path)
     if overlay_png_path is not None:
         response["overlay_png"] = str(overlay_png_path)
+    if comparison is not None:
+        response["comparison"] = comparison
 
     _open_browser(url)
     click.echo(json.dumps(response))
