@@ -15,6 +15,7 @@ from agentcad.commands.export_cmd import export_cmd
 from agentcad.commands.feedback import feedback
 from agentcad.commands.import_cmd import import_cmd
 from agentcad.commands.init import init
+from agentcad.commands.instructions import instructions
 from agentcad.commands.inspect_cmd import inspect_cmd
 from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
@@ -173,6 +174,9 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
     Read the full built-in documentation or one section. Useful sections include
     quickstart, preamble, commands, workflow, render, measure, check-spec,
     inspect, parts, editing, helpers, patterns, runtimes, feedback, and mcp.
+
+  agentcad instructions install
+    Record a short project note so future agents read `agentcad --help`.
 
   agentcad skill install
   agentcad skill show
@@ -383,6 +387,7 @@ cli.add_command(export_cmd)
 cli.add_command(feedback)
 cli.add_command(import_cmd)
 cli.add_command(init)
+cli.add_command(instructions)
 cli.add_command(inspect_cmd)
 cli.add_command(measure)
 cli.add_command(parts_cmd)
