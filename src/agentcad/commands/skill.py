@@ -138,6 +138,7 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state |
 | `agentcad docs [SECTION]` | Runtime-aware built-in documentation |
+| `agentcad instructions install` | Record a short project note so future agents read `agentcad --help` |
 | `agentcad view FILE [FILE_B]` | Open one model or an explicit synchronized A/B comparison |
 
 ## Debugging playbook

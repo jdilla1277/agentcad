@@ -31,6 +31,7 @@ Create a Python 3.12 virtual environment, then:
 
 pip install agentcad
 agentcad skill install
+agentcad instructions install
 agentcad --help
 agentcad init --name phone-stand
 
