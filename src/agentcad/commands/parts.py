@@ -433,6 +433,7 @@ def view_parts(
         preview_png=_existing_file(version_dir / "preview.png"),
         diff_side_png=_existing_file(version_dir / "diff_side.png"),
         diff_overlay_png=_existing_file(version_dir / "diff_overlay.png"),
+        diff_volume_png=_existing_file(version_dir / "diff_volume.png"),
         parts=parts,
         groups=groups,
         part_review=review_state,

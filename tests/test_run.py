@@ -981,10 +981,18 @@ def test_run_no_preview_second_run_still_writes_diff(runner, isolated_dir):
     parsed = json.loads(result.stdout)
     assert "diff" in parsed
     assert parsed["diff"]["against"] == "first"
-    assert parsed["diff"]["comparison"]["method"] == "four_view_image_mask"
-    assert "visual_overlap" in parsed["diff"]["comparison"]
+    projection = parsed["diff"]["projection_comparison"]
+    assert projection["method"] == "four_view_image_mask"
+    assert "score" in projection
+    assert (
+        parsed["diff"]["comparison_3d"]["method"]
+        == "source_frame_boolean_volume"
+    )
+    assert parsed["diff"]["comparison_3d"]["volumes"]["shared"] == 1000.0
     assert (isolated_dir / "v2_second" / "diff_side.png").exists()
     assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
+    assert (isolated_dir / "v2_second" / "diff_volume.png").exists()
+    assert (isolated_dir / "v2_second" / "diff_volume.glb").exists()
 
 
 def test_run_no_preview_second_run_viewer_includes_prior(runner, isolated_dir):
@@ -1085,10 +1093,15 @@ def test_run_auto_diff_png_when_prior_success(runner, isolated_dir):
     assert p2["diff"]["against"] == "first"
     assert p2["diff"]["side_by_side"] == "v2_second/diff_side.png"
     assert p2["diff"]["overlay"] == "v2_second/diff_overlay.png"
-    assert p2["diff"]["comparison"]["alignment"]["mode"] == "bounding_box_center"
-    assert len(p2["diff"]["comparison"]["views"]) == 4
+    projection = p2["diff"]["projection_comparison"]
+    assert projection["alignment"]["mode"] == "bounding_box_center"
+    assert len(projection["views"]) == 4
+    assert p2["diff"]["comparison_3d"]["alignment"]["mode"] == "source_frame"
+    assert p2["diff"]["volume_png"] == "v2_second/diff_volume.png"
+    assert p2["diff"]["volume_glb"] == "v2_second/diff_volume.glb"
     assert (isolated_dir / "v2_second" / "diff_side.png").exists()
     assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
+    assert (isolated_dir / "v2_second" / "diff_volume.png").exists()
 
 
 def test_run_auto_diff_skips_failed_versions(runner, isolated_dir):

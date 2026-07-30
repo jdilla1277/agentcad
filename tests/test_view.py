@@ -196,13 +196,19 @@ def test_view_two_files_step_auto_converts(runner, isolated_dir, monkeypatch):
     overlay_png_path = Path(parsed["overlay_png"])
     assert overlay_png_path.exists()
     assert overlay_png_path.stat().st_size > 0
-    assert parsed["comparison"]["method"] == "four_view_image_mask"
-    assert parsed["comparison"]["alignment"]["mode"] == "bounding_box_center"
-    assert len(parsed["comparison"]["views"]) == 4
+    projection = parsed["projection_comparison"]
+    assert projection["method"] == "four_view_image_mask"
+    assert projection["alignment"]["mode"] == "bounding_box_center"
+    assert len(projection["views"]) == 4
+    assert parsed["comparison_3d"]["method"] == "source_frame_boolean_volume"
+    assert parsed["comparison_3d"]["volumes"]["shared"] == 1000.0
+    assert Path(parsed["volume_glb"]).exists()
+    assert Path(parsed["volume_png"]).exists()
     html = (isolated_dir / "diff_a_b.html").read_text()
-    assert html.count("data:image/png;base64,") == 2
+    assert html.count("data:image/png;base64,") == 3
     assert "four matched views" in html
-    assert "semantic difference map" in html
+    assert "centered 2D projection map" in html
+    assert "source-frame 3D volume" in html
 
 
 def test_view_two_glbs_no_png(runner, isolated_dir, monkeypatch):
@@ -452,8 +458,9 @@ def test_diff_visual_flag_produces_diff_html_and_png(runner, isolated_dir, monke
     overlay_png_path = isolated_dir / parsed["visual"]["overlay_png"]
     assert overlay_png_path.exists()
     assert overlay_png_path.stat().st_size > 0
-    assert parsed["visual"]["comparison"]["method"] == "four_view_image_mask"
-    assert "visual_overlap" in parsed["visual"]["comparison"]
+    projection = parsed["visual"]["projection_comparison"]
+    assert projection["method"] == "four_view_image_mask"
+    assert "score" in projection
 
 
 def test_diff_visual_with_overlay(runner, isolated_dir, monkeypatch):
@@ -467,10 +474,16 @@ def test_diff_visual_with_overlay(runner, isolated_dir, monkeypatch):
     assert parsed["visual"]["mode"] == "overlay"
     assert "png" in parsed["visual"]
     assert "overlay_png" in parsed["visual"]
-    assert parsed["visual"]["comparison"]["alignment"]["relative_scale"] == "preserved"
+    assert (
+        parsed["visual"]["projection_comparison"]["alignment"]["relative_scale"]
+        == "preserved"
+    )
+    assert parsed["comparison_3d"]["alignment"]["mode"] == "source_frame"
+    assert "volume_glb" in parsed["visual"]
+    assert "volume_png" in parsed["visual"]
     html = (isolated_dir / parsed["visual"]["html"]).read_text()
     assert 'id="opacity-a"' in html
-    assert html.count("data:image/png;base64,") == 2
+    assert html.count("data:image/png;base64,") == 3
 
 
 def test_diff_without_visual_unchanged(runner, isolated_dir):

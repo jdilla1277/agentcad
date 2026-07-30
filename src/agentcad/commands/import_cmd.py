@@ -185,12 +185,39 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
                     prev_shape, topo_shape, prev["label"], label,
                     overlay, width=1024, height=1024,
                 )
+                from agentcad.solid_compare import (
+                    compare_solid_volumes,
+                    write_solid_comparison_artifacts,
+                )
+
+                solid_comparison = compare_solid_volumes(
+                    prev_shape,
+                    topo_shape,
+                )
                 diff_meta = {
                     "against": prev["label"],
                     "side_by_side": f"{dir_name}/diff_side.png",
                     "overlay": f"{dir_name}/diff_overlay.png",
-                    "comparison": comparison,
+                    "projection_comparison": comparison,
+                    "comparison_3d": solid_comparison.data,
                 }
+                volume_glb = version_dir / "diff_volume.glb"
+                volume_png = version_dir / "diff_volume.png"
+                try:
+                    if write_solid_comparison_artifacts(
+                        solid_comparison,
+                        volume_glb,
+                        volume_png,
+                    ):
+                        diff_meta["volume_glb"] = (
+                            f"{dir_name}/diff_volume.glb"
+                        )
+                        diff_meta["volume_png"] = (
+                            f"{dir_name}/diff_volume.png"
+                        )
+                except Exception:
+                    # Numeric comparison remains useful if artifact export fails.
+                    pass
             except Exception:
                 # Diff is best-effort — never fail the whole import.
                 diff_meta = None
@@ -210,6 +237,11 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
         preview_png=preview_path,
         diff_side_png=(version_dir / "diff_side.png") if diff_meta else None,
         diff_overlay_png=(version_dir / "diff_overlay.png") if diff_meta else None,
+        diff_volume_png=(
+            version_dir / "diff_volume.png"
+            if diff_meta and diff_meta.get("volume_png")
+            else None
+        ),
     )
 
     viewer_opened = False

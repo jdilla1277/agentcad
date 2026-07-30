@@ -116,7 +116,7 @@ def test_render_diff_overlay_contains_four_aligned_views(tmp_path):
         assert image.size == (192, 368)
     assert comparison["method"] == "four_view_image_mask"
     assert comparison["alignment"]["mode"] == "bounding_box_center"
-    assert comparison["visual_overlap"]["classification"] in {
+    assert comparison["score"]["classification"] in {
         "low", "moderate", "high",
     }
     assert len(comparison["views"]) == 4
@@ -138,8 +138,8 @@ def test_render_diff_overlay_classifies_same_geometry_as_high_overlap(tmp_path):
         height=192,
     )
 
-    assert comparison["visual_overlap"]["classification"] == "high"
-    assert comparison["visual_overlap"]["ratio"] > 0.95
+    assert comparison["score"]["classification"] == "high"
+    assert comparison["score"]["value"] > 0.95
 
 
 def test_semantic_diff_panel_classifies_shared_removed_and_added_pixels():
@@ -150,9 +150,9 @@ def test_semantic_diff_panel_classifies_shared_removed_and_added_pixels():
 
     panel, stats = _semantic_diff_panel(image_a, image_b)
 
-    assert stats["overlap_ratio"] == pytest.approx(0.25)
-    assert stats["removed_ratio"] == pytest.approx(0.375)
-    assert stats["added_ratio"] == pytest.approx(0.375)
+    assert stats["coincident_fraction_of_union"] == pytest.approx(0.25)
+    assert stats["reference_only_fraction_of_union"] == pytest.approx(0.375)
+    assert stats["candidate_only_fraction_of_union"] == pytest.approx(0.375)
     pixels = (
         panel.get_flattened_data()
         if hasattr(panel, "get_flattened_data")

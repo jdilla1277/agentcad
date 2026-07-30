@@ -5,6 +5,7 @@ from OCP.AIS import AIS_InteractiveContext, AIS_Shape
 from OCP.Aspect import Aspect_DisplayConnection, Aspect_NeutralWindow
 from OCP.Graphic3d import (
     Graphic3d_MaterialAspect,
+    Graphic3d_NameOfMaterial_Plastered,
     Graphic3d_NameOfMaterial_Silver,
 )
 from OCP.Image import Image_AlienPixMap
@@ -131,12 +132,22 @@ def _setup_render(shape, width=800, height=600, parts=None, msaa=0):
         part_shape = part.get("topo_shape")
         if part_shape is None:
             continue
-        part_items.append((part_shape, _parse_color(part.get("color")), idx))
+        part_items.append((
+            part_shape,
+            _parse_color(part.get("color")),
+            idx,
+            part.get("material"),
+        ))
 
     if part_items:
-        for part_shape, parsed_color, idx in part_items:
+        for part_shape, parsed_color, idx, material in part_items:
             ais_shape = AIS_Shape(part_shape)
-            ais_shape.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
+            material_name = (
+                Graphic3d_NameOfMaterial_Plastered
+                if material == "matte"
+                else Graphic3d_NameOfMaterial_Silver
+            )
+            ais_shape.SetMaterial(Graphic3d_MaterialAspect(material_name))
             r, g, b = parsed_color or _GLB_PALETTE[idx % len(_GLB_PALETTE)]
             ais_shape.SetColor(Quantity_Color(r, g, b, Quantity_TOC_RGB))
             context.Display(ais_shape, 1, -1, False)
@@ -390,9 +401,18 @@ def _semantic_diff_panel(image_a, image_b):
     added_pixels = _mask_pixel_count(added)
     denominator = union_pixels or 1
     return panel, {
-        "overlap_ratio": round(shared_pixels / denominator, 4),
-        "removed_ratio": round(removed_pixels / denominator, 4),
-        "added_ratio": round(added_pixels / denominator, 4),
+        "coincident_fraction_of_union": round(
+            shared_pixels / denominator,
+            4,
+        ),
+        "reference_only_fraction_of_union": round(
+            removed_pixels / denominator,
+            4,
+        ),
+        "candidate_only_fraction_of_union": round(
+            added_pixels / denominator,
+            4,
+        ),
         "_shared_pixels": shared_pixels,
         "_union_pixels": union_pixels,
     }
@@ -444,13 +464,81 @@ def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
         composite.save(str(output_path))
 
 
+def render_solid_comparison(
+    shape,
+    parts,
+    output_path,
+    per_view_size=512,
+    comparison_data=None,
+):
+    """Render actual shared/reference-only/candidate-only 3D volumes."""
+    import tempfile
+    from PIL import Image, ImageDraw
+
+    legend_h = 132
+    legend_font = _image_label_font(18)
+    with tempfile.TemporaryDirectory() as tmp:
+        composite_path = Path(tmp) / "solid_comparison.png"
+        render_composite_4view(
+            shape,
+            composite_path,
+            per_view_size=per_view_size,
+            parts=parts,
+        )
+        with Image.open(composite_path) as source:
+            source = source.convert("RGB")
+            output = Image.new(
+                "RGB",
+                (source.width, source.height + legend_h),
+                (245, 245, 245),
+            )
+            output.paste(source, (0, legend_h))
+
+        draw = ImageDraw.Draw(output)
+        draw.text(
+            (10, 8),
+            "SOURCE-FRAME 3D VOLUME | NO ALIGNMENT APPLIED",
+            fill=(40, 40, 40),
+            font=legend_font,
+        )
+        volumes = (comparison_data or {}).get("volumes", {})
+        unit = (comparison_data or {}).get("units", {}).get("volume")
+
+        def _legend_text(label, key):
+            if key not in volumes or not unit:
+                return label
+            return f"{label} | {volumes[key]:,.4f} {unit}"
+
+        legend = (
+            (
+                (210, 214, 220),
+                _legend_text("SHARED 3D VOLUME", "shared"),
+            ),
+            (
+                (0, 114, 178),
+                _legend_text("REFERENCE-ONLY 3D VOLUME", "reference_only"),
+            ),
+            (
+                (230, 159, 0),
+                _legend_text("CANDIDATE-ONLY 3D VOLUME", "candidate_only"),
+            ),
+        )
+        for index, (color, label) in enumerate(legend):
+            y = 40 + index * 30
+            draw.rectangle([(10, y + 1), (29, y + 20)], fill=color)
+            draw.text((38, y), label, fill=(40, 40, 40), font=legend_font)
+
+        output.save(str(output_path))
+
+
 def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
                         width=1024, height=1024, view_name="iso",
                         parts_a=None, parts_b=None):
     """Render four center-aligned semantic difference maps.
 
-    Shared projection is gray, A-only geometry is blue, and B-only geometry is
-    orange. The return value describes the same masks used to make the image.
+    Coincident projection is gray, A-only projected pixels are blue, and
+    B-only projected pixels are orange. The return value describes the same
+    masks used to make the image.
     """
     import tempfile
     from PIL import Image, ImageDraw
@@ -518,26 +606,26 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
         draw.rectangle([(10, 9), (29, 28)], fill=(210, 214, 220))
         draw.text(
             (38, 8),
-            "SHARED PROJECTION",
+            "COINCIDENT PROJECTED PIXELS",
             fill=(40, 40, 40),
             font=legend_font,
         )
         draw.rectangle([(10, 41), (29, 60)], fill=(0, 114, 178))
         draw.text(
             (38, 40),
-            f"REMOVED | A (previous) | {label_a}",
+            f"REFERENCE-ONLY PROJECTION | A (previous) | {label_a}",
             fill=(40, 40, 40),
             font=legend_font,
         )
         draw.rectangle([(10, 73), (29, 92)], fill=(230, 159, 0))
         draw.text(
             (38, 72),
-            f"ADDED | B (current) | {label_b}",
+            f"CANDIDATE-ONLY PROJECTION | B (current) | {label_b}",
             fill=(40, 40, 40),
             font=legend_font,
         )
         for (x, y), label, stats in zip(positions, labels, view_stats):
-            overlap = round(stats["overlap_ratio"] * 100)
+            overlap = round(stats["coincident_fraction_of_union"] * 100)
             draw.text(
                 (x + 10, y + 5),
                 f"{label} | OVERLAP {overlap}%",
@@ -564,15 +652,22 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
     overlap_ratio = round(shared_pixels / (union_pixels or 1), 4)
     return {
         "method": "four_view_image_mask",
+        "scope": "2d_projected_pixels",
         "alignment": {
             "mode": "bounding_box_center",
             "rotation": "preserved",
             "relative_scale": "preserved",
         },
-        "visual_overlap": {
-            "ratio": overlap_ratio,
+        "score": {
+            "metric": "projection_intersection_over_union",
+            "value": overlap_ratio,
             "classification": _overlap_classification(overlap_ratio),
+            "aggregation": "foreground_union_pixel_weighted_across_views",
         },
+        "limitations": [
+            "Does not establish shared 3D geometry.",
+            "Does not identify physical material additions or removals.",
+        ],
         "views": view_stats,
     }
 

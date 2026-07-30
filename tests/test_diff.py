@@ -78,6 +78,17 @@ def test_diff_accepts_standalone_step_paths_without_manifest(runner, isolated_di
         "from": {"x": 10.0, "y": 10.0, "z": 10.0},
         "to": {"x": 20.0, "y": 20.0, "z": 20.0},
     }
+    comparison = data["comparison_3d"]
+    assert comparison["method"] == "source_frame_boolean_volume"
+    assert comparison["alignment"] == {
+        "mode": "source_frame",
+        "transform_applied": False,
+    }
+    assert comparison["volumes"]["shared"] == 1000.0
+    assert comparison["volumes"]["reference_only"] == 0.0
+    assert comparison["volumes"]["candidate_only"] == 7000.0
+    assert comparison["ratios"]["reference_coverage"] == 1.0
+    assert comparison["ratios"]["candidate_coverage"] == 0.125
 
 
 def test_diff_standalone_step_path_missing_file_error(runner, isolated_dir):

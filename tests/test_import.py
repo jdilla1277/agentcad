@@ -172,10 +172,18 @@ class TestImportAutoDiff:
         parsed = json.loads(result.stdout)
         assert "diff" in parsed
         assert parsed["diff"]["against"] == "rev_a"
-        assert parsed["diff"]["comparison"]["method"] == "four_view_image_mask"
-        assert "visual_overlap" in parsed["diff"]["comparison"]
+        projection = parsed["diff"]["projection_comparison"]
+        assert projection["method"] == "four_view_image_mask"
+        assert "score" in projection
+        assert (
+            parsed["diff"]["comparison_3d"]["method"]
+            == "source_frame_boolean_volume"
+        )
+        assert parsed["diff"]["comparison_3d"]["status"] == "success"
         side = isolated_dir / "v2_rev_b" / "diff_side.png"
         assert side.exists()
+        assert (isolated_dir / "v2_rev_b" / "diff_volume.png").exists()
+        assert (isolated_dir / "v2_rev_b" / "diff_volume.glb").exists()
 
 
 # --- non-Tier-0 inputs ------------------------------------------------------
