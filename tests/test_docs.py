@@ -60,6 +60,30 @@ def test_docs_full_rollup_excludes_cadquery_pointer(runner, isolated_dir):
     assert "CadQuery compatibility — overview pointer" not in data["content"]
 
 
+# Issue #118: the mirror-image guard — CadQuery compatibility docs must not
+# present build123d code as usable. Naming build123d-only helpers in a
+# "these are build123d-only" warning is fine; code snippets are not.
+def test_cadquery_editing_docs_lead_with_native_path(runner, isolated_dir):
+    result = runner.invoke(cli, ["docs", "editing", "--runtime", "cadquery"])
+    data = json.loads(result.stdout)
+    content = data["content"]
+    assert "importers.importStep" in content
+    assert "from build123d import" not in content
+    assert "Plane.XY" not in content
+    assert "Sketch()" not in content
+    # the native selector path comes before the build123d-only pointer
+    assert content.index("importers.importStep") < content.index("build123d-only")
+    # init-first flow: `import --init` pins build123d and breaks step 4
+    assert "agentcad init --name legacy --runtime cadquery" in content
+    assert "import vendor.step --init" not in content
+
+
+def test_cadquery_full_docs_contain_no_build123d_imports(runner, isolated_dir):
+    result = runner.invoke(cli, ["docs", "--runtime", "cadquery"])
+    content = json.loads(result.stdout)["content"]
+    assert "from build123d import" not in content
+
+
 def test_docs_returns_full_documentation(runner):
     result = runner.invoke(cli, ["docs"])
     assert result.exit_code == 0
@@ -663,8 +687,9 @@ def test_docs_editing_describes_runtime_neutral_annular_helpers(runner):
     result = runner.invoke(cli, ["docs", "editing", "--runtime", "cadquery"])
     assert result.exit_code == 0
     content = json.loads(result.stdout)["content"]
-    assert "annular_boss and raise_annulus are runtime-neutral" in content
-    assert "the helpers above are build123d-only" not in content
+    assert "Runtime-neutral edit helpers" in content
+    assert "annular_boss" in content
+    assert "raise_annulus" in content
 
 
 # --- M38: Complex profile patterns ---
