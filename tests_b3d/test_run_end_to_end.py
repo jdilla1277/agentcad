@@ -280,9 +280,9 @@ class TestPreview:
         png = isolated_dir / "v1_label" / "preview.png"
         data = png.read_bytes()
         width, height = _struct.unpack(">II", data[16:24])
-        # 2 panels wide × 512px = 1024, plus label bars stacked (2 × (512+22) = 1068).
+        # 2 panels wide x 512px, plus two 30px label bars.
         assert width == 1024
-        assert height == 1068
+        assert height == 1084
 
     def test_default_does_not_auto_render_preview_gif(self, runner, isolated_dir):
         """Turntable GIFs are on-demand via the viewer's Export GIF button —

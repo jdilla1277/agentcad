@@ -154,10 +154,12 @@ SECTIONS = {
         "    check-spec\n"
         "             file, spec_file, passed, matched_features, missing_features,\n"
         "             total_abs_count_error, validity, metrics\n"
-        "    view     url, model | mode, url, model_a, model_b, png?\n"
+        "    view     url, model | mode, url, model_a, model_b, png?,\n"
+        "             projection_comparison?, comparison_3d?, volume_png?, volume_glb?\n"
         "    parts   version, label, viewer?, viewer_glb?, parts[] / part\n"
         "    diff     v1, v2, changes (with 'outputs', 'renders', 'metrics', 'parts'?\n"
-        "             subkeys), visual?\n"
+        "             subkeys), comparison_3d?, visual? (side-by-side, centered\n"
+        "             projection, and source-frame 3D volume artifacts)\n"
     ),
     "export": (
         "Exporting mesh formats:\n"

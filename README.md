@@ -59,8 +59,8 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad parts list REF`** — list named/captured parts for a version
 - **`agentcad parts show REF ID`** — show one versioned part by stable id
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
-- **`agentcad diff 1 2`** — compare versions (metrics, outputs, parameters)
-- **`agentcad view old.step new.step`** — open an explicit synchronized A/B comparison
+- **`agentcad diff 1 2`** — compare versions, including actual shared/reference-only/candidate-only source-frame volume for valid closed solids
+- **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
 
 ## No boilerplate

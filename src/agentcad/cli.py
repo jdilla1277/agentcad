@@ -72,7 +72,10 @@ VERSION OUTPUTS
       meta.json         full run metadata, including runtime and parts
       preview.png       4-view composite: front, right, top, iso
       diff_side.png     side-by-side vs. prior success (from v2 onward)
-      diff_overlay.png  tinted overlay vs. prior success (from v2 onward)
+      diff_overlay.png  centered 2D projection map vs. prior (from v2 onward)
+      diff_volume.png   source-frame shared/reference-only/candidate-only
+                        3D volume vs. prior (from v2 onward, valid solids)
+      diff_volume.glb   interactive colored geometry backing the 3D volume map
       viewer.html       interactive review viewer (opens automatically;
                         from v2: A=previous, B=current)
       renders/          requested PNG views
@@ -122,14 +125,17 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
   agentcad view FILE [FILE_B] [--overlay] [--measure] [--spec spec.json]
     Open an explicit browser review for STEP/STP or GLB; STEP auto-converts.
     A second file opens synchronized A/B comparison, or a red/green overlay
-    with --overlay. --measure embeds geometry measurements; --spec runs the
-    checklist and opens Spec check mode. Measurement and spec review require
-    STEP/STP source geometry.
+    with --overlay. Two STEP files also produce centered 2D projection and
+    source-frame 3D volume artifacts. --measure embeds geometry measurements;
+    --spec runs the checklist and opens Spec check mode. Measurement and spec
+    review require STEP/STP source geometry.
 
   agentcad diff REF1 REF2 [--visual] [--overlay]
     Compare version metrics, outputs, parameters, and parts. Refs may be version
-    numbers or labels. --visual opens the browser comparison; --overlay selects
-    its tinted overlay mode.
+    numbers, labels, or STEP/BREP paths. Closed solids also return actual shared,
+    reference-only, and candidate-only source-frame volumes; no alignment is
+    applied. --visual opens the browser comparison and writes colored volume
+    artifacts; --overlay selects its tinted interactive mode.
 
   agentcad parts list REF
   agentcad parts show REF PART_ID

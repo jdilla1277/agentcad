@@ -64,8 +64,12 @@ def test_cadquery_project_help_teaches_only_compatibility_api(
     assert "CADQUERY COMPATIBILITY AUTHORING" in output
     assert "box = cq.Workplane" in output
     assert "box = Box(10, 20, 5)" not in output
-    assert "run         Execute a build123d script" not in output
-    assert "run         Execute the project's CAD script" in output
+    run_help = next(
+        line.strip() for line in output.splitlines()
+        if line.strip().startswith("run ")
+    )
+    assert "Execute a build123d script" not in run_help
+    assert "Execute the project's CAD script" in run_help
     assert "CHOOSING A RUNTIME" not in output
     assert "\x08" not in output
 

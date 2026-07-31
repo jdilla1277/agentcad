@@ -221,8 +221,10 @@ def test_diff_response_shape(runner, isolated_dir):
     r = runner.invoke(cli, ["diff", "1", "2"])
     assert r.exit_code == 0, r.output
     parsed = json.loads(r.stdout)
-    for key in ("command", "status", "v1", "v2", "changes"):
+    for key in ("command", "status", "v1", "v2", "changes", "comparison_3d"):
         assert key in parsed, f"`diff` missing required field: {key}"
+    assert parsed["comparison_3d"]["method"] == "source_frame_boolean_volume"
+    assert parsed["comparison_3d"]["alignment"]["transform_applied"] is False
     # diff.changes mirrors the artifact convention — outputs and renders
     # are sub-sections, not top-level fields.
     assert "outputs" in parsed["changes"]

@@ -981,8 +981,18 @@ def test_run_no_preview_second_run_still_writes_diff(runner, isolated_dir):
     parsed = json.loads(result.stdout)
     assert "diff" in parsed
     assert parsed["diff"]["against"] == "first"
+    projection = parsed["diff"]["projection_comparison"]
+    assert projection["method"] == "four_view_image_mask"
+    assert "score" in projection
+    assert (
+        parsed["diff"]["comparison_3d"]["method"]
+        == "source_frame_boolean_volume"
+    )
+    assert parsed["diff"]["comparison_3d"]["volumes"]["shared"] == 1000.0
     assert (isolated_dir / "v2_second" / "diff_side.png").exists()
     assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
+    assert (isolated_dir / "v2_second" / "diff_volume.png").exists()
+    assert (isolated_dir / "v2_second" / "diff_volume.glb").exists()
 
 
 def test_run_no_preview_second_run_viewer_includes_prior(runner, isolated_dir):
@@ -1057,9 +1067,9 @@ def test_run_preview_is_4view_composite_1024(runner, isolated_dir):
     png = isolated_dir / "v1_label" / "preview.png"
     data = png.read_bytes()
     width, height = struct.unpack(">II", data[16:24])
-    # 2 panels wide × 512px = 1024, plus label bars stacked (2 × (512 + 22) = 1068)
+    # 2 panels wide x 512px, plus two 30px label bars.
     assert width == 1024
-    assert height == 1068
+    assert height == 1084
 
 
 def test_run_auto_diff_png_when_prior_success(runner, isolated_dir):
@@ -1083,8 +1093,15 @@ def test_run_auto_diff_png_when_prior_success(runner, isolated_dir):
     assert p2["diff"]["against"] == "first"
     assert p2["diff"]["side_by_side"] == "v2_second/diff_side.png"
     assert p2["diff"]["overlay"] == "v2_second/diff_overlay.png"
+    projection = p2["diff"]["projection_comparison"]
+    assert projection["alignment"]["mode"] == "bounding_box_center"
+    assert len(projection["views"]) == 4
+    assert p2["diff"]["comparison_3d"]["alignment"]["mode"] == "source_frame"
+    assert p2["diff"]["volume_png"] == "v2_second/diff_volume.png"
+    assert p2["diff"]["volume_glb"] == "v2_second/diff_volume.glb"
     assert (isolated_dir / "v2_second" / "diff_side.png").exists()
     assert (isolated_dir / "v2_second" / "diff_overlay.png").exists()
+    assert (isolated_dir / "v2_second" / "diff_volume.png").exists()
 
 
 def test_run_auto_diff_skips_failed_versions(runner, isolated_dir):
@@ -1818,7 +1835,7 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert "partMatchesNameExact" in viewer_html
     assert "Longest IDs first avoids" in viewer_html
     assert "&& !partState.ghostRest" in viewer_html
-    assert "attach(sceneA_split, MODEL_A_URL, {})" in viewer_html
+    assert "attach(sceneA_split, MODEL_A_URL, { alignToCenter: true })" in viewer_html
 
     from PIL import Image
     preview_img = Image.open(isolated_dir / "v1" / "preview.png").convert("RGB")

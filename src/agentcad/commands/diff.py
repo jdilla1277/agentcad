@@ -9,6 +9,10 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.manifest import load_manifest
+from agentcad.metrics import compute_metrics
+from agentcad.step_io import load_cad_shape
+
+_CAD_FILE_SUFFIXES = {".step", ".stp", ".brep"}
 
 
 def _resolve_version(manifest, ref):
@@ -56,6 +60,26 @@ def _scalar_diff(old_val, new_val):
     return {"from": old_val, "to": new_val}
 
 
+def _looks_like_file_ref(ref):
+    p = Path(ref).expanduser()
+    return p.suffix.lower() in _CAD_FILE_SUFFIXES or "/" in ref or "\\" in ref
+
+
+def _resolve_file_ref(ref):
+    p = Path(ref).expanduser()
+    return p if p.is_file() else None
+
+
+def _load_file_shape_and_metrics(path):
+    shape = load_cad_shape(path)
+    return shape, compute_metrics(shape)
+
+
+def _metric_changes(metrics_a, metrics_b):
+    all_keys = sorted(set(metrics_a.keys()) | set(metrics_b.keys()))
+    return {k: _scalar_diff(metrics_a.get(k), metrics_b.get(k)) for k in all_keys}
+
+
 @click.command()
 @click.argument("ref1")
 @click.argument("ref2")
@@ -71,6 +95,67 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
     if overlay:
         argv.append("--overlay")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    file_a = _resolve_file_ref(ref1)
+    file_b = _resolve_file_ref(ref2)
+    if (
+        file_a is not None
+        or file_b is not None
+        or _looks_like_file_ref(ref1)
+        or _looks_like_file_ref(ref2)
+    ):
+        if file_a is None:
+            click.echo(json.dumps({
+                "command": "diff",
+                "status": "error",
+                "message": f"File '{ref1}' not found.",
+            }))
+            sys.exit(1)
+        if file_b is None:
+            click.echo(json.dumps({
+                "command": "diff",
+                "status": "error",
+                "message": f"File '{ref2}' not found.",
+            }))
+            sys.exit(1)
+
+        try:
+            shape_a, metrics_a = _load_file_shape_and_metrics(file_a)
+            shape_b, metrics_b = _load_file_shape_and_metrics(file_b)
+        except ValueError as exc:
+            click.echo(json.dumps({
+                "command": "diff",
+                "status": "error",
+                "message": str(exc),
+            }))
+            sys.exit(1)
+
+        from agentcad.solid_compare import compare_solid_volumes
+
+        solid_comparison = compare_solid_volumes(shape_a, shape_b)
+        response = {
+            "command": "diff",
+            "status": "success",
+            "v1": {"file": _relative_to_cwd(file_a), "label": file_a.name},
+            "v2": {"file": _relative_to_cwd(file_b), "label": file_b.name},
+            "changes": {
+                "metrics": _metric_changes(metrics_a, metrics_b),
+            },
+            "comparison_3d": solid_comparison.data,
+        }
+
+        if visual:
+            _add_visual_response(
+                response,
+                file_a,
+                file_b,
+                overlay,
+                solid_comparison=solid_comparison,
+            )
+
+        click.echo(json.dumps(response))
+        maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
+        return
 
     manifest = load_manifest(command="diff")
 
@@ -183,9 +268,21 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
         "changes": changes,
     }
 
+    step_a = _find_step_path(v1_entry, meta1)
+    step_b = _find_step_path(v2_entry, meta2)
+    solid_comparison = None
+    if step_a is not None and step_b is not None:
+        try:
+            from agentcad.solid_compare import compare_solid_volumes
+
+            shape_a = load_cad_shape(step_a)
+            shape_b = load_cad_shape(step_b)
+            solid_comparison = compare_solid_volumes(shape_a, shape_b)
+            response["comparison_3d"] = solid_comparison.data
+        except ValueError:
+            solid_comparison = None
+
     if visual:
-        step_a = _find_step_path(v1_entry, meta1)
-        step_b = _find_step_path(v2_entry, meta2)
         if step_a is None or step_b is None:
             click.echo(json.dumps({
                 "command": "diff",
@@ -193,33 +290,13 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
                 "message": "Could not find STEP outputs for one or both versions.",
             }))
             sys.exit(1)
-
-        from agentcad.commands.view import _resolve_to_glb_and_shape, _render_diff, _render_diff_png, _open_browser
-
-        glb_a, shape_a, err = _resolve_to_glb_and_shape(str(step_a))
-        if err:
-            click.echo(json.dumps({"command": "diff", "status": "error", "message": err}))
-            sys.exit(1)
-        glb_b, shape_b, err = _resolve_to_glb_and_shape(str(step_b))
-        if err:
-            click.echo(json.dumps({"command": "diff", "status": "error", "message": err}))
-            sys.exit(1)
-
-        html_path, url, mode = _render_diff(glb_a, glb_b, overlay=overlay, out_dir=Path.cwd())
-
-        visual_resp = {
-            "mode": mode,
-            "html": _relative_to_cwd(html_path),
-            "url": url,
-        }
-
-        # Agent-facing: side-by-side PNG (skipped for overlay mode for now)
-        if shape_a is not None and shape_b is not None and not overlay:
-            png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, Path.cwd())
-            visual_resp["png"] = _relative_to_cwd(png_path)
-
-        _open_browser(url)
-        response["visual"] = visual_resp
+        _add_visual_response(
+            response,
+            step_a,
+            step_b,
+            overlay,
+            solid_comparison=solid_comparison,
+        )
 
     click.echo(json.dumps(response))
 
@@ -228,6 +305,85 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
 
 def _relative_to_cwd(path):
     return str(path.relative_to(Path.cwd())) if path.is_relative_to(Path.cwd()) else str(path)
+
+
+def _add_visual_response(
+    response,
+    step_a,
+    step_b,
+    overlay,
+    *,
+    solid_comparison=None,
+):
+    from agentcad.commands.view import (
+        _open_browser,
+        _render_diff,
+        _render_diff_overlay_png,
+        _render_diff_png,
+        _render_solid_comparison_artifacts,
+        _resolve_to_glb_and_shape,
+    )
+
+    glb_a, shape_a, err = _resolve_to_glb_and_shape(str(step_a))
+    if err:
+        click.echo(json.dumps({"command": "diff", "status": "error", "message": err}))
+        sys.exit(1)
+    glb_b, shape_b, err = _resolve_to_glb_and_shape(str(step_b))
+    if err:
+        click.echo(json.dumps({"command": "diff", "status": "error", "message": err}))
+        sys.exit(1)
+
+    png_path = None
+    overlay_png_path = None
+    volume_glb_path = None
+    volume_png_path = None
+    projection_comparison = None
+    if shape_a is not None and shape_b is not None:
+        png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, Path.cwd())
+        overlay_png_path, projection_comparison = _render_diff_overlay_png(
+            shape_a, shape_b, glb_a, glb_b, Path.cwd()
+        )
+        if solid_comparison is None:
+            from agentcad.solid_compare import compare_solid_volumes
+
+            solid_comparison = compare_solid_volumes(shape_a, shape_b)
+            response["comparison_3d"] = solid_comparison.data
+        volume_glb_path, volume_png_path = _render_solid_comparison_artifacts(
+            solid_comparison,
+            glb_a,
+            glb_b,
+            Path.cwd(),
+        )
+
+    html_path, url, mode = _render_diff(
+        glb_a,
+        glb_b,
+        overlay=overlay,
+        out_dir=Path.cwd(),
+        diff_side_png=png_path,
+        diff_overlay_png=overlay_png_path,
+        diff_volume_png=volume_png_path,
+    )
+
+    visual_resp = {
+        "mode": mode,
+        "html": _relative_to_cwd(html_path),
+        "url": url,
+    }
+
+    if png_path is not None:
+        visual_resp["png"] = _relative_to_cwd(png_path)
+    if overlay_png_path is not None:
+        visual_resp["overlay_png"] = _relative_to_cwd(overlay_png_path)
+    if projection_comparison is not None:
+        visual_resp["projection_comparison"] = projection_comparison
+    if volume_glb_path is not None:
+        visual_resp["volume_glb"] = _relative_to_cwd(volume_glb_path)
+    if volume_png_path is not None:
+        visual_resp["volume_png"] = _relative_to_cwd(volume_png_path)
+
+    _open_browser(url)
+    response["visual"] = visual_resp
 
 
 def _find_step_path(version_entry, meta):

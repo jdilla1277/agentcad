@@ -1011,17 +1011,47 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                     width=512, height=512,
                     parts_b=glb_parts,
                 )
-                render_diff_overlay(
+                comparison = render_diff_overlay(
                     prev_shape, topo_shape_for_metrics,
                     prev["label"], label, overlay_path,
                     width=1024, height=1024,
                     parts_b=glb_parts,
                 )
+                from agentcad.solid_compare import (
+                    compare_solid_volumes,
+                    write_solid_comparison_artifacts,
+                )
+
+                solid_comparison = compare_solid_volumes(
+                    prev_shape,
+                    topo_shape_for_metrics,
+                )
                 diff_meta = {
                     "against": prev["label"],
                     "side_by_side": f"{dir_name}/diff_side.png",
                     "overlay": f"{dir_name}/diff_overlay.png",
+                    "projection_comparison": comparison,
+                    "comparison_3d": solid_comparison.data,
                 }
+                try:
+                    volume_glb_path = version_dir / "diff_volume.glb"
+                    volume_png_path = version_dir / "diff_volume.png"
+                    if write_solid_comparison_artifacts(
+                        solid_comparison,
+                        volume_glb_path,
+                        volume_png_path,
+                    ):
+                        diff_meta["volume_glb"] = (
+                            f"{dir_name}/diff_volume.glb"
+                        )
+                        diff_meta["volume_png"] = (
+                            f"{dir_name}/diff_volume.png"
+                        )
+                except Exception as exc:
+                    warnings.append(
+                        "Could not write 3D volume comparison artifacts: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
             except Exception as e:
                 warnings.append(
                     f"Could not render diff against v{prev['version']}_{prev['label']}: {type(e).__name__}: {e}"
@@ -1061,6 +1091,11 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         preview_png=version_dir / "preview.png" if preview_meta else None,
         diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
         diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
+        diff_volume_png=(
+            version_dir / "diff_volume.png"
+            if diff_meta and diff_meta.get("volume_png")
+            else None
+        ),
         parts=parts_output,
         parts_model="b" if prev_glb_path else "a",
         part_changes=part_changes,

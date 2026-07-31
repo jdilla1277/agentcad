@@ -26,6 +26,7 @@ import click
 #   __PREVIEW_PNG_URL__      base64 data URI for preview.png, or ""
 #   __DIFF_SIDE_PNG_URL__    base64 data URI for diff_side.png, or ""
 #   __DIFF_OVERLAY_PNG_URL__ base64 data URI for diff_overlay.png, or ""
+#   __DIFF_VOLUME_PNG_URL__  base64 data URI for diff_volume.png, or ""
 #   __DEFAULT_MODE__         starting mode string
 #   __PARTS_MODEL__          model ("a" or "b") represented by PARTS
 #   __PART_CHANGES_JSON__    previous/current named-part change summary, or null
@@ -309,12 +310,16 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <img id="img-preview">
   </div>
   <div class="panel" id="panel-diff-side" style="display:none;">
-    <h3>diff_side.png — side-by-side (A: previous, B: this run) the agent reads for "what changed"</h3>
+    <h3>diff_side.png — four matched views of A (previous) and B (this run)</h3>
     <img id="img-diff-side">
   </div>
   <div class="panel" id="panel-diff-overlay" style="display:none;">
-    <h3>diff_overlay.png — tinted overlay (green A, red B) for spotting subtle shifts</h3>
+    <h3>diff_overlay.png — centered 2D projection map (coincident gray, reference-only blue, candidate-only orange)</h3>
     <img id="img-diff-overlay">
+  </div>
+  <div class="panel" id="panel-diff-volume" style="display:none;">
+    <h3>diff_volume.png — source-frame 3D volume (shared gray, reference-only blue, candidate-only orange)</h3>
+    <img id="img-diff-volume">
   </div>
 </div>
 <div id="parts-view">
@@ -412,6 +417,7 @@ const LABEL_B = "__LABEL_B__";
 const PREVIEW_PNG_URL = "__PREVIEW_PNG_URL__";
 const DIFF_SIDE_PNG_URL = "__DIFF_SIDE_PNG_URL__";
 const DIFF_OVERLAY_PNG_URL = "__DIFF_OVERLAY_PNG_URL__";
+const DIFF_VOLUME_PNG_URL = "__DIFF_VOLUME_PNG_URL__";
 const DEFAULT_MODE = "__DEFAULT_MODE__";
 const PARTS_MODEL = "__PARTS_MODEL__";
 const PARTS = __PARTS_JSON__;
@@ -421,7 +427,7 @@ const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
 
 const hasB = MODEL_B_URL.length > 0;
-const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0;
+const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0 || DIFF_VOLUME_PNG_URL.length > 0;
 const hasAgentState = Boolean(PART_REVIEW);
 const hasAgentView = hasAgentImgs || hasAgentState;
 const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
@@ -473,6 +479,7 @@ function setupModeButtons() {
   if (PREVIEW_PNG_URL) { document.getElementById('panel-preview').style.display = ''; document.getElementById('img-preview').src = PREVIEW_PNG_URL; }
   if (DIFF_SIDE_PNG_URL) { document.getElementById('panel-diff-side').style.display = ''; document.getElementById('img-diff-side').src = DIFF_SIDE_PNG_URL; }
   if (DIFF_OVERLAY_PNG_URL) { document.getElementById('panel-diff-overlay').style.display = ''; document.getElementById('img-diff-overlay').src = DIFF_OVERLAY_PNG_URL; }
+  if (DIFF_VOLUME_PNG_URL) { document.getElementById('panel-diff-volume').style.display = ''; document.getElementById('img-diff-volume').src = DIFF_VOLUME_PNG_URL; }
 
   if (hasPartsView) {
     setupStaticPartsPanel();
@@ -1235,7 +1242,9 @@ function orientMarker(marker, axis) {
 }
 
 function cadPointToViewer(point) {
-  return new THREE.Vector3(Number(point.x), Number(point.z), -Number(point.y));
+  const viewerPoint = new THREE.Vector3(Number(point.x), Number(point.z), -Number(point.y));
+  if (reviewModelA) viewerPoint.add(reviewModelA.position);
+  return viewerPoint;
 }
 
 function reviewMetrics() {
@@ -1247,10 +1256,18 @@ function viewerBoundingBox() {
   const x = bbox.x || null;
   const y = bbox.y || null;
   const z = bbox.z || null;
+  const offset = reviewModelA ? reviewModelA.position : new THREE.Vector3();
+  const shifted = (range, amount) => (
+    Array.isArray(range) && range.length === 2
+      ? [Number(range[0]) + amount, Number(range[1]) + amount]
+      : null
+  );
   return {
-    x,
-    y: z,
-    z: Array.isArray(y) && y.length === 2 ? [-Number(y[1]), -Number(y[0])] : null,
+    x: shifted(x, offset.x),
+    y: shifted(z, offset.y),
+    z: Array.isArray(y) && y.length === 2
+      ? [-Number(y[1]) + offset.z, -Number(y[0]) + offset.z]
+      : null,
   };
 }
 
@@ -1504,13 +1521,19 @@ const combinedBox = new THREE.Box3();
 
 const loader = new GLTFLoader();
 
-function attach(scene, url, { material, onMesh }) {
+function attach(scene, url, { material, onMesh, alignToCenter=false }) {
   return new Promise(resolve => {
     if (!url) { resolve(null); return; }
     loader.load(url, gltf => {
       const model = gltf.scene;
       if (material) {
         model.traverse(c => { if (c.isMesh) c.material = material; });
+      }
+      if (alignToCenter) {
+        const sourceBox = new THREE.Box3().setFromObject(model);
+        const sourceCenter = sourceBox.getCenter(new THREE.Vector3());
+        model.position.sub(sourceCenter);
+        model.updateMatrixWorld(true);
       }
       scene.add(model);
 
@@ -1550,6 +1573,7 @@ function fitCamera() {
 // Load all scenes in parallel, then fit camera
 Promise.all([
   attach(sceneA_single, MODEL_A_URL, {
+    alignToCenter: hasB,
     onMesh: m => {
       reviewModelA = m;
       if (PARTS_MODEL === 'a') {
@@ -1559,12 +1583,21 @@ Promise.all([
     },
   }),
   hasB ? attach(sceneB_single, MODEL_B_URL, {
+    alignToCenter: true,
     onMesh: PARTS_MODEL === 'b' ? m => { registerPartMeshes(m); applyPartState(); } : null,
   }) : null,
-  hasB ? attach(sceneA_split, MODEL_A_URL, {}) : null,
-  hasB ? attach(sceneB_split, MODEL_B_URL, {}) : null,
-  hasB ? attach(sceneOverlay, MODEL_A_URL, { material: tintA, onMesh: m => overlayModelA = m }) : null,
-  hasB ? attach(sceneOverlay, MODEL_B_URL, { material: tintB, onMesh: m => overlayModelB = m }) : null,
+  hasB ? attach(sceneA_split, MODEL_A_URL, { alignToCenter: true }) : null,
+  hasB ? attach(sceneB_split, MODEL_B_URL, { alignToCenter: true }) : null,
+  hasB ? attach(sceneOverlay, MODEL_A_URL, {
+    material: tintA,
+    alignToCenter: true,
+    onMesh: m => overlayModelA = m,
+  }) : null,
+  hasB ? attach(sceneOverlay, MODEL_B_URL, {
+    material: tintB,
+    alignToCenter: true,
+    onMesh: m => overlayModelB = m,
+  }) : null,
 ].filter(Boolean)).then(() => {
   fitCamera();
   applyPartState();
@@ -1933,6 +1966,7 @@ def _render_unified(
     preview_png=None,
     diff_side_png=None,
     diff_overlay_png=None,
+    diff_volume_png=None,
     parts=None,
     parts_model="a",
     part_changes=None,
@@ -1961,6 +1995,7 @@ def _render_unified(
         "__PREVIEW_PNG_URL__": _embed_data_uri(preview_png),
         "__DIFF_SIDE_PNG_URL__": _embed_data_uri(diff_side_png),
         "__DIFF_OVERLAY_PNG_URL__": _embed_data_uri(diff_overlay_png),
+        "__DIFF_VOLUME_PNG_URL__": _embed_data_uri(diff_volume_png),
         "__DEFAULT_MODE__": default_mode,
         "__PARTS_MODEL__": parts_model,
         "__PARTS_JSON__": json.dumps(parts_payload),
@@ -1988,7 +2023,16 @@ def _render_single(glb_path, *, review=None):
     return html_path, html_path.as_uri()
 
 
-def _render_diff(glb_a, glb_b, overlay=False, out_dir=None, review=None):
+def _render_diff(
+    glb_a,
+    glb_b,
+    overlay=False,
+    out_dir=None,
+    review=None,
+    diff_side_png=None,
+    diff_overlay_png=None,
+    diff_volume_png=None,
+):
     """Write diff viewer HTML (with side-by-side or overlay as default).
 
     Returns (html_path, url, mode).
@@ -2004,19 +2048,65 @@ def _render_diff(glb_a, glb_b, overlay=False, out_dir=None, review=None):
         label_a=glb_a.name,
         label_b=glb_b.name,
         default_mode=mode,
+        diff_side_png=diff_side_png,
+        diff_overlay_png=diff_overlay_png,
+        diff_volume_png=diff_volume_png,
         review=review,
     )
     return html_path, html_path.as_uri(), mode
 
 
+def _diff_png_path(glb_a, glb_b, out_dir):
+    label_a, label_b = _diff_name_parts(glb_a, glb_b)
+    return out_dir / f"diff_{label_a}_{label_b}.png"
+
+
 def _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir):
-    """Render the side-by-side comparison PNG next to the diff HTML."""
+    """Render the four-view side-by-side comparison next to the diff HTML."""
     from agentcad.render import render_diff_side_by_side
 
-    label_a, label_b = _diff_name_parts(glb_a, glb_b)
-    png_path = out_dir / f"diff_{label_a}_{label_b}.png"
+    png_path = _diff_png_path(glb_a, glb_b, out_dir)
     render_diff_side_by_side(shape_a, shape_b, glb_a.name, glb_b.name, png_path)
     return png_path
+
+
+def _render_diff_overlay_png(shape_a, shape_b, glb_a, glb_b, out_dir):
+    """Render the four-view semantic difference map next to the diff HTML."""
+    from agentcad.render import render_diff_overlay
+
+    label_a, label_b = _diff_name_parts(glb_a, glb_b)
+    png_path = out_dir / f"diff_{label_a}_{label_b}_overlay.png"
+    comparison = render_diff_overlay(
+        shape_a, shape_b, glb_a.name, glb_b.name, png_path
+    )
+    return png_path, comparison
+
+
+def _render_solid_comparison_artifacts(
+    solid_comparison,
+    glb_a,
+    glb_b,
+    out_dir,
+):
+    """Write colored source-frame Boolean comparison artifacts."""
+    from agentcad.solid_compare import write_solid_comparison_artifacts
+
+    label_a, label_b = _diff_name_parts(glb_a, glb_b)
+    base = out_dir / f"diff_{label_a}_{label_b}_volume"
+    glb_path = base.with_suffix(".glb")
+    png_path = base.with_suffix(".png")
+    try:
+        written = write_solid_comparison_artifacts(
+            solid_comparison,
+            glb_path,
+            png_path,
+        )
+    except Exception:
+        # Numeric comparison remains authoritative if rendering/export fails.
+        return None, None
+    if not written:
+        return None, None
+    return glb_path, png_path
 
 
 def _review_error(message):
@@ -2155,7 +2245,37 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if err:
         _error(err)
 
-    html_path, url, mode = _render_diff(glb_a, glb_b, overlay=overlay, review=review)
+    out_dir = glb_a.parent
+    png_path = None
+    overlay_png_path = None
+    volume_glb_path = None
+    volume_png_path = None
+    projection_comparison = None
+    solid_comparison = None
+    if shape_a is not None and shape_b is not None:
+        from agentcad.solid_compare import compare_solid_volumes
+
+        png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir)
+        overlay_png_path, projection_comparison = _render_diff_overlay_png(
+            shape_a, shape_b, glb_a, glb_b, out_dir
+        )
+        solid_comparison = compare_solid_volumes(shape_a, shape_b)
+        volume_glb_path, volume_png_path = _render_solid_comparison_artifacts(
+            solid_comparison,
+            glb_a,
+            glb_b,
+            out_dir,
+        )
+
+    html_path, url, mode = _render_diff(
+        glb_a,
+        glb_b,
+        overlay=overlay,
+        review=review,
+        diff_side_png=png_path,
+        diff_overlay_png=overlay_png_path,
+        diff_volume_png=volume_png_path,
+    )
 
     response = {
         "command": "view",
@@ -2168,10 +2288,18 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if review:
         response["review"] = True
 
-    # Agent-facing PNG composite (only when we have TopoDS shapes from STEP inputs)
-    if shape_a is not None and shape_b is not None and not overlay:
-        png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, html_path.parent)
+    if png_path is not None:
         response["png"] = str(png_path)
+    if overlay_png_path is not None:
+        response["overlay_png"] = str(overlay_png_path)
+    if projection_comparison is not None:
+        response["projection_comparison"] = projection_comparison
+    if solid_comparison is not None:
+        response["comparison_3d"] = solid_comparison.data
+    if volume_glb_path is not None:
+        response["volume_glb"] = str(volume_glb_path)
+    if volume_png_path is not None:
+        response["volume_png"] = str(volume_png_path)
 
     _open_browser(url)
     click.echo(json.dumps(response))
