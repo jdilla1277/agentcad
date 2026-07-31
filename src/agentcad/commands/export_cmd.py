@@ -79,8 +79,6 @@ def export_cmd(step_file, formats, no_daemon):
         sys.exit(1)
 
     # Import STEP (silencer + clean errors via shared helper)
-    import cadquery as cq
-    from cadquery import exporters
     from agentcad.step_io import load_cad_shape
 
     try:
@@ -93,9 +91,6 @@ def export_cmd(step_file, formats, no_daemon):
             "suggestion": "Re-export from your CAD tool; the file may be incomplete or corrupted.",
         }))
         sys.exit(1)
-    # Wrap into a Workplane for cadquery's STL exporter (which expects a wp).
-    wp = cq.Workplane().newObject([cq.Shape.cast(topo_shape)])
-
     # Determine output directory
     parent_dir = step_path.parent
     stem = step_path.stem  # e.g. "output"
@@ -105,7 +100,8 @@ def export_cmd(step_file, formats, no_daemon):
     for fmt in fmt_list:
         out_path = parent_dir / f"{stem}.{fmt}"
         if fmt == "stl":
-            exporters.export(wp, str(out_path), exportType="STL")
+            from agentcad.export import export_stl
+            export_stl(topo_shape, str(out_path))
         elif fmt == "glb":
             from agentcad.export import export_glb
             export_glb(topo_shape, str(out_path))
