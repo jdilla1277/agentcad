@@ -164,6 +164,16 @@ def _cross_normalize(ax, ay, az, bx, by, bz):
     return (cx / length, cy / length, cz / length)
 
 
+def export_stl(shape, output_path, linear_deflection=0.1):
+    """Export an OCP TopoDS_Shape to STL via OCCT's writer."""
+    from OCP.StlAPI import StlAPI_Writer
+
+    BRepMesh_IncrementalMesh(shape, linear_deflection)
+    writer = StlAPI_Writer()
+    if writer.Write(shape, output_path) is False:
+        raise RuntimeError(f"OCCT STL write failed for {output_path}")
+
+
 def export_obj(shape, output_path, linear_deflection=0.1):
     """Export an OCP TopoDS_Shape to Wavefront OBJ.
 

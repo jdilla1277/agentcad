@@ -56,6 +56,27 @@ def test_export_stl_produces_file(runner, isolated_dir):
     assert stl_path.stat().st_size > 0
 
 
+def test_export_stl_is_valid_mesh(runner, isolated_dir):
+    """The OCCT STL writer must produce a structurally valid mesh file."""
+    step_path = _create_step(runner, isolated_dir)
+    result = runner.invoke(cli, ["export", str(step_path), "--format", "stl"])
+    assert result.exit_code == 0
+    stl_path = Path(json.loads(result.stdout)["outputs"]["stl"])
+    raw = stl_path.read_bytes()
+    if raw.startswith(b"solid"):
+        text = raw.decode()
+        assert text.count("facet normal") >= 12  # a box tessellates to >= 12 tris
+        assert text.count("facet normal") == text.count("endfacet")
+        assert text.rstrip().splitlines()[-1].startswith("endsolid")
+    else:
+        # binary STL: 80-byte header + uint32 count + 50 bytes per triangle
+        import struct
+
+        (count,) = struct.unpack_from("<I", raw, 80)
+        assert count >= 12
+        assert len(raw) == 84 + 50 * count
+
+
 def test_export_glb_produces_file(runner, isolated_dir):
     step_path = _create_step(runner, isolated_dir)
     result = runner.invoke(cli, ["export", str(step_path), "--format", "glb"])

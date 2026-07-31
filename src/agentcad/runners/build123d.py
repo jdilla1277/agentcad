@@ -693,14 +693,9 @@ def export_step(native_shape: Any, path: str) -> None:
 def export_stl(native_shape: Any, path: str) -> None:
     """Write STL using build123d, or OCCT directly for raw TopoDS shapes."""
     if _is_topods_shape(native_shape):
-        from OCP.BRepMesh import BRepMesh_IncrementalMesh
-        from OCP.StlAPI import StlAPI_Writer
+        from agentcad.export import export_stl as _export_topods_stl
 
-        BRepMesh_IncrementalMesh(native_shape, 0.1)
-        writer = StlAPI_Writer()
-        ok = writer.Write(native_shape, path)
-        if ok is False:
-            raise RuntimeError(f"OCCT STL write failed for {path}")
+        _export_topods_stl(native_shape, path)
         return
 
     from build123d import export_stl as _export

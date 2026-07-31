@@ -298,8 +298,8 @@ def _build_guide(runtime: str = "build123d") -> str:
             "run, docs, help, and skill on the same API."
         )
         run_runtime_help = (
-            "--runtime ENGINE Explicit one-off override of this compatibility "
-            "project's runtime."
+            "--runtime ENGINE     Explicit one-off override of this\n"
+            "                         compatibility project's runtime."
         )
     else:
         init_runtime_option = ""
@@ -308,8 +308,8 @@ def _build_guide(runtime: str = "build123d") -> str:
             "skill commands follow that project mode."
         )
         run_runtime_help = (
-            "--runtime ENGINE Explicit compatibility override; see "
-            "`agentcad docs runtimes`."
+            "--runtime ENGINE     Explicit compatibility override; see\n"
+            "                         `agentcad docs runtimes`."
         )
     return (
         _GUIDE_TEMPLATE

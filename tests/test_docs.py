@@ -4,6 +4,62 @@ from click.testing import CliRunner
 from agentcad.cli import cli
 
 
+# Issue #116: the default (build123d) docs surface must not teach CadQuery
+# API tokens. Prose pointers to compatibility mode are fine; code is not.
+CADQUERY_CODE_TOKENS = [
+    "cq.Workplane",
+    ".val().wrapped",
+    "importers.importStep",
+    "from cadquery import",
+    "cadquery.exporters",
+    "import cadquery",
+]
+
+
+def test_default_docs_contain_no_cadquery_code(runner, isolated_dir):
+    result = runner.invoke(cli, ["docs"])
+    data = json.loads(result.stdout)
+    assert data["runtime"] == "build123d"
+    for token in CADQUERY_CODE_TOKENS:
+        assert token not in data["content"], f"default docs teach {token!r}"
+
+
+def test_default_docs_sections_contain_no_cadquery_code(runner, isolated_dir):
+    """Every individually fetchable default section stays clean. Only the
+    `runtimes` comparison shows both APIs, and only on explicit request."""
+    sections = json.loads(runner.invoke(cli, ["docs"]).stdout)["sections"]
+    for section in sections:
+        if section == "runtimes":
+            continue
+        data = json.loads(runner.invoke(cli, ["docs", section]).stdout)
+        for token in CADQUERY_CODE_TOKENS:
+            assert token not in data["content"], f"{section} teaches {token!r}"
+
+
+def test_default_help_contains_no_cadquery_code(runner, isolated_dir):
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    for token in CADQUERY_CODE_TOKENS:
+        assert token not in result.output, f"--help teaches {token!r}"
+
+
+def test_docs_cadquery_pointer_section(runner, isolated_dir):
+    """`docs cadquery` is discoverable, points at compatibility mode, and
+    contains no CadQuery code itself."""
+    result = runner.invoke(cli, ["docs", "cadquery"])
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert "--runtime cadquery" in data["content"]
+    for token in CADQUERY_CODE_TOKENS:
+        assert token not in data["content"], token
+
+
+def test_docs_full_rollup_excludes_cadquery_pointer(runner, isolated_dir):
+    data = json.loads(runner.invoke(cli, ["docs"]).stdout)
+    assert "cadquery" in data["sections"]
+    assert "CadQuery compatibility — overview pointer" not in data["content"]
+
+
 def test_docs_returns_full_documentation(runner):
     result = runner.invoke(cli, ["docs"])
     assert result.exit_code == 0
