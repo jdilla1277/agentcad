@@ -692,6 +692,20 @@ def test_docs_editing_describes_runtime_neutral_annular_helpers(runner):
     assert "raise_annulus" in content
 
 
+def test_docs_build123d_editing_starts_with_imported_part_contract(runner):
+    result = runner.invoke(cli, ["docs", "editing", "--runtime", "build123d"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+
+    assert "load_step('input.step')  # build123d Part" in content
+    assert "base.solids()" in content
+    assert "base.faces()" in content
+    assert "base.edges()" in content
+    assert "base.bounding_box()" in content
+    assert content.index("Imported-part contract") < content.index("1. Import the file")
+    assert "CadQuery" not in content
+
+
 # --- M38: Complex profile patterns ---
 
 

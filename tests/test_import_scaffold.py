@@ -32,6 +32,14 @@ class TestImportScaffold:
         assert "v1_bracket/output.step" in content
         # Uses load_step (the Phase 2 helper), not raw cadquery.importers
         assert "load_step(" in content
+        # Establishes the positive object contract where editing starts.
+        assert "build123d Part" in content
+        assert "base.solids()" in content
+        assert "base.faces()" in content
+        assert "base.edges()" in content
+        assert "base.bounding_box()" in content
+        assert "agentcad measure" in content
+        assert "agentcad inspect" in content
         # build123d-only path per design conventions
         assert "from build123d" in content
         # Has show_object so the script produces a v2 immediately

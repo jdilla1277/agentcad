@@ -941,6 +941,67 @@ class TestFailures:
         assert meta["status"] == "failed"
         assert "something went wrong" in meta["error"]
 
+    def test_part_bounding_box_error_has_persisted_guidance(
+        self, runner, isolated_dir
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "source.py", SIMPLE)
+        source = _run(
+            runner, "source.py", "--output", "source", "--no-preview"
+        )
+        assert source.exit_code == 0, source.output
+
+        _write(
+            isolated_dir,
+            "edit.py",
+            'base = load_step("v1_source/output.step")\n'
+            "bounds = base.BoundingBox()\n"
+            "show_object(base)\n",
+        )
+        result = _run(
+            runner, "edit.py", "--output", "bounds", "--no-preview"
+        )
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "failed"
+        assert "BoundingBox" in parsed["error"]
+        assert "base.bounding_box()" in parsed["suggestion"]
+        assert parsed["more_at"] == "agentcad docs editing"
+
+        meta = json.loads(
+            (isolated_dir / "v2_bounds_failed" / "meta.json").read_text()
+        )
+        assert meta["suggestion"] == parsed["suggestion"]
+        assert meta["more_at"] == "agentcad docs editing"
+
+    def test_uncalled_part_collection_error_has_source_checked_guidance(
+        self, runner, isolated_dir
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "source.py", SIMPLE)
+        source = _run(
+            runner, "source.py", "--output", "source", "--no-preview"
+        )
+        assert source.exit_code == 0, source.output
+
+        _write(
+            isolated_dir,
+            "edit.py",
+            'base = load_step("v1_source/output.step")\n'
+            "for solid in base.solids:\n"
+            "    pass\n"
+            "show_object(base)\n",
+        )
+        result = _run(
+            runner, "edit.py", "--output", "solids", "--no-preview"
+        )
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "failed"
+        assert "method' object is not iterable" in parsed["error"]
+        assert "base.solids()" in parsed["suggestion"]
+        assert parsed["more_at"] == "agentcad docs editing"
+
     def test_failed_no_metrics(self, runner, isolated_dir):
         """Validation failures don't carry a metrics dict."""
         _init(runner, isolated_dir)
