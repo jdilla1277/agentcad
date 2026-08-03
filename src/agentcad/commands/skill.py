@@ -105,6 +105,17 @@ agentcad --help   # Read the built-in how-to guide and command reference
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
   `replace_face`, `annular_boss`, and `raise_annulus`.
+- For imported STEP/BREP edits, `load_step(path)` returns a build123d `Part`:
+  ```python
+  base = load_step("v1_vendor/output.step")
+  solids = base.solids()
+  faces = base.faces()
+  edges = base.edges()
+  bounds = base.bounding_box()
+  ```
+  Use `agentcad measure` and `agentcad inspect` for read-only discovery; use
+  the loaded `Part` in a script when changing geometry. See
+  `agentcad docs editing` for the complete edit workflow.
 - For imported STEP annular edits, use the non-fuse workflow:
   ```python
   raw = load_step_shape("v1_vendor/output.step")

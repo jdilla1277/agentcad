@@ -137,7 +137,8 @@ class TestImportCore:
         assert "next_actions" in parsed
         assert 1 <= len(parsed["next_actions"]) <= 2
         assert all(" — " in a for a in parsed["next_actions"])
-        assert "more_at" in parsed
+        assert parsed["more_at"] == "agentcad docs editing"
+        assert "agentcad docs editing" in parsed["next_actions"][0]
 
     def test_context_surfaces_source_import(self, runner, isolated_dir):
         """Per PRD: `agentcad context` distinguishes imported versions from

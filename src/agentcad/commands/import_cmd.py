@@ -315,13 +315,13 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
     if scaffold_written:
         response["scaffold"] = "edit.py"
     response["next_actions"] = [
-        f"agentcad run edit.py --output my_edit — modify the scaffold and re-run to produce v{version_num + 1}",
+        "agentcad docs editing — read the imported-Part contract, then modify and run edit.py",
         f"agentcad measure {dir_name}/output.step — check dimensions before editing",
     ] if scaffold_written else [
         f"agentcad view {dir_name}/output.step — open in browser to inspect or share with humans",
         f"agentcad measure {dir_name}/output.step — check dimensions before editing",
     ]
-    response["more_at"] = "agentcad docs"
+    response["more_at"] = "agentcad docs editing"
     click.echo(json.dumps(response))
 
     maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
@@ -368,7 +368,10 @@ comparison against the import.
 from build123d import *
 
 
-# Load the imported baseline as a build123d Part.
+# load_step() returns the imported baseline as a build123d Part.
+# Part topology collections are methods: base.solids(), base.faces(), base.edges().
+# Use base.bounding_box() when the edit itself needs the bounds; for read-only
+# dimensions and feature discovery, prefer `agentcad measure` / `agentcad inspect`.
 base = load_step("{version_dir}/output.step")
 
 

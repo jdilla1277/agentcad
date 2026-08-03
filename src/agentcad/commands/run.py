@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import re
@@ -246,6 +247,68 @@ def _enrich_error(msg):
     return msg
 
 
+def _uncalled_part_topology_methods(source):
+    """Return Part collection attributes referenced without being called.
+
+    The runtime ``TypeError: 'method' object is not iterable`` is generic, so
+    only attach Part-specific guidance when the source itself contains one of
+    the imported-Part collection methods as a bare attribute.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    called_attributes = {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    return sorted({
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr in {"solids", "faces", "edges"}
+        and id(node) not in called_attributes
+    })
+
+
+def _execution_error_guidance(msg, runtime, source):
+    """Return focused recovery fields for known build123d Part mistakes."""
+    if runtime != "build123d":
+        return {}
+
+    suggestion = None
+    if "'Part' object has no attribute 'BoundingBox'" in msg:
+        suggestion = (
+            "`load_step()` returns a build123d `Part`. Get its bounds with "
+            "`base.bounding_box()`."
+        )
+    elif "'Part' object has no attribute 'IsNull'" in msg:
+        suggestion = (
+            "`load_step()` returns a build123d `Part`. Use `agentcad inspect` "
+            "or run metrics for validity; use `load_step_shape()` only when "
+            "the edit requires a raw topology shape."
+        )
+    elif "'method' object is not iterable" in msg:
+        methods = _uncalled_part_topology_methods(source)
+        if methods:
+            calls = ", ".join(f"`base.{method}()`" for method in methods)
+            names = ", ".join(f"`{method}`" for method in methods)
+            suggestion = (
+                f"{names} {'is a method' if len(methods) == 1 else 'are methods'} "
+                f"on the Part returned by `load_step()`. Call "
+                f"{'it' if len(methods) == 1 else 'them'} as {calls}."
+            )
+
+    if suggestion is None:
+        return {}
+    return {
+        "suggestion": suggestion,
+        "more_at": "agentcad docs editing",
+    }
+
+
 def _find_prev_success(versions):
     """Return the most recent successful version in the manifest, or None.
 
@@ -345,7 +408,15 @@ def _part_change_summary(previous_parts, current_parts, previous_label):
     }
 
 
-def _record_failure(manifest, script_path, label, version_num, error_msg, runtime=None):
+def _record_failure(
+    manifest,
+    script_path,
+    label,
+    version_num,
+    error_msg,
+    runtime=None,
+    guidance=None,
+):
     """Record a script failure on disk and in the manifest."""
     dir_name = f"v{version_num}_{label}_failed"
     version_dir = Path.cwd() / dir_name
@@ -366,6 +437,8 @@ def _record_failure(manifest, script_path, label, version_num, error_msg, runtim
     }
     if runtime is not None:
         meta["runtime"] = runtime
+    if guidance:
+        meta.update(guidance)
     (version_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
     # Update manifest (current does NOT advance)
@@ -390,6 +463,8 @@ def _record_failure(manifest, script_path, label, version_num, error_msg, runtim
     }
     if runtime is not None:
         output_json["runtime"] = runtime
+    if guidance:
+        output_json.update(guidance)
     click.echo(json.dumps(output_json))
     sys.exit(1)
 
@@ -731,8 +806,21 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     label = output
 
     if result.status == "execution_error":
-        _record_failure(manifest, script_path, label, version_num,
-                        _enrich_error(result.exception), runtime=runtime_name)
+        error_msg = _enrich_error(result.exception)
+        guidance = _execution_error_guidance(
+            error_msg,
+            runtime=runtime_name,
+            source=raw_source,
+        )
+        _record_failure(
+            manifest,
+            script_path,
+            label,
+            version_num,
+            error_msg,
+            runtime=runtime_name,
+            guidance=guidance,
+        )
 
     # Success path
     shape = result.native_shape
