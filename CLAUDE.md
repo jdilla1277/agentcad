@@ -48,6 +48,23 @@ fixtures. When validating unmerged CLI behavior, avoid stale installed code and
 stale daemons: use the current checkout (`PYTHONPATH=src` or editable install)
 and pass `--no-daemon` for command behavior checks.
 
+## Explaining Your Work
+
+When summarizing a change, bug, or design decision for the user, use simple,
+concrete language. Mechanism-first jargon is the failure mode.
+
+- Order: what the feature does for the user → what went wrong and what it
+  would cause → the fix. Consequence before mechanism.
+- Describe geometry and data physically before naming APIs: "two separate
+  solids in one container, like LEGO pieces in a bag — not glued together"
+  beats "a TopoDS_Compound with non-manifold member interfaces".
+- State consequences concretely: "an agent trusting that number would revert
+  a correct edit", not "produces incorrect results".
+- Give the fix one line of intuition ("the comparison cares about occupied
+  space, not how the model is bookkept into pieces") before any detail.
+- Keep OCCT/library class names out of the explanation unless the reader
+  needs them to act; plain terms ("the overlap math") carry the meaning.
+
 ## Fork PRs
 
 External contributors submit PRs from forks. When acting as maintainer on one:

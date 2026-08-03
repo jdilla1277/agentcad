@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from OCP.BRep import BRep_Builder
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
@@ -83,13 +83,43 @@ class SolidComparison:
         return compound
 
 
-def _solid_count(shape):
-    count = 0
+def _solids(shape):
+    solids = []
     explorer = TopExp_Explorer(shape, TopAbs_SOLID)
     while explorer.More():
-        count += 1
+        solids.append(explorer.Current())
         explorer.Next()
-    return count
+    return solids
+
+
+def _solid_count(shape):
+    return len(_solids(shape))
+
+
+def _canonicalize(shape, tolerance_mm):
+    """Fuse a multi-solid input into a single occupied-volume shape.
+
+    A compound whose member solids touch or overlap EACH OTHER — e.g. the
+    compound `raise_annulus` returns by design (part + boss seated on a
+    face) — is a degenerate Boolean argument: Common/Cut can come back
+    empty or partial, and GProp volume double-counts the overlap. Fusing
+    the members first makes the comparison measure occupied volume.
+    Disjoint members fuse into a valid multi-solid result, so this is safe
+    for genuine assemblies too. Falls back to the original shape if the
+    fuse fails, preserving the old behavior for unfusable geometry.
+    """
+    solids = _solids(shape)
+    if len(solids) <= 1:
+        return shape
+    try:
+        fused = solids[0]
+        for solid in solids[1:]:
+            fused = _run_boolean(BRepAlgoAPI_Fuse, fused, solid, tolerance_mm)
+    except Exception:
+        return shape
+    if BRepCheck_Analyzer(fused).IsValid():
+        return fused
+    return shape
 
 
 def _volume(shape):
@@ -177,6 +207,9 @@ def compare_solid_volumes(
                 f"{role}_is_invalid",
                 f"The {role} is not a valid B-rep solid.",
             )
+
+    reference_shape = _canonicalize(reference_shape, tolerance_mm)
+    candidate_shape = _canonicalize(candidate_shape, tolerance_mm)
 
     reference_volume = _volume(reference_shape)
     candidate_volume = _volume(candidate_shape)
