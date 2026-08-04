@@ -43,6 +43,19 @@ opening or finalizing the PR. Ask the sub-agent to behave like a fresh agent:
 read the docs, use the feature end-to-end in a scratch project, and report
 confusing behavior or mismatches between docs and reality.
 
+When output semantics can change the agent's next action, pre-register the
+expected behaviors before collecting responses. Use both a targeted
+comprehension prompt and a neutral, open-ended workflow prompt when the risk
+warrants it. Explicit questions can prove that the output supports a correct
+interpretation; they do not prove that an agent will apply that interpretation
+without prompting.
+
+For geometry comparison or validation, pair synthetic primitive tests with at
+least one real workflow artifact that preserves the topology and container
+shape agents actually produce, such as compounds or multi-solid outputs. A
+Boolean that works for one closed primitive may behave differently for the
+same occupied geometry wrapped in a compound.
+
 Keep friction artifacts under `.context/` unless they are intentional public
 fixtures. When validating unmerged CLI behavior, avoid stale installed code and
 stale daemons: use the current checkout (`PYTHONPATH=src` or editable install)
