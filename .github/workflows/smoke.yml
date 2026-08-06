@@ -24,8 +24,12 @@ jobs:
       - name: Collect tests
         run: pytest --collect-only -q
 
-      - name: Run OCP-free interface guardrails
-        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py -q
+      - name: Run interface guardrails
+        # test_docs.py / test_help.py carry the #117 + #120 contamination guards:
+        # no CadQuery code in the default build123d docs, no build123d code in
+        # the compat docs. They only exercise CLI text, so they belong here
+        # rather than in the full OCP suite.
+        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py -q
 
   windows-platform:
     runs-on: windows-latest
