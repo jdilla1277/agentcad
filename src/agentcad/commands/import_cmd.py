@@ -37,20 +37,50 @@ from agentcad.native_io import silence_native_stdout
     "--view/--no-view", "open_view", default=True,
     help="Open the generated review viewer after a successful import (default on).",
 )
+@click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["cadquery", "build123d"]),
+    help=(
+        "Pin the CAD engine of the manifest bootstrapped by --init, and so of "
+        "the edit.py scaffold. Mirrors `agentcad init --runtime`. Only valid "
+        "together with --init: an existing manifest already records its "
+        "runtime. Defaults to build123d."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def import_cmd(file, label, init_flag, open_view, no_daemon):
+def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
     tracking. Every other command (run, diff, render, view) works on it
     just like a scripted version.
     """
+    # --runtime pins the manifest --init creates. Without --init the manifest
+    # already exists and records its own runtime, so honouring the flag would
+    # mean silently re-pinning an established project; refuse instead of
+    # ignoring it, which is the failure mode the flag exists to remove.
+    if runtime and not init_flag:
+        _emit({
+            "command": "import", "status": "error",
+            "message": "--runtime only applies with --init.",
+            "suggestion": (
+                f"{MANIFEST_FILE} already records the project runtime. Use "
+                f"`agentcad import --init --runtime {runtime} {file}` in a fresh "
+                f"directory, or `agentcad run --runtime {runtime} <script>` to "
+                "override the engine for a single run."
+            ),
+        }, exit_code=1)
+        return
+
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["import", file]
     if label:
         argv.extend(["--label", label])
     if init_flag:
         argv.append("--init")
+    if runtime:
+        argv.extend(["--runtime", runtime])
     if not open_view:
         argv.append("--no-view")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
@@ -67,7 +97,7 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
     manifest_path = Path.cwd() / MANIFEST_FILE
     if not manifest_path.exists():
         if init_flag:
-            _bootstrap_manifest()
+            _bootstrap_manifest(runtime=runtime)
         else:
             _emit({
                 "command": "import", "status": "error",

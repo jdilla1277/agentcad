@@ -442,3 +442,100 @@ def test_successful_import_without_flag_still_routes_then_spawns(
     assert result.exit_code == 0, result.output
     assert len(route_calls) == 1
     assert len(spawn_calls) == 1
+
+
+# --- --init --runtime (issue #129) ------------------------------------------
+
+class TestImportInitRuntime:
+    """`import --init --runtime <rt>` pins the bootstrapped manifest.
+
+    Before this, --init always produced a build123d manifest, so a CadQuery
+    agent taking the natural one-command path was silently pinned to the
+    wrong engine and only found out when the scaffolded edit script hit a
+    runtime mismatch. The docs worked around it by prescribing the two-step
+    `init --runtime cadquery` then `import` dance.
+    """
+
+    def test_init_runtime_cadquery_pins_the_manifest(self, runner, isolated_dir):
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+        )
+        assert result.exit_code == 0, result.output
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "cadquery"
+
+    def test_init_runtime_cadquery_scaffolds_a_cadquery_edit_script(
+        self, runner, isolated_dir
+    ):
+        """The scaffold follows the manifest, so pinning cq must reach edit.py."""
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+        )
+        assert result.exit_code == 0, result.output
+        scaffold = (isolated_dir / "edit.py").read_text()
+        assert "import cadquery" in scaffold
+        assert "importers.importStep" in scaffold
+        assert "from build123d" not in scaffold
+
+    def test_scaffolded_cq_edit_runs_without_a_runtime_flag(
+        self, runner, isolated_dir
+    ):
+        """The acceptance criterion: no `--runtime` needed on the follow-up run."""
+        step = _bracket_step(isolated_dir)
+        runner.invoke(cli, ["import", "--init", "--runtime", "cadquery", str(step)])
+        result = runner.invoke(cli, ["run", "edit.py", "--output", "scaffold_baseline"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success", parsed
+        assert parsed["runtime"] == "cadquery"
+
+    def test_init_runtime_build123d_is_explicit_but_unchanged(
+        self, runner, isolated_dir
+    ):
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "build123d", str(step)]
+        )
+        assert result.exit_code == 0, result.output
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+
+    def test_init_without_runtime_still_defaults_to_build123d(
+        self, runner, isolated_dir
+    ):
+        """Unchanged behaviour, pinned so the default cannot drift silently."""
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(cli, ["import", "--init", str(step)])
+        assert result.exit_code == 0, result.output
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+
+    def test_runtime_without_init_is_rejected_not_ignored(
+        self, runner, isolated_dir
+    ):
+        """An existing manifest already records its runtime.
+
+        Silently ignoring the flag would recreate the footgun this flag exists
+        to remove, so it is an error that names the alternatives.
+        """
+        _init_project(runner, isolated_dir)
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(cli, ["import", "--runtime", "cadquery", str(step)])
+        assert result.exit_code != 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "error"
+        assert "--runtime only applies with --init" in parsed["message"]
+        # The project must be left untouched.
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+        assert manifest["versions"] == []
+
+    def test_runtime_rejects_an_unknown_engine(self, runner, isolated_dir):
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "openscad", str(step)]
+        )
+        assert result.exit_code != 0
+        assert "openscad" in result.output
