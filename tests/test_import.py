@@ -526,11 +526,43 @@ class TestImportInitRuntime:
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "error"
-        assert "--runtime only applies with --init" in parsed["message"]
+        assert "the manifest already exists" in parsed["message"]
         # The project must be left untouched.
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
         assert manifest["runtime"] == "build123d"
         assert manifest["versions"] == []
+
+    def test_runtime_with_init_is_rejected_when_manifest_exists(
+        self, runner, isolated_dir
+    ):
+        """--init is a no-op for an existing manifest, so runtime must error."""
+        _init_project(runner, isolated_dir)
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+        )
+        assert result.exit_code != 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "error"
+        assert "the manifest already exists" in parsed["message"]
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+        assert manifest["versions"] == []
+        assert not (isolated_dir / "edit.py").exists()
+
+    def test_runtime_without_init_in_fresh_directory_reports_requires_init(
+        self, runner, isolated_dir
+    ):
+        result = runner.invoke(
+            cli,
+            ["import", "--runtime", "cadquery", str(isolated_dir / "part.step")],
+        )
+        assert result.exit_code != 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "error"
+        assert "--runtime requires --init" in parsed["message"]
+        assert "--init --runtime cadquery" in parsed["suggestion"]
+        assert not (isolated_dir / "agentcad.json").exists()
 
     def test_runtime_rejects_an_unknown_engine(self, runner, isolated_dir):
         step = _bracket_step(isolated_dir)

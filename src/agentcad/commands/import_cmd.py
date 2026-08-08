@@ -56,19 +56,35 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
     tracking. Every other command (run, diff, render, view) works on it
     just like a scripted version.
     """
-    # --runtime pins the manifest --init creates. Without --init the manifest
-    # already exists and records its own runtime, so honouring the flag would
-    # mean silently re-pinning an established project; refuse instead of
-    # ignoring it, which is the failure mode the flag exists to remove.
+    # --runtime pins only the manifest that --init creates. Refuse it when a
+    # manifest already exists even if --init was also passed: --init is a
+    # no-op in that case, so accepting the flag would silently ignore the
+    # requested runtime and recreate the wrong-engine footgun this option
+    # exists to remove.
+    manifest_path = Path.cwd() / MANIFEST_FILE
+    if runtime and manifest_path.exists():
+        _emit({
+            "command": "import", "status": "error",
+            "message": (
+                f"--runtime only applies when --init creates a new "
+                f"{MANIFEST_FILE}; the manifest already exists."
+            ),
+            "suggestion": (
+                f"Run `agentcad import {file}` to use the project's recorded "
+                f"runtime, or use `agentcad import --init --runtime {runtime} "
+                f"{file}` in a fresh directory. To override the engine for one "
+                f"script, use `agentcad run --runtime {runtime} <script>`."
+            ),
+        }, exit_code=1)
+        return
+
     if runtime and not init_flag:
         _emit({
             "command": "import", "status": "error",
-            "message": "--runtime only applies with --init.",
+            "message": f"--runtime requires --init to create {MANIFEST_FILE}.",
             "suggestion": (
-                f"{MANIFEST_FILE} already records the project runtime. Use "
-                f"`agentcad import --init --runtime {runtime} {file}` in a fresh "
-                f"directory, or `agentcad run --runtime {runtime} <script>` to "
-                "override the engine for a single run."
+                f"Use `agentcad import --init --runtime {runtime} {file}` to "
+                "bootstrap the project and import in one command."
             ),
         }, exit_code=1)
         return
@@ -94,7 +110,6 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         return
 
     # 2. Manifest handling.
-    manifest_path = Path.cwd() / MANIFEST_FILE
     if not manifest_path.exists():
         if init_flag:
             _bootstrap_manifest(runtime=runtime)
