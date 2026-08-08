@@ -265,6 +265,12 @@ def show_part(ref, part_id):
     help="Part id to hide in the generated review viewer. Repeat for multiple parts.",
 )
 @click.option("--ghost-rest", is_flag=True, default=False, help="Make non-selected parts transparent.")
+@click.option(
+    "--explode",
+    "explode_amount",
+    default=None,
+    help="Open the viewer pre-exploded: a percentage like 50% or a factor like 0.5.",
+)
 @click.option("--focus", "focus_id", default=None, help="Part id to focus the camera on.")
 @click.option(
     "--isolate-group",
@@ -296,6 +302,7 @@ def view_parts(
     isolate_ids,
     hide_ids,
     ghost_rest,
+    explode_amount,
     focus_id,
     isolate_group_ids,
     hide_group_ids,
@@ -307,10 +314,20 @@ def view_parts(
     """Generate a temporary part review viewer for agents and humans.
 
     REF accepts the same forms as `parts list`. The generated HTML embeds the
-    version's viewer GLB plus an initial review state for hide/isolate/ghost/focus.
+    version's viewer GLB plus an initial review state for
+    hide/isolate/ghost/focus/explode.
     Human changes inside the browser are not persisted; agents can generate a
     new viewer whenever a different inspection setup is useful.
     """
+    explode_factor = None
+    if explode_amount is not None:
+        from agentcad.explode import parse_explode_factor
+
+        try:
+            explode_factor = parse_explode_factor(explode_amount)
+        except ValueError as exc:
+            _emit_error(str(exc), ref=ref)
+
     manifest = load_manifest(command="parts")
     version_entry = _resolve_version(manifest, ref)
     if version_entry is None:
@@ -402,6 +419,8 @@ def view_parts(
         "focus_group": focus_group_id,
         "ghost_rest": ghost_rest,
     }
+    if explode_factor is not None:
+        review_state["explode"] = explode_factor
 
     from agentcad.commands.view import _open_browser, _render_unified
 
@@ -422,6 +441,8 @@ def view_parts(
             name_parts.extend(["focus", effective_focus_id])
         if ghost_rest:
             name_parts.append("ghost")
+        if explode_factor is not None:
+            name_parts.extend(["explode", str(int(round(explode_factor * 100)))])
     html_path = version_dir / f"{_slugify_review_name(name_parts)}.html"
     version_label = meta.get("label", version_entry.get("label"))
     viewer_label = f"{version_label} · {review_label}" if review_label else f"{version_label} parts"

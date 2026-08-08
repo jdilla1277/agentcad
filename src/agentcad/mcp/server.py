@@ -132,6 +132,34 @@ def render(
 
 
 @mcp.tool()
+def explode(
+    ref: str,
+    cwd: str,
+    factor: str = "100%",
+    view: str = "iso",
+    no_open: bool = False,
+) -> dict:
+    """Render an exploded view of a multi-part model.
+
+    Parts move apart radially from the assembly center so fits and overlaps
+    become visible. Produces PNG renders plus an interactive viewer with an
+    explode slider.
+
+    Args:
+        ref: Version reference (number, vN, label, current, latest) or STEP path.
+        cwd: Project directory.
+        factor: Explosion amount — a percentage like 50% or a factor like 0.5.
+            100% doubles each part's distance from the assembly center.
+        view: PNG view spec (front,right,iso,all or custom angle az:el).
+        no_open: Skip opening the interactive viewer in a browser.
+    """
+    args = ["explode", ref, "--factor", factor, "--view", view]
+    if no_open:
+        args.append("--no-open")
+    return _invoke(args, cwd=cwd)
+
+
+@mcp.tool()
 def export(step_file: str, formats: str, cwd: str) -> dict:
     """Export a STEP file to mesh formats (stl, glb, obj).
 

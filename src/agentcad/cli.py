@@ -11,6 +11,7 @@ from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
 from agentcad.commands.docs import docs
+from agentcad.commands.explode_cmd import explode
 from agentcad.commands.export_cmd import export_cmd
 from agentcad.commands.feedback import feedback
 from agentcad.commands.import_cmd import import_cmd
@@ -144,12 +145,19 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
 
   agentcad parts view REF [--isolate ID] [--hide ID] [--ghost-rest] [--focus ID]
                           [--isolate-group GROUP] [--hide-group GROUP]
-                          [--focus-group GROUP] [--label TEXT] [--note TEXT]
-                          [--no-open]
+                          [--focus-group GROUP] [--explode PCT] [--label TEXT]
+                          [--note TEXT] [--no-open]
     Create a temporary part review handoff viewer. Repeat --isolate/--hide for parts,
     or --isolate-group/--hide-group for groups; use --ghost-rest, --focus,
-    --focus-group, --label, --note, and --no-open as needed.
+    --focus-group, --explode, --label, --note, and --no-open as needed.
     Browser changes are not saved; generate another viewer to change the state.
+
+  agentcad explode REF [--factor PCT] [--view SPEC] [--no-open]
+    Render an exploded view of a multi-part model: parts move apart radially
+    from the assembly center so fits and overlaps become visible. REF is a
+    version reference or STEP path. --factor accepts 50%, 100% (default), or a
+    scale like 0.5; --view takes the same spec as render. Produces PNG renders
+    for agents plus an interactive viewer with an explode slider for humans.
 
 COMMAND REFERENCE: VERIFY AND DEBUG
   agentcad measure FILE [OPTIONS]
@@ -389,6 +397,7 @@ cli.add_command(check_spec)
 cli.add_command(daemon)
 cli.add_command(diff)
 cli.add_command(docs)
+cli.add_command(explode)
 cli.add_command(export_cmd)
 cli.add_command(feedback)
 cli.add_command(import_cmd)
