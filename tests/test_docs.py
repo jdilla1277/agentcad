@@ -73,9 +73,13 @@ def test_cadquery_editing_docs_lead_with_native_path(runner, isolated_dir):
     assert "Sketch()" not in content
     # the native selector path comes before the build123d-only pointer
     assert content.index("importers.importStep") < content.index("build123d-only")
-    # init-first flow: `import --init` pins build123d and breaks step 4
-    assert "agentcad init --name legacy --runtime cadquery" in content
-    assert "import vendor.step --init" not in content
+    # One-command flow (#129). `import --init --runtime cadquery` now pins cq,
+    # so the docs no longer prescribe the two-step init-first dance nor warn
+    # against the --init shortcut. This previously required the
+    # `agentcad init --name legacy --runtime cadquery` line and forbade
+    # `import vendor.step --init`; both were workarounds for the missing flag.
+    assert "agentcad import vendor.step --init --runtime cadquery" in content
+    assert "Do not use the `import --init` shortcut" not in content
 
 
 def test_cadquery_full_docs_contain_no_build123d_imports(runner, isolated_dir):
