@@ -15,8 +15,8 @@ from pathlib import Path
 
 import click
 
+from agentcad import __version__
 from agentcad import file_detect
-from agentcad.commands.context import TOOL_VERSION
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
@@ -314,7 +314,7 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         "source": "import",
         "original_filename": file_path.name,
         "sha256": sha256,
-        "tool_version": TOOL_VERSION,
+        "tool_version": __version__,
         "created": datetime.now(timezone.utc).isoformat(),
         "outputs": outputs,
         "preview": f"{dir_name}/preview.png",

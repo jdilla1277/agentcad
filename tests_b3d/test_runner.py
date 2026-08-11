@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agentcad.metrics import compute_metrics
 from agentcad.runners import build123d as b3d_runner
 from agentcad.runners.build123d import discover_parameters
@@ -125,6 +127,40 @@ def test_step_export_accepts_build123d_shape(tmp_path):
     out = tmp_path / "out.step"
     export_step(result.native_shape, str(out))
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_load_step_preserves_single_solid_volume(tmp_path):
+    """A STEP containing one solid must remain a real, measurable Part."""
+    from build123d import Box, Part, export_step
+
+    source = tmp_path / "box.step"
+    export_step(Box(10, 10, 10), str(source))
+
+    loaded = b3d_runner._load_step(str(source))
+
+    assert isinstance(loaded, Part)
+    assert len(loaded.solids()) == 1
+    assert loaded.volume == pytest.approx(1000.0)
+    assert loaded.volume == pytest.approx(loaded.solids()[0].volume)
+
+
+def test_load_step_preserves_multi_solid_volume(tmp_path):
+    """Normalizing a single Solid must not break compound STEP files."""
+    from build123d import Box, Compound, Part, Pos, export_step
+
+    source = tmp_path / "two-boxes.step"
+    shape = Compound(children=[
+        Box(1, 2, 3),
+        Pos(10, 0, 0) * Box(2, 3, 4),
+    ])
+    export_step(shape, str(source))
+
+    loaded = b3d_runner._load_step(str(source))
+
+    assert isinstance(loaded, Part)
+    assert len(loaded.solids()) == 2
+    assert loaded.volume == pytest.approx(30.0)
+    assert loaded.volume == pytest.approx(sum(s.volume for s in loaded.solids()))
 
 
 _RAW_TOPODS_COMPOUND_SCRIPT = """\

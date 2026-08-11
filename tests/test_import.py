@@ -13,6 +13,7 @@ import cadquery as cq
 import pytest
 from cadquery import exporters
 
+from agentcad import __version__
 from agentcad.cli import cli
 
 
@@ -99,7 +100,7 @@ class TestImportCore:
         assert meta["source"] == "import"
         assert meta["original_filename"] == "bracket.step"
         assert meta["sha256"] == original_sha
-        assert "tool_version" in meta
+        assert meta["tool_version"] == __version__
 
     def test_manifest_entry_marks_source_as_import(self, runner, isolated_dir):
         _init_project(runner, isolated_dir)
