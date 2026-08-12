@@ -469,6 +469,72 @@ def _record_failure(
     sys.exit(1)
 
 
+def _record_invalid_geometry(
+    manifest,
+    script_path,
+    label,
+    version_num,
+    runtime,
+    output_type,
+    metrics,
+    parts,
+    groups,
+    warnings,
+    response,
+):
+    """Preserve invalid-geometry diagnostics without advancing current."""
+    dir_name = f"v{version_num}_{label}_invalid"
+    version_dir = Path.cwd() / dir_name
+    version_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+
+    meta = {
+        **response,
+        "version_recorded": True,
+        "version": version_num,
+        "label": label,
+        "runtime": runtime,
+        "output_type": output_type,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "script": f"{dir_name}/script.py",
+    }
+    if parts:
+        meta["parts"] = parts
+    if groups:
+        meta["groups"] = groups
+    if warnings:
+        meta["warnings"] = warnings
+    (version_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+
+    versions = manifest.get("versions", [])
+    versions.append({
+        "version": version_num,
+        "label": label,
+        "status": "invalid_geometry",
+        "path": f"{dir_name}/",
+    })
+    manifest["versions"] = versions
+    save_manifest(manifest)
+
+    output_json = {
+        **response,
+        "version_recorded": True,
+        "version": version_num,
+        "label": label,
+        "runtime": runtime,
+        "output_type": output_type,
+        "path": f"{dir_name}/",
+    }
+    if parts:
+        output_json["parts"] = parts
+    if groups:
+        output_json["groups"] = groups
+    if warnings:
+        output_json["warnings"] = warnings
+    click.echo(json.dumps(output_json))
+    sys.exit(1)
+
+
 def _slugify_part_id(value):
     """Return a lowercase, JSON/path-friendly part handle."""
     slug = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower())
@@ -901,14 +967,47 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         for entry, raw in zip(parts_output, raw_parts)
     ]
 
-    # Surface validity issues as top-level warnings
-    if not metrics.get("is_valid", True):
-        warnings.append(
-            "Invalid geometry detected (is_valid: false). "
-            "Run 'agentcad inspect' on the STEP file for diagnostic details."
-        )
     if metrics.get("warnings"):
         warnings.extend(metrics["warnings"])
+
+    # Final geometry validity is part of core CAD success. Stop before STEP
+    # export and before every visual/post-processing phase when it fails.
+    from agentcad.core_build import invalid_geometry_payload
+
+    invalid_response = invalid_geometry_payload("run", metrics)
+    if invalid_response is not None:
+        if dry_run:
+            invalid_response.update({
+                "runtime": runtime_name,
+                "output_type": output_type,
+            })
+            if parts_output:
+                invalid_response["parts"] = parts_output
+            if groups_output:
+                invalid_response["groups"] = groups_output
+            if warnings:
+                invalid_response["warnings"] = warnings
+            _timings["total_ms"] = round(
+                (time.perf_counter() - _t_total_start) * 1000
+            )
+            invalid_response["timings"] = _timings
+            invalid_response["completed_phases"] = list(_phase_tracker.completed)
+            invalid_response["phase_timings"] = dict(_timings)
+            click.echo(json.dumps(invalid_response))
+            sys.exit(1)
+        _record_invalid_geometry(
+            manifest,
+            script_path,
+            label,
+            version_num,
+            runtime_name,
+            output_type,
+            metrics,
+            parts_output,
+            groups_output,
+            warnings,
+            invalid_response,
+        )
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:
@@ -945,6 +1044,10 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     _t = _start_phase("export_step")
     runner.export_step(shape, str(version_dir / "output.step"))
     _finish_phase("export_step", _t, "export_step_ms")
+
+    # Core build boundary: execution, all metrics, validity, and STEP export
+    # have succeeded. Everything below is post-processing or an explicitly
+    # requested secondary export; Milestone 1.3 commits this core result here.
 
     # Export mesh formats if requested
     exports_meta = {}

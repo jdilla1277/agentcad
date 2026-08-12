@@ -204,10 +204,16 @@ JSON RESPONSE CONTRACT
                        v{N}_{label}_failed/ with the script and metadata
     "error"            CLI/input error; no version or artifacts
     "validation_error" static script check failed; no version or artifacts
+    "invalid_geometry" script/import produced an invalid final B-rep; records
+                       a numbered diagnostic attempt unless --dry-run, writes no
+                       STEP, and does not advance current; see
+                       version_recorded/current_advanced
 
-  Successful run metrics include bounding_box, dimensions, volume, surface_area,
-  center_of_mass, face_count, edge_count, and is_valid. Check metrics before
-  rendering; visual appearance alone does not prove dimensional correctness.
+  Run/import metrics include bounding_box, dimensions, volume, surface_area,
+  center_of_mass, face_count, edge_count, and is_valid. A successful materialized
+  build has is_valid=true and an exported STEP; --dry-run is explicitly metrics
+  only. Check metrics before rendering; visual appearance alone does not prove
+  dimensional correctness.
 
 SPEC AND MEASUREMENT CHECKS
   When requirements include explicit holes, bores, diameters, counts, or
@@ -217,9 +223,9 @@ SPEC AND MEASUREMENT CHECKS
     3. Run `agentcad measure` on output.step.
     4. Run `agentcad check-spec` for explicit cylindrical requirements.
        Revise before marking the model done when `passed` is false.
-    5. Run `agentcad inspect` when geometry is invalid or topology looks wrong.
-       free_edge_count > 0 suggests an open shell; face_orientations helps find
-       inverted faces.
+    5. Run `agentcad inspect` when an existing source CAD file or successful
+       output STEP has topology that looks wrong. An `invalid_geometry` run has
+       no output STEP; repair its recorded script/source using response metrics.
     6. Review the automatically opened viewer with the user. Use
        `agentcad view old.step new.step` for an explicit non-adjacent comparison.
 
@@ -228,7 +234,7 @@ DEBUGGING
   $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
   $ agentcad measure v1_test/output.step                  # dimensions + feature sizes
   $ agentcad check-spec v1_test/output.step spec.json     # compare against intended features
-  $ agentcad inspect v1_test/output.step                  # topology deep-dive
+  $ agentcad inspect v1_test/output.step                  # successful STEP deep-dive
     Hollow shape?     -> free_edge_count > 0, shell not closed
     Inverted normals? -> face_orientations imbalanced
     Invalid?          -> is_valid: false

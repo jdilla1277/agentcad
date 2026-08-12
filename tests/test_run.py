@@ -1354,7 +1354,7 @@ def test_run_direct_no_via_field(runner, isolated_dir):
     assert "via" not in parsed
 
 
-# --- M36: Validity warnings & diagnostics ---
+# --- M68 1.2: invalid geometry is a core build failure ---
 
 def _fake_metrics_invalid(real_compute):
     """Wrap compute_metrics to force is_valid=False."""
@@ -1366,8 +1366,8 @@ def _fake_metrics_invalid(real_compute):
     return wrapper
 
 
-def test_run_invalid_shape_has_warnings_in_output(runner, isolated_dir, monkeypatch):
-    """is_valid: false in metrics should produce top-level warnings."""
+def test_run_invalid_shape_returns_explicit_outcome(runner, isolated_dir, monkeypatch):
+    """Invalid final geometry must never be reported as an ordinary success."""
     _init_project(runner)
     _write_script(isolated_dir)
     from agentcad import metrics
@@ -1376,10 +1376,16 @@ def test_run_invalid_shape_has_warnings_in_output(runner, isolated_dir, monkeypa
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv"])
+    assert result.exit_code == 1
     parsed = json.loads(result.stdout)
-    assert parsed["status"] == "success"
-    assert "warnings" in parsed
-    assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+    assert parsed["status"] == "invalid_geometry"
+    assert parsed["metrics"]["is_valid"] is False
+    assert parsed["metrics"]["validity_errors"] == [
+        "BRepCheck_InvalidToleranceValue"
+    ]
+    assert parsed["version_recorded"] is True
+    assert parsed["current_advanced"] is False
+    assert not (isolated_dir / "v1_inv" / "output.step").exists()
 
 
 def test_run_emits_json_error_on_unexpected_exception_after_script_start(
@@ -1414,23 +1420,44 @@ def test_run_emits_json_error_on_unexpected_exception_after_script_start(
     assert "Bnd_Box is void" in (parsed.get("message", "") + parsed.get("traceback", ""))
 
 
-def test_run_invalid_shape_warnings_in_meta(runner, isolated_dir, monkeypatch):
-    """is_valid: false should also appear in meta.json warnings."""
+def test_run_invalid_shape_is_recorded_without_advancing_current(
+    runner, isolated_dir, monkeypatch
+):
+    """Keep diagnostics, but never make invalid geometry the current version."""
     _init_project(runner)
     _write_script(isolated_dir)
+    manifest_path = isolated_dir / MANIFEST_FILE
+    manifest = json.loads(manifest_path.read_text())
+    manifest["versions"] = [{
+        "version": 1,
+        "label": "baseline",
+        "status": "success",
+        "path": "v1_baseline/",
+    }]
+    manifest["current"] = "baseline"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     from agentcad import metrics
     monkeypatch.setattr(
         "agentcad.metrics.compute_metrics",
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     runner.invoke(cli, ["run", "script.py", "--output", "inv"])
-    meta = json.loads((isolated_dir / "v1_inv" / "meta.json").read_text())
-    assert "warnings" in meta
-    assert any("invalid geometry" in w.lower() for w in meta["warnings"])
+
+    meta = json.loads(
+        (isolated_dir / "v2_inv_invalid" / "meta.json").read_text()
+    )
+    manifest = json.loads(manifest_path.read_text())
+    assert meta["status"] == "invalid_geometry"
+    assert meta["metrics"]["is_valid"] is False
+    assert manifest["current"] == "baseline"
+    assert manifest["versions"][-1]["status"] == "invalid_geometry"
+    assert manifest["versions"][-1]["path"] == "v2_inv_invalid/"
 
 
-def test_run_invalid_shape_dry_run_has_warnings(runner, isolated_dir, monkeypatch):
-    """Dry-run should also surface validity warnings."""
+def test_run_invalid_shape_dry_run_is_explicit_without_artifacts(
+    runner, isolated_dir, monkeypatch
+):
+    """Dry-run surfaces invalidity without allocating a version."""
     _init_project(runner)
     _write_script(isolated_dir)
     from agentcad import metrics
@@ -1439,9 +1466,15 @@ def test_run_invalid_shape_dry_run_has_warnings(runner, isolated_dir, monkeypatc
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv", "--dry-run"])
+    assert result.exit_code == 1
     parsed = json.loads(result.stdout)
-    assert "warnings" in parsed
-    assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+    assert parsed["status"] == "invalid_geometry"
+    assert parsed["metrics"]["is_valid"] is False
+    assert parsed["version_recorded"] is False
+    assert parsed["current_advanced"] is False
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+    assert not (isolated_dir / "v1_inv_invalid").exists()
 
 
 def test_run_valid_shape_no_warnings(runner, isolated_dir):
