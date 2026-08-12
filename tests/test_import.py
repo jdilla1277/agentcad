@@ -317,6 +317,46 @@ class TestImportAutoDiff:
         assert (isolated_dir / "v2_rev_b" / "diff_volume.png").exists()
         assert (isolated_dir / "v2_rev_b" / "diff_volume.glb").exists()
 
+    def test_no_diff_skips_every_automatic_comparison_call(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        baseline = runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        assert baseline.exit_code == 0, baseline.output
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("comparison work must not run with --no-diff")
+
+        for target in (
+            "agentcad.render.render_diff_side_by_side",
+            "agentcad.render.render_diff_overlay",
+            "agentcad.solid_compare.compare_solid_volumes",
+            "agentcad.solid_compare.write_solid_comparison_artifacts",
+        ):
+            monkeypatch.setattr(target, forbidden)
+
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-diff", "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        version_dir = isolated_dir / "v2_rev_b"
+        assert parsed["artifacts"]["diff"] == {
+            "status": "skipped",
+            "message": "Automatic comparison disabled with --no-diff.",
+        }
+        assert "diff" not in parsed
+        assert not list(version_dir.glob("diff_*"))
+        meta = json.loads((version_dir / "meta.json").read_text())
+        assert meta["artifacts"]["diff"]["status"] == "skipped"
+        viewer_html = (version_dir / "viewer.html").read_text()
+        assert 'DEFAULT_MODE = "single-a"' in viewer_html
+
 
 # --- non-Tier-0 inputs ------------------------------------------------------
 
@@ -512,6 +552,31 @@ def test_import_routes_through_daemon_when_available(runner, isolated_dir, monke
     parsed = json.loads(result.stdout)
     assert parsed["via"] == "daemon"
     assert parsed["command"] == "import"
+
+
+def test_import_routes_no_diff_flag_through_daemon(
+    runner, isolated_dir, monkeypatch
+):
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    requests = []
+
+    def fake_send_request(message, **_kwargs):
+        requests.append(message)
+        return {
+            "type": "result",
+            "exit_code": 0,
+            "output": json.dumps({"command": "import", "status": "success"}),
+        }
+
+    monkeypatch.setattr("agentcad.daemon.send_request", fake_send_request)
+    result = runner.invoke(cli, [
+        "import", "any.step", "--label", "fast", "--no-diff", "--no-view",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert requests[0]["argv"] == [
+        "import", "any.step", "--label", "fast", "--no-view", "--no-diff",
+    ]
 
 
 def test_import_no_daemon_flag_skips_routing_and_spawn(

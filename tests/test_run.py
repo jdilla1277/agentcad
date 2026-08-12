@@ -1174,6 +1174,107 @@ def test_run_no_preview_second_run_still_writes_diff(runner, isolated_dir):
     assert (isolated_dir / "v2_second" / "diff_volume.glb").exists()
 
 
+def test_run_no_diff_skips_every_automatic_comparison_call(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    first = runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert first.exit_code == 0, first.output
+    _write_script(isolated_dir, content=(
+        'import cadquery as cq\n'
+        'result = cq.Workplane("XY").box(20, 20, 20)\n'
+        'show_object(result)\n'
+    ))
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("comparison work must not run with --no-diff")
+
+    for target in (
+        "agentcad.render.render_diff_side_by_side",
+        "agentcad.render.render_diff_overlay",
+        "agentcad.solid_compare.compare_solid_volumes",
+        "agentcad.solid_compare.write_solid_comparison_artifacts",
+    ):
+        monkeypatch.setattr(target, forbidden)
+
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-diff",
+        "--no-preview", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    version_dir = isolated_dir / "v2_second"
+    assert parsed["artifacts"]["diff"] == {
+        "status": "skipped",
+        "message": "Automatic comparison disabled with --no-diff.",
+    }
+    assert "diff" not in parsed
+    assert "diff_ms" not in parsed["timings"]
+    assert "diff" not in parsed["completed_phases"]
+    assert not list(version_dir.glob("diff_*"))
+    meta = json.loads((version_dir / "meta.json").read_text())
+    assert meta["artifacts"]["diff"]["status"] == "skipped"
+    viewer_html = (version_dir / "viewer.html").read_text()
+    assert 'DEFAULT_MODE = "single-a"' in viewer_html
+
+
+def test_run_fast_path_writes_only_core_and_explicit_exports(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "baseline", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("optional visual work ran on the fast path")
+
+    with monkeypatch.context() as fast_path_patches:
+        for target in (
+            "agentcad.render.render_diff_side_by_side",
+            "agentcad.render.render_diff_overlay",
+            "agentcad.solid_compare.compare_solid_volumes",
+            "agentcad.solid_compare.write_solid_comparison_artifacts",
+            "agentcad.export.export_glb",
+            "agentcad.commands.view._render_unified",
+        ):
+            fast_path_patches.setattr(target, forbidden)
+
+        result = runner.invoke(cli, [
+            "run", "script.py", "--output", "fast", "--no-preview",
+            "--no-diff", "--no-view", "--export", "stl", "--no-daemon",
+        ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    version_dir = isolated_dir / "v2_fast"
+    assert parsed["status"] == "success"
+    assert parsed["outputs"] == {
+        "step": "v2_fast/output.step",
+        "script": "v2_fast/script.py",
+        "stl": "v2_fast/output.stl",
+    }
+    assert parsed["artifacts"]["diff"]["status"] == "skipped"
+    assert parsed["artifacts"]["viewer_glb"]["status"] == "skipped"
+    assert parsed["artifacts"]["viewer"]["status"] == "skipped"
+    assert set(path.name for path in version_dir.iterdir()) == {
+        "meta.json", "output.step", "output.stl", "script.py",
+    }
+    assert not any("diff" in key for key in parsed["timings"])
+
+    explicit = runner.invoke(cli, ["diff", "1", "2", "--no-daemon"])
+    assert explicit.exit_code == 0, explicit.output
+    assert json.loads(explicit.stdout)["status"] == "success"
+
+
 def test_run_no_preview_second_run_viewer_includes_prior(runner, isolated_dir):
     """The viewer for a --no-preview run #2 still embeds the prior version's
     GLB so side-by-side comparison works. This is the actual user-facing
@@ -1521,6 +1622,35 @@ def test_run_via_daemon_field_in_output(runner, isolated_dir, monkeypatch):
     assert result.exit_code == 0
     parsed = json.loads(result.stdout)
     assert parsed["via"] == "daemon"
+
+
+def test_run_routes_no_diff_flag_through_daemon(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    requests = []
+
+    def fake_send_request(message, **_kwargs):
+        requests.append(message)
+        return {
+            "type": "result",
+            "exit_code": 0,
+            "output": json.dumps({"command": "run", "status": "success"}),
+        }
+
+    monkeypatch.setattr("agentcad.daemon.send_request", fake_send_request)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "fast", "--no-preview",
+        "--no-diff", "--no-view",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert requests[0]["argv"] == [
+        "run", "script.py", "--output", "fast", "--no-preview",
+        "--no-diff", "--no-view",
+    ]
 
 
 def test_run_direct_no_via_field(runner, isolated_dir):

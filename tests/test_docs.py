@@ -475,6 +475,16 @@ def test_docs_commands_mentions_preview(runner):
     assert "preview" in content
 
 
+def test_docs_commands_mentions_no_diff_fast_path(runner):
+    result = runner.invoke(cli, ["docs", "commands"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "--no-diff" in content
+    assert "--no-preview --no-diff --no-view" in content
+    assert "agentcad diff" in content
+    assert "meta.json" in content
+
+
 # --- M19: Colored GLB in export docs ---
 
 

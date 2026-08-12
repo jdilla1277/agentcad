@@ -38,6 +38,16 @@ from agentcad.native_io import silence_native_stdout
     help="Open the generated review viewer after a successful import (default on).",
 )
 @click.option(
+    "--diff/--no-diff",
+    "auto_diff",
+    default=True,
+    help=(
+        "Automatically compare against the previous successful version "
+        "(default on). --no-diff skips automatic comparison; explicit "
+        "`agentcad diff` remains available."
+    ),
+)
+@click.option(
     "--runtime",
     default=None,
     type=click.Choice(["cadquery", "build123d"]),
@@ -49,7 +59,7 @@ from agentcad.native_io import silence_native_stdout
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
+def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
@@ -99,6 +109,8 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         argv.extend(["--runtime", runtime])
     if not open_view:
         argv.append("--no-view")
+    if not auto_diff:
+        argv.append("--no-diff")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -284,7 +296,12 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
             "preview": {"status": "pending"},
             "viewer_glb": {"status": "pending"},
             "diff": _artifact_state(
-                has_previous_step, "No previous successful STEP to compare."
+                auto_diff and has_previous_step,
+                (
+                    "Automatic comparison disabled with --no-diff."
+                    if not auto_diff
+                    else "No previous successful STEP to compare."
+                ),
             ),
             "viewer": {"status": "pending"},
             "browser": _artifact_state(
@@ -316,9 +333,7 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         return True, value
 
     # 8. Visual artifacts (preview, glb, viewer).
-    from agentcad.render import (
-        render_composite_4view, render_diff_overlay, render_diff_side_by_side,
-    )
+    from agentcad.render import render_composite_4view
     from agentcad.export import export_glb
     from agentcad.commands.view import _render_unified
 
@@ -345,10 +360,14 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
 
     # 8. Auto-diff against most recent successful prior version.
     diff_meta = None
-    if prev is not None:
+    if auto_diff and prev is not None:
         prev_step = Path.cwd() / prev["path"].rstrip("/") / "output.step"
         if prev_step.exists():
             try:
+                from agentcad.render import (
+                    render_diff_overlay,
+                    render_diff_side_by_side,
+                )
                 from agentcad.step_io import load_cad_shape
                 prev_shape = load_cad_shape(prev_step)
                 side = version_dir / "diff_side.png"
@@ -397,7 +416,7 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
             except Exception:
                 # Diff is best-effort — never fail the whole import.
                 diff_meta = None
-    if has_previous_step:
+    if auto_diff and has_previous_step:
         if diff_meta is None:
             lifecycle.set_artifact(
                 "diff",
@@ -410,7 +429,7 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
 
     # 9. Unified viewer HTML.
     prev_glb = None
-    if prev is not None:
+    if auto_diff and prev is not None:
         cand = Path.cwd() / prev["path"].rstrip("/") / "output.glb"
         if cand.exists():
             prev_glb = cand

@@ -89,6 +89,9 @@ def test_skill_show_content_mentions_commands(runner):
     assert "base.edges()" in content
     assert "base.bounding_box()" in content
     assert "agentcad docs editing" in content
+    assert "--no-preview --no-diff --no-view" in content
+    assert "agentcad diff" in content
+    assert "explicit" in content
 
 
 def test_skill_install_creates_file(runner, isolated_dir):

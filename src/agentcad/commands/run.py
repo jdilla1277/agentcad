@@ -657,9 +657,19 @@ def _assign_part_identity(raw_parts):
     default=True,
     help=(
         "4-view composite PNG + per-part previews (default on, ~2-4s). "
-        "The viewer.html, GLB, and diff PNGs always generate regardless — "
-        "--no-preview skips the composite and per-part previews. Use it when "
-        "you don't need agent-readable PNGs this iteration."
+        "By itself, --no-preview skips only those PNGs; viewer.html, its GLB, "
+        "and automatic diff work remain enabled. Combine it with --no-diff "
+        "--no-view for the core-only fast path."
+    ),
+)
+@click.option(
+    "--diff/--no-diff",
+    "auto_diff",
+    default=True,
+    help=(
+        "Automatically compare against the previous successful version "
+        "(default on). --no-diff skips all automatic comparison work; "
+        "`agentcad diff` remains available for later review."
     ),
 )
 @click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
@@ -677,7 +687,10 @@ def _assign_part_identity(raw_parts):
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
-def run(ctx, script, output, render, export, preview, open_view, params, dry_run, runtime, no_daemon):
+def run(
+    ctx, script, output, render, export, preview, auto_diff, open_view,
+    params, dry_run, runtime, no_daemon,
+):
     """Execute the project's CAD script and produce a versioned STEP file.
 
     New projects use build123d. CadQuery scripts remain supported in projects
@@ -728,6 +741,7 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
             file=script,
             label=output,
             init_flag=False,
+            auto_diff=auto_diff,
             open_view=open_view,
             no_daemon=no_daemon,
         )
@@ -742,7 +756,7 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
     try:
         _run_impl(
             ctx, script, output, render, export,
-            preview, open_view, params, dry_run, runtime, no_daemon,
+            preview, auto_diff, open_view, params, dry_run, runtime, no_daemon,
         )
     except SystemExit:
         # Explicit sys.exit() calls inside _run_impl are intentional —
@@ -774,8 +788,10 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
         _clear_run_timeout()
 
 
-def _run_impl(ctx, script, output, render, export, preview, open_view, params,
-              dry_run, runtime, no_daemon):
+def _run_impl(
+    ctx, script, output, render, export, preview, auto_diff, open_view,
+    params, dry_run, runtime, no_daemon,
+):
     _t_total_start = time.perf_counter()
     _timings = {}
     _phase_tracker = _PhaseTracker(_timings)
@@ -814,6 +830,8 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         argv.extend(["--export", export])
     if not preview:
         argv.append("--no-preview")
+    if not auto_diff:
+        argv.append("--no-diff")
     if not open_view:
         argv.append("--no-view")
     if params:
@@ -1129,6 +1147,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         previous
         and (Path.cwd() / previous["path"] / "output.step").exists()
     )
+    fast_path = not preview and not auto_diff and not open_view
 
     def _artifact_state(enabled, skipped_message):
         if enabled:
@@ -1168,11 +1187,22 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 preview and bool(parts_output),
                 "No per-part preview work requested.",
             ),
-            "viewer_glb": {"status": "pending"},
-            "diff": _artifact_state(
-                has_previous_step, "No previous successful STEP to compare."
+            "viewer_glb": _artifact_state(
+                not fast_path,
+                "Viewer artifacts disabled on the core-only fast path.",
             ),
-            "viewer": {"status": "pending"},
+            "diff": _artifact_state(
+                auto_diff and has_previous_step,
+                (
+                    "Automatic comparison disabled with --no-diff."
+                    if not auto_diff
+                    else "No previous successful STEP to compare."
+                ),
+            ),
+            "viewer": _artifact_state(
+                not fast_path,
+                "Viewer artifacts disabled on the core-only fast path.",
+            ),
             "browser": _artifact_state(
                 open_view, "Browser launch disabled with --no-view."
             ),
@@ -1254,7 +1284,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         _finish_phase("render_views", _t, "render_views_ms")
 
     # Visual feedback pipeline. Three tiers, decoupled by cost:
-    #   1. Always (cheap, agent depends on these for the viewer to work):
+    #   1. Default visual review (unless the core-only fast path is selected):
     #      - GLB export
     #      - diff PNGs against the most recent successful prior version
     #      - unified viewer.html
@@ -1311,34 +1341,35 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             lifecycle.meta["parts"] = parts_output
             _finish_phase("parts_preview", _t, "parts_preview_ms")
 
-    # Tier 1: GLB + diff + viewer.html — always run, regardless of --preview.
-    # These are what make the viewer experience work; they're cheap enough
-    # that there's no agent-side reason to opt out.
-    from agentcad.export import export_glb
-    from agentcad.commands.view import _render_unified
+    # Tier 1: GLB + diff + viewer.html normally run regardless of --preview.
+    # The explicit --no-preview --no-diff --no-view combination is the
+    # core-only fast path and bypasses this entire visual pipeline.
+    if not fast_path:
+        from agentcad.export import export_glb
+        from agentcad.commands.view import _render_unified
 
     viewer_glb_path = version_dir / "output.glb"
-    if not viewer_glb_path.exists():
+    if not fast_path and not viewer_glb_path.exists():
         _heartbeat("exporting viewer GLB…")
         _t = _start_phase("export_viewer_glb")
         export_glb(topo_shape_for_metrics, str(viewer_glb_path), parts=glb_parts)
         lifecycle.meta["viewer_glb"] = f"{dir_name}/output.glb"
         _finish_phase("export_viewer_glb", _t, "export_viewer_glb_ms")
-    else:
+    elif not fast_path:
         lifecycle.meta["viewer_glb"] = f"{dir_name}/output.glb"
         lifecycle.set_artifact("viewer_glb", "success")
 
     prev = previous
     previous_parts = []
     part_changes = None
-    if prev is not None:
+    if auto_diff and prev is not None:
         previous_meta_path = Path.cwd() / prev["path"] / "meta.json"
         try:
             previous_parts = json.loads(previous_meta_path.read_text()).get("parts", [])
         except (OSError, json.JSONDecodeError):
             previous_parts = []
         part_changes = _part_change_summary(previous_parts, parts_output, prev["label"])
-    if prev is not None:
+    if auto_diff and prev is not None:
         from agentcad.render import (
             render_diff_side_by_side,
             render_diff_overlay,
@@ -1420,7 +1451,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     # modes. Decoupled from diff_meta: even if the diff PNG render failed,
     # we still want the 3D comparison to work in the viewer.
     prev_glb_path = None
-    if prev is not None:
+    if auto_diff and prev is not None:
         candidate = Path.cwd() / prev["path"] / "output.glb"
         if candidate.exists():
             prev_glb_path = candidate
@@ -1435,34 +1466,35 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 except Exception:
                     prev_glb_path = None
 
-    _heartbeat("writing viewer.html…")
-    _t = _start_phase("viewer")
     viewer_path = version_dir / "viewer.html"
-    _render_unified(
-        viewer_path,
-        glb_a=prev_glb_path or viewer_glb_path,
-        glb_b=viewer_glb_path if prev_glb_path else None,
-        label_a=prev["label"] if prev_glb_path else label,
-        label_b=label if prev_glb_path else "",
-        default_mode="side-by-side" if prev_glb_path else "single-a",
-        preview_png=version_dir / "preview.png" if preview_meta else None,
-        diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
-        diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
-        diff_volume_png=(
-            version_dir / "diff_volume.png"
-            if diff_meta and diff_meta.get("volume_png")
-            else None
-        ),
-        parts=parts_output,
-        parts_model="b" if prev_glb_path else "a",
-        part_changes=part_changes,
-        groups=groups_output,
-    )
-    viewer_meta = f"{dir_name}/viewer.html"
-    viewer_glb_meta = f"{dir_name}/output.glb"
-    lifecycle.meta["viewer"] = viewer_meta
-    lifecycle.meta["viewer_glb"] = viewer_glb_meta
-    _finish_phase("viewer", _t, "viewer_ms")
+    if not fast_path:
+        _heartbeat("writing viewer.html…")
+        _t = _start_phase("viewer")
+        _render_unified(
+            viewer_path,
+            glb_a=prev_glb_path or viewer_glb_path,
+            glb_b=viewer_glb_path if prev_glb_path else None,
+            label_a=prev["label"] if prev_glb_path else label,
+            label_b=label if prev_glb_path else "",
+            default_mode="side-by-side" if prev_glb_path else "single-a",
+            preview_png=version_dir / "preview.png" if preview_meta else None,
+            diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
+            diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
+            diff_volume_png=(
+                version_dir / "diff_volume.png"
+                if diff_meta and diff_meta.get("volume_png")
+                else None
+            ),
+            parts=parts_output,
+            parts_model="b" if prev_glb_path else "a",
+            part_changes=part_changes,
+            groups=groups_output,
+        )
+        viewer_meta = f"{dir_name}/viewer.html"
+        viewer_glb_meta = f"{dir_name}/output.glb"
+        lifecycle.meta["viewer"] = viewer_meta
+        lifecycle.meta["viewer_glb"] = viewer_glb_meta
+        _finish_phase("viewer", _t, "viewer_ms")
 
     viewer_opened = False
     if open_view:

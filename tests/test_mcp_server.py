@@ -104,6 +104,29 @@ def test_docs_mcp_accepts_runtime_override(monkeypatch):
     )]
 
 
+def test_run_mcp_passes_core_only_fast_path(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, cwd=None):
+        calls.append((args, cwd))
+        return {"status": "success"}
+
+    monkeypatch.setattr(server, "_invoke", fake_invoke)
+    result = server.run(
+        "part.py", "fast", "/tmp/project",
+        preview=False, diff=False, view=False,
+    )
+
+    assert result["status"] == "success"
+    assert calls == [(
+        [
+            "run", "part.py", "--output", "fast",
+            "--no-preview", "--no-diff", "--no-view",
+        ],
+        "/tmp/project",
+    )]
+
+
 def test_docs_mcp_runtime_override_returns_cadquery_content():
     result = server.docs("quickstart", "cadquery")
 

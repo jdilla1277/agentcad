@@ -311,6 +311,23 @@ def test_run_subcommand_help_no_preview_scoped_to_preview_pngs(runner):
     assert "256x256" not in output
 
 
+def test_help_documents_no_diff_and_core_only_fast_path(runner):
+    full_help = runner.invoke(cli, ["--help"]).output
+    run_help = runner.invoke(cli, ["run", "--help"]).output
+    import_help = runner.invoke(cli, ["import", "--help"]).output
+
+    assert "--diff / --no-diff" in run_help
+    assert "--diff / --no-diff" in import_help
+    assert "--no-preview --no-diff --no-view" in full_help
+    assert "core-only fast path" in full_help
+    assert "agentcad diff" in full_help
+    assert "remains available" in full_help
+    assert "always generate regardless" not in run_help
+    assert "GLB backing viewer.html (always)" not in full_help
+    assert "when used by itself" in full_help.lower()
+    assert "meta.json" in full_help
+
+
 def test_help_presents_automatic_previous_current_review(runner):
     full_help = runner.invoke(cli, ["--help"]).output
     run_help = runner.invoke(cli, ["run", "--help"]).output

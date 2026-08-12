@@ -68,7 +68,7 @@ VERSION OUTPUTS
   A successful first run creates:
     v1_first/
       output.step       STEP geometry
-      output.glb        GLB backing viewer.html (always)
+      output.glb        GLB backing viewer.html (normally; skipped by fast path)
       script.py         copy of the executed script
       meta.json         full run metadata, including runtime and parts
       preview.png       4-view composite: front, right, top, iso
@@ -82,9 +82,15 @@ VERSION OUTPUTS
       renders/          requested PNG views
 
   The viewer can inspect parts and groups, compare versions, and export an
-  on-demand turntable GIF. `--no-preview` skips only preview.png and per-part
-  previews; viewer.html, its GLB, and diff PNGs still generate. `--no-view`
-  prevents the automatic browser launch without removing viewer artifacts.
+  on-demand turntable GIF. When used by itself, `--no-preview` skips only
+  preview.png and per-part previews; viewer.html, its GLB, and diff PNGs still
+  generate. `--no-view` prevents the automatic browser launch without removing
+  viewer artifacts.
+  `--no-diff` skips automatic comparison with the prior version; an explicit
+  `agentcad diff` remains available. Combine
+  `--no-preview --no-diff --no-view` for the core-only fast path: output.step,
+  the saved script, meta.json (including metrics), and only explicitly
+  requested exports.
 
 COMMAND REFERENCE: CREATE AND IMPORT
   agentcad init [--name NAME]__INIT_RUNTIME_OPTION__ [--force]
@@ -97,22 +103,25 @@ COMMAND REFERENCE: CREATE AND IMPORT
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
-                         outputs.glb; viewer_glb is always generated.
+                         outputs.glb; viewer_glb normally generates separately.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
     --view / --no-view   Open the review viewer after success (default on).
                          From v2, previous/current comparison is preloaded.
+    --diff / --no-diff   Generate or skip automatic comparison with the prior
+                         successful version (default on).
     --params K=V,...     Override top-level constants; values may be numbers,
                          booleans, or strings.
     __RUN_RUNTIME_HELP__
     --dry-run            Return validation and metrics without consuming a
                          version or writing artifacts.
 
-  agentcad import FILE [--label LABEL] [--init]
+  agentcad import FILE [--label LABEL] [--init] [--no-diff]
     Adopt STEP/STP/BREP as a versioned baseline with provenance. --init creates
     a manifest when needed. Later render, view, measure, parts, and diff commands
-    work on an imported version like a scripted one.
+    work on an imported version like a scripted one. --no-diff skips the
+    automatic prior-version comparison without disabling explicit diff commands.
 
 COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
   agentcad render STEP --view SPEC [OPTIONS]
