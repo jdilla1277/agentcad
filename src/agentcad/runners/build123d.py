@@ -390,16 +390,20 @@ def _load_step(path: str):
     silencing OCCT's native stdout writes (which would otherwise leak
     into the script's output and break JSON contracts).
     """
-    from build123d import Part, import_step
+    from build123d import Compound, Part, import_step
     from agentcad.native_io import silence_native_stdout
 
     with silence_native_stdout():
         loaded = import_step(path)
-    # `import_step` returns a Compound; wrap in Part for the documented
-    # `load_step(path) -> Part` contract. Part accepts a Compound.
+    # A single-solid STEP imports as a Solid. Passing its raw TopoDS_Solid
+    # directly to Part creates a wrapper whose own volume is zero even though
+    # its child solid is valid. Give Part a real compound so its aggregate
+    # properties include the imported geometry.
     if isinstance(loaded, Part):
         return loaded
-    return Part(loaded.wrapped) if hasattr(loaded, "wrapped") else Part(loaded)
+    if isinstance(loaded, Compound):
+        return Part(loaded.wrapped)
+    return Part(Compound(children=[loaded]).wrapped)
 
 
 def _load_step_shape(path: str):

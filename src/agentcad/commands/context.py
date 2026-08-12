@@ -2,9 +2,8 @@ import json
 
 import click
 
+from agentcad import __version__
 from agentcad.manifest import load_manifest
-
-TOOL_VERSION = "0.1.0"
 
 
 @click.command()
@@ -32,7 +31,7 @@ def context():
         "command": "context",
         "status": "success",
         "project": manifest["name"],
-        "tool_version": TOOL_VERSION,
+        "tool_version": __version__,
         "current": current,
         "version_count": len(versions),
         "versions": versions_summary,
