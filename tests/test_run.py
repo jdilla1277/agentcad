@@ -4,6 +4,8 @@ import struct
 import time
 from pathlib import Path
 
+import pytest
+
 from agentcad.cli import cli
 from agentcad.manifest import MANIFEST_FILE
 
@@ -415,6 +417,183 @@ def test_run_timeout_during_step_export_reports_completed_phases(
     assert "script_exec_ms" in parsed["phase_timings"]
     assert "metrics_ms" in parsed["phase_timings"]
     assert "export" in parsed["suggestion"].lower()
+
+
+def test_run_preview_failure_preserves_registered_core(
+    runner, isolated_dir, monkeypatch
+):
+    """Core STEP/meta/manifest must exist before optional preview starts."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    observed = {}
+
+    def fail_preview(*_args, **_kwargs):
+        meta_path = isolated_dir / "v1_post_fail" / "meta.json"
+        manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+        observed["meta"] = json.loads(meta_path.read_text())
+        observed["manifest"] = manifest
+        raise RuntimeError("injected preview failure")
+
+    monkeypatch.setattr(
+        "agentcad.render.render_composite_4view",
+        fail_preview,
+    )
+
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "post_fail", "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["core"]["status"] == "success"
+    assert parsed["artifacts"]["preview"]["status"] == "failed"
+    assert "injected preview failure" in parsed["artifacts"]["preview"]["message"]
+    assert observed["meta"]["artifacts"]["preview"]["status"] == "pending"
+    assert observed["manifest"]["current"] == "post_fail"
+    assert observed["manifest"]["versions"][0]["status"] == "success"
+    version_dir = isolated_dir / "v1_post_fail"
+    assert (version_dir / "output.step").exists()
+    assert (version_dir / "meta.json").exists()
+    assert not (isolated_dir / "v1_post_fail_failed").exists()
+
+
+def test_run_preview_timeout_preserves_registered_core(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    # Warm native imports before starting a deliberately tiny watchdog.
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
+    warmup = runner.invoke(cli, [
+        "run", "script.py", "--output", "warmup", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert warmup.exit_code == 0, warmup.output
+
+    def slow_preview(*_args, **_kwargs):
+        time.sleep(1)
+
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    monkeypatch.setattr(
+        "agentcad.render.render_composite_4view",
+        slow_preview,
+    )
+
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "timeout", "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["artifacts"]["preview"]["status"] == "timeout"
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == "timeout"
+    assert manifest["versions"][-1]["status"] == "success"
+    assert (isolated_dir / "v2_timeout" / "output.step").exists()
+    assert (isolated_dir / "v2_timeout" / "meta.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("artifact", "target", "extra_args"),
+    [
+        (
+            "mesh_exports",
+            "agentcad.runners.cadquery.export_stl",
+            ["--export", "stl", "--no-preview"],
+        ),
+        (
+            "renders",
+            "agentcad.render.render_shape",
+            ["--render", "front", "--no-preview"],
+        ),
+        (
+            "preview",
+            "agentcad.render.render_composite_4view",
+            [],
+        ),
+        (
+            "viewer_glb",
+            "agentcad.export.export_glb",
+            ["--no-preview"],
+        ),
+        (
+            "viewer",
+            "agentcad.commands.view._render_unified",
+            ["--no-preview"],
+        ),
+    ],
+)
+def test_run_optional_phase_exception_never_reverses_core_success(
+    runner, isolated_dir, monkeypatch, artifact, target, extra_args
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    def injected_failure(*_args, **_kwargs):
+        raise RuntimeError(f"injected {artifact} failure")
+
+    monkeypatch.setattr(target, injected_failure)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", artifact,
+        "--no-view", "--no-daemon", *extra_args,
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["core"]["status"] == "success"
+    assert parsed["artifacts"][artifact]["status"] == "failed"
+    assert (isolated_dir / f"v1_{artifact}" / "output.step").exists()
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == artifact
+    assert manifest["versions"][0]["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("phase", "target"),
+    [
+        ("diff", "agentcad.render.render_diff_side_by_side"),
+        ("viewer", "agentcad.commands.view._render_unified"),
+    ],
+)
+def test_run_optional_phase_timeout_never_reverses_core_success(
+    runner, isolated_dir, monkeypatch, phase, target
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "baseline", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    from agentcad.commands.run import _RunTimeout
+
+    def injected_timeout(*_args, **_kwargs):
+        raise _RunTimeout({
+            "command": "run",
+            "status": "failed",
+            "error_kind": "timeout",
+            "timeout_phase": phase,
+            "message": f"injected {phase} timeout",
+        })
+
+    monkeypatch.setattr(target, injected_timeout)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", f"{phase}_timeout", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["artifacts"][phase]["status"] == "timeout"
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == f"{phase}_timeout"
+    assert manifest["versions"][-1]["status"] == "success"
 
 
 def test_run_no_show_object_caught_by_validation(runner, isolated_dir):

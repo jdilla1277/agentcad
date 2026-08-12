@@ -22,6 +22,8 @@ def load_manifest(command=None):
 
 
 def save_manifest(manifest):
-    """Write the manifest dict to agentcad.json."""
+    """Atomically write the manifest to agentcad.json."""
+    from agentcad.versioning import atomic_write_json
+
     manifest_path = Path.cwd() / MANIFEST_FILE
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    atomic_write_json(manifest_path, manifest)

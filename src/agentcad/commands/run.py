@@ -21,7 +21,7 @@ from agentcad.commands.export_cmd import (
     parse_export_formats,
     unsupported_export_formats,
 )
-from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
+from agentcad.manifest import MANIFEST_FILE, load_manifest
 
 
 _DEFAULT_RUN_TIMEOUT_S = 115.0
@@ -29,6 +29,16 @@ _RUN_TIMEOUT_ENV = "AGENTCAD_RUN_TIMEOUT_S"
 _ACTIVE_PHASE_TRACKER = None
 _PREVIOUS_ALARM_HANDLER = None
 _RUN_TIMEOUT_INSTALLED = False
+
+_PHASE_ARTIFACTS = {
+    "export_mesh": "mesh_exports",
+    "render_views": "renders",
+    "preview": "preview",
+    "parts_preview": "parts_preview",
+    "export_viewer_glb": "viewer_glb",
+    "diff": "diff",
+    "viewer": "viewer",
+}
 
 
 class _RunTimeout(BaseException):
@@ -46,6 +56,8 @@ class _PhaseTracker:
         self.active_phase = None
         self.active_started_at = None
         self.next_phase = None
+        self.lifecycle = None
+        self.reservation = None
 
     def start(self, phase):
         self.active_phase = phase
@@ -210,6 +222,53 @@ def _clear_run_timeout():
     _ACTIVE_PHASE_TRACKER = None
     _PREVIOUS_ALARM_HANDLER = None
     _RUN_TIMEOUT_INSTALLED = False
+
+
+def _recover_committed_core(error, *, timeout_payload=None):
+    """Turn post-core failures into successful builds with artifact status."""
+    tracker = _ACTIVE_PHASE_TRACKER
+    if tracker is None or tracker.lifecycle is None:
+        return None
+
+    lifecycle = tracker.lifecycle
+    phase = (
+        (timeout_payload or {}).get("timeout_phase")
+        or tracker.active_phase
+        or tracker.next_phase
+        or "post_processing"
+    )
+    artifact = _PHASE_ARTIFACTS.get(phase)
+    status = "timeout" if timeout_payload is not None else "failed"
+    if timeout_payload is not None:
+        message = timeout_payload.get("message", str(error))
+    else:
+        message = f"{type(error).__name__}: {error}"
+    if artifact is not None:
+        lifecycle.set_artifact(artifact, status, message=message)
+    lifecycle.finish_pending(
+        message=f"Skipped after {phase} {status}."
+    )
+    lifecycle.add_warning(
+        f"Optional {phase} work {status}; core STEP remains successful: {message}"
+    )
+    lifecycle.meta["completed_phases"] = list(tracker.completed)
+    lifecycle.meta["phase_timings"] = dict(tracker.timings)
+    lifecycle.persist()
+    return lifecycle.response()
+
+
+def _cleanup_uncommitted_reservation():
+    """Remove only this run's exact reserved directory before core commit."""
+    tracker = _ACTIVE_PHASE_TRACKER
+    if (
+        tracker is None
+        or tracker.lifecycle is not None
+        or tracker.reservation is None
+    ):
+        return
+    reservation = tracker.reservation
+    if not (reservation.path / "meta.json").exists():
+        shutil.rmtree(reservation.path, ignore_errors=True)
 
 
 def _parse_params(raw):
@@ -409,18 +468,19 @@ def _part_change_summary(previous_parts, current_parts, previous_label):
 
 
 def _record_failure(
-    manifest,
     script_path,
     label,
-    version_num,
+    reservation,
     error_msg,
     runtime=None,
     guidance=None,
 ):
     """Record a script failure on disk and in the manifest."""
-    dir_name = f"v{version_num}_{label}_failed"
-    version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True, exist_ok=True)
+    from agentcad.versioning import commit_version
+
+    version_num = reservation.number
+    dir_name = reservation.dir_name
+    version_dir = reservation.path
 
     # Copy script into failed directory
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
@@ -439,18 +499,12 @@ def _record_failure(
         meta["runtime"] = runtime
     if guidance:
         meta.update(guidance)
-    (version_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-
-    # Update manifest (current does NOT advance)
-    versions = manifest.get("versions", [])
-    versions.append({
+    commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
         "status": "failed",
         "path": f"{dir_name}/",
-    })
-    manifest["versions"] = versions
-    save_manifest(manifest)
+    }, advance_current=False)
 
     # Output failure JSON
     output_json = {
@@ -470,10 +524,9 @@ def _record_failure(
 
 
 def _record_invalid_geometry(
-    manifest,
     script_path,
     label,
-    version_num,
+    reservation,
     runtime,
     output_type,
     metrics,
@@ -483,9 +536,11 @@ def _record_invalid_geometry(
     response,
 ):
     """Preserve invalid-geometry diagnostics without advancing current."""
-    dir_name = f"v{version_num}_{label}_invalid"
-    version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True, exist_ok=True)
+    from agentcad.versioning import commit_version
+
+    version_num = reservation.number
+    dir_name = reservation.dir_name
+    version_dir = reservation.path
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
 
     meta = {
@@ -504,17 +559,12 @@ def _record_invalid_geometry(
         meta["groups"] = groups
     if warnings:
         meta["warnings"] = warnings
-    (version_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-
-    versions = manifest.get("versions", [])
-    versions.append({
+    commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
         "status": "invalid_geometry",
         "path": f"{dir_name}/",
-    })
-    manifest["versions"] = versions
-    save_manifest(manifest)
+    }, advance_current=False)
 
     output_json = {
         **response,
@@ -699,9 +749,19 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
         # they already emitted the proper JSON. Pass through.
         raise
     except _RunTimeout as e:
+        recovered = _recover_committed_core(e, timeout_payload=e.payload)
+        if recovered is not None:
+            click.echo(json.dumps(recovered))
+            return
+        _cleanup_uncommitted_reservation()
         click.echo(json.dumps(e.payload))
         sys.exit(1)
     except Exception as e:
+        recovered = _recover_committed_core(e)
+        if recovered is not None:
+            click.echo(json.dumps(recovered))
+            return
+        _cleanup_uncommitted_reservation()
         import traceback as _tb
         click.echo(json.dumps({
             "command": "run",
@@ -731,6 +791,12 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     def _finish_phase(phase, start, key=None):
         _mark(key or f"{phase}_ms", start)
         _phase_tracker.complete(phase)
+        artifact = _PHASE_ARTIFACTS.get(phase)
+        lifecycle = _phase_tracker.lifecycle
+        if artifact and lifecycle is not None:
+            current = lifecycle.meta.get("artifacts", {}).get(artifact, {})
+            if current.get("status") == "pending":
+                lifecycle.set_artifact(artifact, "success")
 
     def _heartbeat(message):
         # Stderr progress line so callers can distinguish "still working"
@@ -866,12 +932,15 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         }))
         sys.exit(1)
 
-    # Determine version number before recording failures (failures consume a number)
+    # Keep the current history snapshot for previous-version comparison. A
+    # directory reservation, not list length, allocates version numbers.
     versions = manifest.get("versions", [])
-    version_num = len(versions) + 1
     label = output
 
     if result.status == "execution_error":
+        from agentcad.versioning import reserve_version
+
+        reservation = reserve_version(Path.cwd(), label, suffix="_failed")
         error_msg = _enrich_error(result.exception)
         guidance = _execution_error_guidance(
             error_msg,
@@ -879,10 +948,9 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             source=raw_source,
         )
         _record_failure(
-            manifest,
             script_path,
             label,
-            version_num,
+            reservation,
             error_msg,
             runtime=runtime_name,
             guidance=guidance,
@@ -995,11 +1063,13 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             invalid_response["phase_timings"] = dict(_timings)
             click.echo(json.dumps(invalid_response))
             sys.exit(1)
+        from agentcad.versioning import reserve_version
+
+        reservation = reserve_version(Path.cwd(), label, suffix="_invalid")
         _record_invalid_geometry(
-            manifest,
             script_path,
             label,
-            version_num,
+            reservation,
             runtime_name,
             output_type,
             metrics,
@@ -1031,10 +1101,14 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         click.echo(json.dumps(output_json))
         return
 
-    # Script succeeded — create version directory and write files
-    dir_name = f"v{version_num}_{label}" if label != f"v{version_num}" else label
-    version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True, exist_ok=True)
+    # Atomically reserve a unique version directory before writing core files.
+    from agentcad.versioning import reserve_version
+
+    reservation = reserve_version(Path.cwd(), label)
+    _phase_tracker.reservation = reservation
+    version_num = reservation.number
+    dir_name = reservation.dir_name
+    version_dir = reservation.path
 
     # Copy script into version directory
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
@@ -1045,9 +1119,84 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     runner.export_step(shape, str(version_dir / "output.step"))
     _finish_phase("export_step", _t, "export_step_ms")
 
-    # Core build boundary: execution, all metrics, validity, and STEP export
-    # have succeeded. Everything below is post-processing or an explicitly
-    # requested secondary export; Milestone 1.3 commits this core result here.
+    # Core build boundary: commit the valid STEP and its metadata before any
+    # optional export/render/diff/viewer work begins.
+    from agentcad.core_build import ArtifactLifecycle
+    from agentcad.versioning import commit_version
+
+    previous = _find_prev_success(versions)
+    has_previous_step = bool(
+        previous
+        and (Path.cwd() / previous["path"] / "output.step").exists()
+    )
+
+    def _artifact_state(enabled, skipped_message):
+        if enabled:
+            return {"status": "pending"}
+        return {"status": "skipped", "message": skipped_message}
+
+    created = datetime.now(timezone.utc).isoformat()
+    meta = {
+        "command": "run",
+        "status": "success",
+        "core": {
+            "status": "success",
+            "committed_at": created,
+        },
+        "version": version_num,
+        "label": label,
+        "runtime": runtime_name,
+        "output_type": output_type,
+        "created": created,
+        "script": f"{dir_name}/script.py",
+        "outputs": {
+            "step": f"{dir_name}/output.step",
+            "script": f"{dir_name}/script.py",
+        },
+        "metrics": metrics,
+        "artifacts": {
+            "mesh_exports": _artifact_state(
+                bool(export), "No optional mesh exports requested."
+            ),
+            "renders": _artifact_state(
+                bool(render), "No explicit renders requested."
+            ),
+            "preview": _artifact_state(
+                preview, "Preview disabled with --no-preview."
+            ),
+            "parts_preview": _artifact_state(
+                preview and bool(parts_output),
+                "No per-part preview work requested.",
+            ),
+            "viewer_glb": {"status": "pending"},
+            "diff": _artifact_state(
+                has_previous_step, "No previous successful STEP to compare."
+            ),
+            "viewer": {"status": "pending"},
+            "browser": _artifact_state(
+                open_view, "Browser launch disabled with --no-view."
+            ),
+        },
+        "completed_phases": list(_phase_tracker.completed),
+        "phase_timings": dict(_timings),
+    }
+    if parts_output:
+        meta["parts"] = parts_output
+    if groups_output:
+        meta["groups"] = groups_output
+    if parsed_params:
+        meta["params"] = parsed_params
+    if warnings:
+        meta["warnings"] = warnings
+
+    commit_version(reservation, meta, {
+        "version": version_num,
+        "label": label,
+        "status": "success",
+        "path": f"{dir_name}/",
+    }, advance_current=True)
+    lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
+    _phase_tracker.lifecycle = lifecycle
 
     # Export mesh formats if requested
     exports_meta = {}
@@ -1073,6 +1222,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 obj_path = version_dir / "output.obj"
                 export_obj(topo_shape, str(obj_path))
                 exports_meta["obj"] = f"{dir_name}/output.obj"
+        lifecycle.meta["outputs"].update(exports_meta)
         _finish_phase("export_mesh", _t, "export_mesh_ms")
 
     # Render views if requested
@@ -1100,6 +1250,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 out_path = renders_dir / f"{name}.png"
                 render_shape_custom(topo_shape, az, el, out_path, parts=glb_parts)
                 renders_meta[name] = f"{dir_name}/renders/{name}.png"
+        lifecycle.meta["renders"] = renders_meta
         _finish_phase("render_views", _t, "render_views_ms")
 
     # Visual feedback pipeline. Three tiers, decoupled by cost:
@@ -1132,6 +1283,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             parts=glb_parts,
         )
         preview_meta = f"{dir_name}/preview.png"
+        lifecycle.meta["preview"] = preview_meta
         _finish_phase("preview", _t, "preview_ms")
 
         # Per-part previews use the resolved part id, which is unique and
@@ -1156,6 +1308,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                     parts=[{**entry, "topo_shape": raw["topo_shape"]}],
                 )
                 entry["preview"] = f"{dir_name}/parts/{fname}"
+            lifecycle.meta["parts"] = parts_output
             _finish_phase("parts_preview", _t, "parts_preview_ms")
 
     # Tier 1: GLB + diff + viewer.html — always run, regardless of --preview.
@@ -1169,9 +1322,13 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         _heartbeat("exporting viewer GLB…")
         _t = _start_phase("export_viewer_glb")
         export_glb(topo_shape_for_metrics, str(viewer_glb_path), parts=glb_parts)
+        lifecycle.meta["viewer_glb"] = f"{dir_name}/output.glb"
         _finish_phase("export_viewer_glb", _t, "export_viewer_glb_ms")
+    else:
+        lifecycle.meta["viewer_glb"] = f"{dir_name}/output.glb"
+        lifecycle.set_artifact("viewer_glb", "success")
 
-    prev = _find_prev_success(versions)
+    prev = previous
     previous_parts = []
     part_changes = None
     if prev is not None:
@@ -1249,6 +1406,15 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 )
             finally:
                 _finish_phase("diff", _t, "diff_ms")
+                if diff_meta is None:
+                    lifecycle.set_artifact(
+                        "diff",
+                        "unavailable",
+                        message="Comparison artifacts could not be generated.",
+                    )
+                else:
+                    lifecycle.meta["diff"] = diff_meta
+                    lifecycle.set_artifact("diff", "success")
 
     # Resolve the prior version's GLB for the viewer's side-by-side / overlay
     # modes. Decoupled from diff_meta: even if the diff PNG render failed,
@@ -1294,6 +1460,8 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     )
     viewer_meta = f"{dir_name}/viewer.html"
     viewer_glb_meta = f"{dir_name}/output.glb"
+    lifecycle.meta["viewer"] = viewer_meta
+    lifecycle.meta["viewer_glb"] = viewer_glb_meta
     _finish_phase("viewer", _t, "viewer_ms")
 
     viewer_opened = False
@@ -1302,57 +1470,41 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             from agentcad.commands.view import _open_browser
 
             viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+            lifecycle.set_artifact(
+                "browser",
+                "success" if viewer_opened else "unavailable",
+                message=None if viewer_opened else "Browser did not open.",
+            )
         except Exception as exc:
             warnings.append(f"Could not open the review viewer: {type(exc).__name__}: {exc}")
+            lifecycle.set_artifact(
+                "browser",
+                "failed",
+                message=f"{type(exc).__name__}: {exc}",
+            )
 
-    # Write meta.json
-    created = datetime.now(timezone.utc).isoformat()
-    meta = {
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "runtime": runtime_name,
-        "output_type": output_type,
-        "created": created,
-        "script": f"{dir_name}/script.py",
-        "outputs": {
-            "step": f"{dir_name}/output.step",
-            **exports_meta,
-        },
-    }
-    meta["metrics"] = metrics
+    # Finalize metadata only; the successful manifest entry was committed at
+    # the core boundary and is never rolled back by optional artifact work.
     if parts_output:
-        meta["parts"] = parts_output
+        lifecycle.meta["parts"] = parts_output
     if groups_output:
-        meta["groups"] = groups_output
+        lifecycle.meta["groups"] = groups_output
     if parsed_params:
-        meta["params"] = parsed_params
+        lifecycle.meta["params"] = parsed_params
     if warnings:
-        meta["warnings"] = warnings
+        lifecycle.meta["warnings"] = warnings
     if preview_meta:
-        meta["preview"] = preview_meta
+        lifecycle.meta["preview"] = preview_meta
     if diff_meta:
-        meta["diff"] = diff_meta
+        lifecycle.meta["diff"] = diff_meta
     if viewer_meta:
-        meta["viewer"] = viewer_meta
-        meta["viewer_glb"] = viewer_glb_meta
+        lifecycle.meta["viewer"] = viewer_meta
+        lifecycle.meta["viewer_glb"] = viewer_glb_meta
     if renders_meta:
-        meta["renders"] = renders_meta
-    meta["completed_phases"] = list(_phase_tracker.completed)
-    meta["phase_timings"] = dict(_timings)
-    meta_path = version_dir / "meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
-
-    # Update manifest
-    versions.append({
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "path": f"{dir_name}/",
-    })
-    manifest["versions"] = versions
-    manifest["current"] = label
-    save_manifest(manifest)
+        lifecycle.meta["renders"] = renders_meta
+    lifecycle.meta["completed_phases"] = list(_phase_tracker.completed)
+    lifecycle.meta["phase_timings"] = dict(_timings)
+    lifecycle.finish_pending(message="Optional artifact was not needed.")
 
     hint = None
     if viewer_meta:
@@ -1368,6 +1520,8 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     output_json = {
         "command": "run",
         "status": "success",
+        "core": lifecycle.meta["core"],
+        "artifacts": lifecycle.meta["artifacts"],
         "runtime": runtime_name,
         "output_type": output_type,
         "version": version_num,

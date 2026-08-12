@@ -199,7 +199,7 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
 JSON RESPONSE CONTRACT
   Agent-facing command results are JSON with "command" and "status" keys.
   Successful `run` results also include "runtime". Run-specific statuses:
-    "success"          completed normally
+    "success"          primary command work completed; inspect artifact statuses
     "failed"           script execution failed; consumes a version and creates
                        v{N}_{label}_failed/ with the script and metadata
     "error"            CLI/input error; no version or artifacts
@@ -214,6 +214,12 @@ JSON RESPONSE CONTRACT
   build has is_valid=true and an exported STEP; --dry-run is explicitly metrics
   only. Check metrics before rendering; visual appearance alone does not prove
   dimensional correctness.
+
+  Materialized run/import responses separate `core.status` from `artifacts`.
+  Core success is committed before optional work. Each artifact reports pending,
+  success, unavailable, timeout, failed, or skipped; a non-success artifact does
+  not reverse core success or remove the registered STEP. Keep and use that STEP;
+  retry only the optional render/view work if you need it.
 
 SPEC AND MEASUREMENT CHECKS
   When requirements include explicit holes, bores, diameters, counts, or

@@ -149,6 +149,7 @@ def test_docs_schema_section(runner):
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     content = data["content"]
+    normalized = " ".join(content.split())
     assert "success" in content
     assert "failed" in content
     assert "error" in content
@@ -158,6 +159,10 @@ def test_docs_schema_section(runner):
     assert "recognized_deferred" in content
     assert "viewer_glb" in content
     assert "outputs.glb appears only when --export glb" in content
+    assert "artifacts" in content
+    assert "pending, success, unavailable, timeout, failed, or skipped" in normalized
+    assert "Keep and use that STEP" in normalized
+    assert "run core, artifacts" in normalized
 
 
 def test_docs_schema_documents_stdout_vs_stderr(runner):

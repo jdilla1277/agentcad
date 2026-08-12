@@ -5,8 +5,55 @@ metrics where applicable, final geometry validation, and STEP export. Visual
 artifacts and browser work happen only after this boundary.
 """
 
+from copy import deepcopy
+from pathlib import Path
+
+from agentcad.versioning import atomic_write_json
+
 
 INVALID_GEOMETRY = "invalid_geometry"
+
+
+class ArtifactLifecycle:
+    """Persist post-processing state without changing core build success."""
+
+    def __init__(self, meta_path: Path, meta: dict):
+        self.meta_path = Path(meta_path)
+        self.meta = meta
+
+    def persist(self) -> None:
+        atomic_write_json(self.meta_path, self.meta)
+
+    def set_artifact(
+        self,
+        name: str,
+        status: str,
+        *,
+        message: str | None = None,
+    ) -> None:
+        entry = self.meta.setdefault("artifacts", {}).setdefault(name, {})
+        entry["status"] = status
+        if message:
+            entry["message"] = message
+        else:
+            entry.pop("message", None)
+        self.persist()
+
+    def finish_pending(self, *, message: str) -> None:
+        for entry in self.meta.get("artifacts", {}).values():
+            if entry.get("status") == "pending":
+                entry["status"] = "skipped"
+                entry["message"] = message
+        self.persist()
+
+    def add_warning(self, warning: str) -> None:
+        warnings = self.meta.setdefault("warnings", [])
+        if warning not in warnings:
+            warnings.append(warning)
+        self.persist()
+
+    def response(self) -> dict:
+        return deepcopy(self.meta)
 
 
 def invalid_geometry_payload(command: str, metrics: dict) -> dict | None:

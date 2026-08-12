@@ -189,6 +189,73 @@ class TestImportCore:
         assert manifest["current"] == "baseline"
         assert manifest["versions"][-1]["status"] == "invalid_geometry"
 
+    def test_preview_failure_preserves_registered_core(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        source = _box_step(isolated_dir)
+        observed = {}
+
+        def fail_preview(*_args, **_kwargs):
+            meta_path = isolated_dir / "v1_box" / "meta.json"
+            observed["meta"] = json.loads(meta_path.read_text())
+            observed["manifest"] = json.loads(
+                (isolated_dir / "agentcad.json").read_text()
+            )
+            raise RuntimeError("injected import preview failure")
+
+        monkeypatch.setattr(
+            "agentcad.render.render_composite_4view",
+            fail_preview,
+        )
+
+        result = runner.invoke(
+            cli, ["import", str(source), "--no-view", "--no-daemon"]
+        )
+
+        assert result.exit_code == 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["core"]["status"] == "success"
+        assert parsed["artifacts"]["preview"]["status"] == "failed"
+        assert observed["meta"]["artifacts"]["preview"]["status"] == "pending"
+        assert observed["manifest"]["current"] == "box"
+        assert observed["manifest"]["versions"][0]["status"] == "success"
+        assert (isolated_dir / "v1_box" / "output.step").exists()
+        assert (isolated_dir / "v1_box" / "meta.json").exists()
+
+    @pytest.mark.parametrize(
+        ("artifact", "target"),
+        [
+            ("preview", "agentcad.render.render_composite_4view"),
+            ("viewer_glb", "agentcad.export.export_glb"),
+            ("viewer", "agentcad.commands.view._render_unified"),
+        ],
+    )
+    def test_optional_phase_failure_never_reverses_core_success(
+        self, runner, isolated_dir, monkeypatch, artifact, target
+    ):
+        _init_project(runner, isolated_dir)
+        source = _box_step(isolated_dir)
+
+        def injected_failure(*_args, **_kwargs):
+            raise RuntimeError(f"injected import {artifact} failure")
+
+        monkeypatch.setattr(target, injected_failure)
+        result = runner.invoke(
+            cli, ["import", str(source), "--no-view", "--no-daemon"]
+        )
+
+        assert result.exit_code == 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["core"]["status"] == "success"
+        assert parsed["artifacts"][artifact]["status"] == "failed"
+        assert (isolated_dir / "v1_box" / "output.step").exists()
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["current"] == "box"
+        assert manifest["versions"][0]["status"] == "success"
+
     def test_response_includes_next_actions_per_convention(
         self, runner, isolated_dir
     ):
