@@ -155,6 +155,7 @@ def test_help_documents_feature_flags_missing_from_old_guide(runner):
 def test_help_documents_status_values(runner):
     result = runner.invoke(cli, ["--help"])
     output = result.output
+    normalized = " ".join(output.split())
     assert "success" in output
     assert "failed" in output
     assert "error" in output
@@ -163,6 +164,9 @@ def test_help_documents_status_values(runner):
     assert "An `invalid_geometry` run has" in output
     assert "no output STEP" in output
     assert "--dry-run is explicitly metrics" in output
+    assert "artifacts" in output
+    assert "pending, success, unavailable, timeout, failed, or skipped" in normalized
+    assert "Keep and use that STEP" in normalized
 
 
 def test_help_mentions_metrics(runner):
