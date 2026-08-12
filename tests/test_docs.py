@@ -152,6 +152,8 @@ def test_docs_schema_section(runner):
     assert "success" in content
     assert "failed" in content
     assert "error" in content
+    assert "validation_error" in content
+    assert "invalid_geometry" in content
     assert "unknown_format" in content
     assert "recognized_deferred" in content
     assert "viewer_glb" in content

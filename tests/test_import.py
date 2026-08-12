@@ -38,6 +38,30 @@ def _box_step(directory: Path, name: str = "box.step") -> Path:
     return path
 
 
+def _invalid_brep(directory: Path, name: str = "invalid.brep") -> Path:
+    """Write a solid containing an open one-face shell: parseable but invalid."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.BRepTools import BRepTools
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS, TopoDS_Shell, TopoDS_Solid
+
+    box = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
+    face = TopoDS.Face_s(TopExp_Explorer(box, TopAbs_FACE).Current())
+    builder = BRep_Builder()
+    shell = TopoDS_Shell()
+    builder.MakeShell(shell)
+    builder.Add(shell, face)
+    solid = TopoDS_Solid()
+    builder.MakeSolid(solid)
+    builder.Add(solid, shell)
+
+    path = directory / name
+    assert BRepTools.Write_s(solid, str(path))
+    return path
+
+
 def _init_project(runner, isolated_dir):
     result = runner.invoke(cli, ["init"])
     assert result.exit_code == 0, result.output
@@ -125,6 +149,45 @@ class TestImportCore:
         assert "metrics" in parsed
         # Bracket has a real volume; sanity check.
         assert parsed["metrics"]["volume"] > 0
+
+    def test_invalid_geometry_is_recorded_but_not_made_current(
+        self, runner, isolated_dir
+    ):
+        _init_project(runner, isolated_dir)
+        manifest_path = isolated_dir / "agentcad.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["versions"] = [{
+            "version": 1,
+            "label": "baseline",
+            "status": "success",
+            "source": "import",
+            "path": "v1_baseline/",
+        }]
+        manifest["current"] = "baseline"
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        source = _invalid_brep(isolated_dir)
+
+        result = runner.invoke(
+            cli, ["import", str(source), "--no-view"]
+        )
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_geometry"
+        assert parsed["metrics"]["is_valid"] is False
+        assert parsed["version_recorded"] is True
+        assert parsed["current_advanced"] is False
+        invalid_dir = isolated_dir / "v2_invalid_invalid"
+        assert (invalid_dir / "source.brep").exists()
+        assert not (invalid_dir / "output.step").exists()
+        assert not (invalid_dir / "output.glb").exists()
+        assert not (invalid_dir / "preview.png").exists()
+        assert not (invalid_dir / "viewer.html").exists()
+        meta = json.loads((invalid_dir / "meta.json").read_text())
+        manifest = json.loads(manifest_path.read_text())
+        assert meta["status"] == "invalid_geometry"
+        assert manifest["current"] == "baseline"
+        assert manifest["versions"][-1]["status"] == "invalid_geometry"
 
     def test_response_includes_next_actions_per_convention(
         self, runner, isolated_dir

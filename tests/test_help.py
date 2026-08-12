@@ -159,6 +159,10 @@ def test_help_documents_status_values(runner):
     assert "failed" in output
     assert "error" in output
     assert "validation_error" in output
+    assert "invalid_geometry" in output
+    assert "An `invalid_geometry` run has" in output
+    assert "no output STEP" in output
+    assert "--dry-run is explicitly metrics" in output
 
 
 def test_help_mentions_metrics(runner):

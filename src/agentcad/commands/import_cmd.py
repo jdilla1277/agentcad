@@ -134,25 +134,9 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         label = file_path.stem or "import"
     label = _safe_label(label)
     dir_name = f"v{version_num}_{label}"
-    version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True, exist_ok=True)
-
-    # 4. Verbatim source copy. Done before parsing so we have provenance even
-    #    if the kernel rejects the file.
     ext = file_path.suffix.lower()
-    source_copy = version_dir / f"source{ext}"
-    try:
-        shutil.copy2(str(file_path), str(source_copy))
-    except OSError as exc:
-        shutil.rmtree(version_dir, ignore_errors=True)
-        _emit({
-            "command": "import", "status": "error",
-            "format_detected": detection.get("format"),
-            "message": f"Could not copy source file: {exc}",
-        }, exit_code=1)
-        return
 
-    # 5. Read the shape via the consolidated loader. It silences fd-1
+    # 4. Read the shape via the consolidated loader. It silences fd-1
     #    around the OCCT call and raises a clean ValueError with an
     #    agent-actionable message on empty compounds / null shapes /
     #    parser failures.
@@ -160,7 +144,6 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         from agentcad.step_io import load_cad_shape
         topo_shape = load_cad_shape(file_path)
     except Exception as exc:
-        shutil.rmtree(version_dir, ignore_errors=True)
         # load_cad_shape's message is already complete (what + why + what to
         # do) — don't wrap it with another sentence that duplicates content.
         _emit({
@@ -176,7 +159,77 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         }, exit_code=1)
         return
 
-    # 6. Re-export normalized output.step. Every other command reads this,
+    # 5. Aggregate metrics and final validity are core work. Invalid geometry
+    # is preserved for diagnosis but never normalized, previewed, or made
+    # current.
+    from agentcad.metrics import compute_metrics
+
+    with silence_native_stdout():
+        metrics = compute_metrics(topo_shape)
+
+    from agentcad.core_build import invalid_geometry_payload
+
+    invalid_response = invalid_geometry_payload("import", metrics)
+    if invalid_response is not None:
+        invalid_dir_name = f"{dir_name}_invalid"
+        invalid_dir = Path.cwd() / invalid_dir_name
+        invalid_dir.mkdir(parents=True, exist_ok=True)
+        source_copy = invalid_dir / f"source{ext}"
+        try:
+            shutil.copy2(str(file_path), str(source_copy))
+        except OSError as exc:
+            shutil.rmtree(invalid_dir, ignore_errors=True)
+            _emit({
+                "command": "import", "status": "error",
+                "format_detected": detection.get("format"),
+                "message": f"Could not copy source file: {exc}",
+            }, exit_code=1)
+            return
+
+        invalid_meta = {
+            **invalid_response,
+            "version_recorded": True,
+            "version": version_num,
+            "label": label,
+            "source": "import",
+            "original_filename": file_path.name,
+            "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
+            "tool_version": __version__,
+            "created": datetime.now(timezone.utc).isoformat(),
+            "outputs": {"source": f"{invalid_dir_name}/source{ext}"},
+        }
+        (invalid_dir / "meta.json").write_text(
+            json.dumps(invalid_meta, indent=2) + "\n"
+        )
+        versions.append({
+            "version": version_num,
+            "label": label,
+            "status": "invalid_geometry",
+            "source": "import",
+            "path": f"{invalid_dir_name}/",
+        })
+        manifest["versions"] = versions
+        save_manifest(manifest)
+        _emit({**invalid_meta, "path": f"{invalid_dir_name}/"}, exit_code=1)
+        return
+
+    # 6. Materialize provenance only after the input has parsed and passed
+    # validity. Parser errors do not consume a version.
+    version_dir = Path.cwd() / dir_name
+    version_dir.mkdir(parents=True, exist_ok=True)
+    source_copy = version_dir / f"source{ext}"
+    try:
+        shutil.copy2(str(file_path), str(source_copy))
+    except OSError as exc:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        _emit({
+            "command": "import", "status": "error",
+            "format_detected": detection.get("format"),
+            "message": f"Could not copy source file: {exc}",
+        }, exit_code=1)
+        return
+
+    # 7. Re-export normalized output.step. Every other command reads this,
     #    so we standardize on STEP regardless of input format.
     try:
         with silence_native_stdout():
@@ -192,16 +245,16 @@ def import_cmd(file, label, init_flag, open_view, runtime, no_daemon):
         }, exit_code=1)
         return
 
-    # 7. Metrics + visual artifacts (preview, glb, viewer).
-    from agentcad.metrics import compute_metrics
+    # Core build boundary: source loading, metrics, validity, provenance copy,
+    # and normalized STEP export have succeeded. Everything below is visual
+    # post-processing; Milestone 1.3 commits the core result here.
+
+    # 8. Visual artifacts (preview, glb, viewer).
     from agentcad.render import (
         render_composite_4view, render_diff_overlay, render_diff_side_by_side,
     )
     from agentcad.export import export_glb
     from agentcad.commands.view import _render_unified
-
-    with silence_native_stdout():
-        metrics = compute_metrics(topo_shape)
 
     preview_path = version_dir / "preview.png"
     with silence_native_stdout():

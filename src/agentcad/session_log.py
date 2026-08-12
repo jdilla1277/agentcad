@@ -7,7 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-_ERROR_STATUSES = {"failed", "error", "validation_error"}
+_ERROR_STATUSES = {
+    "failed",
+    "error",
+    "validation_error",
+    "invalid_geometry",
+}
 
 
 class SessionLogger:
