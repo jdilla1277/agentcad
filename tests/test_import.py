@@ -317,6 +317,76 @@ class TestImportAutoDiff:
         assert (isolated_dir / "v2_rev_b" / "diff_volume.png").exists()
         assert (isolated_dir / "v2_rev_b" / "diff_volume.glb").exists()
 
+    def test_auto_diff_reports_observable_comparison_phases(
+        self, runner, isolated_dir
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        expected = [
+            "source_loading",
+            "comparison_rendering",
+            "projection_comparison",
+            "exact_3d_comparison",
+            "difference_artifact_export",
+            "viewer_generation",
+        ]
+        assert list(parsed["comparison_phases"]) == expected
+        for phase in expected:
+            entry = parsed["comparison_phases"][phase]
+            assert entry["status"] == "success"
+            assert isinstance(entry["duration_ms"], int)
+            assert entry["duration_ms"] >= 0
+        meta = json.loads((isolated_dir / "v2_rev_b" / "meta.json").read_text())
+        assert meta["comparison_phases"] == parsed["comparison_phases"]
+
+    def test_exact_failure_is_attributed_and_projection_survives(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        def fail_exact(*_args, **_kwargs):
+            raise RuntimeError("injected import exact failure")
+
+        monkeypatch.setattr(
+            "agentcad.solid_compare.compare_solid_volumes", fail_exact
+        )
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        phases = parsed["comparison_phases"]
+        assert phases["projection_comparison"]["status"] == "success"
+        assert phases["exact_3d_comparison"]["status"] == "failed"
+        assert "injected import exact failure" in (
+            phases["exact_3d_comparison"]["message"]
+        )
+        assert phases["difference_artifact_export"]["status"] == "skipped"
+        assert parsed["artifacts"]["diff"]["status"] == "success"
+        assert (
+            parsed["diff"]["projection_comparison"]["method"]
+            == "four_view_image_mask"
+        )
+        assert "comparison_3d" not in parsed["diff"]
+
     def test_no_diff_skips_every_automatic_comparison_call(
         self, runner, isolated_dir, monkeypatch
     ):

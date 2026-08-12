@@ -47,14 +47,16 @@ agentcad --help   # Read the built-in how-to guide and command reference
    ```bash
    agentcad run script.py --output label
    ```
-   Every successful run produces (paths in the JSON response):
+   A normal successful iteration can produce (paths in the JSON response):
    - `preview.png` — 4-view composite (front, right, top, iso). **Read this**
      to confirm the part looks right before iterating. One image, all 4 angles.
    - `diff.side_by_side` — side-by-side PNG vs the most recent successful prior
-     version. **Read this** when iterating to see what your change did.
+     version, when one exists and automatic diff is enabled. **Read this** when
+     iterating to see what your change did.
    - `diff.overlay` — tinted (green prev, red this) overlay for subtle shifts.
      Read only if side-by-side didn't resolve the question.
-   - `viewer.html` — interactive 3D review viewer for the user (humans only;
+   - `viewer.html` — interactive 3D review viewer for the user unless viewer
+     artifacts are disabled (humans only;
      you can't render HTML). It opens automatically after a successful run.
      From v2, A=previous and B=current are already loaded with synchronized
      A/B, side-by-side, overlay, diff-image, and Parts-tab change review.
@@ -69,6 +71,13 @@ agentcad --help   # Read the built-in how-to guide and command reference
    without generating previews, automatic comparisons, viewer assets, or
    opening a browser. You can still run an explicit
    `agentcad diff OLD NEW` later.
+
+   When a comparison is slow or incomplete, read `comparison_phases` in the
+   JSON response. `source_loading`, `comparison_rendering`,
+   `projection_comparison`, `exact_3d_comparison`,
+   `difference_artifact_export`, and `viewer_generation` each report a status
+   and, when attempted, `duration_ms`. The largest duration identifies the
+   expensive stage; a failed exact phase does not erase a successful projection.
 
 4. **Review with the user.** The generated viewer opens automatically. On v2+
    start with its previous/current comparison, then use A/B, Overlay, and Parts

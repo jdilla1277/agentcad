@@ -146,6 +146,9 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     reference-only, and candidate-only source-frame volumes; no alignment is
     applied. --visual opens the browser comparison and writes colored volume
     artifacts; --overlay selects its tinted interactive mode.
+    Comparison responses expose comparison_phases; read each status and
+    duration_ms to distinguish source loading, rendering, 2D projection,
+    exact_3d_comparison, artifact export, and viewer generation.
 
   agentcad parts list REF
   agentcad parts show REF PART_ID

@@ -485,6 +485,26 @@ def test_docs_commands_mentions_no_diff_fast_path(runner):
     assert "meta.json" in content
 
 
+def test_docs_schemas_explains_observable_comparison_phases(runner):
+    result = runner.invoke(cli, ["docs", "schema"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "comparison_phases" in content
+    for name in (
+        "source_loading",
+        "comparison_rendering",
+        "projection_comparison",
+        "exact_3d_comparison",
+        "difference_artifact_export",
+        "viewer_generation",
+    ):
+        assert name in content
+    assert "duration_ms" in content
+    assert "most expensive" in content
+    assert "explanatory\n              message" in content
+    assert "omitted when no\n              comparison was attempted" in content
+
+
 # --- M19: Colored GLB in export docs ---
 
 

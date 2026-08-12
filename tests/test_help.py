@@ -328,6 +328,13 @@ def test_help_documents_no_diff_and_core_only_fast_path(runner):
     assert "meta.json" in full_help
 
 
+def test_help_points_to_observable_comparison_phases(runner):
+    output = runner.invoke(cli, ["--help"]).output
+    assert "comparison_phases" in output
+    assert "exact_3d_comparison" in output
+    assert "duration_ms" in output
+
+
 def test_help_presents_automatic_previous_current_review(runner):
     full_help = runner.invoke(cli, ["--help"]).output
     run_help = runner.invoke(cli, ["run", "--help"]).output

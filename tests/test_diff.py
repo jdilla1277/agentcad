@@ -90,6 +90,18 @@ def test_diff_accepts_standalone_step_paths_without_manifest(runner, isolated_di
     assert comparison["ratios"]["reference_coverage"] == 1.0
     assert comparison["ratios"]["candidate_coverage"] == 0.125
 
+    phases = data["comparison_phases"]
+    assert phases["source_loading"]["status"] == "success"
+    assert phases["exact_3d_comparison"]["status"] == "success"
+    for name in (
+        "comparison_rendering",
+        "projection_comparison",
+        "difference_artifact_export",
+        "viewer_generation",
+    ):
+        assert phases[name]["status"] == "skipped"
+        assert "duration_ms" not in phases[name]
+
 
 def test_diff_standalone_step_path_missing_file_error(runner, isolated_dir):
     input_step = _write_box_step(isolated_dir / "input.step", 10)
@@ -101,6 +113,35 @@ def test_diff_standalone_step_path_missing_file_error(runner, isolated_dir):
     assert data["command"] == "diff"
     assert data["status"] == "error"
     assert data["message"] == "File 'missing.step' not found."
+
+
+def test_diff_exact_exception_is_attributed_without_losing_metric_changes(
+    runner, isolated_dir, monkeypatch
+):
+    input_step = _write_box_step(isolated_dir / "input.step", 10)
+    output_step = _write_box_step(isolated_dir / "output.step", 20)
+
+    def fail_exact(*_args, **_kwargs):
+        raise RuntimeError("injected explicit exact failure")
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.compare_solid_volumes", fail_exact
+    )
+    result = runner.invoke(cli, [
+        "diff", str(input_step), str(output_step), "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert data["changes"]["metrics"]["volume"] == {
+        "from": 1000.0,
+        "to": 8000.0,
+    }
+    assert "comparison_3d" not in data
+    phase = data["comparison_phases"]["exact_3d_comparison"]
+    assert phase["status"] == "failed"
+    assert "injected explicit exact failure" in phase["message"]
 
 
 def test_diff_by_version_number(runner, isolated_dir):

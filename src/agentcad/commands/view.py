@@ -6,6 +6,8 @@ from pathlib import Path
 
 import click
 
+from agentcad.comparison_phases import ComparisonPhaseRecorder
+
 
 # Unified viewer template. Handles all display modes in a single HTML file:
 #   - single-a        → one model, orbit/zoom (current `agentcad view FILE` behavior)
@@ -2220,11 +2222,10 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if err:
         _error(err)
 
-    glb_a, shape_a, err = _resolve_to_glb_and_shape(file)
-    if err:
-        _error(err)
-
     if file_b is None:
+        glb_a, shape_a, err = _resolve_to_glb_and_shape(file)
+        if err:
+            _error(err)
         if overlay:
             _error("--overlay requires two files")
         html_path, url = _render_single(glb_a, review=review)
@@ -2241,7 +2242,12 @@ def view(file, file_b, overlay, with_measure, spec_file):
         click.echo(json.dumps(response))
         return
 
-    glb_b, shape_b, err = _resolve_to_glb_and_shape(file_b)
+    phase_recorder = ComparisonPhaseRecorder()
+    with phase_recorder.observe("source_loading"):
+        glb_a, shape_a, err = _resolve_to_glb_and_shape(file)
+        if err:
+            _error(err)
+        glb_b, shape_b, err = _resolve_to_glb_and_shape(file_b)
     if err:
         _error(err)
 
@@ -2255,27 +2261,69 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if shape_a is not None and shape_b is not None:
         from agentcad.solid_compare import compare_solid_volumes
 
-        png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir)
-        overlay_png_path, projection_comparison = _render_diff_overlay_png(
-            shape_a, shape_b, glb_a, glb_b, out_dir
-        )
-        solid_comparison = compare_solid_volumes(shape_a, shape_b)
-        volume_glb_path, volume_png_path = _render_solid_comparison_artifacts(
-            solid_comparison,
+        with phase_recorder.observe("comparison_rendering"):
+            png_path = _render_diff_png(
+                shape_a, shape_b, glb_a, glb_b, out_dir
+            )
+        with phase_recorder.observe("projection_comparison"):
+            overlay_png_path, projection_comparison = (
+                _render_diff_overlay_png(
+                    shape_a, shape_b, glb_a, glb_b, out_dir
+                )
+            )
+        try:
+            with phase_recorder.observe("exact_3d_comparison") as phase:
+                solid_comparison = compare_solid_volumes(shape_a, shape_b)
+                phase.status = solid_comparison.data.get("status", "success")
+                phase.message = solid_comparison.data.get("reason", {}).get(
+                    "message"
+                )
+        except Exception:
+            solid_comparison = None
+        if solid_comparison is not None and solid_comparison.available:
+            with phase_recorder.observe(
+                "difference_artifact_export"
+            ) as phase:
+                volume_glb_path, volume_png_path = (
+                    _render_solid_comparison_artifacts(
+                        solid_comparison,
+                        glb_a,
+                        glb_b,
+                        out_dir,
+                    )
+                )
+                if volume_glb_path is None and volume_png_path is None:
+                    phase.status = "unavailable"
+                    phase.message = (
+                        "3D difference artifacts were not available."
+                    )
+        else:
+            phase_recorder.skip(
+                "difference_artifact_export",
+                "Exact 3D comparison produced no exportable geometry.",
+            )
+    else:
+        for phase_name in (
+            "comparison_rendering",
+            "projection_comparison",
+            "exact_3d_comparison",
+            "difference_artifact_export",
+        ):
+            phase_recorder.skip(
+                phase_name,
+                "Loaded inputs did not include B-rep shapes.",
+            )
+
+    with phase_recorder.observe("viewer_generation"):
+        html_path, url, mode = _render_diff(
             glb_a,
             glb_b,
-            out_dir,
+            overlay=overlay,
+            review=review,
+            diff_side_png=png_path,
+            diff_overlay_png=overlay_png_path,
+            diff_volume_png=volume_png_path,
         )
-
-    html_path, url, mode = _render_diff(
-        glb_a,
-        glb_b,
-        overlay=overlay,
-        review=review,
-        diff_side_png=png_path,
-        diff_overlay_png=overlay_png_path,
-        diff_volume_png=volume_png_path,
-    )
 
     response = {
         "command": "view",
@@ -2284,6 +2332,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
         "url": url,
         "model_a": str(glb_a),
         "model_b": str(glb_b),
+        "comparison_phases": phase_recorder.entries,
     }
     if review:
         response["review"] = True
