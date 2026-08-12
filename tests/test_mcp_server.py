@@ -19,7 +19,7 @@ from agentcad.mcp.server import (
 
 EXPECTED_TOOLS = {
     "run", "render", "export", "measure", "inspect", "check_spec",
-    "docs", "context", "diff", "view",
+    "docs", "context", "recover", "diff", "view",
 }
 
 
@@ -135,6 +135,23 @@ def test_context_tool_success_with_project(tmp_path, monkeypatch):
     result = _invoke(["context"], cwd=str(tmp_path))
     assert result["status"] == "success"
     assert result["command"] == "context"
+
+
+def test_recover_tool_passes_explicit_current_choice(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, cwd=None):
+        calls.append((args, cwd))
+        return {"command": "recover", "status": "success"}
+
+    monkeypatch.setattr(server, "_invoke", fake_invoke)
+    result = server.recover("v3_interrupted", "/tmp/project", True)
+
+    assert result["status"] == "success"
+    assert calls == [(
+        ["recover", "v3_interrupted", "--make-current"],
+        "/tmp/project",
+    )]
 
 
 def test_run_tool_missing_script_error(tmp_path, monkeypatch):

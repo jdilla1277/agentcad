@@ -254,12 +254,27 @@ def docs(
 
 @mcp.tool()
 def context(cwd: str) -> dict:
-    """Show project state (versions, current version, tool version).
+    """Show project state, including interrupted-version recovery candidates.
 
     Args:
         cwd: Project directory (must contain agentcad.json).
     """
     return _invoke(["context"], cwd=cwd)
+
+
+@mcp.tool()
+def recover(version_dir: str, cwd: str, make_current: bool = False) -> dict:
+    """Validate and reconcile an interrupted version directory safely.
+
+    Args:
+        version_dir: Direct version directory name reported by context.
+        cwd: Project directory containing agentcad.json and the version directory.
+        make_current: Explicitly make the recovered successful version current.
+    """
+    args = ["recover", version_dir]
+    if make_current:
+        args.append("--make-current")
+    return _invoke(args, cwd=cwd)
 
 
 @mcp.tool()

@@ -25,6 +25,16 @@ class VersionReservation:
     path: Path
 
 
+class VersionConflictError(RuntimeError):
+    def __init__(self, number: int, registered_path: str):
+        self.number = number
+        self.registered_path = registered_path
+        super().__init__(
+            f"Version {number} is already registered at {registered_path}; "
+            "no history was changed."
+        )
+
+
 def atomic_write_json(path: Path, payload: dict) -> None:
     """Replace *path* with complete JSON, never a partially written document."""
     path = Path(path)
@@ -129,11 +139,21 @@ def commit_version(
     advance_current: bool,
 ) -> dict:
     """Atomically write metadata, then merge the reservation into the manifest."""
-    atomic_write_json(reservation.path / "meta.json", meta)
     project_dir = reservation.path.parent
     manifest_path = project_dir / "agentcad.json"
     with _version_lock(project_dir):
         manifest = json.loads(manifest_path.read_text())
+        conflict = next((
+            entry for entry in manifest.get("versions", [])
+            if entry.get("version") == reservation.number
+            and str(entry.get("path", "")).rstrip("/") != reservation.dir_name
+        ), None)
+        if conflict is not None:
+            raise VersionConflictError(
+                reservation.number,
+                str(conflict.get("path", "")),
+            )
+        atomic_write_json(reservation.path / "meta.json", meta)
         versions = [
             entry for entry in manifest.get("versions", [])
             if entry.get("version") != reservation.number
@@ -145,4 +165,3 @@ def commit_version(
             manifest["current"] = reservation.label
         atomic_write_json(manifest_path, manifest)
     return manifest
-

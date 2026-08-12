@@ -82,3 +82,43 @@ def test_concurrent_core_commits_merge_manifest_entries(tmp_path):
         == "success"
         for reservation in reservations
     )
+
+
+def test_commit_version_conflict_does_not_overwrite_metadata(tmp_path):
+    from agentcad.versioning import (
+        VersionConflictError,
+        VersionReservation,
+        commit_version,
+    )
+
+    manifest_path = tmp_path / "agentcad.json"
+    manifest_path.write_text(json.dumps({
+        "name": "conflict",
+        "versions": [{
+            "version": 1,
+            "label": "registered",
+            "status": "success",
+            "path": "v1_registered/",
+        }],
+    }))
+    orphan = tmp_path / "v1_orphan"
+    orphan.mkdir()
+    reservation = VersionReservation(1, "orphan", "v1_orphan", orphan)
+
+    with pytest.raises(VersionConflictError):
+        commit_version(
+            reservation,
+            {"status": "success", "important": "new metadata"},
+            {
+                "version": 1,
+                "label": "orphan",
+                "status": "success",
+                "path": "v1_orphan/",
+            },
+            advance_current=False,
+        )
+
+    assert not (orphan / "meta.json").exists()
+    assert json.loads(manifest_path.read_text())["versions"][0]["path"] == (
+        "v1_registered/"
+    )

@@ -1,9 +1,11 @@
 import json
+from pathlib import Path
 
 import click
 
 from agentcad import __version__
 from agentcad.manifest import load_manifest
+from agentcad.recovery import recovery_summary
 
 
 @click.command()
@@ -13,6 +15,7 @@ def context():
 
     versions = manifest.get("versions", [])
     current = manifest.get("current", None)
+    recovery = recovery_summary(Path.cwd(), manifest)
 
     versions_summary = [
         {
@@ -35,4 +38,5 @@ def context():
         "current": current,
         "version_count": len(versions),
         "versions": versions_summary,
+        "recovery": recovery,
     }))

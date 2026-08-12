@@ -34,6 +34,12 @@ def test_context_subcommand_registered(runner):
     assert result.exit_code == 0
 
 
+def test_recover_subcommand_registered(runner):
+    result = runner.invoke(cli, ["recover", "--help"])
+    assert result.exit_code == 0
+    assert "--make-current" in result.output
+
+
 def test_docs_subcommand_registered(runner):
     result = runner.invoke(cli, ["docs", "--help"])
     assert result.exit_code == 0

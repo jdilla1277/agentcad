@@ -147,7 +147,8 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | `agentcad parts list REF` | List parts captured for a version |
 | `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
-| `agentcad context` | Project state |
+| `agentcad context` | Project state and interrupted-version recovery candidates |
+| `agentcad recover VERSION_DIR` | Validate and reconcile interrupted history without deleting files |
 | `agentcad docs [SECTION]` | Runtime-aware built-in documentation |
 | `agentcad instructions install` | Record a short project note so future agents read `agentcad --help` |
 | `agentcad view FILE [FILE_B]` | Open one model or an explicit synchronized A/B comparison |
