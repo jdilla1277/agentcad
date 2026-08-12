@@ -118,6 +118,7 @@ def test_docs_lists_sections(runner):
     assert "inspect" in sections
     assert "parts" in sections
     assert "feedback" in sections
+    assert "recovery" in sections
 
 
 def test_docs_commands_section(runner):
@@ -127,7 +128,7 @@ def test_docs_commands_section(runner):
     content = data["content"]
     for cmd in [
         "init", "run", "render", "measure", "check-spec", "parts",
-        "context", "docs", "diff", "feedback",
+        "context", "recover", "docs", "diff", "feedback",
     ]:
         assert cmd in content
     assert "part review viewers" in content
@@ -142,6 +143,30 @@ def test_docs_render_section(runner):
     assert "view" in content
     assert "zoom" in content
     assert "focus" in content
+
+
+def test_docs_recovery_section_is_explicit_and_non_destructive(runner):
+    result = runner.invoke(cli, ["docs", "recovery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "agentcad context" in content
+    assert "agentcad recover v3_edit" in content
+    assert "--make-current" in content
+    assert "never deletes" in content
+    assert "source files" in content
+    assert "never repairs history by itself" in content
+    assert "atomic JSON" in content
+    assert "safely retryable" in content
+    assert "malformed/invalid STEP" in content
+    assert "pending by the interruption become unavailable" in content
+    assert "does not rerun" in content
+
+
+def test_mcp_docs_include_recovery_tool(runner):
+    content = json.loads(runner.invoke(cli, ["docs", "mcp"]).stdout)["content"]
+    assert "context" in content
+    assert "recover" in content
+    assert "interrupted version history" in content
 
 
 def test_docs_schema_section(runner):

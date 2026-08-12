@@ -20,6 +20,7 @@ from agentcad.commands.inspect_cmd import inspect_cmd
 from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
+from agentcad.commands.recover import recover
 from agentcad.commands.run import run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
@@ -174,12 +175,20 @@ COMMAND REFERENCE: VERIFY AND DEBUG
 
 COMMAND REFERENCE: PROJECT AND INTEGRATIONS
   agentcad context
-    Return project name, current version, version history, and tool version.
+    Return project name, current version, version history, tool version, and any
+    interrupted version directories that need explicit recovery.
+
+  agentcad recover VERSION_DIR [--make-current]
+    Validate an interrupted directory's output.step and safely restore its
+    metadata/history entry with atomic JSON replacements. Recovery never deletes
+    the directory, STEP, or source files and does not change current unless
+    --make-current is explicitly passed.
 
   agentcad docs [SECTION] [--runtime ENGINE]
     Read the full built-in documentation or one section. Useful sections include
-    quickstart, preamble, commands, workflow, render, measure, check-spec,
-    inspect, parts, editing, helpers, patterns, runtimes, feedback, and mcp.
+    quickstart, preamble, commands, workflow, recovery, render, measure,
+    check-spec, inspect, parts, editing, helpers, patterns, runtimes, feedback,
+    and mcp.
 
   agentcad instructions install
     Record a short project note so future agents read `agentcad --help`.
@@ -410,6 +419,7 @@ cli.add_command(inspect_cmd)
 cli.add_command(measure)
 cli.add_command(parts_cmd)
 cli.add_command(render)
+cli.add_command(recover)
 cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)

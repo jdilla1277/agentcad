@@ -76,6 +76,8 @@ def test_skill_show_content_mentions_commands(runner):
     assert "agentcad run" in content
     assert "agentcad init" in content
     assert "agentcad check-spec" in content
+    assert "agentcad recover VERSION_DIR" in content
+    assert "without deleting files" in content
     assert "`passed` is false" in content
     assert "cylindrical_features[].axis" in content
     assert "show_object" in content

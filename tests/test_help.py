@@ -92,7 +92,7 @@ def test_help_documents_all_commands(runner):
     output = result.output
     guide = output.split("QUICK START", 1)[1]
     for cmd in ["init", "run", "import", "render", "export", "measure",
-                "check-spec", "inspect", "parts", "diff", "context", "view",
+                "check-spec", "inspect", "parts", "diff", "context", "recover", "view",
                 "docs", "skill", "feedback", "subscribe"]:
         assert f"agentcad {cmd}" in guide
     assert "parts view" in output
@@ -219,6 +219,16 @@ def test_help_mentions_docs_command(runner):
     result = runner.invoke(cli, ["--help"])
     output = result.output
     assert "agentcad docs" in output
+
+
+def test_help_documents_explicit_interrupted_version_recovery(runner):
+    output = runner.invoke(cli, ["--help"]).output
+    normalized = " ".join(output.split())
+    assert "agentcad recover VERSION_DIR" in normalized
+    assert "never deletes the directory" in normalized
+    assert "source files" in normalized
+    assert "does not change current" in normalized
+    assert "--make-current" in normalized
 
 
 def test_help_shows_example_json_output(runner):
