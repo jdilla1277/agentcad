@@ -63,6 +63,13 @@ agentcad --help   # Read the built-in how-to guide and command reference
    Pass `--no-view` only when browser launch would disrupt an unattended or
    high-volume run.
 
+   For a core-only iteration, pass
+   `--no-preview --no-diff --no-view`. This writes `output.step`, the saved
+   script, `meta.json` (including metrics), and explicitly requested exports
+   without generating previews, automatic comparisons, viewer assets, or
+   opening a browser. You can still run an explicit
+   `agentcad diff OLD NEW` later.
+
 4. **Review with the user.** The generated viewer opens automatically. On v2+
    start with its previous/current comparison, then use A/B, Overlay, and Parts
    without selecting files manually. Use `agentcad view old.step new.step` only
@@ -135,6 +142,7 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | `agentcad run SCRIPT --output LABEL` | Execute script, produce STEP + metrics |
 | `agentcad run ... --dry-run` | Metrics only, no version consumed |
 | `agentcad run ... --no-preview` | Suppress preview (on by default) |
+| `agentcad run ... --no-diff` | Suppress automatic prior-version comparison |
 | `agentcad run ... --no-view` | Suppress automatic browser review |
 | `agentcad run ... --render iso,front` | PNG views |
 | `agentcad run ... --export stl,glb` | Mesh export |
