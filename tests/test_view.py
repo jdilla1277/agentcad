@@ -258,7 +258,7 @@ def test_view_exact_exception_is_attributed_and_projection_survives(
         raise RuntimeError("injected view exact failure")
 
     monkeypatch.setattr(
-        "agentcad.solid_compare.compare_solid_volumes", fail_exact
+        "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
     )
     result = runner.invoke(cli, ["view", str(a_step), str(b_step)])
 
@@ -275,6 +275,43 @@ def test_view_exact_exception_is_attributed_and_projection_survives(
     assert phases["viewer_generation"]["status"] == "success"
     assert parsed["projection_comparison"]["method"] == "four_view_image_mask"
     assert "comparison_3d" not in parsed
+
+
+def test_view_exact_timeout_preserves_projection(
+    runner, isolated_dir, monkeypatch
+):
+    from cadquery import exporters as cq_exporters
+
+    a_step = isolated_dir / "a.step"
+    b_step = isolated_dir / "b.step"
+    cq_exporters.export(cq.Workplane("XY").box(10, 10, 10), str(a_step))
+    cq_exporters.export(cq.Workplane("XY").box(20, 20, 20), str(b_step))
+
+    def exact_timeout(*_args, **_kwargs):
+        from agentcad.solid_compare import SolidComparison
+
+        return SolidComparison({
+            "method": "source_frame_boolean_volume",
+            "status": "timeout",
+            "timeout_s": 0.05,
+            "reason": {
+                "code": "exact_comparison_timeout",
+                "message": "Exact comparison timed out.",
+            },
+        })
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
+        exact_timeout,
+    )
+    result = runner.invoke(cli, ["view", str(a_step), str(b_step)])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["projection_comparison"]["method"] == "four_view_image_mask"
+    assert parsed["comparison_3d"]["status"] == "timeout"
+    assert parsed["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
 
 
 def test_view_two_files_missing_second_errors(runner, isolated_dir, monkeypatch):

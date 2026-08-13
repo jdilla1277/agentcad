@@ -2,7 +2,9 @@ import cadquery as cq
 import pytest
 from PIL import Image
 
+import agentcad.solid_compare as solid_compare_module
 from agentcad.solid_compare import (
+    bounded_compare_solid_volumes,
     compare_solid_volumes,
     write_solid_comparison_artifacts,
 )
@@ -159,3 +161,66 @@ def test_successful_comparison_writes_colored_glb_and_png(tmp_path):
     assert glb_path.stat().st_size > 0
     with Image.open(png_path) as image:
         assert image.size == (1024, 1216)
+
+
+def test_bounded_comparison_returns_exact_shapes_from_worker(monkeypatch):
+    monkeypatch.setenv("AGENTCAD_DIFF_TIMEOUT_S", "10")
+
+    comparison = bounded_compare_solid_volumes(
+        _box(),
+        _box(translation=(5, 0, 0)),
+    )
+
+    assert comparison.available
+    assert comparison.data["volumes"]["shared"] == pytest.approx(500.0)
+    assert comparison.shared_shape is not None
+    assert comparison.reference_only_shape is not None
+    assert comparison.candidate_only_shape is not None
+
+
+def test_bounded_comparison_preserves_compound_occupied_volume(monkeypatch):
+    monkeypatch.setenv("AGENTCAD_DIFF_TIMEOUT_S", "10")
+    candidate = _compound(_box(), _box(size=4, translation=(0, 0, 7)))
+
+    comparison = bounded_compare_solid_volumes(_box(), candidate)
+
+    assert comparison.available
+    assert comparison.data["volumes"]["shared"] == pytest.approx(1000.0)
+    assert comparison.data["volumes"]["candidate_only"] == pytest.approx(64.0)
+
+
+@pytest.mark.parametrize("value", ["invalid", "-1", "nan", "inf"])
+def test_invalid_exact_timeout_uses_safe_default(monkeypatch, value):
+    monkeypatch.setenv("AGENTCAD_DIFF_TIMEOUT_S", value)
+
+    assert solid_compare_module._exact_timeout_seconds() == 30.0
+
+
+def test_zero_exact_timeout_disables_dedicated_limit(monkeypatch):
+    monkeypatch.setenv("AGENTCAD_DIFF_TIMEOUT_S", "0")
+
+    assert solid_compare_module._exact_timeout_seconds() is None
+
+
+def test_bounded_comparison_kills_worker_after_exact_budget(
+    monkeypatch, tmp_path
+):
+    marker = tmp_path / "worker-finished"
+    script = (
+        "import pathlib,time; "
+        "time.sleep(5); "
+        f"pathlib.Path({str(marker)!r}).write_text('not killed')"
+    )
+    monkeypatch.setenv("AGENTCAD_DIFF_TIMEOUT_S", "0.05")
+    monkeypatch.setattr(
+        solid_compare_module,
+        "_exact_worker_argv",
+        lambda *_args: [solid_compare_module.sys.executable, "-c", script],
+    )
+
+    comparison = bounded_compare_solid_volumes(_box(), _box())
+
+    assert comparison.data["status"] == "timeout"
+    assert comparison.data["reason"]["code"] == "exact_comparison_timeout"
+    assert comparison.data["timeout_s"] == pytest.approx(0.05)
+    assert not marker.exists()

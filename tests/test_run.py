@@ -1286,7 +1286,7 @@ def test_run_exact_diff_failure_is_attributed_without_losing_projection(
         raise RuntimeError("injected exact comparison failure")
 
     monkeypatch.setattr(
-        "agentcad.solid_compare.compare_solid_volumes", fail_exact
+        "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
     )
     result = runner.invoke(cli, [
         "run", "script.py", "--output", "second", "--no-preview",
@@ -1312,6 +1312,52 @@ def test_run_exact_diff_failure_is_attributed_without_losing_projection(
         == "four_view_image_mask"
     )
     assert "comparison_3d" not in parsed["diff"]
+
+
+def test_run_exact_worker_timeout_preserves_projection_and_version(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    def exact_timeout(*_args, **_kwargs):
+        from agentcad.solid_compare import SolidComparison
+
+        return SolidComparison({
+            "method": "source_frame_boolean_volume",
+            "status": "timeout",
+            "timeout_s": 0.05,
+            "reason": {
+                "code": "exact_comparison_timeout",
+                "message": "Exact 3D comparison exceeded its 0.05s budget.",
+            },
+        })
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
+        exact_timeout,
+    )
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "bounded", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["comparison_phases"]["projection_comparison"]["status"] == "success"
+    assert parsed["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
+    assert parsed["diff"]["comparison_3d"]["status"] == "timeout"
+    assert parsed["artifacts"]["diff"]["status"] == "success"
+    assert parsed["comparison_phases"]["difference_artifact_export"]["status"] == "skipped"
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == "bounded"
+    assert (isolated_dir / "v2_bounded" / "output.step").exists()
 
 
 def test_run_missing_side_by_side_does_not_prevent_viewer_generation(
@@ -1433,7 +1479,7 @@ def test_run_no_diff_skips_every_automatic_comparison_call(
     for target in (
         "agentcad.render.render_diff_side_by_side",
         "agentcad.render.render_diff_overlay",
-        "agentcad.solid_compare.compare_solid_volumes",
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
         "agentcad.solid_compare.write_solid_comparison_artifacts",
     ):
         monkeypatch.setattr(target, forbidden)
@@ -1478,7 +1524,7 @@ def test_run_fast_path_writes_only_core_and_explicit_exports(
         for target in (
             "agentcad.render.render_diff_side_by_side",
             "agentcad.render.render_diff_overlay",
-            "agentcad.solid_compare.compare_solid_volumes",
+            "agentcad.solid_compare.bounded_compare_solid_volumes",
             "agentcad.solid_compare.write_solid_comparison_artifacts",
             "agentcad.export.export_glb",
             "agentcad.commands.view._render_unified",

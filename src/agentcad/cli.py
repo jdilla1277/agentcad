@@ -149,6 +149,12 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     Comparison responses expose comparison_phases; read each status and
     duration_ms to distinguish source loading, rendering, 2D projection,
     exact_3d_comparison, artifact export, and viewer generation.
+    Exact 3D work runs in a terminable worker with a 30s default budget.
+    Set AGENTCAD_DIFF_TIMEOUT_S=N to override it; 0 disables this dedicated
+    limit for diagnostics. A timeout preserves completed projection results
+    and the committed version, but skips colored exact-volume artifacts. Check
+    comparison_3d.status/reason/timeout_s; if exact volumes are still needed,
+    retry `agentcad diff OLD NEW` with a larger budget instead of rerunning CAD.
 
   agentcad parts list REF
   agentcad parts show REF PART_ID

@@ -56,7 +56,7 @@ def main() -> int:
 
             script.write_text(SCRIPT.format(size=14))
             with patch(
-                "agentcad.solid_compare.compare_solid_volumes",
+                "agentcad.solid_compare.bounded_compare_solid_volumes",
                 side_effect=RuntimeError("injected exact phase failure"),
             ):
                 failed_exact_result, failed_exact = _invoke_json(runner, [

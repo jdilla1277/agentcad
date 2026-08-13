@@ -1513,12 +1513,14 @@ def _run_impl(
             solid_comparison = None
             _heartbeat("computing exact 3D comparison…")
             try:
-                from agentcad.solid_compare import compare_solid_volumes
+                from agentcad.solid_compare import (
+                    bounded_compare_solid_volumes,
+                )
 
                 with comparison_recorder.observe(
                     "exact_3d_comparison"
                 ) as phase:
-                    solid_comparison = compare_solid_volumes(
+                    solid_comparison = bounded_compare_solid_volumes(
                         prev_shape,
                         topo_shape_for_metrics,
                     )

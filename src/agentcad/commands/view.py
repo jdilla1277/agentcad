@@ -2274,7 +2274,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
     projection_comparison = None
     solid_comparison = None
     if shape_a is not None and shape_b is not None:
-        from agentcad.solid_compare import compare_solid_volumes
+        from agentcad.solid_compare import bounded_compare_solid_volumes
 
         with phase_recorder.observe("comparison_rendering"):
             png_path, source_views = _render_diff_png(
@@ -2293,7 +2293,9 @@ def view(file, file_b, overlay, with_measure, spec_file):
             )
         try:
             with phase_recorder.observe("exact_3d_comparison") as phase:
-                solid_comparison = compare_solid_volumes(shape_a, shape_b)
+                solid_comparison = bounded_compare_solid_volumes(
+                    shape_a, shape_b
+                )
                 phase.status = solid_comparison.data.get("status", "success")
                 phase.message = solid_comparison.data.get("reason", {}).get(
                     "message"

@@ -95,6 +95,10 @@ def test_skill_show_content_mentions_commands(runner):
     assert "comparison_phases" in content
     assert "exact_3d_comparison" in content
     assert "duration_ms" in content
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in content
+    assert "30-second default worker budget" in content
+    assert "comparison_3d.status/reason/timeout_s" in content
+    assert "create a duplicate version" in content
 
 
 def test_skill_install_creates_file(runner, isolated_dir):

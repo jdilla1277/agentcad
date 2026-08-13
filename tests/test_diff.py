@@ -125,7 +125,7 @@ def test_diff_exact_exception_is_attributed_without_losing_metric_changes(
         raise RuntimeError("injected explicit exact failure")
 
     monkeypatch.setattr(
-        "agentcad.solid_compare.compare_solid_volumes", fail_exact
+        "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
     )
     result = runner.invoke(cli, [
         "diff", str(input_step), str(output_step), "--no-daemon",
@@ -142,6 +142,40 @@ def test_diff_exact_exception_is_attributed_without_losing_metric_changes(
     phase = data["comparison_phases"]["exact_3d_comparison"]
     assert phase["status"] == "failed"
     assert "injected explicit exact failure" in phase["message"]
+
+
+def test_diff_exact_timeout_is_structured(
+    runner, isolated_dir, monkeypatch
+):
+    input_step = _write_box_step(isolated_dir / "input.step", 10)
+    output_step = _write_box_step(isolated_dir / "output.step", 20)
+
+    def exact_timeout(*_args, **_kwargs):
+        from agentcad.solid_compare import SolidComparison
+
+        return SolidComparison({
+            "method": "source_frame_boolean_volume",
+            "status": "timeout",
+            "timeout_s": 0.05,
+            "reason": {
+                "code": "exact_comparison_timeout",
+                "message": "Exact comparison timed out.",
+            },
+        })
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
+        exact_timeout,
+    )
+    result = runner.invoke(cli, [
+        "diff", str(input_step), str(output_step), "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert data["comparison_3d"]["status"] == "timeout"
+    assert data["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
 
 
 def test_diff_by_version_number(runner, isolated_dir):

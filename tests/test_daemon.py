@@ -2182,6 +2182,79 @@ class TestRunSpawnsDaemonForNextInvocation:
         finally:
             stop_daemon(socket_path=sock_path, pid_path=pid_path)
 
+    def test_daemon_run_exact_timeout_commits_version(
+        self, tmp_path, daemon_paths
+    ):
+        """A bounded exact worker must also be safe from a routed run."""
+        from agentcad.daemon import daemon_status, stop_daemon
+
+        sock_path, pid_path = daemon_paths
+        script = tmp_path / "bounded.py"
+        script.write_text(
+            "import cadquery as cq\n"
+            "result = cq.Workplane('XY').box(10, 10, 10)"
+            ".faces('>Z').workplane().hole(2)\n"
+            "show_object(result)\n"
+        )
+        env = self._agentcad_env(sock_path, pid_path)
+        env["AGENTCAD_DIFF_TIMEOUT_S"] = "0.001"
+        agentcad_exe = str(pathlib.Path(sys.executable).parent / "agentcad")
+        subprocess.run(
+            [agentcad_exe, "init", "--name", "bounded_daemon",
+             "--runtime", "cadquery"],
+            cwd=tmp_path, env=env, check=True, capture_output=True,
+        )
+
+        try:
+            first = subprocess.run(
+                [agentcad_exe, "run", str(script), "--output", "first",
+                 "--no-preview", "--no-diff"],
+                cwd=tmp_path, env=env, capture_output=True, text=True,
+                timeout=120,
+            )
+            assert first.returncode == 0, first.stderr
+            for _ in range(50):
+                if daemon_status(
+                    socket_path=sock_path, pid_path=pid_path
+                ).get("running"):
+                    break
+                time.sleep(0.1)
+
+            script.write_text(
+                "import cadquery as cq\n"
+                "result = cq.Workplane('XY').box(12, 10, 10)"
+                ".faces('>Z').workplane().hole(2)\n"
+                "show_object(result)\n"
+            )
+            second = subprocess.run(
+                [agentcad_exe, "run", str(script), "--output", "bounded",
+                 "--no-preview", "--no-view"],
+                cwd=tmp_path, env=env, capture_output=True, text=True,
+                timeout=20,
+            )
+
+            assert second.returncode == 0, second.stderr
+            response = json.loads(second.stdout)
+            assert response["status"] == "success"
+            assert response["core"]["status"] == "success"
+            assert response.get("via") == "daemon"
+            assert (
+                response["comparison_phases"]["projection_comparison"]["status"]
+                == "success"
+            )
+            assert (
+                response["comparison_phases"]["exact_3d_comparison"]["status"]
+                == "timeout"
+            )
+            assert response["diff"]["comparison_3d"]["status"] == "timeout"
+            assert response["diff"]["comparison_3d"]["timeout_s"] == 0.001
+            assert response["version"] == 2
+            assert (tmp_path / "v2_bounded" / "output.step").exists()
+            manifest = json.loads((tmp_path / "agentcad.json").read_text())
+            assert manifest["current"] == "bounded"
+        finally:
+            stop_daemon(socket_path=sock_path, pid_path=pid_path)
+
     def test_no_daemon_flag_skips_spawn(self, tmp_path, daemon_paths):
         """`--no-daemon` is the explicit opt-out; it should not leave a
         daemon behind."""

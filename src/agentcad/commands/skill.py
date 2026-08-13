@@ -78,6 +78,13 @@ agentcad --help   # Read the built-in how-to guide and command reference
    `difference_artifact_export`, and `viewer_generation` each report a status
    and, when attempted, `duration_ms`. The largest duration identifies the
    expensive stage; a failed exact phase does not erase a successful projection.
+   Exact 3D work has a 30-second default worker budget. Set
+   `AGENTCAD_DIFF_TIMEOUT_S=N` to override it (`0` disables the dedicated limit
+   for diagnostics). A timeout leaves the core version and projection usable,
+   reports `comparison_3d.status/reason/timeout_s`, and skips colored exact-
+   volume artifacts. If exact volumes are still needed, run
+   `agentcad diff OLD NEW` with a larger budget; do not rerun the original CAD
+   command and create a duplicate version.
 
 4. **Review with the user.** The generated viewer opens automatically. On v2+
    start with its previous/current comparison, then use A/B, Overlay, and Parts
