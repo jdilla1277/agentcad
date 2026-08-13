@@ -96,7 +96,14 @@ def parse_view_spec(spec):
     )
 
 
-def _setup_render(shape, width=800, height=600, parts=None, msaa=0):
+def _setup_render(
+    shape,
+    width=800,
+    height=600,
+    parts=None,
+    msaa=0,
+    background_color=None,
+):
     """Set up offscreen rendering pipeline, returning (view, context)."""
     display_connection = Aspect_DisplayConnection()
     driver = OpenGl_GraphicDriver(display_connection)
@@ -122,6 +129,10 @@ def _setup_render(shape, width=800, height=600, parts=None, msaa=0):
 
     view = viewer.CreateView()
     view.ChangeRenderingParams().NbMsaaSamples = msaa
+    if background_color is not None:
+        view.SetBackgroundColor(
+            Quantity_Color(*background_color, Quantity_TOC_RGB)
+        )
     window = Aspect_NeutralWindow()
     window.SetSize(width, height)
     view.SetWindow(window)
@@ -203,8 +214,16 @@ def render_shape(shape, view_name, output_path, width=800, height=600,
     _capture(view, output_path, width, height, msaa=msaa)
 
 
-def render_shape_batch(shape, view_specs, output_paths, width=512, height=512,
-                       parts=None, msaa=0):
+def render_shape_batch(
+    shape,
+    view_specs,
+    output_paths,
+    width=512,
+    height=512,
+    parts=None,
+    msaa=0,
+    background_color=None,
+):
     """Render multiple views of the same shape through ONE viewer setup.
 
     Shares the OpenGL context, lights, and AIS geometry upload across all views —
@@ -219,7 +238,14 @@ def render_shape_batch(shape, view_specs, output_paths, width=512, height=512,
         width, height: Per-view dimensions in pixels.
         msaa: Number of multisample antialiasing samples; 0 disables MSAA.
     """
-    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
+    view, _ctx = _setup_render(
+        shape,
+        width,
+        height,
+        parts=parts,
+        msaa=msaa,
+        background_color=background_color,
+    )
     for spec, out_path in zip(view_specs, output_paths):
         if isinstance(spec, str):
             view.SetProj(VIEWS[spec])
@@ -257,6 +283,26 @@ class ComparisonSourceViews:
     per_view_size: int
     reference: tuple
     candidate: tuple
+    reference_masks: tuple
+    candidate_masks: tuple
+
+
+_COMPARISON_MASK_BACKGROUND = (1.0, 0.0, 1.0)
+_COMPARISON_MASK_BACKGROUND_RGB = (255, 0, 255)
+_DISPLAY_BACKGROUND_RGB = (77, 77, 77)
+
+
+def _comparison_source_image(image):
+    """Return the display panel and color-independent silhouette mask."""
+    from PIL import Image
+
+    mask = _object_mask(
+        image,
+        background=_COMPARISON_MASK_BACKGROUND_RGB,
+    )
+    display = Image.new("RGB", image.size, _DISPLAY_BACKGROUND_RGB)
+    display.paste(image, mask=mask)
+    return display, mask
 
 
 def render_comparison_source_views(
@@ -282,6 +328,7 @@ def render_comparison_source_views(
             width=per_view_size,
             height=per_view_size,
             parts=parts_a,
+            background_color=_COMPARISON_MASK_BACKGROUND,
         )
         render_shape_batch(
             shape_b,
@@ -290,14 +337,23 @@ def render_comparison_source_views(
             width=per_view_size,
             height=per_view_size,
             parts=parts_b,
+            background_color=_COMPARISON_MASK_BACKGROUND,
         )
-        reference = tuple(Image.open(path).convert("RGB") for path in a_paths)
-        candidate = tuple(Image.open(path).convert("RGB") for path in b_paths)
+        reference_pairs = tuple(
+            _comparison_source_image(Image.open(path).convert("RGB"))
+            for path in a_paths
+        )
+        candidate_pairs = tuple(
+            _comparison_source_image(Image.open(path).convert("RGB"))
+            for path in b_paths
+        )
 
     return ComparisonSourceViews(
         per_view_size=per_view_size,
-        reference=reference,
-        candidate=candidate,
+        reference=tuple(pair[0] for pair in reference_pairs),
+        candidate=tuple(pair[0] for pair in candidate_pairs),
+        reference_masks=tuple(pair[1] for pair in reference_pairs),
+        candidate_masks=tuple(pair[1] for pair in candidate_pairs),
     )
 
 
@@ -363,7 +419,7 @@ def _comparison_frame_scales(shape_a, shape_b, view_spec):
     return extent_a / common_extent, extent_b / common_extent
 
 
-def _scale_image_about_center(image, scale):
+def _scale_image_about_center(image, scale, background=None):
     from PIL import Image
 
     if scale >= 0.999:
@@ -373,7 +429,8 @@ def _scale_image_about_center(image, scale):
         max(1, round(image.height * scale)),
     )
     resized = image.resize(scaled_size, Image.Resampling.LANCZOS)
-    framed = Image.new("RGB", image.size, image.getpixel((0, 0)))
+    fill = image.getpixel((0, 0)) if background is None else background
+    framed = Image.new(image.mode, image.size, fill)
     framed.paste(
         resized,
         ((image.width - resized.width) // 2, (image.height - resized.height) // 2),
@@ -381,19 +438,20 @@ def _scale_image_about_center(image, scale):
     return framed
 
 
-def _object_mask(image, threshold=8):
+def _object_mask(image, threshold=8, background=None):
     from PIL import Image, ImageChops
 
-    corners = [
-        image.getpixel((0, 0)),
-        image.getpixel((image.width - 1, 0)),
-        image.getpixel((0, image.height - 1)),
-        image.getpixel((image.width - 1, image.height - 1)),
-    ]
-    background = tuple(
-        round(sum(pixel[channel] for pixel in corners) / len(corners))
-        for channel in range(3)
-    )
+    if background is None:
+        corners = [
+            image.getpixel((0, 0)),
+            image.getpixel((image.width - 1, 0)),
+            image.getpixel((0, image.height - 1)),
+            image.getpixel((image.width - 1, image.height - 1)),
+        ]
+        background = tuple(
+            round(sum(pixel[channel] for pixel in corners) / len(corners))
+            for channel in range(3)
+        )
     difference = ImageChops.difference(
         image, Image.new("RGB", image.size, background)
     ).convert("L")
@@ -423,11 +481,13 @@ def _mask_pixel_count(mask):
     return mask.histogram()[255]
 
 
-def _semantic_diff_panel(image_a, image_b):
+def _semantic_diff_panel(image_a, image_b, mask_a=None, mask_b=None):
     from PIL import Image, ImageChops
 
-    mask_a = _object_mask(image_a)
-    mask_b = _object_mask(image_b)
+    if mask_a is None:
+        mask_a = _object_mask(image_a)
+    if mask_b is None:
+        mask_b = _object_mask(image_b)
     shared = ImageChops.multiply(mask_a, mask_b)
     removed = ImageChops.subtract(mask_a, mask_b)
     added = ImageChops.subtract(mask_b, mask_a)
@@ -634,15 +694,35 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
 
     a_paths = source_views.reference
     b_paths = source_views.candidate
+    a_masks = source_views.reference_masks
+    b_masks = source_views.candidate_masks
     panels = []
     view_stats = []
-    for label, a_path, b_path, spec in zip(labels, a_paths, b_paths, specs):
+    for label, a_path, b_path, a_mask, b_mask, spec in zip(
+        labels,
+        a_paths,
+        b_paths,
+        a_masks,
+        b_masks,
+        specs,
+    ):
         a_img = a_path.copy()
         b_img = b_path.copy()
         scale_a, scale_b = _comparison_frame_scales(shape_a, shape_b, spec)
         a_img = _scale_image_about_center(a_img, scale_a)
         b_img = _scale_image_about_center(b_img, scale_b)
-        panel, stats = _semantic_diff_panel(a_img, b_img)
+        a_mask = _scale_image_about_center(
+            a_mask, scale_a, background=0
+        ).point(lambda value: 255 if value > 127 else 0)
+        b_mask = _scale_image_about_center(
+            b_mask, scale_b, background=0
+        ).point(lambda value: 255 if value > 127 else 0)
+        panel, stats = _semantic_diff_panel(
+            a_img,
+            b_img,
+            mask_a=a_mask,
+            mask_b=b_mask,
+        )
         panels.append(panel)
         view_stats.append({
             "view": label.lower().replace(" ", "_").replace("-", "_"),

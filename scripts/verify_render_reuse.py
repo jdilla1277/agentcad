@@ -43,7 +43,10 @@ def main() -> int:
                 "--no-preview", "--no-view", "--no-daemon",
             ])
 
-            script.write_text(SCRIPT.format(size=12))
+            # Keep geometry identical so any projection difference can only
+            # come from the previous STEP's neutral material versus the
+            # current named part's palette color.
+            script.write_text(SCRIPT.format(size=10))
             source_batch_calls = []
             source_sessions = 0
             tracking_sources = False
@@ -78,6 +81,9 @@ def main() -> int:
 
             version_dir = project / "v2_second"
             phases = response.get("comparison_phases", {})
+            projection = response.get("diff", {}).get(
+                "projection_comparison", {}
+            )
             checks = {
                 "runs_succeed": first.exit_code == 0 and second.exit_code == 0,
                 "one_shared_source_session": source_sessions == 1,
@@ -92,6 +98,15 @@ def main() -> int:
                 "projection_phase_succeeds": (
                     phases.get("projection_comparison", {}).get("status")
                     == "success"
+                ),
+                "display_color_does_not_create_false_difference": (
+                    projection.get("score", {}).get("value") == 1.0
+                    and all(
+                        view.get("coincident_fraction_of_union") == 1.0
+                        and view.get("reference_only_fraction_of_union") == 0.0
+                        and view.get("candidate_only_fraction_of_union") == 0.0
+                        for view in projection.get("views", [])
+                    )
                 ),
             }
             summary = {

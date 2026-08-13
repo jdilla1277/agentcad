@@ -225,6 +225,28 @@ def test_render_diff_overlay_classifies_same_geometry_as_high_overlap(tmp_path):
     assert comparison["score"]["value"] > 0.95
 
 
+def test_projection_mask_ignores_different_display_materials(tmp_path):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+
+    comparison = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "neutral reference",
+        "colored candidate",
+        tmp_path / "material_independent.png",
+        width=192,
+        height=192,
+        parts_b=[{"topo_shape": shape_b, "color": "#6699cc"}],
+    )
+
+    assert comparison["score"]["value"] == 1.0
+    for view in comparison["views"]:
+        assert view["coincident_fraction_of_union"] == 1.0
+        assert view["reference_only_fraction_of_union"] == 0.0
+        assert view["candidate_only_fraction_of_union"] == 0.0
+
+
 def test_semantic_diff_panel_classifies_shared_removed_and_added_pixels():
     image_a = Image.new("RGB", (100, 100), (77, 77, 77))
     image_b = Image.new("RGB", (100, 100), (77, 77, 77))

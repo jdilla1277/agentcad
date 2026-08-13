@@ -505,6 +505,7 @@ def test_docs_schemas_explains_observable_comparison_phases(runner):
     assert "omitted when no\n              comparison was attempted" in content
     assert "Source panels are captured once" in content
     assert "reuses those pixels" in content
+    assert "independent of display material and lighting" in content
 
 
 # --- M19: Colored GLB in export docs ---
