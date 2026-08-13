@@ -506,6 +506,18 @@ def test_docs_schemas_explains_observable_comparison_phases(runner):
     assert "Source panels are captured once" in content
     assert "reuses those pixels" in content
     assert "independent of display material and lighting" in content
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in content
+    assert "terminable worker" in content
+    assert "comparison_3d.status/reason/timeout_s" in content
+    assert "create a duplicate version" in content
+
+
+def test_docs_commands_mentions_exact_comparison_budget(runner):
+    result = runner.invoke(cli, ["docs", "commands"])
+    content = json.loads(result.output)["content"]
+
+    assert "30s default worker budget" in content
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in content
 
 
 # --- M19: Colored GLB in export docs ---

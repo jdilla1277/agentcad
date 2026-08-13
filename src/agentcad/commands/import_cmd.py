@@ -434,12 +434,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
 
             solid_comparison = None
             try:
-                from agentcad.solid_compare import compare_solid_volumes
+                from agentcad.solid_compare import (
+                    bounded_compare_solid_volumes,
+                )
 
                 with comparison_recorder.observe(
                     "exact_3d_comparison"
                 ) as phase:
-                    solid_comparison = compare_solid_volumes(
+                    solid_comparison = bounded_compare_solid_volumes(
                         prev_shape,
                         topo_shape,
                     )

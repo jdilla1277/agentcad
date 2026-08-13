@@ -1,6 +1,13 @@
 """Source-frame volumetric comparison for closed CAD solids."""
 
+import json
+import math
+import os
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from OCP.BRep import BRep_Builder
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
@@ -13,6 +20,8 @@ from OCP.TopoDS import TopoDS_Compound
 
 
 _DEFAULT_TOLERANCE_MM = 1e-7
+_DEFAULT_EXACT_TIMEOUT_S = 30.0
+_EXACT_TIMEOUT_ENV = "AGENTCAD_DIFF_TIMEOUT_S"
 _SHARED_COLOR = "#d2d6dc"
 _REFERENCE_ONLY_COLOR = "#0072b2"
 _CANDIDATE_ONLY_COLOR = "#e69f00"
@@ -155,6 +164,147 @@ def _unavailable(tolerance_mm, code, message):
             "message": message,
         },
     })
+
+
+def _exact_timeout_seconds():
+    raw = os.environ.get(_EXACT_TIMEOUT_ENV)
+    if raw is None:
+        return _DEFAULT_EXACT_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_EXACT_TIMEOUT_S
+    if not math.isfinite(value) or value < 0:
+        return _DEFAULT_EXACT_TIMEOUT_S
+    return None if value == 0 else value
+
+
+def _exact_worker_argv(
+    reference_path,
+    candidate_path,
+    result_dir,
+    tolerance_mm,
+):
+    return [
+        sys.executable,
+        "-m",
+        "agentcad.exact_compare_worker",
+        str(reference_path),
+        str(candidate_path),
+        str(result_dir),
+        str(tolerance_mm),
+    ]
+
+
+def _write_brep(shape, path):
+    from OCP.BRepTools import BRepTools
+    from agentcad.native_io import silence_native_stdout
+
+    with silence_native_stdout():
+        written = BRepTools.Write_s(shape, str(path))
+    if not written:
+        raise RuntimeError(f"Could not serialize exact comparison input: {path.name}")
+
+
+def _load_worker_shape(result_dir, name):
+    path = result_dir / f"{name}.brep"
+    if not path.exists():
+        return None
+    from agentcad.step_io import load_cad_shape
+
+    return load_cad_shape(path)
+
+
+def bounded_compare_solid_volumes(
+    reference_shape,
+    candidate_shape,
+    *,
+    tolerance_mm=_DEFAULT_TOLERANCE_MM,
+):
+    """Run exact native comparison in a worker with an enforceable deadline."""
+    timeout_s = _exact_timeout_seconds()
+    with tempfile.TemporaryDirectory(prefix="agentcad-exact-") as temp:
+        result_dir = Path(temp)
+        reference_path = result_dir / "reference.brep"
+        candidate_path = result_dir / "candidate.brep"
+        try:
+            _write_brep(reference_shape, reference_path)
+            _write_brep(candidate_shape, candidate_path)
+        except Exception as exc:
+            return _unavailable(
+                tolerance_mm,
+                "worker_input_serialization_failed",
+                f"Could not prepare exact comparison worker inputs: {exc}",
+            )
+
+        try:
+            completed = subprocess.run(
+                _exact_worker_argv(
+                    reference_path,
+                    candidate_path,
+                    result_dir,
+                    tolerance_mm,
+                ),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_s,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            budget = timeout_s if timeout_s is not None else 0
+            comparison = _unavailable(
+                tolerance_mm,
+                "exact_comparison_timeout",
+                f"Exact 3D comparison exceeded its {budget:g}s budget.",
+            )
+            comparison.data["status"] = "timeout"
+            comparison.data["timeout_s"] = budget
+            return comparison
+        except Exception as exc:
+            return _unavailable(
+                tolerance_mm,
+                "exact_worker_launch_failed",
+                f"Could not start the exact comparison worker: {exc}",
+            )
+
+        result_path = result_dir / "result.json"
+        if completed.returncode != 0 or not result_path.exists():
+            detail = (completed.stderr or "").strip()[-1000:]
+            suffix = f": {detail}" if detail else ""
+            return _unavailable(
+                tolerance_mm,
+                "exact_worker_failed",
+                f"Exact comparison worker exited without a result{suffix}",
+            )
+        try:
+            data = json.loads(result_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            return _unavailable(
+                tolerance_mm,
+                "exact_worker_result_invalid",
+                f"Exact comparison worker returned an invalid result: {exc}",
+            )
+
+        if data.get("status") != "success":
+            return SolidComparison(data)
+        try:
+            return SolidComparison(
+                data,
+                shared_shape=_load_worker_shape(result_dir, "shared"),
+                reference_only_shape=_load_worker_shape(
+                    result_dir, "reference_only"
+                ),
+                candidate_only_shape=_load_worker_shape(
+                    result_dir, "candidate_only"
+                ),
+            )
+        except Exception as exc:
+            return _unavailable(
+                tolerance_mm,
+                "exact_worker_shape_invalid",
+                f"Could not load exact comparison worker geometry: {exc}",
+            )
 
 
 def _run_boolean(operation_type, shape_a, shape_b, tolerance_mm):

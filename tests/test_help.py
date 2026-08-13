@@ -333,6 +333,10 @@ def test_help_points_to_observable_comparison_phases(runner):
     assert "comparison_phases" in output
     assert "exact_3d_comparison" in output
     assert "duration_ms" in output
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in output
+    assert "30s default budget" in output
+    assert "comparison_3d.status/reason/timeout_s" in output
+    assert "instead of rerunning CAD" in output
 
 
 def test_help_presents_automatic_previous_current_review(runner):

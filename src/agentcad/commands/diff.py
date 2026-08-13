@@ -133,12 +133,14 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             }))
             sys.exit(1)
 
-        from agentcad.solid_compare import compare_solid_volumes
+        from agentcad.solid_compare import bounded_compare_solid_volumes
 
         solid_comparison = None
         try:
             with phase_recorder.observe("exact_3d_comparison") as phase:
-                solid_comparison = compare_solid_volumes(shape_a, shape_b)
+                solid_comparison = bounded_compare_solid_volumes(
+                    shape_a, shape_b
+                )
                 phase.status = solid_comparison.data.get("status", "success")
                 phase.message = (
                     solid_comparison.data.get("message")
@@ -293,13 +295,15 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
     solid_comparison = None
     if step_a is not None and step_b is not None:
         try:
-            from agentcad.solid_compare import compare_solid_volumes
+            from agentcad.solid_compare import bounded_compare_solid_volumes
 
             with phase_recorder.observe("source_loading"):
                 shape_a = load_cad_shape(step_a)
                 shape_b = load_cad_shape(step_b)
             with phase_recorder.observe("exact_3d_comparison") as phase:
-                solid_comparison = compare_solid_volumes(shape_a, shape_b)
+                solid_comparison = bounded_compare_solid_volumes(
+                    shape_a, shape_b
+                )
                 phase.status = solid_comparison.data.get("status", "success")
                 phase.message = (
                     solid_comparison.data.get("message")
@@ -397,11 +401,13 @@ def _add_visual_response(
             and phase_recorder.entries["exact_3d_comparison"].get("status")
             == "pending"
         ):
-            from agentcad.solid_compare import compare_solid_volumes
+            from agentcad.solid_compare import bounded_compare_solid_volumes
 
             try:
                 with phase_recorder.observe("exact_3d_comparison") as phase:
-                    solid_comparison = compare_solid_volumes(shape_a, shape_b)
+                    solid_comparison = bounded_compare_solid_volumes(
+                        shape_a, shape_b
+                    )
                     phase.status = solid_comparison.data.get("status", "success")
                     phase.message = (
                         solid_comparison.data.get("message")

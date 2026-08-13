@@ -364,7 +364,7 @@ class TestImportAutoDiff:
             raise RuntimeError("injected import exact failure")
 
         monkeypatch.setattr(
-            "agentcad.solid_compare.compare_solid_volumes", fail_exact
+            "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
         )
         result = runner.invoke(cli, [
             "import", str(second), "--no-view", "--no-daemon",
@@ -387,6 +387,46 @@ class TestImportAutoDiff:
         )
         assert "comparison_3d" not in parsed["diff"]
 
+    def test_exact_timeout_is_attributed_and_projection_survives(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        def exact_timeout(*_args, **_kwargs):
+            from agentcad.solid_compare import SolidComparison
+
+            return SolidComparison({
+                "method": "source_frame_boolean_volume",
+                "status": "timeout",
+                "timeout_s": 0.05,
+                "reason": {
+                    "code": "exact_comparison_timeout",
+                    "message": "Exact comparison timed out.",
+                },
+            })
+
+        monkeypatch.setattr(
+            "agentcad.solid_compare.bounded_compare_solid_volumes",
+            exact_timeout,
+        )
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        phases = parsed["comparison_phases"]
+        assert parsed["status"] == "success"
+        assert phases["projection_comparison"]["status"] == "success"
+        assert phases["exact_3d_comparison"]["status"] == "timeout"
+        assert parsed["diff"]["comparison_3d"]["status"] == "timeout"
+        assert parsed["artifacts"]["diff"]["status"] == "success"
+
     def test_no_diff_skips_every_automatic_comparison_call(
         self, runner, isolated_dir, monkeypatch
     ):
@@ -404,7 +444,7 @@ class TestImportAutoDiff:
         for target in (
             "agentcad.render.render_diff_side_by_side",
             "agentcad.render.render_diff_overlay",
-            "agentcad.solid_compare.compare_solid_volumes",
+            "agentcad.solid_compare.bounded_compare_solid_volumes",
             "agentcad.solid_compare.write_solid_comparison_artifacts",
         ):
             monkeypatch.setattr(target, forbidden)
