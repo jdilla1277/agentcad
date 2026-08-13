@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import agentcad.render as render_module
 import cadquery as cq
 from PIL import Image, ImageChops, ImageDraw
 
@@ -120,6 +121,88 @@ def test_render_diff_overlay_contains_four_aligned_views(tmp_path):
         "low", "moderate", "high",
     }
     assert len(comparison["views"]) == 4
+
+
+def test_side_by_side_and_overlay_reuse_each_source_view_render(
+    tmp_path, monkeypatch
+):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
+    render_calls = []
+    original = render_module.render_shape_batch
+
+    def track_render_batch(*args, **kwargs):
+        render_calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(render_module, "render_shape_batch", track_render_batch)
+    source_views = render_diff_side_by_side(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        tmp_path / "diff_side.png",
+        width=96,
+        height=96,
+    )
+    comparison = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        tmp_path / "diff_overlay.png",
+        width=192,
+        height=192,
+        source_views=source_views,
+    )
+
+    assert len(render_calls) == 2
+    assert all(len(args[1]) == 4 for args, _kwargs in render_calls)
+    assert comparison["method"] == "four_view_image_mask"
+
+
+def test_reused_source_views_preserve_overlay_pixels_and_measurements(tmp_path):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
+    source_views = render_diff_side_by_side(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        tmp_path / "diff_side.png",
+        width=96,
+        height=96,
+    )
+    reused_path = tmp_path / "reused_overlay.png"
+    standalone_path = tmp_path / "standalone_overlay.png"
+
+    reused = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        reused_path,
+        width=192,
+        height=192,
+        source_views=source_views,
+    )
+    standalone = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        standalone_path,
+        width=192,
+        height=192,
+    )
+
+    assert reused == standalone
+    with Image.open(reused_path) as reused_image:
+        with Image.open(standalone_path) as standalone_image:
+            pixel_difference = ImageChops.difference(
+                reused_image, standalone_image
+            )
+            assert pixel_difference.getbbox() is None
 
 
 def test_render_diff_overlay_classifies_same_geometry_as_high_overlap(tmp_path):

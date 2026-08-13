@@ -1433,6 +1433,7 @@ def _run_impl(
     prev_shape = None
     if comparison_recorder is not None:
         from agentcad.render import (
+            render_comparison_source_views,
             render_diff_side_by_side,
             render_diff_overlay,
         )
@@ -1462,15 +1463,23 @@ def _run_impl(
             diff_meta = {"against": prev["label"]}
             side_path = version_dir / "diff_side.png"
             overlay_path = version_dir / "diff_overlay.png"
+            source_views = None
 
             _heartbeat("rendering side-by-side comparison…")
             try:
                 with comparison_recorder.observe("comparison_rendering"):
+                    source_views = render_comparison_source_views(
+                        prev_shape,
+                        topo_shape_for_metrics,
+                        per_view_size=512,
+                        parts_b=glb_parts,
+                    )
                     render_diff_side_by_side(
                         prev_shape, topo_shape_for_metrics,
                         prev["label"], label, side_path,
                         width=512, height=512,
                         parts_b=glb_parts,
+                        source_views=source_views,
                     )
                 diff_meta["side_by_side"] = f"{dir_name}/diff_side.png"
             except Exception as exc:
@@ -1481,12 +1490,17 @@ def _run_impl(
 
             _heartbeat("computing 2D projection comparison…")
             try:
+                if source_views is None:
+                    raise RuntimeError(
+                        "Comparison source views were unavailable."
+                    )
                 with comparison_recorder.observe("projection_comparison"):
                     comparison = render_diff_overlay(
                         prev_shape, topo_shape_for_metrics,
                         prev["label"], label, overlay_path,
                         width=1024, height=1024,
                         parts_b=glb_parts,
+                        source_views=source_views,
                     )
                 diff_meta["overlay"] = f"{dir_name}/diff_overlay.png"
                 diff_meta["projection_comparison"] = comparison

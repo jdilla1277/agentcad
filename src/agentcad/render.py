@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from OCP.AIS import AIS_InteractiveContext, AIS_Shape
@@ -249,6 +250,57 @@ _COMPOSITE_VIEWS = [
 ]
 
 
+@dataclass(frozen=True)
+class ComparisonSourceViews:
+    """The four rendered source panels shared by comparison artifacts."""
+
+    per_view_size: int
+    reference: tuple
+    candidate: tuple
+
+
+def render_comparison_source_views(
+    shape_a,
+    shape_b,
+    *,
+    per_view_size,
+    parts_a=None,
+    parts_b=None,
+):
+    """Render each source/view combination once and keep the pixels in memory."""
+    import tempfile
+    from PIL import Image
+
+    specs = [view[1] for view in _COMPOSITE_VIEWS]
+    with tempfile.TemporaryDirectory() as tmp:
+        a_paths = [Path(tmp) / f"a_{i}.png" for i in range(len(specs))]
+        b_paths = [Path(tmp) / f"b_{i}.png" for i in range(len(specs))]
+        render_shape_batch(
+            shape_a,
+            specs,
+            a_paths,
+            width=per_view_size,
+            height=per_view_size,
+            parts=parts_a,
+        )
+        render_shape_batch(
+            shape_b,
+            specs,
+            b_paths,
+            width=per_view_size,
+            height=per_view_size,
+            parts=parts_b,
+        )
+        reference = tuple(Image.open(path).convert("RGB") for path in a_paths)
+        candidate = tuple(Image.open(path).convert("RGB") for path in b_paths)
+
+    return ComparisonSourceViews(
+        per_view_size=per_view_size,
+        reference=reference,
+        candidate=candidate,
+    )
+
+
 def _image_label_font(size):
     from PIL import ImageFont
 
@@ -426,6 +478,36 @@ def _overlap_classification(ratio):
     return "low"
 
 
+def _compose_4view(images, per_view_size):
+    """Compose already-rendered source panels using the default 2x2 layout."""
+    from PIL import Image, ImageDraw
+
+    labels = [v[0] for v in _COMPOSITE_VIEWS]
+    w, h = per_view_size, per_view_size
+    label_h = 30
+    label_font = _image_label_font(18)
+    composite = Image.new("RGB", (w * 2, (h + label_h) * 2), (245, 245, 245))
+
+    positions = [(0, 0), (w, 0), (0, h + label_h), (w, h + label_h)]
+    for image, (x, y) in zip(images, positions):
+        composite.paste(image, (x, y + label_h))
+
+    draw = ImageDraw.Draw(composite)
+    for (x, y), label in zip(positions, labels):
+        draw.text((x + 10, y + 4), label, fill=(40, 40, 40), font=label_font)
+    draw.line(
+        [(w, 0), (w, (h + label_h) * 2)],
+        fill=(200, 200, 200),
+        width=1,
+    )
+    draw.line(
+        [(0, h + label_h), (w * 2, h + label_h)],
+        fill=(200, 200, 200),
+        width=1,
+    )
+    return composite
+
+
 def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
     """Render a 4-panel composite: top view + three iso angles spaced around the part.
 
@@ -433,35 +515,21 @@ def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
     shape → four informative angles → single image.
     """
     import tempfile
-    from PIL import Image, ImageDraw
+    from PIL import Image
 
-    labels = [v[0] for v in _COMPOSITE_VIEWS]
     specs = [v[1] for v in _COMPOSITE_VIEWS]
-
     with tempfile.TemporaryDirectory() as tmp:
         tmp_paths = [Path(tmp) / f"panel_{i}.png" for i in range(len(specs))]
-        render_shape_batch(shape, specs, tmp_paths,
-                           width=per_view_size, height=per_view_size, parts=parts)
-
-        imgs = [Image.open(p).convert("RGB") for p in tmp_paths]
-        w, h = per_view_size, per_view_size
-        label_h = 30
-        label_font = _image_label_font(18)
-        composite = Image.new("RGB", (w * 2, (h + label_h) * 2), (245, 245, 245))
-
-        # 2x2 grid in row-major order
-        positions = [(0, 0), (w, 0), (0, h + label_h), (w, h + label_h)]
-        for img, (x, y) in zip(imgs, positions):
-            composite.paste(img, (x, y + label_h))
-
-        draw = ImageDraw.Draw(composite)
-        for (x, y), label in zip(positions, labels):
-            draw.text((x + 10, y + 4), label, fill=(40, 40, 40), font=label_font)
-        # Dividers
-        draw.line([(w, 0), (w, (h + label_h) * 2)], fill=(200, 200, 200), width=1)
-        draw.line([(0, h + label_h), (w * 2, h + label_h)], fill=(200, 200, 200), width=1)
-
-        composite.save(str(output_path))
+        render_shape_batch(
+            shape,
+            specs,
+            tmp_paths,
+            width=per_view_size,
+            height=per_view_size,
+            parts=parts,
+        )
+        images = [Image.open(path).convert("RGB") for path in tmp_paths]
+        _compose_4view(images, per_view_size).save(str(output_path))
 
 
 def render_solid_comparison(
@@ -533,14 +601,13 @@ def render_solid_comparison(
 
 def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
                         width=1024, height=1024, view_name="iso",
-                        parts_a=None, parts_b=None):
+                        parts_a=None, parts_b=None, source_views=None):
     """Render four center-aligned semantic difference maps.
 
     Coincident projection is gray, A-only projected pixels are blue, and
     B-only projected pixels are orange. The return value describes the same
     masks used to make the image.
     """
-    import tempfile
     from PIL import Image, ImageDraw
 
     del view_name  # Diff artifacts always use the standard four comparison views.
@@ -552,100 +619,94 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
     label_font = _image_label_font(18)
     legend_font = _image_label_font(18)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        a_paths = [Path(tmp) / f"a_{i}.png" for i in range(len(specs))]
-        b_paths = [Path(tmp) / f"b_{i}.png" for i in range(len(specs))]
-        render_shape_batch(
+    if source_views is None:
+        source_views = render_comparison_source_views(
             shape_a,
-            specs,
-            a_paths,
-            width=per_view_size,
-            height=per_view_size,
-            parts=parts_a,
-        )
-        render_shape_batch(
             shape_b,
-            specs,
-            b_paths,
-            width=per_view_size,
-            height=per_view_size,
-            parts=parts_b,
+            per_view_size=per_view_size,
+            parts_a=parts_a,
+            parts_b=parts_b,
+        )
+    if source_views.per_view_size != per_view_size:
+        raise ValueError(
+            "Shared comparison source views do not match the requested size."
         )
 
-        panels = []
-        view_stats = []
-        for label, a_path, b_path, spec in zip(labels, a_paths, b_paths, specs):
-            a_img = Image.open(a_path).convert("RGB")
-            b_img = Image.open(b_path).convert("RGB")
-            scale_a, scale_b = _comparison_frame_scales(shape_a, shape_b, spec)
-            a_img = _scale_image_about_center(a_img, scale_a)
-            b_img = _scale_image_about_center(b_img, scale_b)
-            panel, stats = _semantic_diff_panel(a_img, b_img)
-            panels.append(panel)
-            view_stats.append({
-                "view": label.lower().replace(" ", "_").replace("-", "_"),
-                **stats,
-            })
+    a_paths = source_views.reference
+    b_paths = source_views.candidate
+    panels = []
+    view_stats = []
+    for label, a_path, b_path, spec in zip(labels, a_paths, b_paths, specs):
+        a_img = a_path.copy()
+        b_img = b_path.copy()
+        scale_a, scale_b = _comparison_frame_scales(shape_a, shape_b, spec)
+        a_img = _scale_image_about_center(a_img, scale_a)
+        b_img = _scale_image_about_center(b_img, scale_b)
+        panel, stats = _semantic_diff_panel(a_img, b_img)
+        panels.append(panel)
+        view_stats.append({
+            "view": label.lower().replace(" ", "_").replace("-", "_"),
+            **stats,
+        })
 
-        panel_stride = per_view_size + label_h
-        composite = Image.new(
-            "RGB",
-            (per_view_size * 2, legend_h + panel_stride * 2),
-            (245, 245, 245),
-        )
-        positions = [
-            (0, legend_h),
-            (per_view_size, legend_h),
-            (0, legend_h + panel_stride),
-            (per_view_size, legend_h + panel_stride),
-        ]
-        for panel, (x, y) in zip(panels, positions):
-            composite.paste(panel, (x, y + label_h))
+    panel_stride = per_view_size + label_h
+    composite = Image.new(
+        "RGB",
+        (per_view_size * 2, legend_h + panel_stride * 2),
+        (245, 245, 245),
+    )
+    positions = [
+        (0, legend_h),
+        (per_view_size, legend_h),
+        (0, legend_h + panel_stride),
+        (per_view_size, legend_h + panel_stride),
+    ]
+    for panel, (x, y) in zip(panels, positions):
+        composite.paste(panel, (x, y + label_h))
 
-        draw = ImageDraw.Draw(composite)
-        draw.rectangle([(10, 9), (29, 28)], fill=(210, 214, 220))
+    draw = ImageDraw.Draw(composite)
+    draw.rectangle([(10, 9), (29, 28)], fill=(210, 214, 220))
+    draw.text(
+        (38, 8),
+        "COINCIDENT PROJECTED PIXELS",
+        fill=(40, 40, 40),
+        font=legend_font,
+    )
+    draw.rectangle([(10, 41), (29, 60)], fill=(0, 114, 178))
+    draw.text(
+        (38, 40),
+        f"REFERENCE-ONLY PROJECTION | A (previous) | {label_a}",
+        fill=(40, 40, 40),
+        font=legend_font,
+    )
+    draw.rectangle([(10, 73), (29, 92)], fill=(230, 159, 0))
+    draw.text(
+        (38, 72),
+        f"CANDIDATE-ONLY PROJECTION | B (current) | {label_b}",
+        fill=(40, 40, 40),
+        font=legend_font,
+    )
+    for (x, y), label, stats in zip(positions, labels, view_stats):
+        overlap = round(stats["coincident_fraction_of_union"] * 100)
         draw.text(
-            (38, 8),
-            "COINCIDENT PROJECTED PIXELS",
+            (x + 10, y + 5),
+            f"{label} | OVERLAP {overlap}%",
             fill=(40, 40, 40),
-            font=legend_font,
+            font=label_font,
         )
-        draw.rectangle([(10, 41), (29, 60)], fill=(0, 114, 178))
-        draw.text(
-            (38, 40),
-            f"REFERENCE-ONLY PROJECTION | A (previous) | {label_a}",
-            fill=(40, 40, 40),
-            font=legend_font,
-        )
-        draw.rectangle([(10, 73), (29, 92)], fill=(230, 159, 0))
-        draw.text(
-            (38, 72),
-            f"CANDIDATE-ONLY PROJECTION | B (current) | {label_b}",
-            fill=(40, 40, 40),
-            font=legend_font,
-        )
-        for (x, y), label, stats in zip(positions, labels, view_stats):
-            overlap = round(stats["coincident_fraction_of_union"] * 100)
-            draw.text(
-                (x + 10, y + 5),
-                f"{label} | OVERLAP {overlap}%",
-                fill=(40, 40, 40),
-                font=label_font,
-            )
-        divider_x = per_view_size
-        divider_y = legend_h + panel_stride
-        draw.line(
-            [(divider_x, legend_h), (divider_x, composite.height)],
-            fill=(200, 200, 200),
-            width=1,
-        )
-        draw.line(
-            [(0, divider_y), (composite.width, divider_y)],
-            fill=(200, 200, 200),
-            width=1,
-        )
-
-        composite.save(str(output_path))
+    divider_x = per_view_size
+    divider_y = legend_h + panel_stride
+    draw.line(
+        [(divider_x, legend_h), (divider_x, composite.height)],
+        fill=(200, 200, 200),
+        width=1,
+    )
+    draw.line(
+        [(0, divider_y), (composite.width, divider_y)],
+        fill=(200, 200, 200),
+        width=1,
+    )
+    composite.save(str(output_path))
 
     shared_pixels = sum(stats.pop("_shared_pixels") for stats in view_stats)
     union_pixels = sum(stats.pop("_union_pixels") for stats in view_stats)
@@ -672,57 +733,68 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
     }
 
 
-def render_diff_side_by_side(shape_a, shape_b, label_a, label_b, output_path,
-                             width=512, height=512, view_name="iso",
-                             parts_a=None, parts_b=None):
-    """Render standard four-view composites for A and B side-by-side."""
-    import tempfile
+def render_diff_side_by_side(
+    shape_a,
+    shape_b,
+    label_a,
+    label_b,
+    output_path,
+    width=512,
+    height=512,
+    view_name="iso",
+    parts_a=None,
+    parts_b=None,
+    source_views=None,
+):
+    """Render two composites and return source panels reusable by the overlay."""
     from PIL import Image, ImageDraw
 
     del view_name  # Diff artifacts always use the standard four comparison views.
     label_h = 36
     label_font = _image_label_font(20)
     per_view_size = max(64, min(width, height))
-
-    with tempfile.TemporaryDirectory() as tmp:
-        a_path = Path(tmp) / "a.png"
-        b_path = Path(tmp) / "b.png"
-        render_composite_4view(
+    if source_views is None:
+        source_views = render_comparison_source_views(
             shape_a,
-            a_path,
-            per_view_size=per_view_size,
-            parts=parts_a,
-        )
-        render_composite_4view(
             shape_b,
-            b_path,
             per_view_size=per_view_size,
-            parts=parts_b,
+            parts_a=parts_a,
+            parts_b=parts_b,
+        )
+    if source_views.per_view_size != per_view_size:
+        raise ValueError(
+            "Shared comparison source views do not match the requested size."
         )
 
-        a_img = Image.open(a_path).convert("RGB")
-        b_img = Image.open(b_path).convert("RGB")
+    a_img = _compose_4view(source_views.reference, per_view_size)
+    b_img = _compose_4view(source_views.candidate, per_view_size)
+    composite_w = a_img.width + b_img.width
+    composite_h = max(a_img.height, b_img.height) + label_h
+    composite = Image.new("RGB", (composite_w, composite_h), (245, 245, 245))
+    composite.paste(a_img, (0, label_h))
+    composite.paste(b_img, (a_img.width, label_h))
 
-        composite_w = a_img.width + b_img.width
-        composite_h = max(a_img.height, b_img.height) + label_h
-        composite = Image.new("RGB", (composite_w, composite_h), (245, 245, 245))
-        composite.paste(a_img, (0, label_h))
-        composite.paste(b_img, (a_img.width, label_h))
-
-        draw = ImageDraw.Draw(composite)
-        draw.text(
-            (12, 5), f"A (previous) · {label_a}", fill=(40, 40, 40), font=label_font
-        )
-        draw.text(
-            (a_img.width + 12, 5),
-            f"B (current) · {label_b}",
-            fill=(40, 40, 40),
-            font=label_font,
-        )
-        divider_x = a_img.width
-        draw.line([(divider_x, 0), (divider_x, composite_h)], fill=(180, 180, 180), width=1)
-
-        composite.save(str(output_path))
+    draw = ImageDraw.Draw(composite)
+    draw.text(
+        (12, 5),
+        f"A (previous) · {label_a}",
+        fill=(40, 40, 40),
+        font=label_font,
+    )
+    draw.text(
+        (a_img.width + 12, 5),
+        f"B (current) · {label_b}",
+        fill=(40, 40, 40),
+        font=label_font,
+    )
+    divider_x = a_img.width
+    draw.line(
+        [(divider_x, 0), (divider_x, composite_h)],
+        fill=(180, 180, 180),
+        width=1,
+    )
+    composite.save(str(output_path))
+    return source_views
 
 
 def render_shape_custom(shape, azimuth, elevation, output_path,
