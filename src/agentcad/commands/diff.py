@@ -380,12 +380,17 @@ def _add_visual_response(
         phase_recorder = ComparisonPhaseRecorder()
     if shape_a is not None and shape_b is not None:
         with phase_recorder.observe("comparison_rendering"):
-            png_path = _render_diff_png(
+            png_path, source_views = _render_diff_png(
                 shape_a, shape_b, glb_a, glb_b, Path.cwd()
             )
         with phase_recorder.observe("projection_comparison"):
             overlay_png_path, projection_comparison = _render_diff_overlay_png(
-                shape_a, shape_b, glb_a, glb_b, Path.cwd()
+                shape_a,
+                shape_b,
+                glb_a,
+                glb_b,
+                Path.cwd(),
+                source_views=source_views,
             )
         if (
             solid_comparison is None

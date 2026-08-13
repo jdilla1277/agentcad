@@ -2068,18 +2068,33 @@ def _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir):
     from agentcad.render import render_diff_side_by_side
 
     png_path = _diff_png_path(glb_a, glb_b, out_dir)
-    render_diff_side_by_side(shape_a, shape_b, glb_a.name, glb_b.name, png_path)
-    return png_path
+    source_views = render_diff_side_by_side(
+        shape_a, shape_b, glb_a.name, glb_b.name, png_path
+    )
+    return png_path, source_views
 
 
-def _render_diff_overlay_png(shape_a, shape_b, glb_a, glb_b, out_dir):
+def _render_diff_overlay_png(
+    shape_a,
+    shape_b,
+    glb_a,
+    glb_b,
+    out_dir,
+    *,
+    source_views=None,
+):
     """Render the four-view semantic difference map next to the diff HTML."""
     from agentcad.render import render_diff_overlay
 
     label_a, label_b = _diff_name_parts(glb_a, glb_b)
     png_path = out_dir / f"diff_{label_a}_{label_b}_overlay.png"
     comparison = render_diff_overlay(
-        shape_a, shape_b, glb_a.name, glb_b.name, png_path
+        shape_a,
+        shape_b,
+        glb_a.name,
+        glb_b.name,
+        png_path,
+        source_views=source_views,
     )
     return png_path, comparison
 
@@ -2262,13 +2277,18 @@ def view(file, file_b, overlay, with_measure, spec_file):
         from agentcad.solid_compare import compare_solid_volumes
 
         with phase_recorder.observe("comparison_rendering"):
-            png_path = _render_diff_png(
+            png_path, source_views = _render_diff_png(
                 shape_a, shape_b, glb_a, glb_b, out_dir
             )
         with phase_recorder.observe("projection_comparison"):
             overlay_png_path, projection_comparison = (
                 _render_diff_overlay_png(
-                    shape_a, shape_b, glb_a, glb_b, out_dir
+                    shape_a,
+                    shape_b,
+                    glb_a,
+                    glb_b,
+                    out_dir,
+                    source_views=source_views,
                 )
             )
         try:

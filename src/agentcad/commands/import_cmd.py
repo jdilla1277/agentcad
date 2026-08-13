@@ -385,6 +385,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
 
         if prev_shape is not None:
             from agentcad.render import (
+                render_comparison_source_views,
                 render_diff_overlay,
                 render_diff_side_by_side,
             )
@@ -392,11 +393,18 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
             diff_meta = {"against": prev["label"]}
             side = version_dir / "diff_side.png"
             overlay = version_dir / "diff_overlay.png"
+            source_views = None
             try:
                 with comparison_recorder.observe("comparison_rendering"):
+                    source_views = render_comparison_source_views(
+                        prev_shape,
+                        topo_shape,
+                        per_view_size=512,
+                    )
                     render_diff_side_by_side(
                         prev_shape, topo_shape, prev["label"], label,
                         side, width=512, height=512,
+                        source_views=source_views,
                     )
                 diff_meta["side_by_side"] = f"{dir_name}/diff_side.png"
             except Exception as exc:
@@ -406,10 +414,15 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
                 )
 
             try:
+                if source_views is None:
+                    raise RuntimeError(
+                        "Comparison source views were unavailable."
+                    )
                 with comparison_recorder.observe("projection_comparison"):
                     comparison = render_diff_overlay(
                         prev_shape, topo_shape, prev["label"], label,
                         overlay, width=1024, height=1024,
+                        source_views=source_views,
                     )
                 diff_meta["overlay"] = f"{dir_name}/diff_overlay.png"
                 diff_meta["projection_comparison"] = comparison
