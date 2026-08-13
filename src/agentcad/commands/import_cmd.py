@@ -526,10 +526,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
                     preview_png=preview_path if preview_ok else None,
                     diff_side_png=(
                         version_dir / "diff_side.png"
-                    ) if diff_meta else None,
+                        if diff_meta and diff_meta.get("side_by_side")
+                        else None
+                    ),
                     diff_overlay_png=(
                         version_dir / "diff_overlay.png"
-                    ) if diff_meta else None,
+                        if diff_meta and diff_meta.get("overlay")
+                        else None
+                    ),
                     diff_volume_png=(
                         version_dir / "diff_volume.png"
                         if diff_meta and diff_meta.get("volume_png")

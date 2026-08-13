@@ -1613,8 +1613,16 @@ def _run_impl(
                 label_b=label if prev_glb_path else "",
                 default_mode="side-by-side" if prev_glb_path else "single-a",
                 preview_png=version_dir / "preview.png" if preview_meta else None,
-                diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
-                diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
+                diff_side_png=(
+                    version_dir / "diff_side.png"
+                    if diff_meta and diff_meta.get("side_by_side")
+                    else None
+                ),
+                diff_overlay_png=(
+                    version_dir / "diff_overlay.png"
+                    if diff_meta and diff_meta.get("overlay")
+                    else None
+                ),
                 diff_volume_png=(
                     version_dir / "diff_volume.png"
                     if diff_meta and diff_meta.get("volume_png")

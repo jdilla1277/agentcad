@@ -1314,6 +1314,40 @@ def test_run_exact_diff_failure_is_attributed_without_losing_projection(
     assert "comparison_3d" not in parsed["diff"]
 
 
+def test_run_missing_side_by_side_does_not_prevent_viewer_generation(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    def fail_side_by_side(*_args, **_kwargs):
+        raise RuntimeError("injected side-by-side render failure")
+
+    monkeypatch.setattr(
+        "agentcad.render.render_diff_side_by_side", fail_side_by_side
+    )
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    phases = parsed["comparison_phases"]
+    assert phases["comparison_rendering"]["status"] == "failed"
+    assert phases["projection_comparison"]["status"] == "success"
+    assert phases["viewer_generation"]["status"] == "success"
+    assert parsed["artifacts"]["viewer"]["status"] == "success"
+    assert "side_by_side" not in parsed["diff"]
+    assert "overlay" in parsed["diff"]
+    assert (isolated_dir / "v2_second" / "viewer.html").exists()
+
+
 def test_run_comparison_viewer_failure_is_attributed_to_viewer_phase(
     runner, isolated_dir, monkeypatch
 ):
