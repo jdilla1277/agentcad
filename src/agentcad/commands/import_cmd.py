@@ -22,6 +22,7 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.commands.init import _bootstrap_manifest
+from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import MANIFEST_FILE
 from agentcad.native_io import silence_native_stdout
 
@@ -310,6 +311,9 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
             "edit_scaffold": {"status": "pending"},
         },
     }
+    comparison_enabled = auto_diff and has_previous_step
+    if comparison_enabled:
+        meta["comparison_phases"] = ComparisonPhaseRecorder().entries
     commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
@@ -318,6 +322,12 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
         "path": f"{dir_name}/",
     }, advance_current=True)
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
+    comparison_recorder = None
+    if comparison_enabled:
+        comparison_recorder = ComparisonPhaseRecorder(
+            lifecycle.meta["comparison_phases"],
+            persist=lifecycle.persist,
+        )
 
     def _attempt_artifact(name, callback):
         try:
@@ -360,64 +370,132 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
 
     # 8. Auto-diff against most recent successful prior version.
     diff_meta = None
-    if auto_diff and prev is not None:
+    if comparison_recorder is not None:
         prev_step = Path.cwd() / prev["path"].rstrip("/") / "output.step"
-        if prev_step.exists():
-            try:
-                from agentcad.render import (
-                    render_diff_overlay,
-                    render_diff_side_by_side,
-                )
+        prev_shape = None
+        try:
+            with comparison_recorder.observe("source_loading"):
                 from agentcad.step_io import load_cad_shape
                 prev_shape = load_cad_shape(prev_step)
-                side = version_dir / "diff_side.png"
-                overlay = version_dir / "diff_overlay.png"
-                render_diff_side_by_side(
-                    prev_shape, topo_shape, prev["label"], label,
-                    side, width=512, height=512,
-                )
-                comparison = render_diff_overlay(
-                    prev_shape, topo_shape, prev["label"], label,
-                    overlay, width=1024, height=1024,
-                )
-                from agentcad.solid_compare import (
-                    compare_solid_volumes,
-                    write_solid_comparison_artifacts,
+        except Exception as exc:
+            lifecycle.add_warning(
+                "Could not load the prior comparison source; core STEP remains "
+                f"successful: {type(exc).__name__}: {exc}"
+            )
+
+        if prev_shape is not None:
+            from agentcad.render import (
+                render_diff_overlay,
+                render_diff_side_by_side,
+            )
+
+            diff_meta = {"against": prev["label"]}
+            side = version_dir / "diff_side.png"
+            overlay = version_dir / "diff_overlay.png"
+            try:
+                with comparison_recorder.observe("comparison_rendering"):
+                    render_diff_side_by_side(
+                        prev_shape, topo_shape, prev["label"], label,
+                        side, width=512, height=512,
+                    )
+                diff_meta["side_by_side"] = f"{dir_name}/diff_side.png"
+            except Exception as exc:
+                lifecycle.add_warning(
+                    "Could not render the side-by-side comparison; core STEP "
+                    f"remains successful: {type(exc).__name__}: {exc}"
                 )
 
-                solid_comparison = compare_solid_volumes(
-                    prev_shape,
-                    topo_shape,
+            try:
+                with comparison_recorder.observe("projection_comparison"):
+                    comparison = render_diff_overlay(
+                        prev_shape, topo_shape, prev["label"], label,
+                        overlay, width=1024, height=1024,
+                    )
+                diff_meta["overlay"] = f"{dir_name}/diff_overlay.png"
+                diff_meta["projection_comparison"] = comparison
+            except Exception as exc:
+                lifecycle.add_warning(
+                    "Could not compute the 2D projection comparison; core STEP "
+                    f"remains successful: {type(exc).__name__}: {exc}"
                 )
-                diff_meta = {
-                    "against": prev["label"],
-                    "side_by_side": f"{dir_name}/diff_side.png",
-                    "overlay": f"{dir_name}/diff_overlay.png",
-                    "projection_comparison": comparison,
-                    "comparison_3d": solid_comparison.data,
-                }
-                volume_glb = version_dir / "diff_volume.glb"
-                volume_png = version_dir / "diff_volume.png"
+
+            solid_comparison = None
+            try:
+                from agentcad.solid_compare import compare_solid_volumes
+
+                with comparison_recorder.observe(
+                    "exact_3d_comparison"
+                ) as phase:
+                    solid_comparison = compare_solid_volumes(
+                        prev_shape,
+                        topo_shape,
+                    )
+                    phase.status = solid_comparison.data.get(
+                        "status", "success"
+                    )
+                    phase.message = solid_comparison.data.get(
+                        "reason", {}
+                    ).get("message")
+                diff_meta["comparison_3d"] = solid_comparison.data
+            except Exception as exc:
+                lifecycle.add_warning(
+                    "Could not compute the exact 3D comparison; core STEP "
+                    f"remains successful: {type(exc).__name__}: {exc}"
+                )
+
+            if solid_comparison is not None and solid_comparison.available:
                 try:
-                    if write_solid_comparison_artifacts(
-                        solid_comparison,
-                        volume_glb,
-                        volume_png,
-                    ):
+                    from agentcad.solid_compare import (
+                        write_solid_comparison_artifacts,
+                    )
+
+                    with comparison_recorder.observe(
+                        "difference_artifact_export"
+                    ) as phase:
+                        volume_glb = version_dir / "diff_volume.glb"
+                        volume_png = version_dir / "diff_volume.png"
+                        written = write_solid_comparison_artifacts(
+                            solid_comparison,
+                            volume_glb,
+                            volume_png,
+                        )
+                        if not written:
+                            phase.status = "unavailable"
+                            phase.message = (
+                                "3D difference artifacts were not available."
+                            )
+                    if written:
                         diff_meta["volume_glb"] = (
                             f"{dir_name}/diff_volume.glb"
                         )
                         diff_meta["volume_png"] = (
                             f"{dir_name}/diff_volume.png"
                         )
-                except Exception:
-                    # Numeric comparison remains useful if artifact export fails.
-                    pass
-            except Exception:
-                # Diff is best-effort — never fail the whole import.
-                diff_meta = None
-    if auto_diff and has_previous_step:
-        if diff_meta is None:
+                except Exception as exc:
+                    lifecycle.add_warning(
+                        "Could not write 3D volume comparison artifacts; core "
+                        "STEP remains successful: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+            else:
+                comparison_recorder.skip(
+                    "difference_artifact_export",
+                    "Exact 3D comparison produced no exportable geometry.",
+                )
+
+        comparison_recorder.finalize_pending(
+            "Skipped because an earlier comparison phase was unavailable."
+        )
+        useful_diff = bool(diff_meta and any(
+            key in diff_meta
+            for key in (
+                "side_by_side",
+                "overlay",
+                "projection_comparison",
+                "comparison_3d",
+            )
+        ))
+        if not useful_diff:
             lifecycle.set_artifact(
                 "diff",
                 "unavailable",
@@ -437,20 +515,37 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
     viewer_ok = False
     if glb_ok:
         def _write_viewer():
-            _render_unified(
-                viewer_path, prev_glb or glb_path, glb_path if prev_glb else None,
-                label_a=prev["label"] if prev_glb else label,
-                label_b=label if prev_glb else None,
-                default_mode="side-by-side" if prev_glb else "single-a",
-                preview_png=preview_path if preview_ok else None,
-                diff_side_png=(version_dir / "diff_side.png") if diff_meta else None,
-                diff_overlay_png=(version_dir / "diff_overlay.png") if diff_meta else None,
-                diff_volume_png=(
-                    version_dir / "diff_volume.png"
-                    if diff_meta and diff_meta.get("volume_png")
-                    else None
-                ),
-            )
+            def _render():
+                _render_unified(
+                    viewer_path,
+                    prev_glb or glb_path,
+                    glb_path if prev_glb else None,
+                    label_a=prev["label"] if prev_glb else label,
+                    label_b=label if prev_glb else None,
+                    default_mode="side-by-side" if prev_glb else "single-a",
+                    preview_png=preview_path if preview_ok else None,
+                    diff_side_png=(
+                        version_dir / "diff_side.png"
+                        if diff_meta and diff_meta.get("side_by_side")
+                        else None
+                    ),
+                    diff_overlay_png=(
+                        version_dir / "diff_overlay.png"
+                        if diff_meta and diff_meta.get("overlay")
+                        else None
+                    ),
+                    diff_volume_png=(
+                        version_dir / "diff_volume.png"
+                        if diff_meta and diff_meta.get("volume_png")
+                        else None
+                    ),
+                )
+
+            if comparison_recorder is not None:
+                with comparison_recorder.observe("viewer_generation"):
+                    _render()
+            else:
+                _render()
 
         viewer_ok, _ = _attempt_artifact("viewer", _write_viewer)
         if viewer_ok:

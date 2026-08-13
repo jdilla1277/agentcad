@@ -92,6 +92,9 @@ def test_skill_show_content_mentions_commands(runner):
     assert "--no-preview --no-diff --no-view" in content
     assert "agentcad diff" in content
     assert "explicit" in content
+    assert "comparison_phases" in content
+    assert "exact_3d_comparison" in content
+    assert "duration_ms" in content
 
 
 def test_skill_install_creates_file(runner, isolated_dir):
