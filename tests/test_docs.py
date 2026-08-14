@@ -617,6 +617,18 @@ def test_docs_daemon_section(runner):
     assert "self-heal" not in lower_content
     assert "pip" in lower_content and "upgrade" in lower_content
     assert "loaded at" in lower_content and "startup" in lower_content
+    assert "progress heartbeat" in lower_content
+    assert "30-second response-idle window" in lower_content
+    assert "never resubmitted" in lower_content
+    assert "stderr" in lower_content
+    assert "stdout" in lower_content
+    assert "via='daemon'" in lower_content
+    assert "exits 124" in lower_content
+    assert "daemon_response_timeout" in lower_content
+    assert "retry_safe=false" in lower_content
+    assert "agentcad context" in lower_content
+    assert "before retrying" in lower_content
+    assert "any daemon-routed" in lower_content
 
 
 def test_docs_commands_does_not_list_daemon(runner):

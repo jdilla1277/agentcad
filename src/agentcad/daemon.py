@@ -2,8 +2,10 @@
 
 Architecture: a long-lived parent process keeps CadQuery/OCP loaded in memory.
 For each ``run`` request, the parent ``fork()``s a child that handles the
-single request and exits. Operational requests (``ping``, ``shutdown``) are
-answered by the parent directly.
+single request and exits. That command child forks a tiny heartbeat monitor so
+progress remains observable even when native CAD code holds Python's execution
+lock. Operational requests (``ping``, ``shutdown``) are answered by the parent
+directly.
 
 Why preforked-per-request rather than handle-in-process:
   - per-request crash isolation: a segfault in OCP only kills that one child;
@@ -25,6 +27,7 @@ import hashlib
 import json
 import os
 import secrets
+import select
 import signal
 import socket
 import struct
@@ -102,6 +105,7 @@ _MAX_RESPONSE_PAYLOAD_BYTES = 64 * 1024 * 1024
 _REQUEST_READ_TIMEOUT_S = 1.0
 _STATUS_PING_TIMEOUT_S = 2.0
 _SHUTDOWN_RESPONSE_TIMEOUT_S = 2.0
+_PROGRESS_INTERVAL_S = 5.0
 _PID_METADATA_VERSION = 1
 
 
@@ -426,31 +430,100 @@ def _run_in_child(server, request, conn):
     with the child. We don't need the cwd/env-restore plumbing that the
     in-process ``_handle_run`` path uses.
     """
+    started = time.monotonic()
+    argv = request.get("argv") or []
+    command = argv[0] if argv else "unknown"
+    stop_reader, stop_writer = os.pipe()
     try:
-        response = server._handle_run(request)
-    except BaseException as e:
-        response = {
-            "type": "result",
-            "exit_code": 98,
-            "output": json.dumps({
-                "command": "run",
-                "status": "error",
-                "message": f"runner crashed: {type(e).__name__}: {e}",
-            }),
-            "stderr": "",
-            "version": server._version,
-        }
-    try:
-        conn.sendall(encode_message(response))
-    except Exception:
-        # Client may have disconnected — child has done its work and will
-        # exit. Nothing useful to log here without contaminating stderr.
+        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    except (AttributeError, ValueError):
         pass
+    try:
+        progress_pid = os.fork()
+    except OSError as exc:
+        os.close(stop_reader)
+        os.close(stop_writer)
+        try:
+            conn.sendall(encode_message({
+                "type": "result",
+                "exit_code": 97,
+                "output": json.dumps({
+                    "command": command,
+                    "status": "error",
+                    "message": f"daemon progress monitor fork failed: {exc}",
+                }),
+                "stderr": "",
+                "version": server._version,
+            }))
+        except Exception:
+            pass
+        return
+    if progress_pid == 0:
+        os.close(stop_writer)
+        try:
+            while True:
+                ready, _, _ = select.select(
+                    [stop_reader], [], [], _PROGRESS_INTERVAL_S
+                )
+                if ready:
+                    break
+                frame = {
+                    "type": "progress",
+                    "command": command,
+                    "elapsed_s": round(time.monotonic() - started, 1),
+                    "message": "daemon command still running",
+                }
+                conn.sendall(encode_message(frame))
+        except Exception:
+            pass
+        finally:
+            os.close(stop_reader)
+            os._exit(0)
+
+    os.close(stop_reader)
+    try:
+        try:
+            response = server._handle_run(request)
+        except BaseException as e:
+            response = {
+                "type": "result",
+                "exit_code": 98,
+                "output": json.dumps({
+                    "command": command,
+                    "status": "error",
+                    "message": f"runner crashed: {type(e).__name__}: {e}",
+                }),
+                "stderr": "",
+                "version": server._version,
+            }
+        try:
+            os.write(stop_writer, b"x")
+        except Exception:
+            pass
+        os.close(stop_writer)
+        try:
+            os.waitpid(progress_pid, 0)
+        except (ChildProcessError, OSError):
+            pass
+        try:
+            conn.sendall(encode_message(response))
+        except Exception:
+            # Client may have disconnected — child has done its work and will
+            # exit. Nothing useful to log here without contaminating stderr.
+            pass
+    finally:
+        try:
+            os.close(stop_writer)
+        except OSError:
+            pass
 
 
 # ---------- Client ----------
 
 _DEFAULT_CONNECT_TIMEOUT_S = 1.0
+# Inactivity deadline between daemon frames. Long commands send progress every
+# few seconds, so they may legitimately outlive this window without making the
+# client lose track of the submitted request.
 _DEFAULT_RESPONSE_TIMEOUT_S = 30.0
 _UNKNOWN_OUTCOME_EXIT_CODE = 124
 
@@ -538,6 +611,7 @@ def _send_request_with_peer(
     connect_timeout_s=None,
     response_timeout_s=None,
     expected_peer_pid=None,
+    progress_callback=None,
 ):
     """Send one request and return ``(response, peer_pid, connected)``.
 
@@ -545,6 +619,10 @@ def _send_request_with_peer(
     kernel socket credentials identify that PID as the listening peer. This
     is the lifecycle safety boundary: a stale PID file must never authorize a
     shutdown request or signal against an unrelated process.
+
+    ``response_timeout_s`` is an inactivity deadline between complete frames,
+    not an overall command deadline. Each progress frame resets it; a silent
+    daemon still produces the existing unknown-outcome safety response.
     """
     if socket_path is None:
         socket_path = _default_socket_path()
@@ -577,18 +655,25 @@ def _send_request_with_peer(
         # so conservatively suppress direct fallback as soon as it begins.
         submission_started = True
         sock.sendall(payload)
-        response = _read_one_message(
-            sock,
-            timeout_s=response_timeout_s,
-            max_payload_bytes=_MAX_RESPONSE_PAYLOAD_BYTES,
-        )
-        if response is None:
-            return (
-                _post_submission_failure(msg, timed_out=False),
-                peer_pid,
-                True,
+        while True:
+            response = _read_one_message(
+                sock,
+                timeout_s=response_timeout_s,
+                max_payload_bytes=_MAX_RESPONSE_PAYLOAD_BYTES,
             )
-        return response, peer_pid, True
+            if response is None:
+                return (
+                    _post_submission_failure(msg, timed_out=False),
+                    peer_pid,
+                    True,
+                )
+            if response.get("type") != "progress":
+                return response, peer_pid, True
+            if progress_callback is not None:
+                try:
+                    progress_callback(response)
+                except Exception:
+                    pass
     except (ConnectionError, OSError, DaemonProtocolError) as exc:
         if submission_started:
             return (
@@ -610,6 +695,7 @@ def send_request(
     *,
     connect_timeout_s=None,
     response_timeout_s=None,
+    progress_callback=None,
 ):
     """Send one request and return its response.
 
@@ -619,14 +705,17 @@ def send_request(
     caller must not retry a non-idempotent command automatically. Operational
     requests return an internal ``transport_error`` marker after submission.
 
-    Connect and response deadlines are separate and injectable so regression
-    tests can exercise slow responses without waiting 30 seconds.
+    Connect and response-idle deadlines are separate and injectable so
+    regression tests can exercise slow responses without waiting 30 seconds.
+    Progress frames reset the response-idle deadline and are forwarded to the
+    optional callback; they never resubmit the request.
     """
     response, _, _ = _send_request_with_peer(
         msg,
         socket_path=socket_path,
         connect_timeout_s=connect_timeout_s,
         response_timeout_s=response_timeout_s,
+        progress_callback=progress_callback,
     )
     return response
 
