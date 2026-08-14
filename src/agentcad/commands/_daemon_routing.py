@@ -52,13 +52,28 @@ def _pid_path() -> str:
 def _route_through_daemon(argv: list[str]):
     """Send an argv-shaped request to the daemon. Returns the raw response
     dict, or ``None`` only if the daemon couldn't be reached before request
-    submission. A timeout/disconnect after submission is returned as an
-    explicit nonzero result so the caller never repeats non-idempotent work.
+    submission. Progress frames keep long commands attached beyond the
+    response-idle window. A silent timeout/disconnect after submission is
+    returned as an explicit nonzero result so the caller never repeats
+    non-idempotent work.
     argv[0] is the Click subcommand name (``run``, ``render``, etc.); the
     daemon-side handler invokes the CLI with this argv directly."""
+    def show_progress(frame):
+        elapsed_s = frame.get("elapsed_s")
+        elapsed = (
+            f" ({elapsed_s:g}s)"
+            if isinstance(elapsed_s, (int, float))
+            else ""
+        )
+        click.echo(
+            f"[agentcad] daemon command still running{elapsed}…",
+            err=True,
+        )
+
     return _daemon.send_request(
         {"type": "run", "cwd": str(Path.cwd()), "argv": argv},
         socket_path=_socket_path(),
+        progress_callback=show_progress,
     )
 
 

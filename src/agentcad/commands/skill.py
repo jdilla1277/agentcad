@@ -86,6 +86,13 @@ agentcad --help   # Read the built-in how-to guide and command reference
    `agentcad diff OLD NEW` with a larger budget; do not rerun the original CAD
    command and create a duplicate version.
 
+   Daemon-routed commands may run beyond 30 seconds. Progress heartbeats appear
+   on stderr while stdout stays reserved for the final JSON response, and the
+   submitted command is never automatically retried. If a silent or lost daemon
+   returns `outcome: "unknown"` and `retry_safe: false`, inspect `agentcad
+   context`, existing outputs, and `agentcad daemon status` before retrying; the
+   original command may already have completed.
+
 4. **Review with the user.** The generated viewer opens automatically. On v2+
    start with its previous/current comparison, then use A/B, Overlay, and Parts
    without selecting files manually. Use `agentcad view old.step new.step` only

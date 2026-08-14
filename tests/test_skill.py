@@ -99,6 +99,12 @@ def test_skill_show_content_mentions_commands(runner):
     assert "30-second default worker budget" in content
     assert "comparison_3d.status/reason/timeout_s" in content
     assert "create a duplicate version" in content
+    assert "Progress heartbeats" in content
+    assert "stdout stays reserved for the final JSON response" in content
+    assert '`outcome: "unknown"`' in content
+    assert "`retry_safe: false`" in content
+    assert "agentcad context" in content
+    assert "before retrying" in content
 
 
 def test_skill_install_creates_file(runner, isolated_dir):
