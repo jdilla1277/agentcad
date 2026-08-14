@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "families": [
+    "clean_exact_control",
+    "shared_transformed_topology",
+    "coincident_curved_surfaces",
+    "overlapping_multisolid",
+    "hidden_underside_geometry",
+    "minimized_impeller"
+  ],
+  "cases": {
+    "box_bore": {
+      "families": ["clean_exact_control"],
+      "reference": "box.step",
+      "candidate": "bored_box.step",
+      "reference_volume_mm3": 32000.0,
+      "candidate_volume_mm3": 29738.0533,
+      "reference_solid_count": 1,
+      "candidate_solid_count": 1,
+      "semantic_change": "removed",
+      "role": "clean exact control"
+    },
+    "coincident_torus": {
+      "families": ["coincident_curved_surfaces"],
+      "reference": "coincident_torus.step",
+      "candidate": "coincident_torus_cut.step",
+      "reference_volume_mm3": 9869.6044,
+      "candidate_volume_mm3": 8272.2289,
+      "reference_solid_count": 1,
+      "candidate_solid_count": 1,
+      "semantic_change": "removed",
+      "role": "exactly coincident curved surfaces"
+    },
+    "overlapping_compound": {
+      "families": ["overlapping_multisolid"],
+      "reference": "single_solid.step",
+      "candidate": "overlapping_compound.step",
+      "reference_volume_mm3": 8000.0,
+      "candidate_raw_member_volume_mm3": 8216.0,
+      "candidate_occupied_volume_mm3": 8144.0,
+      "reference_solid_count": 1,
+      "candidate_solid_count": 2,
+      "semantic_change": "added",
+      "role": "overlapping multi-solid occupied volume"
+    },
+    "covered_rotor": {
+      "families": ["hidden_underside_geometry", "minimized_impeller"],
+      "reference": "covered_rotor_7.step",
+      "candidate": "covered_rotor_5.step",
+      "reference_volume_mm3": 19639.4887,
+      "candidate_volume_mm3": 17948.9138,
+      "reference_solid_count": 1,
+      "candidate_solid_count": 1,
+      "semantic_change": "rebuilt_with_fewer_blades",
+      "blade_counts": [7, 5],
+      "meaningful_geometry": "underside",
+      "top_projection_iou": 1.0,
+      "role": "minimized impeller and hidden-view control"
+    }
+  },
+  "in_memory_cases": {
+    "shared_location": {
+      "families": ["shared_transformed_topology"],
+      "builder": "scripts.generate_comparison_fixtures.shared_location_pair",
+      "role": "transformed shapes sharing one underlying TShape"
+    }
+  }
+}
