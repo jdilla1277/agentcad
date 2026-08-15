@@ -88,7 +88,17 @@ def _metric_changes(metrics_a, metrics_b):
 @click.option("--overlay", is_flag=True, default=False, help="With --visual, use tinted overlay mode instead of side-by-side.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 def diff(ref1, ref2, visual, overlay, no_daemon):
-    """Compare two versions of a model."""
+    """Compare two versions or CAD files.
+
+    Closed solids return exact shared and directional occupied volumes when the
+    native comparison succeeds. Inspect comparison_3d.status and
+    comparison_3d.kernel; failed attempts preserve diagnostics under
+    comparison_3d.reason.kernel and include a suggestion.
+
+    Exact work has a 30-second budget. Set AGENTCAD_DIFF_TIMEOUT_S=N to override
+    it (0 disables the limit for diagnostics). On timeout, retry this diff with
+    a larger budget; do not rerun the CAD build or import.
+    """
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["diff", ref1, ref2]
     if visual:

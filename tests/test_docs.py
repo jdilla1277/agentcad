@@ -509,6 +509,13 @@ def test_docs_schemas_explains_observable_comparison_phases(runner):
     assert "AGENTCAD_DIFF_TIMEOUT_S" in content
     assert "terminable worker" in content
     assert "comparison_3d.status/reason/timeout_s" in content
+    assert "one non-destructive partition" in content
+    assert "comparison_3d.kernel" in content
+    assert "reason.kernel" in content
+    assert "Unavailable results include a suggestion" in content
+    assert "volume_semantics" in content
+    assert "double-count overlaps" in content
+    assert "never published" in content
     assert "create a duplicate version" in content
 
 

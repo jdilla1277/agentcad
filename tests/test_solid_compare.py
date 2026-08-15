@@ -133,13 +133,128 @@ def test_boolean_failure_is_structured(monkeypatch):
     def fail(*_args, **_kwargs):
         raise RuntimeError("synthetic failure")
 
-    monkeypatch.setattr("agentcad.solid_compare._run_boolean", fail)
+    monkeypatch.setattr("agentcad.solid_compare._partition_regions", fail)
 
     comparison = compare_solid_volumes(_box(), _box())
 
     assert not comparison.available
     assert comparison.data["reason"]["code"] == "boolean_operation_failed"
     assert "synthetic failure" in comparison.data["reason"]["message"]
+    assert "--visual" in comparison.data["suggestion"]
+    assert "does not mean the CAD build failed" in comparison.data["suggestion"]
+
+
+def test_comparison_uses_independent_inputs_and_one_partition(monkeypatch):
+    reference = _box()
+    candidate = _box(translation=(5, 0, 0))
+    original_partition = solid_compare_module._partition_regions
+    captured = []
+
+    def capture_partition(reference_copy, candidate_copy, tolerance_mm):
+        captured.append((reference_copy, candidate_copy))
+        return original_partition(reference_copy, candidate_copy, tolerance_mm)
+
+    monkeypatch.setattr(
+        solid_compare_module,
+        "_partition_regions",
+        capture_partition,
+    )
+
+    comparison = compare_solid_volumes(reference, candidate)
+
+    assert comparison.available
+    assert len(captured) == 1
+    reference_copy, candidate_copy = captured[0]
+    assert not reference.IsPartner(reference_copy)
+    assert not candidate.IsPartner(candidate_copy)
+    assert comparison.data["kernel"]["non_destructive"] is True
+    assert comparison.data["kernel"]["partition_passes"] == 1
+    assert comparison.data["volume_semantics"] == {
+        "measurement": "physical_occupied_volume",
+        "compound_members": (
+            "Overlapping members are counted once here; aggregate model metrics "
+            "elsewhere may sum members and double-count their overlap."
+        ),
+    }
+
+
+def test_kernel_warnings_are_exposed_on_success(monkeypatch):
+    original_partition = solid_compare_module._partition_regions
+
+    def partition_with_warning(*args, **kwargs):
+        shared, reference_only, candidate_only, diagnostics = (
+            original_partition(*args, **kwargs)
+        )
+        diagnostics["warnings"] = ["synthetic kernel warning"]
+        return shared, reference_only, candidate_only, diagnostics
+
+    monkeypatch.setattr(
+        solid_compare_module,
+        "_partition_regions",
+        partition_with_warning,
+    )
+
+    comparison = compare_solid_volumes(_box(), _box())
+
+    assert comparison.available
+    operations = comparison.data["kernel"]["operations"]
+    assert operations[-1]["warnings"] == ["synthetic kernel warning"]
+
+
+def test_multisolid_canonicalization_failure_never_uses_raw_input(monkeypatch):
+    candidate = _compound(_box(), _box(size=4))
+
+    def fail(*_args, **_kwargs):
+        raise solid_compare_module._ExactComparisonError(
+            "candidate_canonicalization_failed",
+            "synthetic canonicalization failure",
+        )
+
+    monkeypatch.setattr(
+        solid_compare_module,
+        "_perform_cells_partition",
+        fail,
+    )
+
+    comparison = compare_solid_volumes(_box(), candidate)
+
+    assert not comparison.available
+    assert (
+        comparison.data["reason"]["code"]
+        == "candidate_canonicalization_failed"
+    )
+    assert "synthetic canonicalization failure" in (
+        comparison.data["reason"]["message"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw_volumes", "expected_code"),
+    [
+        ([2000.0, 0.0, 0.0], "shared_volume_exceeds_input"),
+        ([0.0, 1200.0, 1000.0], "subtraction_increased_volume"),
+        ([-10.0, 1010.0, 1000.0], "negative_boolean_volume"),
+        ([float("nan"), 0.0, 0.0], "non_finite_boolean_volume"),
+    ],
+)
+def test_impossible_raw_volumes_are_not_published(
+    monkeypatch,
+    raw_volumes,
+    expected_code,
+):
+    raw = iter(raw_volumes)
+    monkeypatch.setattr(solid_compare_module, "_volume", lambda _shape: next(raw))
+
+    with pytest.raises(solid_compare_module._ExactComparisonError) as error:
+        solid_compare_module._validated_region_volumes(
+            1000.0,
+            1000.0,
+            object(),
+            object(),
+            object(),
+        )
+
+    assert error.value.code == expected_code
 
 
 def test_successful_comparison_writes_colored_glb_and_png(tmp_path):
@@ -223,4 +338,6 @@ def test_bounded_comparison_kills_worker_after_exact_budget(
     assert comparison.data["status"] == "timeout"
     assert comparison.data["reason"]["code"] == "exact_comparison_timeout"
     assert comparison.data["timeout_s"] == pytest.approx(0.05)
+    assert "larger AGENTCAD_DIFF_TIMEOUT_S" in comparison.data["suggestion"]
+    assert "do not rerun the CAD build" in comparison.data["suggestion"]
     assert not marker.exists()

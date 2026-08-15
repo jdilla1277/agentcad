@@ -7,15 +7,18 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
+from OCP.BOPAlgo import BOPAlgo_CellsBuilder
 from OCP.BRep import BRep_Builder
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
 from OCP.GProp import GProp_GProps
 from OCP.TopAbs import TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
+from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS_Compound
 
 
@@ -25,6 +28,15 @@ _EXACT_TIMEOUT_ENV = "AGENTCAD_DIFF_TIMEOUT_S"
 _SHARED_COLOR = "#d2d6dc"
 _REFERENCE_ONLY_COLOR = "#0072b2"
 _CANDIDATE_ONLY_COLOR = "#e69f00"
+
+
+class _ExactComparisonError(RuntimeError):
+    """Internal failure carrying a stable result code and kernel report."""
+
+    def __init__(self, code, message, *, kernel=None):
+        super().__init__(message)
+        self.code = code
+        self.kernel = kernel
 
 
 @dataclass
@@ -105,30 +117,117 @@ def _solid_count(shape):
     return len(_solids(shape))
 
 
-def _canonicalize(shape, tolerance_mm):
-    """Fuse a multi-solid input into a single occupied-volume shape.
+def _shape_list(*shapes):
+    result = TopTools_ListOfShape()
+    for shape in shapes:
+        result.Append(shape)
+    return result
 
-    A compound whose member solids touch or overlap EACH OTHER — e.g. the
-    compound `raise_annulus` returns by design (part + boss seated on a
-    face) — is a degenerate Boolean argument: Common/Cut can come back
-    empty or partial, and GProp volume double-counts the overlap. Fusing
-    the members first makes the comparison measure occupied volume.
-    Disjoint members fuse into a valid multi-solid result, so this is safe
-    for genuine assemblies too. Falls back to the original shape if the
-    fuse fails, preserving the old behavior for unfusable geometry.
+
+def _deep_copy_shape(shape):
+    """Copy topology and geometry so native operations cannot alias inputs."""
+    copied = BRepBuilderAPI_Copy(shape, True, False).Shape()
+    if copied.IsNull():
+        raise RuntimeError("OpenCascade produced a null independent copy")
+    return copied
+
+
+def _dump_kernel_messages(operation, method_name):
+    output = BytesIO()
+    getattr(operation, method_name)(output)
+    return [
+        line.strip()
+        for line in output.getvalue().decode("utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+
+
+def _kernel_diagnostics(operation, label):
+    """Return stable, JSON-safe OpenCascade diagnostics for one operation."""
+    return {
+        "operation": label,
+        "non_destructive": bool(operation.NonDestructive()),
+        "errors": _dump_kernel_messages(operation, "DumpErrors"),
+        "warnings": _dump_kernel_messages(operation, "DumpWarnings"),
+    }
+
+
+def _perform_cells_partition(arguments, tolerance_mm, *, label, error_code):
+    """Build one non-destructive General Fuse partition for all arguments."""
+    operation = BOPAlgo_CellsBuilder()
+    operation.SetNonDestructive(True)
+    operation.SetFuzzyValue(tolerance_mm)
+    for argument in arguments:
+        operation.AddArgument(argument)
+    try:
+        operation.Perform()
+    except Exception as exc:
+        diagnostics = _kernel_diagnostics(operation, label)
+        raise _ExactComparisonError(
+            error_code,
+            f"OpenCascade could not complete {label}: {exc}",
+            kernel=diagnostics,
+        ) from exc
+    diagnostics = _kernel_diagnostics(operation, label)
+    if operation.HasErrors():
+        detail = "; ".join(diagnostics["errors"]) or "unknown kernel error"
+        raise _ExactComparisonError(
+            error_code,
+            f"OpenCascade could not complete {label}: {detail}",
+            kernel=diagnostics,
+        )
+    return operation
+
+
+def _canonicalize_occupied_volume(shape, tolerance_mm, role):
+    """Partition a multi-solid input into non-overlapping occupied cells.
+
+    General Fuse computes all self-interferences in one pass. Keeping every
+    resulting cell measures physical occupied volume without double-counting
+    overlapping compound members. Internal boundaries are deliberately kept:
+    same-domain cleanup is not needed for comparison and can invalidate
+    otherwise valid imported geometry.
     """
     solids = _solids(shape)
     if len(solids) <= 1:
-        return shape
+        return shape, None
+
+    label = f"{role} occupied-volume canonicalization"
+    operation = _perform_cells_partition(
+        solids,
+        tolerance_mm,
+        label=label,
+        error_code=f"{role}_canonicalization_failed",
+    )
     try:
-        fused = solids[0]
-        for solid in solids[1:]:
-            fused = _run_boolean(BRepAlgoAPI_Fuse, fused, solid, tolerance_mm)
-    except Exception:
-        return shape
-    if BRepCheck_Analyzer(fused).IsValid():
-        return fused
-    return shape
+        operation.RemoveAllFromResult()
+        operation.AddAllToResult()
+        if operation.HasErrors():
+            diagnostics = _kernel_diagnostics(operation, label)
+            detail = "; ".join(diagnostics["errors"]) or "unknown kernel error"
+            raise _ExactComparisonError(
+                f"{role}_canonicalization_failed",
+                f"OpenCascade could not extract {label}: {detail}",
+                kernel=diagnostics,
+            )
+        result = _deep_copy_shape(operation.Shape())
+    except _ExactComparisonError:
+        raise
+    except Exception as exc:
+        raise _ExactComparisonError(
+            f"{role}_canonicalization_failed",
+            f"OpenCascade could not extract {label}: {exc}",
+            kernel=_kernel_diagnostics(operation, label),
+        ) from exc
+
+    diagnostics = _kernel_diagnostics(operation, label)
+    if not BRepCheck_Analyzer(result).IsValid():
+        raise _ExactComparisonError(
+            f"{role}_canonicalization_invalid",
+            f"The {role} occupied-volume partition is not a valid B-rep.",
+            kernel=diagnostics,
+        )
+    return result, diagnostics
 
 
 def _volume(shape):
@@ -155,14 +254,41 @@ def _base_response(tolerance_mm):
     }
 
 
-def _unavailable(tolerance_mm, code, message):
+def _unavailable_suggestion(code):
+    if code == "exact_comparison_timeout":
+        return (
+            "Retry the saved models with `agentcad diff REF1 REF2` and a larger "
+            "AGENTCAD_DIFF_TIMEOUT_S; do not rerun the CAD build or import."
+        )
+    if code.endswith("_has_no_closed_solid") or code.endswith("_is_invalid"):
+        return (
+            "Repair or re-export the named input as valid closed solid geometry, "
+            "then retry `agentcad diff`."
+        )
+    if code.endswith("_has_no_positive_volume"):
+        return (
+            "Inspect the named input and re-export it as a positive-volume closed "
+            "solid before retrying `agentcad diff`."
+        )
+    return (
+        "Review the exact failure reason and reason.kernel when present. Run "
+        "`agentcad diff REF1 REF2 --visual` to retain the independent projection "
+        "comparison; an unavailable exact result does not mean the CAD build failed."
+    )
+
+
+def _unavailable(tolerance_mm, code, message, *, kernel=None):
+    reason = {
+        "code": code,
+        "message": message,
+    }
+    if kernel is not None:
+        reason["kernel"] = kernel
     return SolidComparison({
         **_base_response(tolerance_mm),
         "status": "unavailable",
-        "reason": {
-            "code": code,
-            "message": message,
-        },
+        "reason": reason,
+        "suggestion": _unavailable_suggestion(code),
     })
 
 
@@ -307,16 +433,136 @@ def bounded_compare_solid_volumes(
             )
 
 
-def _run_boolean(operation_type, shape_a, shape_b, tolerance_mm):
-    operation = operation_type(shape_a, shape_b)
-    operation.SetFuzzyValue(tolerance_mm)
-    operation.Build()
-    if not operation.IsDone():
-        raise RuntimeError(f"{operation_type.__name__} did not complete")
-    result = operation.Shape()
-    if result.IsNull():
-        raise RuntimeError(f"{operation_type.__name__} produced a null shape")
-    return result
+def _extract_partition_region(operation, take, avoid, label):
+    """Extract one region without recomputing the partition/interferences."""
+    try:
+        operation.RemoveAllFromResult()
+        operation.AddToResult(
+            _shape_list(*take),
+            _shape_list(*avoid),
+        )
+        if operation.HasErrors():
+            diagnostics = _kernel_diagnostics(operation, "exact 3D partition")
+            detail = "; ".join(diagnostics["errors"]) or "unknown kernel error"
+            raise RuntimeError(detail)
+        return _deep_copy_shape(operation.Shape())
+    except Exception as exc:
+        raise _ExactComparisonError(
+            "boolean_operation_failed",
+            f"OpenCascade could not extract the {label} region: {exc}",
+            kernel=_kernel_diagnostics(operation, "exact 3D partition"),
+        ) from exc
+
+
+def _partition_regions(reference_shape, candidate_shape, tolerance_mm):
+    """Compute one partition and derive shared and directional cells from it."""
+    operation = _perform_cells_partition(
+        [reference_shape, candidate_shape],
+        tolerance_mm,
+        label="exact 3D partition",
+        error_code="boolean_operation_failed",
+    )
+    shared_shape = _extract_partition_region(
+        operation,
+        [reference_shape, candidate_shape],
+        [],
+        "shared",
+    )
+    reference_only_shape = _extract_partition_region(
+        operation,
+        [reference_shape],
+        [candidate_shape],
+        "reference-only",
+    )
+    candidate_only_shape = _extract_partition_region(
+        operation,
+        [candidate_shape],
+        [reference_shape],
+        "candidate-only",
+    )
+    return (
+        shared_shape,
+        reference_only_shape,
+        candidate_only_shape,
+        _kernel_diagnostics(operation, "exact 3D partition"),
+    )
+
+
+def _validated_region_volumes(
+    reference_volume,
+    candidate_volume,
+    shared_shape,
+    reference_only_shape,
+    candidate_only_shape,
+):
+    """Reject impossible raw kernel values before normalization or rounding."""
+    raw = {
+        "shared": _volume(shared_shape),
+        "reference_only": _volume(reference_only_shape),
+        "candidate_only": _volume(candidate_only_shape),
+    }
+    all_volumes = {
+        "reference": reference_volume,
+        "candidate": candidate_volume,
+        **raw,
+    }
+    if not all(math.isfinite(value) for value in all_volumes.values()):
+        raise _ExactComparisonError(
+            "non_finite_boolean_volume",
+            "OpenCascade returned a non-finite exact comparison volume.",
+        )
+
+    conservation_tolerance = max(
+        1e-4,
+        max(reference_volume, candidate_volume) * 1e-6,
+    )
+    if any(value < -conservation_tolerance for value in raw.values()):
+        raise _ExactComparisonError(
+            "negative_boolean_volume",
+            "OpenCascade returned a negative exact comparison region volume.",
+        )
+    if raw["shared"] > min(reference_volume, candidate_volume) + conservation_tolerance:
+        raise _ExactComparisonError(
+            "shared_volume_exceeds_input",
+            "The shared region exceeds one of the input solid volumes.",
+        )
+    if raw["reference_only"] > reference_volume + conservation_tolerance:
+        raise _ExactComparisonError(
+            "subtraction_increased_volume",
+            "The reference-only subtraction is larger than the reference input.",
+        )
+    if raw["candidate_only"] > candidate_volume + conservation_tolerance:
+        raise _ExactComparisonError(
+            "subtraction_increased_volume",
+            "The candidate-only subtraction is larger than the candidate input.",
+        )
+
+    reference_error = abs(
+        reference_volume - (raw["shared"] + raw["reference_only"])
+    )
+    candidate_error = abs(
+        candidate_volume - (raw["shared"] + raw["candidate_only"])
+    )
+    if max(reference_error, candidate_error) > conservation_tolerance:
+        raise _ExactComparisonError(
+            "volume_conservation_failed",
+            "Boolean results did not conserve the input solid volumes.",
+        )
+
+    # Tiny negative values are numerical zero. A shared value a few numerical
+    # microns above an input is capped at that input. Both normalizations happen
+    # only after every raw value has passed the explicit finite, sign, bound,
+    # and conservation checks above.
+    normalized = {
+        name: max(0.0, value)
+        for name, value in raw.items()
+    }
+    normalized["shared"] = min(
+        normalized["shared"],
+        reference_volume,
+        candidate_volume,
+    )
+    return normalized
 
 
 def _round_volume(value):
@@ -358,42 +604,71 @@ def compare_solid_volumes(
                 f"The {role} is not a valid B-rep solid.",
             )
 
-    reference_shape = _canonicalize(reference_shape, tolerance_mm)
-    candidate_shape = _canonicalize(candidate_shape, tolerance_mm)
+    try:
+        reference_shape = _deep_copy_shape(reference_shape)
+        candidate_shape = _deep_copy_shape(candidate_shape)
+    except Exception as exc:
+        return _unavailable(
+            tolerance_mm,
+            "input_copy_failed",
+            f"Could not create independent exact-comparison inputs: {exc}",
+        )
+
+    kernel_operations = []
+    try:
+        reference_shape, reference_diagnostics = _canonicalize_occupied_volume(
+            reference_shape,
+            tolerance_mm,
+            "reference",
+        )
+        candidate_shape, candidate_diagnostics = _canonicalize_occupied_volume(
+            candidate_shape,
+            tolerance_mm,
+            "candidate",
+        )
+    except _ExactComparisonError as exc:
+        return _unavailable(
+            tolerance_mm,
+            exc.code,
+            str(exc),
+            kernel=exc.kernel,
+        )
+    for diagnostics in (reference_diagnostics, candidate_diagnostics):
+        if diagnostics is not None:
+            kernel_operations.append(diagnostics)
 
     reference_volume = _volume(reference_shape)
     candidate_volume = _volume(candidate_shape)
-    if reference_volume <= 0:
+    if not math.isfinite(reference_volume) or reference_volume <= 0:
         return _unavailable(
             tolerance_mm,
             "reference_has_no_positive_volume",
-            "The reference has no positive solid volume.",
+            "The reference has no finite positive solid volume.",
         )
-    if candidate_volume <= 0:
+    if not math.isfinite(candidate_volume) or candidate_volume <= 0:
         return _unavailable(
             tolerance_mm,
             "candidate_has_no_positive_volume",
-            "The candidate has no positive solid volume.",
+            "The candidate has no finite positive solid volume.",
         )
 
     try:
-        shared_shape = _run_boolean(
-            BRepAlgoAPI_Common,
+        (
+            shared_shape,
+            reference_only_shape,
+            candidate_only_shape,
+            partition_diagnostics,
+        ) = _partition_regions(
             reference_shape,
             candidate_shape,
             tolerance_mm,
         )
-        reference_only_shape = _run_boolean(
-            BRepAlgoAPI_Cut,
-            reference_shape,
-            candidate_shape,
+    except _ExactComparisonError as exc:
+        return _unavailable(
             tolerance_mm,
-        )
-        candidate_only_shape = _run_boolean(
-            BRepAlgoAPI_Cut,
-            candidate_shape,
-            reference_shape,
-            tolerance_mm,
+            exc.code,
+            str(exc),
+            kernel=exc.kernel,
         )
     except Exception as exc:
         return _unavailable(
@@ -401,6 +676,7 @@ def compare_solid_volumes(
             "boolean_operation_failed",
             f"OpenCascade could not complete the solid comparison: {exc}",
         )
+    kernel_operations.append(partition_diagnostics)
 
     for name, shape in (
         ("shared", shared_shape),
@@ -412,29 +688,28 @@ def compare_solid_volumes(
                 tolerance_mm,
                 "boolean_result_invalid",
                 f"The {name} Boolean result is not a valid B-rep.",
+                kernel=partition_diagnostics,
             )
 
-    shared_volume = max(0.0, _volume(shared_shape))
-    reference_only_volume = max(0.0, _volume(reference_only_shape))
-    candidate_only_volume = max(0.0, _volume(candidate_only_shape))
-    union_volume = reference_volume + candidate_volume - shared_volume
-
-    conservation_tolerance = max(
-        1e-4,
-        max(reference_volume, candidate_volume) * 1e-6,
-    )
-    reference_error = abs(
-        reference_volume - (shared_volume + reference_only_volume)
-    )
-    candidate_error = abs(
-        candidate_volume - (shared_volume + candidate_only_volume)
-    )
-    if max(reference_error, candidate_error) > conservation_tolerance:
+    try:
+        region_volumes = _validated_region_volumes(
+            reference_volume,
+            candidate_volume,
+            shared_shape,
+            reference_only_shape,
+            candidate_only_shape,
+        )
+    except _ExactComparisonError as exc:
         return _unavailable(
             tolerance_mm,
-            "volume_conservation_failed",
-            "Boolean results did not conserve the input solid volumes.",
+            exc.code,
+            str(exc),
+            kernel=partition_diagnostics,
         )
+    shared_volume = region_volumes["shared"]
+    reference_only_volume = region_volumes["reference_only"]
+    candidate_only_volume = region_volumes["candidate_only"]
+    union_volume = reference_volume + candidate_volume - shared_volume
 
     classification_tolerance = max(
         1e-6,
@@ -454,6 +729,19 @@ def compare_solid_volumes(
         **_base_response(tolerance_mm),
         "status": "success",
         "classification": classification,
+        "kernel": {
+            "engine": "OpenCascade",
+            "non_destructive": True,
+            "partition_passes": 1,
+            "operations": kernel_operations,
+        },
+        "volume_semantics": {
+            "measurement": "physical_occupied_volume",
+            "compound_members": (
+                "Overlapping members are counted once here; aggregate model "
+                "metrics elsewhere may sum members and double-count their overlap."
+            ),
+        },
         "volumes": {
             "reference": _round_volume(reference_volume),
             "candidate": _round_volume(candidate_volume),

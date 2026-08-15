@@ -153,7 +153,12 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     Set AGENTCAD_DIFF_TIMEOUT_S=N to override it; 0 disables this dedicated
     limit for diagnostics. A timeout preserves completed projection results
     and the committed version, but skips colored exact-volume artifacts. Check
-    comparison_3d.status/reason/timeout_s; if exact volumes are still needed,
+    comparison_3d.status/reason/timeout_s. Exact results use independent inputs
+    and one non-destructive partition; comparison_3d.kernel exposes native
+    warnings, and failed attempts preserve them under reason.kernel with an
+    actionable suggestion. volume_semantics explains why physical occupied
+    compound volume can differ from aggregate metrics. Impossible or
+    non-conserving volumes are rejected. If exact volumes are still needed,
     retry `agentcad diff OLD NEW` with a larger budget instead of rerunning CAD.
 
   agentcad parts list REF
