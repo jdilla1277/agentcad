@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "captured": "2026-08-14",
+  "tool_version": "0.4.0",
+  "source_commit": "0f61aa3",
+  "platform": "macOS arm64",
+  "note": "Durations are observational and must not be used as CI thresholds.",
+  "cases": {
+    "box_bore": {
+      "wall_ms": 1538,
+      "source_loading_ms": 983,
+      "exact_3d_comparison_ms": 552,
+      "exact_status": "success",
+      "volumes": {
+        "shared": 29738.0533,
+        "reference_only": 2261.9467,
+        "candidate_only": 0.0
+      }
+    },
+    "coincident_torus": {
+      "wall_ms": 903,
+      "source_loading_ms": 25,
+      "exact_3d_comparison_ms": 877,
+      "exact_status": "success",
+      "volumes": {
+        "shared": 8272.2289,
+        "reference_only": 1597.3779,
+        "candidate_only": 0.0
+      }
+    },
+    "overlapping_compound": {
+      "wall_ms": 535,
+      "source_loading_ms": 8,
+      "exact_3d_comparison_ms": 525,
+      "exact_status": "success",
+      "volumes": {
+        "shared": 8000.0,
+        "reference_only": 0.0,
+        "candidate_only": 144.0
+      }
+    },
+    "covered_rotor": {
+      "wall_ms": 992,
+      "source_loading_ms": 24,
+      "exact_3d_comparison_ms": 967,
+      "exact_status": "success",
+      "volumes": {
+        "shared": 15255.4511,
+        "reference_only": 4384.0376,
+        "candidate_only": 2693.4627
+      },
+      "projection": {
+        "overall_iou": 0.9537,
+        "top_coincident_fraction": 1.0
+      }
+    }
+  }
+}
