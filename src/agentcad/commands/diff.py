@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -14,6 +15,30 @@ from agentcad.metrics import compute_metrics
 from agentcad.step_io import load_cad_shape
 
 _CAD_FILE_SUFFIXES = {".step", ".stp", ".brep"}
+
+
+def _add_exact_recovery_suggestion(data, ref1, ref2):
+    """Make explicit-diff recovery advice directly runnable."""
+    command = "agentcad diff {} {}".format(
+        shlex.quote(str(ref1)),
+        shlex.quote(str(ref2)),
+    )
+    status = data.get("status")
+    if status == "timeout":
+        timeout_s = data.get("timeout_s")
+        next_timeout = max(60.0, float(timeout_s or 0) * 2)
+        data["suggestion"] = (
+            "Retry this saved-model comparison with "
+            f"`AGENTCAD_DIFF_TIMEOUT_S={next_timeout:g} {command}`; "
+            "do not rerun the CAD build or import."
+        )
+    elif status == "unavailable" and data.get("kernel") is not None:
+        data["suggestion"] = (
+            "Review comparison_3d.kernel, then run "
+            f"`{command} --visual` to retain the independent projection "
+            "comparison; an unavailable exact result does not mean the CAD "
+            "build failed."
+        )
 
 
 def _resolve_version(manifest, ref):
@@ -88,7 +113,17 @@ def _metric_changes(metrics_a, metrics_b):
 @click.option("--overlay", is_flag=True, default=False, help="With --visual, use tinted overlay mode instead of side-by-side.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 def diff(ref1, ref2, visual, overlay, no_daemon):
-    """Compare two versions of a model."""
+    """Compare two versions or CAD files.
+
+    Closed solids return exact shared and directional occupied volumes when the
+    native comparison succeeds. Inspect comparison_3d.status and
+    comparison_3d.kernel; failed attempts keep diagnostics in the same location
+    and include a copyable suggestion.
+
+    Exact work has a 30-second budget. Set AGENTCAD_DIFF_TIMEOUT_S=N to override
+    it (0 disables the limit for diagnostics). On timeout, retry this diff with
+    a larger budget; do not rerun the CAD build or import.
+    """
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["diff", ref1, ref2]
     if visual:
@@ -140,6 +175,11 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             with phase_recorder.observe("exact_3d_comparison") as phase:
                 solid_comparison = bounded_compare_solid_volumes(
                     shape_a, shape_b
+                )
+                _add_exact_recovery_suggestion(
+                    solid_comparison.data,
+                    ref1,
+                    ref2,
                 )
                 phase.status = solid_comparison.data.get("status", "success")
                 phase.message = (
@@ -304,6 +344,11 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
                 solid_comparison = bounded_compare_solid_volumes(
                     shape_a, shape_b
                 )
+                _add_exact_recovery_suggestion(
+                    solid_comparison.data,
+                    ref1,
+                    ref2,
+                )
                 phase.status = solid_comparison.data.get("status", "success")
                 phase.message = (
                     solid_comparison.data.get("message")
@@ -407,6 +452,11 @@ def _add_visual_response(
                 with phase_recorder.observe("exact_3d_comparison") as phase:
                     solid_comparison = bounded_compare_solid_volumes(
                         shape_a, shape_b
+                    )
+                    _add_exact_recovery_suggestion(
+                        solid_comparison.data,
+                        step_a,
+                        step_b,
                     )
                     phase.status = solid_comparison.data.get("status", "success")
                     phase.message = (

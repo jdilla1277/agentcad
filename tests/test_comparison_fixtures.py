@@ -120,6 +120,20 @@ def test_shared_transform_fixture_really_shares_topology():
     assert _volume(reference) == pytest.approx(1000.0)
     assert _volume(transformed) == pytest.approx(1000.0)
 
+    comparison = compare_solid_volumes(reference, transformed)
+
+    assert comparison.available
+    assert comparison.data["classification"] == "partial_shared_volume"
+    assert comparison.data["volumes"]["reference_only"] == pytest.approx(
+        comparison.data["volumes"]["candidate_only"],
+        abs=1e-4,
+    )
+    # The caller-owned aliases remain untouched; the engine compared deep
+    # copies rather than handing shared topology to native Boolean code.
+    assert reference.IsPartner(transformed)
+    assert _volume(reference) == pytest.approx(1000.0)
+    assert _volume(transformed) == pytest.approx(1000.0)
+
 
 def test_covered_rotor_top_projection_hides_the_blade_change(tmp_path):
     case = CATALOG["cases"]["covered_rotor"]

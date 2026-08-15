@@ -339,6 +339,16 @@ def test_help_points_to_observable_comparison_phases(runner):
     assert "instead of rerunning CAD" in output
 
 
+def test_diff_help_explains_exact_result_recovery(runner):
+    output = runner.invoke(cli, ["diff", "--help"]).output
+
+    assert "comparison_3d.status" in output
+    assert "comparison_3d.kernel" in output
+    assert "same location" in output
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in output
+    assert "do not rerun the CAD build or import" in output
+
+
 def test_help_presents_automatic_previous_current_review(runner):
     full_help = runner.invoke(cli, ["--help"]).output
     run_help = runner.invoke(cli, ["run", "--help"]).output
