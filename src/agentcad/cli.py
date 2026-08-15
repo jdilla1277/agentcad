@@ -154,11 +154,11 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     limit for diagnostics. A timeout preserves completed projection results
     and the committed version, but skips colored exact-volume artifacts. Check
     comparison_3d.status/reason/timeout_s. Exact results use independent inputs
-    and one non-destructive partition; comparison_3d.kernel exposes native
-    warnings, and failed attempts preserve them under reason.kernel with an
-    actionable suggestion. volume_semantics explains why physical occupied
-    compound volume can differ from aggregate metrics. Impossible or
-    non-conserving volumes are rejected. If exact volumes are still needed,
+    and one non-destructive exact partition. comparison_3d.kernel stays in one
+    location on success and failure; exact_partition_runs distinguishes that
+    pass from compound canonicalization, and repeated native messages include
+    counts. volume_semantics explains compound overlap only when applicable.
+    Impossible or non-conserving volumes are rejected. If exact volumes are needed,
     retry `agentcad diff OLD NEW` with a larger budget instead of rerunning CAD.
 
   agentcad parts list REF

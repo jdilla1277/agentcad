@@ -344,7 +344,7 @@ def test_diff_help_explains_exact_result_recovery(runner):
 
     assert "comparison_3d.status" in output
     assert "comparison_3d.kernel" in output
-    assert "comparison_3d.reason.kernel" in output
+    assert "same location" in output
     assert "AGENTCAD_DIFF_TIMEOUT_S" in output
     assert "do not rerun the CAD build or import" in output
 

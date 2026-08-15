@@ -135,11 +135,25 @@ def _deep_copy_shape(shape):
 def _dump_kernel_messages(operation, method_name):
     output = BytesIO()
     getattr(operation, method_name)(output)
-    return [
+    messages = [
         line.strip()
         for line in output.getvalue().decode("utf-8", errors="replace").splitlines()
         if line.strip()
     ]
+    counts = {}
+    for message in messages:
+        counts[message] = counts.get(message, 0) + 1
+    return [
+        {"message": message, "count": count}
+        for message, count in counts.items()
+    ]
+
+
+def _kernel_message_text(messages):
+    return "; ".join(
+        f"{item['message']} (x{item['count']})"
+        for item in messages
+    )
 
 
 def _kernel_diagnostics(operation, label):
@@ -170,7 +184,7 @@ def _perform_cells_partition(arguments, tolerance_mm, *, label, error_code):
         ) from exc
     diagnostics = _kernel_diagnostics(operation, label)
     if operation.HasErrors():
-        detail = "; ".join(diagnostics["errors"]) or "unknown kernel error"
+        detail = _kernel_message_text(diagnostics["errors"]) or "unknown kernel error"
         raise _ExactComparisonError(
             error_code,
             f"OpenCascade could not complete {label}: {detail}",
@@ -204,7 +218,10 @@ def _canonicalize_occupied_volume(shape, tolerance_mm, role):
         operation.AddAllToResult()
         if operation.HasErrors():
             diagnostics = _kernel_diagnostics(operation, label)
-            detail = "; ".join(diagnostics["errors"]) or "unknown kernel error"
+            detail = (
+                _kernel_message_text(diagnostics["errors"])
+                or "unknown kernel error"
+            )
             raise _ExactComparisonError(
                 f"{role}_canonicalization_failed",
                 f"OpenCascade could not extract {label}: {detail}",
@@ -257,7 +274,7 @@ def _base_response(tolerance_mm):
 def _unavailable_suggestion(code):
     if code == "exact_comparison_timeout":
         return (
-            "Retry the saved models with `agentcad diff REF1 REF2` and a larger "
+            "Retry the same saved-model `agentcad diff` with a larger "
             "AGENTCAD_DIFF_TIMEOUT_S; do not rerun the CAD build or import."
         )
     if code.endswith("_has_no_closed_solid") or code.endswith("_is_invalid"):
@@ -271,25 +288,46 @@ def _unavailable_suggestion(code):
             "solid before retrying `agentcad diff`."
         )
     return (
-        "Review the exact failure reason and reason.kernel when present. Run "
-        "`agentcad diff REF1 REF2 --visual` to retain the independent projection "
-        "comparison; an unavailable exact result does not mean the CAD build failed."
+        "Review the exact failure reason and comparison_3d.kernel when present. "
+        "Run an explicit `agentcad diff --visual` for the same saved models to "
+        "retain the independent projection comparison; an unavailable exact result "
+        "does not mean the CAD build failed."
     )
 
 
-def _unavailable(tolerance_mm, code, message, *, kernel=None):
+def _kernel_summary(operations, *, exact_partition_runs):
+    return {
+        "engine": "OpenCascade",
+        "non_destructive": True,
+        "exact_partition_runs": exact_partition_runs,
+        "operations": operations,
+    }
+
+
+def _unavailable(
+    tolerance_mm,
+    code,
+    message,
+    *,
+    kernel=None,
+    exact_partition_runs=None,
+):
     reason = {
         "code": code,
         "message": message,
     }
-    if kernel is not None:
-        reason["kernel"] = kernel
-    return SolidComparison({
+    data = {
         **_base_response(tolerance_mm),
         "status": "unavailable",
         "reason": reason,
         "suggestion": _unavailable_suggestion(code),
-    })
+    }
+    if kernel is not None or exact_partition_runs is not None:
+        data["kernel"] = _kernel_summary(
+            [kernel] if kernel is not None else [],
+            exact_partition_runs=exact_partition_runs or 0,
+        )
+    return SolidComparison(data)
 
 
 def _exact_timeout_seconds():
@@ -443,7 +481,10 @@ def _extract_partition_region(operation, take, avoid, label):
         )
         if operation.HasErrors():
             diagnostics = _kernel_diagnostics(operation, "exact 3D partition")
-            detail = "; ".join(diagnostics["errors"]) or "unknown kernel error"
+            detail = (
+                _kernel_message_text(diagnostics["errors"])
+                or "unknown kernel error"
+            )
             raise RuntimeError(detail)
         return _deep_copy_shape(operation.Shape())
     except Exception as exc:
@@ -632,6 +673,7 @@ def compare_solid_volumes(
             exc.code,
             str(exc),
             kernel=exc.kernel,
+            exact_partition_runs=0,
         )
     for diagnostics in (reference_diagnostics, candidate_diagnostics):
         if diagnostics is not None:
@@ -669,12 +711,14 @@ def compare_solid_volumes(
             exc.code,
             str(exc),
             kernel=exc.kernel,
+            exact_partition_runs=1,
         )
     except Exception as exc:
         return _unavailable(
             tolerance_mm,
             "boolean_operation_failed",
             f"OpenCascade could not complete the solid comparison: {exc}",
+            exact_partition_runs=1,
         )
     kernel_operations.append(partition_diagnostics)
 
@@ -689,6 +733,7 @@ def compare_solid_volumes(
                 "boolean_result_invalid",
                 f"The {name} Boolean result is not a valid B-rep.",
                 kernel=partition_diagnostics,
+                exact_partition_runs=1,
             )
 
     try:
@@ -705,6 +750,7 @@ def compare_solid_volumes(
             exc.code,
             str(exc),
             kernel=partition_diagnostics,
+            exact_partition_runs=1,
         )
     shared_volume = region_volumes["shared"]
     reference_only_volume = region_volumes["reference_only"]
@@ -725,23 +771,24 @@ def compare_solid_volumes(
     else:
         classification = "partial_shared_volume"
 
+    volume_semantics = {
+        "measurement": "physical_occupied_volume",
+    }
+    if reference_diagnostics is not None or candidate_diagnostics is not None:
+        volume_semantics["compound_members"] = (
+            "Overlapping members are counted once here; aggregate model "
+            "metrics elsewhere may sum members and double-count their overlap."
+        )
+
     data = {
         **_base_response(tolerance_mm),
         "status": "success",
         "classification": classification,
-        "kernel": {
-            "engine": "OpenCascade",
-            "non_destructive": True,
-            "partition_passes": 1,
-            "operations": kernel_operations,
-        },
-        "volume_semantics": {
-            "measurement": "physical_occupied_volume",
-            "compound_members": (
-                "Overlapping members are counted once here; aggregate model "
-                "metrics elsewhere may sum members and double-count their overlap."
-            ),
-        },
+        "kernel": _kernel_summary(
+            kernel_operations,
+            exact_partition_runs=1,
+        ),
+        "volume_semantics": volume_semantics,
         "volumes": {
             "reference": _round_volume(reference_volume),
             "candidate": _round_volume(candidate_volume),

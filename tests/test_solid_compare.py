@@ -140,6 +140,8 @@ def test_boolean_failure_is_structured(monkeypatch):
     assert not comparison.available
     assert comparison.data["reason"]["code"] == "boolean_operation_failed"
     assert "synthetic failure" in comparison.data["reason"]["message"]
+    assert "kernel" not in comparison.data["reason"]
+    assert comparison.data["kernel"]["exact_partition_runs"] == 1
     assert "--visual" in comparison.data["suggestion"]
     assert "does not mean the CAD build failed" in comparison.data["suggestion"]
 
@@ -168,13 +170,9 @@ def test_comparison_uses_independent_inputs_and_one_partition(monkeypatch):
     assert not reference.IsPartner(reference_copy)
     assert not candidate.IsPartner(candidate_copy)
     assert comparison.data["kernel"]["non_destructive"] is True
-    assert comparison.data["kernel"]["partition_passes"] == 1
+    assert comparison.data["kernel"]["exact_partition_runs"] == 1
     assert comparison.data["volume_semantics"] == {
         "measurement": "physical_occupied_volume",
-        "compound_members": (
-            "Overlapping members are counted once here; aggregate model metrics "
-            "elsewhere may sum members and double-count their overlap."
-        ),
     }
 
 
@@ -185,7 +183,9 @@ def test_kernel_warnings_are_exposed_on_success(monkeypatch):
         shared, reference_only, candidate_only, diagnostics = (
             original_partition(*args, **kwargs)
         )
-        diagnostics["warnings"] = ["synthetic kernel warning"]
+        diagnostics["warnings"] = [
+            {"message": "synthetic kernel warning", "count": 3}
+        ]
         return shared, reference_only, candidate_only, diagnostics
 
     monkeypatch.setattr(
@@ -198,7 +198,22 @@ def test_kernel_warnings_are_exposed_on_success(monkeypatch):
 
     assert comparison.available
     operations = comparison.data["kernel"]["operations"]
-    assert operations[-1]["warnings"] == ["synthetic kernel warning"]
+    assert operations[-1]["warnings"] == [
+        {"message": "synthetic kernel warning", "count": 3}
+    ]
+
+
+def test_repeated_kernel_messages_are_counted_once():
+    class SyntheticOperation:
+        def DumpWarnings(self, output):
+            output.write(b"orientation warning\norientation warning\n")
+
+    warnings = solid_compare_module._dump_kernel_messages(
+        SyntheticOperation(),
+        "DumpWarnings",
+    )
+
+    assert warnings == [{"message": "orientation warning", "count": 2}]
 
 
 def test_multisolid_canonicalization_failure_never_uses_raw_input(monkeypatch):
@@ -226,6 +241,17 @@ def test_multisolid_canonicalization_failure_never_uses_raw_input(monkeypatch):
     assert "synthetic canonicalization failure" in (
         comparison.data["reason"]["message"]
     )
+    assert "kernel" not in comparison.data["reason"]
+    assert comparison.data["kernel"]["exact_partition_runs"] == 0
+
+
+def test_compound_semantics_appear_only_after_canonicalization():
+    candidate = _compound(_box(), _box(size=4))
+
+    comparison = compare_solid_volumes(_box(), candidate)
+
+    assert comparison.available
+    assert "compound_members" in comparison.data["volume_semantics"]
 
 
 @pytest.mark.parametrize(

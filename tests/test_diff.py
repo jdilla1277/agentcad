@@ -176,6 +176,10 @@ def test_diff_exact_timeout_is_structured(
     assert data["status"] == "success"
     assert data["comparison_3d"]["status"] == "timeout"
     assert data["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
+    suggestion = data["comparison_3d"]["suggestion"]
+    assert str(input_step) in suggestion
+    assert str(output_step) in suggestion
+    assert "AGENTCAD_DIFF_TIMEOUT_S=60" in suggestion
 
 
 def test_diff_by_version_number(runner, isolated_dir):
