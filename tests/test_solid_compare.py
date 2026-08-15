@@ -1,13 +1,19 @@
+import math
+
 import cadquery as cq
 import pytest
 from PIL import Image
 
 import agentcad.solid_compare as solid_compare_module
 from agentcad.solid_compare import (
+    approximate_compare_solid_volumes,
+    bounded_approximate_solid_volumes,
     bounded_compare_solid_volumes,
+    compare_solid_volumes_with_fallback,
     compare_solid_volumes,
     write_solid_comparison_artifacts,
 )
+from agentcad.comparison_phases import ComparisonPhaseRecorder
 
 
 def _box(size=10, translation=(0, 0, 0)):
@@ -343,6 +349,13 @@ def test_zero_exact_timeout_disables_dedicated_limit(monkeypatch):
     assert solid_compare_module._exact_timeout_seconds() is None
 
 
+@pytest.mark.parametrize("value", ["invalid", "-1", "nan", "inf"])
+def test_invalid_approximate_timeout_uses_safe_default(monkeypatch, value):
+    monkeypatch.setenv("AGENTCAD_APPROX_DIFF_TIMEOUT_S", value)
+
+    assert solid_compare_module._approximate_timeout_seconds() == 30.0
+
+
 def test_bounded_comparison_kills_worker_after_exact_budget(
     monkeypatch, tmp_path
 ):
@@ -367,3 +380,183 @@ def test_bounded_comparison_kills_worker_after_exact_budget(
     assert "larger AGENTCAD_DIFF_TIMEOUT_S" in comparison.data["suggestion"]
     assert "do not rerun the CAD build" in comparison.data["suggestion"]
     assert not marker.exists()
+
+
+def test_bounded_approximation_kills_worker_after_its_budget(
+    monkeypatch, tmp_path
+):
+    marker = tmp_path / "approximate-worker-finished"
+    script = (
+        "import pathlib,time; "
+        "time.sleep(5); "
+        f"pathlib.Path({str(marker)!r}).write_text('not killed')"
+    )
+    monkeypatch.setenv("AGENTCAD_APPROX_DIFF_TIMEOUT_S", "0.05")
+    monkeypatch.setattr(
+        solid_compare_module,
+        "_approximate_worker_argv",
+        lambda *_args: [solid_compare_module.sys.executable, "-c", script],
+    )
+
+    comparison = bounded_approximate_solid_volumes(_box(), _box())
+
+    assert comparison.data["status"] == "timeout"
+    assert comparison.data["reason"]["code"] == "approximate_comparison_timeout"
+    assert comparison.data["timeout_s"] == pytest.approx(0.05)
+    assert not marker.exists()
+
+
+def test_approximate_comparison_reports_resolution_error_and_direction():
+    reference = _box()
+    candidate = (
+        cq.Workplane("XY")
+        .box(10, 10, 10)
+        .faces(">Z")
+        .workplane()
+        .hole(4)
+        .val()
+        .wrapped
+    )
+
+    comparison = approximate_compare_solid_volumes(
+        reference,
+        candidate,
+        resolution_mm=0.5,
+    )
+
+    assert comparison.available
+    assert comparison.data["method"] == "approximate_voxel_volume"
+    assert comparison.data["accuracy"] == "approximate"
+    assert comparison.data["resolution_mm"] == 0.5
+    assert comparison.data["volumes"]["reference_only"] > 0
+    assert comparison.data["volumes"]["candidate_only"] == 0
+    error_estimate = comparison.data["error_estimate"]
+    assert error_estimate["is_strict_bound"] is False
+    assert "not additional measured volumes" in error_estimate["interpretation"]
+    assert comparison.data["grid"]["sampling"] == "voxel_center_occupancy"
+    assert comparison.data["volume_semantics"] == {
+        "measurement": "sampled_voxel_occupancy",
+    }
+    assert any(
+        "not exact CAD Booleans" in limitation
+        for limitation in comparison.data["limitations"]
+    )
+
+
+def test_bounded_approximate_comparison_returns_voxel_artifact_shapes():
+    comparison = bounded_approximate_solid_volumes(
+        _box(),
+        _box(translation=(5, 0, 0)),
+        resolution_mm=1,
+    )
+
+    assert comparison.available
+    assert comparison.data["volumes"] == {
+        "reference": 1000.0,
+        "candidate": 1000.0,
+        "shared": 500.0,
+        "reference_only": 500.0,
+        "candidate_only": 500.0,
+        "union": 1500.0,
+    }
+    assert comparison.shared_shape is not None
+    assert comparison.reference_only_shape is not None
+    assert comparison.candidate_only_shape is not None
+    assert {part["id"] for part in comparison.colored_parts()} == {
+        "approximate_shared_volume",
+        "approximate_reference_only_volume",
+        "approximate_candidate_only_volume",
+    }
+
+
+def test_approximate_grid_coarsens_overly_fine_requested_resolution():
+    _origin, dimensions, effective_resolution = solid_compare_module._voxel_grid(
+        _box(),
+        _box(),
+        resolution_mm=0.001,
+    )
+
+    assert effective_resolution > 0.001
+    assert math.prod(dimensions) <= 250_000
+
+
+def test_voxel_surface_merges_coplanar_cells():
+    merged = solid_compare_module._merge_grid_cells({
+        (0, 0), (1, 0), (0, 1), (1, 1), (3, 0),
+    })
+
+    assert sorted(merged) == [(0, 0, 2, 2), (3, 0, 4, 1)]
+
+
+def test_exact_failure_automatically_falls_back_and_keeps_diagnostics(
+    monkeypatch,
+):
+    exact = solid_compare_module._unavailable(
+        solid_compare_module._DEFAULT_TOLERANCE_MM,
+        "boolean_result_invalid",
+        "synthetic exact failure",
+    )
+    approximate = approximate_compare_solid_volumes(
+        _box(),
+        _box(translation=(5, 0, 0)),
+        resolution_mm=1,
+    )
+    monkeypatch.setattr(
+        solid_compare_module,
+        "bounded_compare_solid_volumes",
+        lambda *_args, **_kwargs: exact,
+    )
+    monkeypatch.setattr(
+        solid_compare_module,
+        "bounded_approximate_solid_volumes",
+        lambda *_args, **_kwargs: approximate,
+    )
+    phases = ComparisonPhaseRecorder()
+
+    comparison = compare_solid_volumes_with_fallback(
+        _box(),
+        _box(translation=(5, 0, 0)),
+        phase_recorder=phases,
+    )
+
+    assert comparison.available
+    assert comparison.data["method"] == "approximate_voxel_volume"
+    assert comparison.data["exact_attempt"]["status"] == "unavailable"
+    assert (
+        comparison.data["exact_attempt"]["reason"]["code"]
+        == "boolean_result_invalid"
+    )
+    assert phases.entries["exact_3d_comparison"]["status"] == "unavailable"
+    assert phases.entries["approximate_3d_comparison"]["status"] == "success"
+
+
+def test_exact_success_skips_approximation(monkeypatch):
+    exact = compare_solid_volumes(_box(), _box())
+    monkeypatch.setattr(
+        solid_compare_module,
+        "bounded_compare_solid_volumes",
+        lambda *_args, **_kwargs: exact,
+    )
+    approximate_called = False
+
+    def approximate(*_args, **_kwargs):
+        nonlocal approximate_called
+        approximate_called = True
+
+    monkeypatch.setattr(
+        solid_compare_module,
+        "bounded_approximate_solid_volumes",
+        approximate,
+    )
+    phases = ComparisonPhaseRecorder()
+
+    comparison = compare_solid_volumes_with_fallback(
+        _box(),
+        _box(),
+        phase_recorder=phases,
+    )
+
+    assert comparison.data["method"] == "source_frame_boolean_volume"
+    assert not approximate_called
+    assert phases.entries["exact_3d_comparison"]["status"] == "success"
+    assert phases.entries["approximate_3d_comparison"]["status"] == "skipped"

@@ -41,6 +41,7 @@ _PHASE_ARTIFACTS = {
     "comparison_rendering": "diff",
     "projection_comparison": "diff",
     "exact_3d_comparison": "diff",
+    "approximate_3d_comparison": "diff",
     "difference_artifact_export": "diff",
     "viewer_generation": "viewer",
     # Backward-compatible names accepted by injected failure harnesses and
@@ -159,6 +160,9 @@ def _timeout_suggestion(phase, completed):
         ),
         "exact_3d_comparison": (
             "Exact 3D comparison timed out; the current STEP is already saved."
+        ),
+        "approximate_3d_comparison": (
+            "Approximate 3D comparison timed out; the current STEP is already saved."
         ),
         "difference_artifact_export": (
             "Difference artifact export timed out; numeric results produced earlier "
@@ -1514,21 +1518,14 @@ def _run_impl(
             _heartbeat("computing exact 3D comparison…")
             try:
                 from agentcad.solid_compare import (
-                    bounded_compare_solid_volumes,
+                    compare_solid_volumes_with_fallback,
                 )
 
-                with comparison_recorder.observe(
-                    "exact_3d_comparison"
-                ) as phase:
-                    solid_comparison = bounded_compare_solid_volumes(
-                        prev_shape,
-                        topo_shape_for_metrics,
-                    )
-                    phase.status = solid_comparison.data.get(
-                        "status", "success"
-                    )
-                    reason = solid_comparison.data.get("reason", {})
-                    phase.message = reason.get("message")
+                solid_comparison = compare_solid_volumes_with_fallback(
+                    prev_shape,
+                    topo_shape_for_metrics,
+                    phase_recorder=comparison_recorder,
+                )
                 diff_meta["comparison_3d"] = solid_comparison.data
             except Exception as exc:
                 warnings.append(

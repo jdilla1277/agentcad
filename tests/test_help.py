@@ -335,16 +335,17 @@ def test_help_points_to_observable_comparison_phases(runner):
     assert "duration_ms" in output
     assert "AGENTCAD_DIFF_TIMEOUT_S" in output
     assert "30s default budget" in output
-    assert "comparison_3d.status/reason/timeout_s" in output
+    assert "approximate_3d_comparison" in output
+    assert "Exact diagnostics remain in exact_attempt" in output
     assert "instead of rerunning CAD" in output
 
 
 def test_diff_help_explains_exact_result_recovery(runner):
     output = runner.invoke(cli, ["diff", "--help"]).output
 
-    assert "comparison_3d.status" in output
-    assert "comparison_3d.kernel" in output
-    assert "same location" in output
+    assert "comparison_3d.exact_attempt" in output
+    assert "approximate voxel comparison" in output
+    assert "exact_attempt.kernel" in output
     assert "AGENTCAD_DIFF_TIMEOUT_S" in output
     assert "do not rerun the CAD build or import" in output
 

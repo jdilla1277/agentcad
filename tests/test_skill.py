@@ -97,7 +97,8 @@ def test_skill_show_content_mentions_commands(runner):
     assert "duration_ms" in content
     assert "AGENTCAD_DIFF_TIMEOUT_S" in content
     assert "30-second default worker budget" in content
-    assert "comparison_3d.status/reason/timeout_s" in content
+    assert "method=approximate_voxel_volume" in content
+    assert "exact_attempt" in content
     assert "create a duplicate version" in content
     assert "Progress heartbeats" in content
     assert "stdout stays reserved for the final JSON response" in content

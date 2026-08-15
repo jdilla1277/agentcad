@@ -435,22 +435,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
             solid_comparison = None
             try:
                 from agentcad.solid_compare import (
-                    bounded_compare_solid_volumes,
+                    compare_solid_volumes_with_fallback,
                 )
 
-                with comparison_recorder.observe(
-                    "exact_3d_comparison"
-                ) as phase:
-                    solid_comparison = bounded_compare_solid_volumes(
-                        prev_shape,
-                        topo_shape,
-                    )
-                    phase.status = solid_comparison.data.get(
-                        "status", "success"
-                    )
-                    phase.message = solid_comparison.data.get(
-                        "reason", {}
-                    ).get("message")
+                solid_comparison = compare_solid_volumes_with_fallback(
+                    prev_shape,
+                    topo_shape,
+                    phase_recorder=comparison_recorder,
+                )
                 diff_meta["comparison_3d"] = solid_comparison.data
             except Exception as exc:
                 lifecycle.add_warning(

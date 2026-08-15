@@ -220,6 +220,7 @@ def test_view_two_files_step_auto_converts(runner, isolated_dir, monkeypatch):
     ):
         assert phases[name]["status"] == "success"
         assert phases[name]["duration_ms"] >= 0
+    assert phases["approximate_3d_comparison"]["status"] == "skipped"
 
 
 def test_view_two_glbs_no_png(runner, isolated_dir, monkeypatch):
@@ -239,6 +240,7 @@ def test_view_two_glbs_no_png(runner, isolated_dir, monkeypatch):
         "comparison_rendering",
         "projection_comparison",
         "exact_3d_comparison",
+        "approximate_3d_comparison",
         "difference_artifact_export",
     ):
         assert parsed["comparison_phases"][name]["status"] == "skipped"
@@ -260,6 +262,7 @@ def test_view_exact_exception_is_attributed_and_projection_survives(
     monkeypatch.setattr(
         "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
     )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
     result = runner.invoke(cli, ["view", str(a_step), str(b_step)])
 
     assert result.exit_code == 0, result.output
@@ -271,10 +274,12 @@ def test_view_exact_exception_is_attributed_and_projection_survives(
     assert "injected view exact failure" in (
         phases["exact_3d_comparison"]["message"]
     )
-    assert phases["difference_artifact_export"]["status"] == "skipped"
+    assert phases["approximate_3d_comparison"]["status"] == "success"
+    assert phases["difference_artifact_export"]["status"] == "success"
     assert phases["viewer_generation"]["status"] == "success"
     assert parsed["projection_comparison"]["method"] == "four_view_image_mask"
-    assert "comparison_3d" not in parsed
+    assert parsed["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert parsed["comparison_3d"]["exact_attempt"]["status"] == "unavailable"
 
 
 def test_view_exact_timeout_preserves_projection(
@@ -304,14 +309,18 @@ def test_view_exact_timeout_preserves_projection(
         "agentcad.solid_compare.bounded_compare_solid_volumes",
         exact_timeout,
     )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
     result = runner.invoke(cli, ["view", str(a_step), str(b_step)])
 
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
     assert parsed["status"] == "success"
     assert parsed["projection_comparison"]["method"] == "four_view_image_mask"
-    assert parsed["comparison_3d"]["status"] == "timeout"
+    assert parsed["comparison_3d"]["status"] == "success"
+    assert parsed["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert parsed["comparison_3d"]["exact_attempt"]["status"] == "timeout"
     assert parsed["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
+    assert parsed["comparison_phases"]["approximate_3d_comparison"]["status"] == "success"
 
 
 def test_view_two_files_missing_second_errors(runner, isolated_dir, monkeypatch):
@@ -560,6 +569,10 @@ def test_diff_visual_flag_produces_diff_html_and_png(runner, isolated_dir, monke
         "viewer_generation",
     ):
         assert parsed["comparison_phases"][name]["status"] == "success"
+    assert (
+        parsed["comparison_phases"]["approximate_3d_comparison"]["status"]
+        == "skipped"
+    )
 
 
 def test_diff_visual_with_overlay(runner, isolated_dir, monkeypatch):

@@ -19,6 +19,8 @@ _CAD_FILE_SUFFIXES = {".step", ".stp", ".brep"}
 
 def _add_exact_recovery_suggestion(data, ref1, ref2):
     """Make explicit-diff recovery advice directly runnable."""
+    comparison = data
+    data = comparison.get("exact_attempt", comparison)
     command = "agentcad diff {} {}".format(
         shlex.quote(str(ref1)),
         shlex.quote(str(ref2)),
@@ -38,6 +40,15 @@ def _add_exact_recovery_suggestion(data, ref1, ref2):
             f"`{command} --visual` to retain the independent projection "
             "comparison; an unavailable exact result does not mean the CAD "
             "build failed."
+        )
+    approximate = comparison.get("approximate_attempt", {})
+    if approximate.get("status") == "timeout":
+        timeout_s = approximate.get("timeout_s")
+        next_timeout = max(60.0, float(timeout_s or 0) * 2)
+        approximate["suggestion"] = (
+            "Retry this saved-model comparison with "
+            f"`AGENTCAD_APPROX_DIFF_TIMEOUT_S={next_timeout:g} {command}`; "
+            "do not rerun the CAD build or import."
         )
 
 
@@ -116,13 +127,15 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
     """Compare two versions or CAD files.
 
     Closed solids return exact shared and directional occupied volumes when the
-    native comparison succeeds. Inspect comparison_3d.status and
-    comparison_3d.kernel; failed attempts keep diagnostics in the same location
-    and include a copyable suggestion.
+    native comparison succeeds. Exact failure automatically runs a bounded
+    approximate voxel comparison; it reports resolution and error estimates and
+    keeps exact diagnostics under comparison_3d.exact_attempt, including
+    exact_attempt.kernel when native diagnostics exist.
 
     Exact work has a 30-second budget. Set AGENTCAD_DIFF_TIMEOUT_S=N to override
-    it (0 disables the limit for diagnostics). On timeout, retry this diff with
-    a larger budget; do not rerun the CAD build or import.
+    it (0 disables the limit for diagnostics). Approximate work has its own 30s
+    budget via AGENTCAD_APPROX_DIFF_TIMEOUT_S. Retry this saved diff for exact
+    results; do not rerun the CAD build or import.
     """
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["diff", ref1, ref2]
@@ -168,24 +181,20 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             }))
             sys.exit(1)
 
-        from agentcad.solid_compare import bounded_compare_solid_volumes
+        from agentcad.solid_compare import compare_solid_volumes_with_fallback
 
         solid_comparison = None
         try:
-            with phase_recorder.observe("exact_3d_comparison") as phase:
-                solid_comparison = bounded_compare_solid_volumes(
-                    shape_a, shape_b
-                )
-                _add_exact_recovery_suggestion(
-                    solid_comparison.data,
-                    ref1,
-                    ref2,
-                )
-                phase.status = solid_comparison.data.get("status", "success")
-                phase.message = (
-                    solid_comparison.data.get("message")
-                    or solid_comparison.data.get("reason", {}).get("message")
-                )
+            solid_comparison = compare_solid_volumes_with_fallback(
+                shape_a,
+                shape_b,
+                phase_recorder=phase_recorder,
+            )
+            _add_exact_recovery_suggestion(
+                solid_comparison.data,
+                ref1,
+                ref2,
+            )
         except Exception:
             pass
         response = {
@@ -335,25 +344,21 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
     solid_comparison = None
     if step_a is not None and step_b is not None:
         try:
-            from agentcad.solid_compare import bounded_compare_solid_volumes
+            from agentcad.solid_compare import compare_solid_volumes_with_fallback
 
             with phase_recorder.observe("source_loading"):
                 shape_a = load_cad_shape(step_a)
                 shape_b = load_cad_shape(step_b)
-            with phase_recorder.observe("exact_3d_comparison") as phase:
-                solid_comparison = bounded_compare_solid_volumes(
-                    shape_a, shape_b
-                )
-                _add_exact_recovery_suggestion(
-                    solid_comparison.data,
-                    ref1,
-                    ref2,
-                )
-                phase.status = solid_comparison.data.get("status", "success")
-                phase.message = (
-                    solid_comparison.data.get("message")
-                    or solid_comparison.data.get("reason", {}).get("message")
-                )
+            solid_comparison = compare_solid_volumes_with_fallback(
+                shape_a,
+                shape_b,
+                phase_recorder=phase_recorder,
+            )
+            _add_exact_recovery_suggestion(
+                solid_comparison.data,
+                ref1,
+                ref2,
+            )
             response["comparison_3d"] = solid_comparison.data
         except Exception:
             solid_comparison = None
@@ -446,23 +451,19 @@ def _add_visual_response(
             and phase_recorder.entries["exact_3d_comparison"].get("status")
             == "pending"
         ):
-            from agentcad.solid_compare import bounded_compare_solid_volumes
+            from agentcad.solid_compare import compare_solid_volumes_with_fallback
 
             try:
-                with phase_recorder.observe("exact_3d_comparison") as phase:
-                    solid_comparison = bounded_compare_solid_volumes(
-                        shape_a, shape_b
-                    )
-                    _add_exact_recovery_suggestion(
-                        solid_comparison.data,
-                        step_a,
-                        step_b,
-                    )
-                    phase.status = solid_comparison.data.get("status", "success")
-                    phase.message = (
-                        solid_comparison.data.get("message")
-                        or solid_comparison.data.get("reason", {}).get("message")
-                    )
+                solid_comparison = compare_solid_volumes_with_fallback(
+                    shape_a,
+                    shape_b,
+                    phase_recorder=phase_recorder,
+                )
+                _add_exact_recovery_suggestion(
+                    solid_comparison.data,
+                    step_a,
+                    step_b,
+                )
                 response["comparison_3d"] = solid_comparison.data
             except Exception:
                 pass
@@ -482,7 +483,7 @@ def _add_visual_response(
         else:
             phase_recorder.skip(
                 "difference_artifact_export",
-                "Exact 3D comparison produced no exportable geometry.",
+                "3D comparison produced no exportable geometry.",
             )
     else:
         phase_recorder.skip(

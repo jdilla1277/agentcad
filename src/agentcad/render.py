@@ -623,9 +623,15 @@ def render_solid_comparison(
             output.paste(source, (0, legend_h))
 
         draw = ImageDraw.Draw(output)
+        approximate = (comparison_data or {}).get("accuracy") == "approximate"
+        title = (
+            "APPROXIMATE VOXEL 3D VOLUME | NO ALIGNMENT APPLIED"
+            if approximate
+            else "SOURCE-FRAME 3D VOLUME | NO ALIGNMENT APPLIED"
+        )
         draw.text(
             (10, 8),
-            "SOURCE-FRAME 3D VOLUME | NO ALIGNMENT APPLIED",
+            title,
             fill=(40, 40, 40),
             font=legend_font,
         )
@@ -635,6 +641,9 @@ def render_solid_comparison(
         def _legend_text(label, key):
             if key not in volumes or not unit:
                 return label
+            if approximate:
+                label = label.replace(" 3D VOLUME", "")
+                return f"APPROX. {label} | {volumes[key]:,.2f} {unit}"
             return f"{label} | {volumes[key]:,.4f} {unit}"
 
         legend = (

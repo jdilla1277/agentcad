@@ -320,7 +320,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <img id="img-diff-overlay">
   </div>
   <div class="panel" id="panel-diff-volume" style="display:none;">
-    <h3>diff_volume.png — source-frame 3D volume (shared gray, reference-only blue, candidate-only orange)</h3>
+    <h3>diff_volume.png — source-frame 3D volume (exact or labeled approximate; shared gray, reference-only blue, candidate-only orange)</h3>
     <img id="img-diff-volume">
   </div>
 </div>
@@ -2274,7 +2274,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
     projection_comparison = None
     solid_comparison = None
     if shape_a is not None and shape_b is not None:
-        from agentcad.solid_compare import bounded_compare_solid_volumes
+        from agentcad.solid_compare import compare_solid_volumes_with_fallback
 
         with phase_recorder.observe("comparison_rendering"):
             png_path, source_views = _render_diff_png(
@@ -2292,14 +2292,11 @@ def view(file, file_b, overlay, with_measure, spec_file):
                 )
             )
         try:
-            with phase_recorder.observe("exact_3d_comparison") as phase:
-                solid_comparison = bounded_compare_solid_volumes(
-                    shape_a, shape_b
-                )
-                phase.status = solid_comparison.data.get("status", "success")
-                phase.message = solid_comparison.data.get("reason", {}).get(
-                    "message"
-                )
+            solid_comparison = compare_solid_volumes_with_fallback(
+                shape_a,
+                shape_b,
+                phase_recorder=phase_recorder,
+            )
         except Exception:
             solid_comparison = None
         if solid_comparison is not None and solid_comparison.available:
@@ -2322,13 +2319,14 @@ def view(file, file_b, overlay, with_measure, spec_file):
         else:
             phase_recorder.skip(
                 "difference_artifact_export",
-                "Exact 3D comparison produced no exportable geometry.",
+                "3D comparison produced no exportable geometry.",
             )
     else:
         for phase_name in (
             "comparison_rendering",
             "projection_comparison",
             "exact_3d_comparison",
+            "approximate_3d_comparison",
             "difference_artifact_export",
         ):
             phase_recorder.skip(
