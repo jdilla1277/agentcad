@@ -207,7 +207,7 @@ def test_view_two_files_step_auto_converts(runner, isolated_dir, monkeypatch):
     html = (isolated_dir / "diff_a_b.html").read_text()
     assert html.count("data:image/png;base64,") == 3
     assert "four matched views" in html
-    assert "centered 2D projection map" in html
+    assert "visual silhouette overlap, not physical correctness" in html
     assert "source-frame 3D volume" in html
     phases = parsed["comparison_phases"]
     for name in (

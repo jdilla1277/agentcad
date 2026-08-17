@@ -263,16 +263,14 @@ def render_shape_batch(
         _capture(view, out_path, width, height, msaa=msaa)
 
 
-# The default composite is one top-down layout view + three iso angles spaced
-# around the part, so any asymmetric feature (arm, clamp, bracket, etc.) is
-# visible from at least one angle. Chosen over the classic orthographic
-# front/right/top/iso set because, for agents, dimensions come from the
-# metrics JSON — images need to maximize geometry coverage, not ruler-accuracy.
+# The default composite balances plan and underside coverage with two
+# three-dimensional views. Keeping this as the single camera definition means
+# previews and every comparison artifact show the same evidence.
 _COMPOSITE_VIEWS = [
     ("TOP", "top"),
-    ("ISO FRONT-RIGHT", (45, 25)),
-    ("ISO BACK-RIGHT", (-45, 25)),
-    ("ISO BACK-LEFT", (-135, 25)),
+    ("BOTTOM", "bottom"),
+    ("UPPER ISO", (45, -25)),
+    ("LOWER ISO", (45, 25)),
 ]
 
 
@@ -378,7 +376,7 @@ def _projected_shape_extent(shape, view_spec):
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
     dimensions = (xmax - xmin, ymax - ymin, zmax - zmin)
 
-    if view_spec == "top":
+    if view_spec in {"top", "bottom"}:
         return max(dimensions[0], dimensions[1])
 
     azimuth, elevation = view_spec
@@ -569,7 +567,7 @@ def _compose_4view(images, per_view_size):
 
 
 def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
-    """Render a 4-panel composite: top view + three iso angles spaced around the part.
+    """Render a balanced top, bottom, upper-iso, and lower-iso composite.
 
     This is the default preview agents get after every successful run. One
     shape → four informative angles → single image.
@@ -814,6 +812,10 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
             "classification": _overlap_classification(overlap_ratio),
             "aggregation": "foreground_union_pixel_weighted_across_views",
         },
+        "meaning": (
+            "Visual silhouette overlap across four rendered viewpoints; "
+            "not shared physical volume or model correctness."
+        ),
         "limitations": [
             "Does not establish shared 3D geometry.",
             "Does not identify physical material additions or removals.",

@@ -71,7 +71,7 @@ VERSION OUTPUTS
       output.glb        GLB backing viewer.html (normally; skipped by fast path)
       script.py         copy of the executed script
       meta.json         full run metadata, including runtime and parts
-      preview.png       4-view composite: front, right, top, iso
+      preview.png       4-view composite: top, bottom, upper iso, lower iso
       diff_side.png     side-by-side vs. prior success (from v2 onward)
       diff_overlay.png  centered 2D projection map vs. prior (from v2 onward)
       diff_volume.png   source-frame shared/reference-only/candidate-only

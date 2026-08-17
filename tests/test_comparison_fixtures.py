@@ -19,7 +19,7 @@ from agentcad.solid_compare import (
     compare_solid_volumes,
 )
 from agentcad.step_io import load_cad_shape
-from agentcad.render import render_diff_overlay
+from agentcad.render import render_comparison_source_views, render_diff_overlay
 from scripts.generate_comparison_fixtures import shared_location_pair
 
 
@@ -176,10 +176,15 @@ def test_shared_transform_fixture_really_shares_topology():
     assert _volume(transformed) == pytest.approx(1000.0)
 
 
-def test_covered_rotor_top_projection_hides_the_blade_change(tmp_path):
+def test_default_views_expose_covered_rotor_underside_change(tmp_path):
     case = CATALOG["cases"]["covered_rotor"]
     reference = load_cad_shape(FIXTURE_DIR / case["reference"])
     candidate = load_cad_shape(FIXTURE_DIR / case["candidate"])
+    source_views = render_comparison_source_views(
+        reference,
+        candidate,
+        per_view_size=64,
+    )
 
     projection = render_diff_overlay(
         reference,
@@ -189,16 +194,22 @@ def test_covered_rotor_top_projection_hides_the_blade_change(tmp_path):
         tmp_path / "covered_rotor_overlay.png",
         width=128,
         height=128,
+        source_views=source_views,
     )
 
     views = {view["view"]: view for view in projection["views"]}
+    assert set(views) == {"top", "bottom", "upper_iso", "lower_iso"}
     assert views["top"]["coincident_fraction_of_union"] == pytest.approx(
         case["top_projection_iou"]
     )
-    assert any(
-        view["reference_only_fraction_of_union"] > 0.02
-        for name, view in views.items()
-        if name != "top"
+    assert views["lower_iso"]["reference_only_fraction_of_union"] > 0.02
+    assert (
+        source_views.reference[0].tobytes()
+        == source_views.candidate[0].tobytes()
+    )
+    assert (
+        source_views.reference[3].tobytes()
+        != source_views.candidate[3].tobytes()
     )
 
 

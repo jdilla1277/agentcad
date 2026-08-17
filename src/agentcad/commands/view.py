@@ -308,7 +308,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     </div>
   </div>
   <div class="panel" id="panel-preview" style="display:none;">
-    <h3>preview.png — 4-view composite (top + three iso angles) the agent reads by default</h3>
+    <h3>preview.png — balanced top, bottom, upper-iso, and lower-iso views the agent reads by default</h3>
     <img id="img-preview">
   </div>
   <div class="panel" id="panel-diff-side" style="display:none;">
@@ -316,7 +316,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <img id="img-diff-side">
   </div>
   <div class="panel" id="panel-diff-overlay" style="display:none;">
-    <h3>diff_overlay.png — centered 2D projection map (coincident gray, reference-only blue, candidate-only orange)</h3>
+    <h3>diff_overlay.png — visual silhouette overlap, not physical correctness (coincident gray, reference-only blue, candidate-only orange)</h3>
     <img id="img-diff-overlay">
   </div>
   <div class="panel" id="panel-diff-volume" style="display:none;">
