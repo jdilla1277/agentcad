@@ -13,6 +13,7 @@ COMPARISON_PHASES = (
     "comparison_rendering",
     "projection_comparison",
     "exact_3d_comparison",
+    "approximate_3d_comparison",
     "difference_artifact_export",
     "viewer_generation",
 )

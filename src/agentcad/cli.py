@@ -148,16 +148,22 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     artifacts; --overlay selects its tinted interactive mode.
     Comparison responses expose comparison_phases; read each status and
     duration_ms to distinguish source loading, rendering, 2D projection,
-    exact_3d_comparison, artifact export, and viewer generation.
+    exact_3d_comparison, approximate_3d_comparison, artifact export, and viewer
+    generation.
     Exact 3D work runs in a terminable worker with a 30s default budget.
     Set AGENTCAD_DIFF_TIMEOUT_S=N to override it; 0 disables this dedicated
     limit for diagnostics. A timeout preserves completed projection results
-    and the committed version, but skips colored exact-volume artifacts. Check
-    comparison_3d.status/reason/timeout_s. Exact results use independent inputs
-    and one non-destructive exact partition. comparison_3d.kernel stays in one
-    location on success and failure; exact_partition_runs distinguishes that
-    pass from compound canonicalization, and repeated native messages include
-    counts. volume_semantics explains compound overlap only when applicable.
+    and the committed version, then automatically runs a bounded approximate
+    voxel comparison. Approximate results report method, resolution_mm, and a
+    non-strict error_estimate; its absolute_volume values are heuristic errors,
+    not measurements. Exact diagnostics remain in exact_attempt.
+    Set AGENTCAD_APPROX_DIFF_TIMEOUT_S or AGENTCAD_APPROX_RESOLUTION_MM to tune
+    the fallback. Exact results use independent inputs and one non-destructive
+    exact partition. Native diagnostics appear at comparison_3d.kernel for an
+    exact result and comparison_3d.exact_attempt.kernel after fallback;
+    exact_partition_runs distinguishes that pass from compound canonicalization,
+    and repeated native messages include counts. volume_semantics explains
+    compound overlap only when applicable.
     Impossible or non-conserving volumes are rejected. If exact volumes are needed,
     retry `agentcad diff OLD NEW` with a larger budget instead of rerunning CAD.
 

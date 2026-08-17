@@ -640,6 +640,7 @@ def test_run_comparison_timeout_is_attributed_to_active_subphase(
     for name in (
         "projection_comparison",
         "exact_3d_comparison",
+        "approximate_3d_comparison",
         "difference_artifact_export",
         "viewer_generation",
     ):
@@ -1253,12 +1254,16 @@ def test_run_auto_diff_reports_observable_comparison_phases(
         "comparison_rendering",
         "projection_comparison",
         "exact_3d_comparison",
+        "approximate_3d_comparison",
         "difference_artifact_export",
         "viewer_generation",
     ]
     assert list(parsed["comparison_phases"]) == expected
     for phase in expected:
         entry = parsed["comparison_phases"][phase]
+        if phase == "approximate_3d_comparison":
+            assert entry["status"] == "skipped"
+            continue
         assert entry["status"] == "success"
         assert isinstance(entry["duration_ms"], int)
         assert entry["duration_ms"] >= 0
@@ -1288,6 +1293,7 @@ def test_run_exact_diff_failure_is_attributed_without_losing_projection(
     monkeypatch.setattr(
         "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
     )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
     result = runner.invoke(cli, [
         "run", "script.py", "--output", "second", "--no-preview",
         "--no-view", "--no-daemon",
@@ -1304,14 +1310,16 @@ def test_run_exact_diff_failure_is_attributed_without_losing_projection(
     assert "injected exact comparison failure" in (
         phases["exact_3d_comparison"]["message"]
     )
-    assert phases["difference_artifact_export"]["status"] == "skipped"
+    assert phases["approximate_3d_comparison"]["status"] == "success"
+    assert phases["difference_artifact_export"]["status"] == "success"
     assert phases["viewer_generation"]["status"] == "success"
     assert parsed["artifacts"]["diff"]["status"] == "success"
     assert (
         parsed["diff"]["projection_comparison"]["method"]
         == "four_view_image_mask"
     )
-    assert "comparison_3d" not in parsed["diff"]
+    assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "unavailable"
 
 
 def test_run_exact_worker_timeout_preserves_projection_and_version(
@@ -1342,6 +1350,7 @@ def test_run_exact_worker_timeout_preserves_projection_and_version(
         "agentcad.solid_compare.bounded_compare_solid_volumes",
         exact_timeout,
     )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
     result = runner.invoke(cli, [
         "run", "script.py", "--output", "bounded", "--no-preview",
         "--no-view", "--no-daemon",
@@ -1352,9 +1361,12 @@ def test_run_exact_worker_timeout_preserves_projection_and_version(
     assert parsed["status"] == "success"
     assert parsed["comparison_phases"]["projection_comparison"]["status"] == "success"
     assert parsed["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
-    assert parsed["diff"]["comparison_3d"]["status"] == "timeout"
+    assert parsed["diff"]["comparison_3d"]["status"] == "success"
+    assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "timeout"
     assert parsed["artifacts"]["diff"]["status"] == "success"
-    assert parsed["comparison_phases"]["difference_artifact_export"]["status"] == "skipped"
+    assert parsed["comparison_phases"]["approximate_3d_comparison"]["status"] == "success"
+    assert parsed["comparison_phases"]["difference_artifact_export"]["status"] == "success"
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
     assert manifest["current"] == "bounded"
     assert (isolated_dir / "v2_bounded" / "output.step").exists()

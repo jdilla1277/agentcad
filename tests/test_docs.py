@@ -495,6 +495,7 @@ def test_docs_schemas_explains_observable_comparison_phases(runner):
         "comparison_rendering",
         "projection_comparison",
         "exact_3d_comparison",
+        "approximate_3d_comparison",
         "difference_artifact_export",
         "viewer_generation",
     ):
@@ -508,10 +509,11 @@ def test_docs_schemas_explains_observable_comparison_phases(runner):
     assert "independent of display material and lighting" in content
     assert "AGENTCAD_DIFF_TIMEOUT_S" in content
     assert "terminable worker" in content
-    assert "comparison_3d.status/reason/timeout_s" in content
+    assert "method=approximate_voxel_volume" in content
+    assert "comparison_3d.exact_attempt" in content
     assert "one non-destructive exact" in content
     assert "comparison_3d.kernel" in content
-    assert "same location on\n              success and failure" in content
+    assert "comparison_3d.exact_attempt.kernel" in content
     assert "exact_partition_runs" in content
     assert "counts instead of duplicate entries" in content
     assert "Unavailable results include a suggestion" in content

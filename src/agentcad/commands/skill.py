@@ -75,14 +75,19 @@ agentcad --help   # Read the built-in how-to guide and command reference
    When a comparison is slow or incomplete, read `comparison_phases` in the
    JSON response. `source_loading`, `comparison_rendering`,
    `projection_comparison`, `exact_3d_comparison`,
-   `difference_artifact_export`, and `viewer_generation` each report a status
+   `approximate_3d_comparison`, `difference_artifact_export`, and
+   `viewer_generation` each report a status
    and, when attempted, `duration_ms`. The largest duration identifies the
    expensive stage; a failed exact phase does not erase a successful projection.
    Exact 3D work has a 30-second default worker budget. Set
    `AGENTCAD_DIFF_TIMEOUT_S=N` to override it (`0` disables the dedicated limit
    for diagnostics). A timeout leaves the core version and projection usable,
-   reports `comparison_3d.status/reason/timeout_s`, and skips colored exact-
-   volume artifacts. If exact volumes are still needed, run
+   then runs a bounded voxel fallback. Approximate results report
+   `method=approximate_voxel_volume`, `resolution_mm`, and a non-strict
+   `error_estimate`; its `absolute_volume` values are heuristic errors, not
+   measurements. `exact_attempt` retains the exact failure. Use
+   `AGENTCAD_APPROX_DIFF_TIMEOUT_S` and `AGENTCAD_APPROX_RESOLUTION_MM` to tune
+   the fallback. If exact volumes are still needed, run
    `agentcad diff OLD NEW` with a larger budget; do not rerun the original CAD
    command and create a duplicate version.
 

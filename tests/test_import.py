@@ -338,12 +338,16 @@ class TestImportAutoDiff:
             "comparison_rendering",
             "projection_comparison",
             "exact_3d_comparison",
+            "approximate_3d_comparison",
             "difference_artifact_export",
             "viewer_generation",
         ]
         assert list(parsed["comparison_phases"]) == expected
         for phase in expected:
             entry = parsed["comparison_phases"][phase]
+            if phase == "approximate_3d_comparison":
+                assert entry["status"] == "skipped"
+                continue
             assert entry["status"] == "success"
             assert isinstance(entry["duration_ms"], int)
             assert entry["duration_ms"] >= 0
@@ -366,6 +370,7 @@ class TestImportAutoDiff:
         monkeypatch.setattr(
             "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
         )
+        monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
         result = runner.invoke(cli, [
             "import", str(second), "--no-view", "--no-daemon",
         ])
@@ -379,13 +384,15 @@ class TestImportAutoDiff:
         assert "injected import exact failure" in (
             phases["exact_3d_comparison"]["message"]
         )
-        assert phases["difference_artifact_export"]["status"] == "skipped"
+        assert phases["approximate_3d_comparison"]["status"] == "success"
+        assert phases["difference_artifact_export"]["status"] == "success"
         assert parsed["artifacts"]["diff"]["status"] == "success"
         assert (
             parsed["diff"]["projection_comparison"]["method"]
             == "four_view_image_mask"
         )
-        assert "comparison_3d" not in parsed["diff"]
+        assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+        assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "unavailable"
 
     def test_exact_timeout_is_attributed_and_projection_survives(
         self, runner, isolated_dir, monkeypatch
@@ -414,6 +421,7 @@ class TestImportAutoDiff:
             "agentcad.solid_compare.bounded_compare_solid_volumes",
             exact_timeout,
         )
+        monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
         result = runner.invoke(cli, [
             "import", str(second), "--no-view", "--no-daemon",
         ])
@@ -424,7 +432,10 @@ class TestImportAutoDiff:
         assert parsed["status"] == "success"
         assert phases["projection_comparison"]["status"] == "success"
         assert phases["exact_3d_comparison"]["status"] == "timeout"
-        assert parsed["diff"]["comparison_3d"]["status"] == "timeout"
+        assert parsed["diff"]["comparison_3d"]["status"] == "success"
+        assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+        assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "timeout"
+        assert phases["approximate_3d_comparison"]["status"] == "success"
         assert parsed["artifacts"]["diff"]["status"] == "success"
 
     def test_no_diff_skips_every_automatic_comparison_call(

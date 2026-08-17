@@ -2344,6 +2344,7 @@ class TestRunSpawnsDaemonForNextInvocation:
         )
         env = self._agentcad_env(sock_path, pid_path)
         env["AGENTCAD_DIFF_TIMEOUT_S"] = "0.001"
+        env["AGENTCAD_APPROX_RESOLUTION_MM"] = "1"
         agentcad_exe = str(pathlib.Path(sys.executable).parent / "agentcad")
         subprocess.run(
             [agentcad_exe, "init", "--name", "bounded_daemon",
@@ -2392,8 +2393,14 @@ class TestRunSpawnsDaemonForNextInvocation:
                 response["comparison_phases"]["exact_3d_comparison"]["status"]
                 == "timeout"
             )
-            assert response["diff"]["comparison_3d"]["status"] == "timeout"
-            assert response["diff"]["comparison_3d"]["timeout_s"] == 0.001
+            assert response["diff"]["comparison_3d"]["status"] == "success"
+            assert (
+                response["diff"]["comparison_3d"]["method"]
+                == "approximate_voxel_volume"
+            )
+            exact_attempt = response["diff"]["comparison_3d"]["exact_attempt"]
+            assert exact_attempt["status"] == "timeout"
+            assert exact_attempt["timeout_s"] == 0.001
             assert response["version"] == 2
             assert (tmp_path / "v2_bounded" / "output.step").exists()
             manifest = json.loads((tmp_path / "agentcad.json").read_text())

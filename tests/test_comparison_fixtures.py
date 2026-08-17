@@ -14,7 +14,10 @@ from OCP.GProp import GProp_GProps
 from OCP.TopAbs import TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 
-from agentcad.solid_compare import compare_solid_volumes
+from agentcad.solid_compare import (
+    approximate_compare_solid_volumes,
+    compare_solid_volumes,
+)
 from agentcad.step_io import load_cad_shape
 from agentcad.render import render_diff_overlay
 from scripts.generate_comparison_fixtures import shared_location_pair
@@ -110,6 +113,44 @@ def test_box_bore_remains_the_clean_exact_control():
         2261.9467
     )
     assert comparison.data["volumes"]["candidate_only"] == 0.0
+
+
+def test_approximate_box_bore_preserves_removed_feature_direction_and_error():
+    case = CATALOG["cases"]["box_bore"]
+    comparison = approximate_compare_solid_volumes(
+        load_cad_shape(FIXTURE_DIR / case["reference"]),
+        load_cad_shape(FIXTURE_DIR / case["candidate"]),
+        resolution_mm=1,
+    )
+
+    exact_reference_only = 2261.9467
+    approximate = comparison.data["volumes"]
+    estimated_error = comparison.data["error_estimate"]["absolute_volume"]
+    assert comparison.available
+    assert approximate["reference_only"] > 0
+    assert approximate["candidate_only"] == 0
+    assert abs(approximate["reference_only"] - exact_reference_only) <= (
+        estimated_error["reference_only"]
+    )
+
+
+def test_approximate_compound_preserves_added_feature_direction_and_error():
+    case = CATALOG["cases"]["overlapping_compound"]
+    comparison = approximate_compare_solid_volumes(
+        load_cad_shape(FIXTURE_DIR / case["reference"]),
+        load_cad_shape(FIXTURE_DIR / case["candidate"]),
+        resolution_mm=1,
+    )
+
+    approximate = comparison.data["volumes"]
+    estimated_error = comparison.data["error_estimate"]["absolute_volume"]
+    assert comparison.available
+    assert "compound_members" in comparison.data["volume_semantics"]
+    assert approximate["candidate_only"] > 0
+    assert approximate["reference_only"] == 0
+    assert abs(approximate["candidate_only"] - 144.0) <= (
+        estimated_error["candidate_only"]
+    )
 
 
 def test_shared_transform_fixture_really_shares_topology():
