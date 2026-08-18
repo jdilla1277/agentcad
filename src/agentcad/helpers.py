@@ -11,6 +11,7 @@ from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepTools import BRepTools
 from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeWire,
     BRepBuilderAPI_Transform,
@@ -243,6 +244,37 @@ def mirror_fuse(shape, plane="XZ"):
     return compound
 
 
+def copy_shape(shape):
+    """Return a geometrically independent copy of an OCCT shape.
+
+    Imported features must not share OCCT's internal topology record before
+    one copy is transformed and compared with another. A shallow Python copy
+    or a location-only transform can leave that record shared and make later
+    Boolean results incorrect without raising an error.
+
+    ``shape`` may be a raw ``TopoDS_Shape`` or an object with a ``wrapped``
+    TopoDS shape (such as a build123d or CadQuery shape). The return value is
+    always a raw ``TopoDS_Shape``, matching the other helpers in this module.
+    Geometry is copied; cached triangulation is intentionally not copied.
+    """
+    topo = getattr(shape, "wrapped", shape)
+    if not hasattr(topo, "IsNull"):
+        raise TypeError(
+            "copy_shape expects a TopoDS_Shape or an object with a wrapped "
+            f"TopoDS_Shape, got {type(shape).__name__}"
+        )
+    if topo.IsNull():
+        raise ValueError("copy_shape cannot copy a null shape")
+
+    copier = BRepBuilderAPI_Copy(topo, True, False)
+    if not copier.IsDone():
+        raise ValueError("copy_shape could not create an independent geometry copy")
+    copied = copier.Shape()
+    if copied.IsNull() or topo.IsPartner(copied):
+        raise ValueError("copy_shape did not produce independent geometry")
+    return copied
+
+
 def translate(shape, x, y, z):
     """Translate a shape by (x, y, z).
 
@@ -253,9 +285,10 @@ def translate(shape, x, y, z):
     Returns:
         TopoDS_Shape at the new position.
     """
+    independent = copy_shape(shape)
     trsf = gp_Trsf()
     trsf.SetTranslation(gp_Vec(x, y, z))
-    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+    return BRepBuilderAPI_Transform(independent, trsf, False).Shape()
 
 
 def rotate(shape, axis, angle_deg):
@@ -280,9 +313,10 @@ def rotate(shape, axis, angle_deg):
     }
     if axis not in axes:
         raise ValueError(f"axis must be 'X', 'Y', or 'Z', got '{axis}'")
+    independent = copy_shape(shape)
     trsf = gp_Trsf()
     trsf.SetRotation(axes[axis], math.radians(angle_deg))
-    return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+    return BRepBuilderAPI_Transform(independent, trsf, False).Shape()
 
 
 def bbox_point(shape, x="center", y="center", z="center"):

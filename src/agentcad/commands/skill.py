@@ -141,7 +141,8 @@ agentcad --help   # Read the built-in how-to guide and command reference
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
-  `replace_face`, `annular_boss`, and `raise_annulus`.
+  `replace_face`, `copy_shape`, `translate`, `rotate`, `annular_boss`, and
+  `raise_annulus`.
 - For imported STEP/BREP edits, `load_step(path)` returns a build123d `Part`:
   ```python
   base = load_step("v1_vendor/output.step")
@@ -153,6 +154,15 @@ agentcad --help   # Read the built-in how-to guide and command reference
   Use `agentcad measure` and `agentcad inspect` for read-only discovery; use
   the loaded `Part` in a script when changing geometry. See
   `agentcad docs editing` for the complete edit workflow.
+- When repeating an imported feature, use the pre-injected `rotate()` or
+  `translate()` helper on its raw shape. These helpers make an independent
+  geometry copy before moving it, preventing shared topology from corrupting
+  later Boolean results:
+  ```python
+  blade = load_step_shape("blade.step")
+  blade_72 = rotate(blade, "Z", 72)
+  ```
+  Use `copy_shape(blade)` when an independent, untransformed copy is needed.
 - For imported STEP annular edits, use the non-fuse workflow:
   ```python
   raw = load_step_shape("v1_vendor/output.step")
@@ -208,7 +218,8 @@ agentcad --help   # Read the built-in how-to guide and command reference
 ## Patterns
 
 - **Build at origin, then position:** Create geometry at origin, use `translate()`
-  and `rotate()` to place it.
+  and `rotate()` to place it. These helpers copy imported topology before
+  transforming it.
 - **Compound vs fuse:** `Compound([...])` keeps assembly parts separate; use
   build123d's `+` operator to boolean-fuse solids.
 - **Parametric scripts:** Top-level variable assignments become overridable via
@@ -246,7 +257,8 @@ _CADQUERY_SCRIPT_RULES = """## Script writing rules
 _CADQUERY_PATTERNS = """## Patterns
 
 - **Build at origin, then position:** Create geometry at origin, use
-  `translate()` and `rotate()` to place it.
+  `translate()` and `rotate()` to place it. These helpers copy imported
+  topology before transforming it.
 - **Compound vs union:** `makeCompound()` keeps assembly parts separate;
   `.union()` boolean-fuses solids.
 - **Parametric scripts:** Top-level variable assignments become overridable via

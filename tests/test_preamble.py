@@ -89,6 +89,15 @@ def test_preamble_translate_available(runner, isolated_dir):
     assert parsed["status"] == "success"
 
 
+def test_preamble_copy_shape_available(runner, isolated_dir):
+    _init_project(runner)
+    script = "import cadquery as cq\nbox = cq.Workplane('XY').box(10,10,10).val().wrapped\ncopied = copy_shape(box)\nassert not box.IsPartner(copied)\nshow_object(cq.Workplane('XY').newObject([cq.Shape.cast(copied)]))\n"
+    _write_script(isolated_dir, content=script)
+    result = runner.invoke(cli, ["run", "script.py", "--output", "copy"])
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+
+
 def test_preamble_rotate_available(runner, isolated_dir):
     _init_project(runner)
     script = "import cadquery as cq\nbox = cq.Workplane('XY').box(10,10,10).val().wrapped\nspun = rotate(box, 'Z', 45)\nshow_object(cq.Workplane('XY').newObject([cq.Shape.cast(spun)]))\n"
@@ -111,5 +120,6 @@ def test_docs_preamble_section(runner):
     assert "tapered_sweep" in content
     assert "naca_wire" in content
     assert "mirror_fuse" in content
+    assert "copy_shape" in content
     assert "translate" in content
     assert "rotate" in content
