@@ -141,8 +141,8 @@ agentcad --help   # Read the built-in how-to guide and command reference
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
-  `replace_face`, `copy_shape`, `translate`, `rotate`, `annular_boss`, and
-  `raise_annulus`.
+  `replace_face`, `copy_shape`, `safe_cut`, `safe_intersection`, `safe_fuse`,
+  `translate`, `rotate`, `annular_boss`, and `raise_annulus`.
 - For imported STEP/BREP edits, `load_step(path)` returns a build123d `Part`:
   ```python
   base = load_step("v1_vendor/output.step")
@@ -163,6 +163,10 @@ agentcad --help   # Read the built-in how-to guide and command reference
   blade_72 = rotate(blade, "Z", 72)
   ```
   Use `copy_shape(blade)` when an independent, untransformed copy is needed.
+- For imported geometry Booleans, use `safe_cut(source, *tools)`,
+  `safe_intersection(left, right)`, and `safe_fuse(source, *tools)`. They copy
+  every input, run all tools together, validate the output, and reject
+  physically impossible volume changes instead of returning them silently.
 - For imported STEP annular edits, use the non-fuse workflow:
   ```python
   raw = load_step_shape("v1_vendor/output.step")
@@ -220,8 +224,9 @@ agentcad --help   # Read the built-in how-to guide and command reference
 - **Build at origin, then position:** Create geometry at origin, use `translate()`
   and `rotate()` to place it. These helpers copy imported topology before
   transforming it.
-- **Compound vs fuse:** `Compound([...])` keeps assembly parts separate; use
-  build123d's `+` operator to boolean-fuse solids.
+- **Compound vs fuse:** `Compound([...])` keeps assembly parts separate. Use
+  `safe_fuse(source, *tools)` when imported solids must become one union; use
+  build123d's `+` operator for ordinary newly constructed geometry.
 - **Parametric scripts:** Top-level variable assignments become overridable via
   `--params`. Use this for iteration.
 - **Named parts:** `show_object(shape, id="wheel_left", name="Left wheel",
@@ -245,6 +250,9 @@ _CADQUERY_SCRIPT_RULES = """## Script writing rules
   part = cq.Workplane('XY').box(10, 20, 5).val().wrapped
   moved = translate(part, 50, 0, 0)
   ```
+- Imported-geometry Booleans should use `safe_cut`, `safe_intersection`, or
+  `safe_fuse`; these independently copy inputs and reject invalid or
+  physically impossible output.
 - To show raw helper output:
   ```python
   show_object(cq.Workplane('XY').newObject([cq.Shape.cast(topo_shape)]))
@@ -259,8 +267,9 @@ _CADQUERY_PATTERNS = """## Patterns
 - **Build at origin, then position:** Create geometry at origin, use
   `translate()` and `rotate()` to place it. These helpers copy imported
   topology before transforming it.
-- **Compound vs union:** `makeCompound()` keeps assembly parts separate;
-  `.union()` boolean-fuses solids.
+- **Compound vs union:** `makeCompound()` keeps assembly parts separate. Use
+  `safe_fuse(source, *tools)` for imported raw shapes; `.union()` remains fine
+  for ordinary newly constructed CadQuery geometry.
 - **Parametric scripts:** Top-level variable assignments become overridable via
   `--params`. Use this for iteration.
 - **Named parts:** `show_object(shape, id="wheel_left", name="Left wheel",

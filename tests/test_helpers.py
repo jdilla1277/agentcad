@@ -313,6 +313,18 @@ class TestCopyShape:
         with pytest.raises(ValueError, match="null shape"):
             copy_shape(TopoDS_Shape())
 
+    def test_copy_rebuilds_empty_compound_independently(self):
+        from OCP.BRep import BRep_Builder
+        from OCP.TopoDS import TopoDS_Compound, TopoDS_Iterator
+
+        source = TopoDS_Compound()
+        BRep_Builder().MakeCompound(source)
+
+        copied = copy_shape(source)
+
+        assert not source.IsPartner(copied)
+        assert not TopoDS_Iterator(copied).More()
+
 
 class TestTranslate:
     def test_translate_moves_bounding_box(self):
