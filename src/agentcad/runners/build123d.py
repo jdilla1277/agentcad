@@ -245,6 +245,7 @@ def execute(
     if _helpers is not None:
         for attr in (
             "loft_sections", "tapered_sweep", "naca_wire", "mirror_fuse",
+            "copy_shape",
             "translate", "rotate", "bbox_point", "place_at",
             "annular_boss", "raise_annulus",
             "ellipse_wire", "spline_wire", "polygon_wire", "rounded_rect_wire",

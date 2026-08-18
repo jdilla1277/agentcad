@@ -278,6 +278,8 @@ def test_docs_helpers_section(runner):
     assert "tapered_sweep" in content
     assert "naca_wire" in content
     assert "mirror_fuse" in content
+    assert "copy_shape" in content
+    assert "independent" in content
 
 
 def test_docs_install_section(runner):
@@ -769,6 +771,8 @@ def test_docs_build123d_mentions_annular_edit_helpers(runner):
     assert "Compound(result)" in content
     assert "fragile boolean fuse" in content
     assert "loft_sections([lower, upper])" in content
+    assert "copy_shape" in content
+    assert "independent geometry copy" in content
 
 
 def test_docs_preamble_mentions_annular_edit_helpers(runner):

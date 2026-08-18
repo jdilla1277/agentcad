@@ -86,6 +86,28 @@ class TestLoadStepInBuild123dScript:
         result = runner.invoke(cli, ["run", str(script), "--output", "mirrored"])
         assert result.exit_code == 0, result.output
 
+    def test_imported_shape_copy_and_rotate_are_independent(
+        self, runner, isolated_dir
+    ):
+        """The pre-injected import-pattern helpers must break shared topology
+        before a transform, while leaving the source available unchanged."""
+        _init_and_import(runner, isolated_dir)
+        script = isolated_dir / "edit.py"
+        script.write_text(
+            "from build123d import *\n"
+            "raw = load_step_shape('v1_bracket/output.step')\n"
+            "copied = copy_shape(raw)\n"
+            "rotated = rotate(raw, 'Z', 17)\n"
+            "assert not raw.IsPartner(copied)\n"
+            "assert not raw.IsPartner(rotated)\n"
+            "show_object(Part(rotated))\n"
+        )
+        result = runner.invoke(cli, ["run", str(script), "--output", "rotated"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["metrics"]["is_valid"] is True
+
 
 # --- load_step is b3d-only --------------------------------------------------
 
