@@ -153,6 +153,27 @@ def test_view_two_files_html_contains_both_models(runner, isolated_dir, monkeypa
     assert html.count("data:application/octet-stream;base64,") == 2
 
 
+def test_view_disambiguates_repeated_model_filenames(
+    runner, isolated_dir, monkeypatch
+):
+    baseline_dir = isolated_dir / "baseline"
+    candidate_dir = isolated_dir / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    baseline = _make_glb_named(baseline_dir, "output")
+    candidate = _make_glb_named(candidate_dir, "output")
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+
+    result = runner.invoke(cli, ["view", str(baseline), str(candidate)])
+
+    assert result.exit_code == 0, result.output
+    html = (
+        baseline_dir / "diff_baseline_output_candidate_output.html"
+    ).read_text()
+    assert "baseline/output.glb" in html
+    assert "candidate/output.glb" in html
+
+
 def test_view_two_files_side_by_side_markers(runner, isolated_dir, monkeypatch):
     """Side-by-side HTML has the structural markers for dual viewports."""
     a = _make_glb_named(isolated_dir, "a")

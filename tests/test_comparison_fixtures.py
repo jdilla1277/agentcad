@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from PIL import ImageStat
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
@@ -207,6 +208,11 @@ def test_default_views_expose_covered_rotor_underside_change(tmp_path):
         source_views.reference[0].tobytes()
         == source_views.candidate[0].tobytes()
     )
+    assert (
+        source_views.reference[1].tobytes()
+        != source_views.candidate[1].tobytes()
+    )
+    assert sum(ImageStat.Stat(source_views.reference[1]).mean) / 3 > 100
     assert (
         source_views.reference[3].tobytes()
         != source_views.candidate[3].tobytes()

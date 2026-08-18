@@ -1958,6 +1958,18 @@ def _diff_name_parts(glb_a, glb_b):
     return f"{glb_a.parent.name}_{glb_a.stem}", f"{glb_b.parent.name}_{glb_b.stem}"
 
 
+def _diff_display_labels(path_a, path_b):
+    """Keep distinct basenames short and disambiguate repeated output names."""
+    path_a = Path(path_a)
+    path_b = Path(path_b)
+    if path_a.name != path_b.name:
+        return path_a.name, path_b.name
+    return (
+        f"{path_a.parent.name}/{path_a.name}",
+        f"{path_b.parent.name}/{path_b.name}",
+    )
+
+
 def _render_unified(
     out_html_path,
     glb_a,
@@ -2040,15 +2052,16 @@ def _render_diff(
     Returns (html_path, url, mode).
     """
     mode = "spec" if review else ("overlay" if overlay else "side-by-side")
-    label_a, label_b = _diff_name_parts(glb_a, glb_b)
+    name_a, name_b = _diff_name_parts(glb_a, glb_b)
+    label_a, label_b = _diff_display_labels(glb_a, glb_b)
     target_dir = out_dir if out_dir is not None else glb_a.parent
-    html_path = target_dir / f"diff_{label_a}_{label_b}.html"
+    html_path = target_dir / f"diff_{name_a}_{name_b}.html"
     _render_unified(
         html_path,
         glb_a=glb_a,
         glb_b=glb_b,
-        label_a=glb_a.name,
-        label_b=glb_b.name,
+        label_a=label_a,
+        label_b=label_b,
         default_mode=mode,
         diff_side_png=diff_side_png,
         diff_overlay_png=diff_overlay_png,
@@ -2068,8 +2081,9 @@ def _render_diff_png(shape_a, shape_b, glb_a, glb_b, out_dir):
     from agentcad.render import render_diff_side_by_side
 
     png_path = _diff_png_path(glb_a, glb_b, out_dir)
+    label_a, label_b = _diff_display_labels(glb_a, glb_b)
     source_views = render_diff_side_by_side(
-        shape_a, shape_b, glb_a.name, glb_b.name, png_path
+        shape_a, shape_b, label_a, label_b, png_path
     )
     return png_path, source_views
 
@@ -2086,13 +2100,14 @@ def _render_diff_overlay_png(
     """Render the four-view semantic difference map next to the diff HTML."""
     from agentcad.render import render_diff_overlay
 
-    label_a, label_b = _diff_name_parts(glb_a, glb_b)
-    png_path = out_dir / f"diff_{label_a}_{label_b}_overlay.png"
+    name_a, name_b = _diff_name_parts(glb_a, glb_b)
+    label_a, label_b = _diff_display_labels(glb_a, glb_b)
+    png_path = out_dir / f"diff_{name_a}_{name_b}_overlay.png"
     comparison = render_diff_overlay(
         shape_a,
         shape_b,
-        glb_a.name,
-        glb_b.name,
+        label_a,
+        label_b,
         png_path,
         source_views=source_views,
     )
