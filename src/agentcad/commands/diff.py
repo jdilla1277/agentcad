@@ -112,6 +112,16 @@ def _load_file_shape_and_metrics(path):
     return shape, compute_metrics(shape)
 
 
+def _file_display_labels(path_a, path_b):
+    """Keep repeated CAD filenames distinct in structured output."""
+    if path_a.name != path_b.name:
+        return path_a.name, path_b.name
+    return (
+        f"{path_a.parent.name}/{path_a.name}",
+        f"{path_b.parent.name}/{path_b.name}",
+    )
+
+
 def _metric_changes(metrics_a, metrics_b):
     all_keys = sorted(set(metrics_a.keys()) | set(metrics_b.keys()))
     return {k: _scalar_diff(metrics_a.get(k), metrics_b.get(k)) for k in all_keys}
@@ -197,11 +207,12 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             )
         except Exception:
             pass
+        label_a, label_b = _file_display_labels(file_a, file_b)
         response = {
             "command": "diff",
             "status": "success",
-            "v1": {"file": _relative_to_cwd(file_a), "label": file_a.name},
-            "v2": {"file": _relative_to_cwd(file_b), "label": file_b.name},
+            "v1": {"file": _relative_to_cwd(file_a), "label": label_a},
+            "v2": {"file": _relative_to_cwd(file_b), "label": label_b},
             "changes": {
                 "metrics": _metric_changes(metrics_a, metrics_b),
             },

@@ -48,13 +48,15 @@ agentcad --help   # Read the built-in how-to guide and command reference
    agentcad run script.py --output label
    ```
    A normal successful iteration can produce (paths in the JSON response):
-   - `preview.png` — 4-view composite (front, right, top, iso). **Read this**
-     to confirm the part looks right before iterating. One image, all 4 angles.
+   - `preview.png` — balanced top, bottom, upper-iso, and lower-iso composite.
+     **Read this** to confirm the part looks right before iterating. The lower
+     views expose geometry that a top view can hide.
    - `diff.side_by_side` — side-by-side PNG vs the most recent successful prior
      version, when one exists and automatic diff is enabled. **Read this** when
      iterating to see what your change did.
-   - `diff.overlay` — tinted (green prev, red this) overlay for subtle shifts.
-     Read only if side-by-side didn't resolve the question.
+   - `diff.overlay` — centered 2D visual-overlap map (coincident gray,
+     reference-only blue, candidate-only orange). It helps locate silhouette
+     changes but does not prove physical correctness or shared 3D volume.
    - `viewer.html` — interactive 3D review viewer for the user unless viewer
      artifacts are disabled (humans only;
      you can't render HTML). It opens automatically after a successful run.

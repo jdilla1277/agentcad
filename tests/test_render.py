@@ -7,6 +7,7 @@ from PIL import Image, ImageChops, ImageDraw
 import pytest
 
 from agentcad.render import (
+    _COMPOSITE_VIEWS,
     _comparison_frame_scales,
     _semantic_diff_panel,
     _setup_render,
@@ -89,6 +90,15 @@ def test_render_shape_different_views_differ(tmp_path):
     assert iso_path.read_bytes() != front_path.read_bytes()
 
 
+def test_default_composite_balances_top_bottom_upper_and_lower_views():
+    assert _COMPOSITE_VIEWS == [
+        ("TOP", "top"),
+        ("BOTTOM", "bottom"),
+        ("UPPER ISO", (45, -25)),
+        ("LOWER ISO", (45, 25)),
+    ]
+
+
 def test_render_diff_side_by_side_contains_four_views_per_shape(tmp_path):
     shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
     shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
@@ -116,6 +126,10 @@ def test_render_diff_overlay_contains_four_aligned_views(tmp_path):
         # A 2x2 grid of 96px overlays, with view labels and a shared legend.
         assert image.size == (192, 368)
     assert comparison["method"] == "four_view_image_mask"
+    assert comparison["meaning"] == (
+        "Visual silhouette overlap across four rendered viewpoints; "
+        "not shared physical volume or model correctness."
+    )
     assert comparison["alignment"]["mode"] == "bounding_box_center"
     assert comparison["score"]["classification"] in {
         "low", "moderate", "high",

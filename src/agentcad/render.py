@@ -103,6 +103,7 @@ def _setup_render(
     parts=None,
     msaa=0,
     background_color=None,
+    show_edges=False,
 ):
     """Set up offscreen rendering pipeline, returning (view, context)."""
     display_connection = Aspect_DisplayConnection()
@@ -126,6 +127,12 @@ def _setup_render(
     )
     viewer.AddLight(fill_light)
     viewer.SetLightOn(fill_light)
+    underside_light = V3d_DirectionalLight(
+        gp_Dir(0, 0, 1),
+        Quantity_Color(0.25, 0.25, 0.25, Quantity_TOC_RGB),
+    )
+    viewer.AddLight(underside_light)
+    viewer.SetLightOn(underside_light)
 
     view = viewer.CreateView()
     view.ChangeRenderingParams().NbMsaaSamples = msaa
@@ -160,6 +167,7 @@ def _setup_render(
                 else Graphic3d_NameOfMaterial_Silver
             )
             ais_shape.SetMaterial(Graphic3d_MaterialAspect(material_name))
+            ais_shape.Attributes().SetFaceBoundaryDraw(show_edges)
             r, g, b = parsed_color or _GLB_PALETTE[idx % len(_GLB_PALETTE)]
             ais_shape.SetColor(Quantity_Color(r, g, b, Quantity_TOC_RGB))
             context.Display(ais_shape, 1, -1, False)
@@ -167,6 +175,7 @@ def _setup_render(
     else:
         ais_shape = AIS_Shape(shape)
         ais_shape.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
+        ais_shape.Attributes().SetFaceBoundaryDraw(show_edges)
         context.Display(ais_shape, 1, -1, True)
 
     return view, context
@@ -223,6 +232,7 @@ def render_shape_batch(
     parts=None,
     msaa=0,
     background_color=None,
+    show_edges=False,
 ):
     """Render multiple views of the same shape through ONE viewer setup.
 
@@ -237,6 +247,7 @@ def render_shape_batch(
         output_paths: Parallel iterable of output PNG paths.
         width, height: Per-view dimensions in pixels.
         msaa: Number of multisample antialiasing samples; 0 disables MSAA.
+        show_edges: Draw visible face boundaries for CAD-readable previews.
     """
     view, _ctx = _setup_render(
         shape,
@@ -245,6 +256,7 @@ def render_shape_batch(
         parts=parts,
         msaa=msaa,
         background_color=background_color,
+        show_edges=show_edges,
     )
     for spec, out_path in zip(view_specs, output_paths):
         if isinstance(spec, str):
@@ -263,16 +275,14 @@ def render_shape_batch(
         _capture(view, out_path, width, height, msaa=msaa)
 
 
-# The default composite is one top-down layout view + three iso angles spaced
-# around the part, so any asymmetric feature (arm, clamp, bracket, etc.) is
-# visible from at least one angle. Chosen over the classic orthographic
-# front/right/top/iso set because, for agents, dimensions come from the
-# metrics JSON — images need to maximize geometry coverage, not ruler-accuracy.
+# The default composite balances plan and underside coverage with two
+# three-dimensional views. Keeping this as the single camera definition means
+# previews and every comparison artifact show the same evidence.
 _COMPOSITE_VIEWS = [
     ("TOP", "top"),
-    ("ISO FRONT-RIGHT", (45, 25)),
-    ("ISO BACK-RIGHT", (-45, 25)),
-    ("ISO BACK-LEFT", (-135, 25)),
+    ("BOTTOM", "bottom"),
+    ("UPPER ISO", (45, -25)),
+    ("LOWER ISO", (45, 25)),
 ]
 
 
@@ -329,6 +339,7 @@ def render_comparison_source_views(
             height=per_view_size,
             parts=parts_a,
             background_color=_COMPARISON_MASK_BACKGROUND,
+            show_edges=True,
         )
         render_shape_batch(
             shape_b,
@@ -338,6 +349,7 @@ def render_comparison_source_views(
             height=per_view_size,
             parts=parts_b,
             background_color=_COMPARISON_MASK_BACKGROUND,
+            show_edges=True,
         )
         reference_pairs = tuple(
             _comparison_source_image(Image.open(path).convert("RGB"))
@@ -378,7 +390,7 @@ def _projected_shape_extent(shape, view_spec):
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
     dimensions = (xmax - xmin, ymax - ymin, zmax - zmin)
 
-    if view_spec == "top":
+    if view_spec in {"top", "bottom"}:
         return max(dimensions[0], dimensions[1])
 
     azimuth, elevation = view_spec
@@ -568,8 +580,15 @@ def _compose_4view(images, per_view_size):
     return composite
 
 
-def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
-    """Render a 4-panel composite: top view + three iso angles spaced around the part.
+def render_composite_4view(
+    shape,
+    output_path,
+    per_view_size=512,
+    parts=None,
+    *,
+    show_edges=True,
+):
+    """Render a balanced top, bottom, upper-iso, and lower-iso composite.
 
     This is the default preview agents get after every successful run. One
     shape → four informative angles → single image.
@@ -587,6 +606,7 @@ def render_composite_4view(shape, output_path, per_view_size=512, parts=None):
             width=per_view_size,
             height=per_view_size,
             parts=parts,
+            show_edges=show_edges,
         )
         images = [Image.open(path).convert("RGB") for path in tmp_paths]
         _compose_4view(images, per_view_size).save(str(output_path))
@@ -612,6 +632,7 @@ def render_solid_comparison(
             composite_path,
             per_view_size=per_view_size,
             parts=parts,
+            show_edges=False,
         )
         with Image.open(composite_path) as source:
             source = source.convert("RGB")
@@ -779,7 +800,7 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
         overlap = round(stats["coincident_fraction_of_union"] * 100)
         draw.text(
             (x + 10, y + 5),
-            f"{label} | OVERLAP {overlap}%",
+            f"{label} | SILHOUETTE OVERLAP {overlap}%",
             fill=(40, 40, 40),
             font=label_font,
         )
@@ -814,6 +835,10 @@ def render_diff_overlay(shape_a, shape_b, label_a, label_b, output_path,
             "classification": _overlap_classification(overlap_ratio),
             "aggregation": "foreground_union_pixel_weighted_across_views",
         },
+        "meaning": (
+            "Visual silhouette overlap across four rendered viewpoints; "
+            "not shared physical volume or model correctness."
+        ),
         "limitations": [
             "Does not establish shared 3D geometry.",
             "Does not identify physical material additions or removals.",

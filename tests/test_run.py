@@ -1635,7 +1635,7 @@ def test_run_viewer_glb_uses_requested_part_colors(runner, isolated_dir):
 
 
 def test_run_preview_is_4view_composite_1024(runner, isolated_dir):
-    """Preview is now a 2x2 composite of front/right/top/iso, 512px per quadrant."""
+    """Preview is a balanced 2x2 composite with 512px per quadrant."""
     _init_project(runner)
     _write_script(isolated_dir)
     runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview"])

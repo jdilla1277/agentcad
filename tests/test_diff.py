@@ -103,6 +103,22 @@ def test_diff_accepts_standalone_step_paths_without_manifest(runner, isolated_di
         assert "duration_ms" not in phases[name]
 
 
+def test_diff_disambiguates_repeated_standalone_filenames(runner, isolated_dir):
+    baseline_dir = isolated_dir / "baseline"
+    candidate_dir = isolated_dir / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    baseline = _write_box_step(baseline_dir / "output.step", 10)
+    candidate = _write_box_step(candidate_dir / "output.step", 20)
+
+    result = runner.invoke(cli, ["diff", str(baseline), str(candidate)])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["v1"]["label"] == "baseline/output.step"
+    assert data["v2"]["label"] == "candidate/output.step"
+
+
 def test_diff_standalone_step_path_missing_file_error(runner, isolated_dir):
     input_step = _write_box_step(isolated_dir / "input.step", 10)
 
