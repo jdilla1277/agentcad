@@ -280,6 +280,9 @@ def test_docs_helpers_section(runner):
     assert "mirror_fuse" in content
     assert "copy_shape" in content
     assert "independent" in content
+    assert "safe_cut" in content
+    assert "safe_intersection" in content
+    assert "safe_fuse" in content
 
 
 def test_docs_install_section(runner):
@@ -773,6 +776,10 @@ def test_docs_build123d_mentions_annular_edit_helpers(runner):
     assert "loft_sections([lower, upper])" in content
     assert "copy_shape" in content
     assert "independent geometry copy" in content
+    assert "safe_cut" in content
+    assert "subtraction" in content
+    assert "safe_intersection" in content
+    assert "safe_fuse" in content
 
 
 def test_docs_preamble_mentions_annular_edit_helpers(runner):

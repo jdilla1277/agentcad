@@ -1,14 +1,23 @@
 # agentcad.helpers — Organic geometry primitives for agent scripts
 
+from io import BytesIO
 import math
-
 import warnings
 from pathlib import Path
 
 from OCP.Bnd import Bnd_Box
+from OCP.BOPAlgo import (
+    BOPAlgo_BOP,
+    BOPAlgo_CellsBuilder,
+    BOPAlgo_COMMON,
+    BOPAlgo_CUT,
+    BOPAlgo_FUSE,
+)
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
 from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
+from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepGProp import BRepGProp
 from OCP.BRepTools import BRepTools
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
@@ -19,10 +28,12 @@ from OCP.BRepBuilderAPI import (
 from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
 from OCP.GC import GC_MakeArcOfCircle
 from OCP.GeomAPI import GeomAPI_PointsToBSpline
+from OCP.GProp import GProp_GProps
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.TopAbs import TopAbs_SOLID
+from OCP.TopAbs import TopAbs_COMPOUND, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS, TopoDS_Compound
+from OCP.TopTools import TopTools_ListOfShape
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Iterator
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pnt, gp_Trsf, gp_Vec
 
 
@@ -270,9 +281,296 @@ def copy_shape(shape):
     if not copier.IsDone():
         raise ValueError("copy_shape could not create an independent geometry copy")
     copied = copier.Shape()
-    if copied.IsNull() or topo.IsPartner(copied):
+    if copied.IsNull():
+        raise ValueError("copy_shape did not produce independent geometry")
+    if topo.IsPartner(copied):
+        # OCCT reuses the singleton topology record for an empty compound.
+        # Rebuild that container explicitly; it has no child geometry to copy.
+        children = TopoDS_Iterator(topo)
+        if topo.ShapeType() == TopAbs_COMPOUND and not children.More():
+            empty = TopoDS_Compound()
+            BRep_Builder().MakeCompound(empty)
+            return empty
         raise ValueError("copy_shape did not produce independent geometry")
     return copied
+
+
+_SAFE_BOOLEAN_TOLERANCE_MM = 1e-7
+
+
+def _shape_volume(shape):
+    properties = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, properties)
+    return properties.Mass()
+
+
+def _contains_solid(shape):
+    explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+    return explorer.More()
+
+
+def _solid_members(shape):
+    members = []
+    explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+    while explorer.More():
+        members.append(explorer.Current())
+        explorer.Next()
+    return members
+
+
+def _is_empty_compound(shape):
+    if shape.ShapeType() != TopAbs_COMPOUND:
+        return False
+    return not TopoDS_Iterator(shape).More()
+
+
+def _canonical_occupied_shape(
+    shape, label, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM
+):
+    """Return geometry and volume with overlapping members counted once."""
+    solids = _solid_members(shape)
+    if len(solids) <= 1:
+        return shape, _shape_volume(shape)
+
+    partition = BOPAlgo_CellsBuilder()
+    partition.SetNonDestructive(True)
+    partition.SetFuzzyValue(tolerance)
+    for solid in solids:
+        partition.AddArgument(copy_shape(solid))
+    try:
+        partition.Perform()
+    except Exception as exc:
+        raise ValueError(
+            f"{label} occupied-volume validation failed in the CAD kernel: {exc}"
+        ) from exc
+    if partition.HasErrors():
+        details = "; ".join(_boolean_messages(partition, "DumpErrors"))
+        suffix = f": {details}" if details else ""
+        raise ValueError(f"{label} occupied-volume validation failed{suffix}")
+    partition.RemoveAllFromResult()
+    partition.AddAllToResult()
+    if partition.HasErrors():
+        details = "; ".join(_boolean_messages(partition, "DumpErrors"))
+        suffix = f": {details}" if details else ""
+        raise ValueError(f"{label} occupied-volume extraction failed{suffix}")
+    result = partition.Shape()
+    if result.IsNull() or not BRepCheck_Analyzer(result).IsValid():
+        raise ValueError(f"{label} occupied-volume validation returned invalid geometry")
+    result = copy_shape(result)
+    return result, _shape_volume(result)
+
+
+def _physical_volume(shape, label, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
+    """Measure occupied volume, counting overlapping compound members once."""
+    return _canonical_occupied_shape(shape, label, tolerance)[1]
+
+
+def _boolean_input(shape, label, tolerance):
+    topo = getattr(shape, "wrapped", shape)
+    if not hasattr(topo, "IsNull"):
+        raise TypeError(
+            f"{label} must be a TopoDS_Shape or an object with a wrapped "
+            f"TopoDS_Shape, got {type(shape).__name__}"
+        )
+    if topo.IsNull():
+        raise ValueError(f"{label} is a null shape")
+    if not BRepCheck_Analyzer(topo).IsValid():
+        raise ValueError(f"{label} is invalid; repair it before a safe Boolean")
+    occupied_shape, volume = _canonical_occupied_shape(topo, label, tolerance)
+    if not math.isfinite(volume) or volume <= 0:
+        raise ValueError(
+            f"{label} must contain valid positive-volume solid geometry; "
+            f"measured volume was {volume}"
+        )
+    return occupied_shape, volume
+
+
+def _boolean_tolerance(value):
+    try:
+        tolerance = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"tolerance must be a finite non-negative number, got {value}"
+        ) from exc
+    if not math.isfinite(tolerance) or tolerance < 0:
+        raise ValueError(
+            f"tolerance must be a finite non-negative number, got {value}"
+        )
+    return tolerance
+
+
+def _shape_list(shapes):
+    result = TopTools_ListOfShape()
+    for shape in shapes:
+        result.Append(shape)
+    return result
+
+
+def _boolean_messages(operation, method_name):
+    output = BytesIO()
+    getattr(operation, method_name)(output)
+    return [
+        line.strip()
+        for line in output.getvalue().decode("utf-8", errors="replace").splitlines()
+        if line.strip()
+    ]
+
+
+def _volume_slack(*volumes):
+    """Allow tiny kernel noise while still rejecting physically wrong output."""
+    scale = max((abs(volume) for volume in volumes), default=0.0)
+    return max(1e-6, scale * 1e-7)
+
+
+def _run_safe_boolean(name, operation_kind, argument, tools, tolerance):
+    operation = BOPAlgo_BOP()
+    operation.SetArguments(_shape_list([copy_shape(argument)]))
+    operation.SetTools(_shape_list([copy_shape(tool) for tool in tools]))
+    operation.SetOperation(operation_kind)
+    operation.SetNonDestructive(True)
+    operation.SetFuzzyValue(tolerance)
+    try:
+        operation.Perform()
+    except Exception as exc:
+        raise ValueError(f"{name} failed in the CAD kernel: {exc}") from exc
+    if operation.HasErrors():
+        details = "; ".join(_boolean_messages(operation, "DumpErrors"))
+        suffix = f": {details}" if details else ""
+        raise ValueError(f"{name} failed in the CAD kernel{suffix}")
+
+    result = operation.Shape()
+    if result.IsNull():
+        raise ValueError(f"{name} returned a null result")
+    if not BRepCheck_Analyzer(result).IsValid():
+        raise ValueError(f"{name} returned invalid geometry; no result was accepted")
+    if not _contains_solid(result) and not _is_empty_compound(result):
+        raise ValueError(
+            f"{name} returned invalid geometry: output was not a solid; "
+            "no result was accepted"
+        )
+
+    warning_messages = _boolean_messages(operation, "DumpWarnings")
+    if warning_messages:
+        warnings.warn(
+            f"{name} completed with CAD-kernel warnings: "
+            + "; ".join(warning_messages),
+            UserWarning,
+        )
+    return copy_shape(result)
+
+
+def _safe_result_volume(result, name, tolerance):
+    raw_volume = _shape_volume(result)
+    physical_volume = _physical_volume(result, f"{name} result", tolerance)
+    slack = _volume_slack(raw_volume, physical_volume)
+    if abs(raw_volume - physical_volume) > slack:
+        raise ValueError(
+            f"{name} returned overlapping solid members whose aggregate volume "
+            "double-counts occupied space; no result was accepted"
+        )
+    return physical_volume
+
+
+def safe_cut(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
+    """Subtract one or more tools without accepting an impossible result.
+
+    Inputs are independently copied, all tools are applied in one
+    non-destructive kernel operation, and the result must be valid with a
+    volume no greater than the source.
+    """
+    if not tools:
+        raise ValueError("safe_cut requires at least one cutting tool")
+    tolerance = _boolean_tolerance(tolerance)
+    source, source_volume = _boolean_input(source, "safe_cut source", tolerance)
+    checked_tools = [
+        _boolean_input(tool, f"safe_cut tool {index}", tolerance)[0]
+        for index, tool in enumerate(tools, start=1)
+    ]
+    result = _run_safe_boolean(
+        "safe_cut", BOPAlgo_CUT, source, checked_tools, tolerance
+    )
+    result_volume = _safe_result_volume(result, "safe_cut", tolerance)
+    slack = _volume_slack(source_volume, result_volume)
+    if not math.isfinite(result_volume) or result_volume < 0:
+        raise ValueError(
+            f"safe_cut returned an invalid volume ({result_volume} mm^3); "
+            "no result was accepted"
+        )
+    if result_volume > source_volume + slack:
+        raise ValueError(
+            "safe_cut rejected an impossible result: subtraction increased "
+            f"volume from {source_volume} to {result_volume} mm^3"
+        )
+    return result
+
+
+def safe_intersection(left, right, *, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
+    """Intersect two solids and reject invalid or oversized output."""
+    tolerance = _boolean_tolerance(tolerance)
+    left, left_volume = _boolean_input(
+        left, "safe_intersection left input", tolerance
+    )
+    right, right_volume = _boolean_input(
+        right, "safe_intersection right input", tolerance
+    )
+    result = _run_safe_boolean(
+        "safe_intersection", BOPAlgo_COMMON, left, [right], tolerance
+    )
+    result_volume = _safe_result_volume(result, "safe_intersection", tolerance)
+    slack = _volume_slack(left_volume, right_volume, result_volume)
+    if not math.isfinite(result_volume) or result_volume < 0:
+        raise ValueError(
+            f"safe_intersection returned an invalid volume ({result_volume} mm^3); "
+            "no result was accepted"
+        )
+    maximum = min(left_volume, right_volume)
+    if result_volume > maximum + slack:
+        raise ValueError(
+            "safe_intersection rejected an impossible result: intersection "
+            f"volume {result_volume} mm^3 exceeds input volume {maximum} mm^3"
+        )
+    return result
+
+
+def safe_fuse(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
+    """Fuse a source and one or more tools in one validated operation.
+
+    The result must be valid and its volume must remain between the largest
+    input and the sum of all inputs. Disjoint inputs may produce a valid
+    multi-solid compound.
+    """
+    if not tools:
+        raise ValueError("safe_fuse requires at least one tool")
+    tolerance = _boolean_tolerance(tolerance)
+    source, source_volume = _boolean_input(source, "safe_fuse source", tolerance)
+    checked_tools = []
+    input_volumes = [source_volume]
+    for index, tool in enumerate(tools, start=1):
+        checked, volume = _boolean_input(
+            tool, f"safe_fuse tool {index}", tolerance
+        )
+        checked_tools.append(checked)
+        input_volumes.append(volume)
+
+    result = _run_safe_boolean(
+        "safe_fuse", BOPAlgo_FUSE, source, checked_tools, tolerance
+    )
+    result_volume = _safe_result_volume(result, "safe_fuse", tolerance)
+    slack = _volume_slack(*input_volumes, result_volume)
+    minimum = max(input_volumes)
+    maximum = sum(input_volumes)
+    if not math.isfinite(result_volume) or result_volume < 0:
+        raise ValueError(
+            f"safe_fuse returned an invalid volume ({result_volume} mm^3); "
+            "no result was accepted"
+        )
+    if result_volume < minimum - slack or result_volume > maximum + slack:
+        raise ValueError(
+            "safe_fuse rejected an impossible result: union volume "
+            f"{result_volume} mm^3 is outside the physical range "
+            f"{minimum}..{maximum} mm^3"
+        )
+    return result
 
 
 def translate(shape, x, y, z):

@@ -80,7 +80,8 @@ def test_cadquery_preamble_docs_list_helpers(runner, isolated_dir):
     result = runner.invoke(cli, ["docs", "preamble", "--runtime", "cadquery"])
     content = json.loads(result.stdout)["content"]
     for helper in ["loft_sections", "tapered_sweep", "naca_wire",
-                   "mirror_fuse", "copy_shape", "translate", "rotate"]:
+                   "mirror_fuse", "copy_shape", "safe_cut",
+                   "safe_intersection", "safe_fuse", "translate", "rotate"]:
         assert helper in content
 
 

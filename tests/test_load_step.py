@@ -108,6 +108,23 @@ class TestLoadStepInBuild123dScript:
         assert parsed["status"] == "success"
         assert parsed["metrics"]["is_valid"] is True
 
+    def test_imported_shape_safe_intersection_is_pre_injected(
+        self, runner, isolated_dir
+    ):
+        _init_and_import(runner, isolated_dir)
+        script = isolated_dir / "edit.py"
+        script.write_text(
+            "from build123d import *\n"
+            "raw = load_step_shape('v1_bracket/output.step')\n"
+            "shared = safe_intersection(raw, copy_shape(raw))\n"
+            "show_object(Part(shared))\n"
+        )
+        result = runner.invoke(cli, ["run", str(script), "--output", "shared"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["metrics"]["is_valid"] is True
+
 
 # --- load_step is b3d-only --------------------------------------------------
 
