@@ -25,7 +25,7 @@ jobs:
         run: pytest --collect-only -q
 
       - name: Run OCP-free interface guardrails
-        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py -q
+        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
 
   windows-platform:
     runs-on: windows-latest
