@@ -69,6 +69,18 @@ def test_init_without_cad_returns_concise_quickstart_actions(runner, isolated_di
     assert parsed["more_at"] == "agentcad docs quickstart"
 
 
+def test_init_quickstart_actions_follow_compatibility_runtime(
+    runner, isolated_dir
+):
+    result = runner.invoke(cli, ["init", "--runtime", "cadquery"])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["next_actions"][1] == (
+        "agentcad docs preamble — see the names available in cadquery scripts"
+    )
+
+
 def test_init_with_cad_routes_to_import_scaffold(runner, isolated_dir):
     (isolated_dir / "input.step").write_text("ISO-10303-21;\n")
 
