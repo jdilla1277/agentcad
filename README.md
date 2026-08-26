@@ -46,7 +46,7 @@ to keep the phone from sliding. Show me a preview when you're done.
 
 ## What it does
 
-- **`agentcad run script.py --output label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+- **`agentcad run script.py --label label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
 - **Automatic review viewer** — successful runs open `viewer.html`; from v2,
   A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
   Parts-tab change review (`--no-view` opts out)
@@ -62,6 +62,10 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad diff 1 2`** — compare versions, including actual shared/reference-only/candidate-only source-frame volume for valid closed solids
 - **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
+
+`--label` names the version; the JSON response returns the actual file under
+`outputs.step`. The older `--output LABEL` spelling remains a deprecated
+compatibility alias and never denotes a destination path.
 
 ## No boilerplate
 
@@ -85,14 +89,14 @@ For a CadQuery project:
 ```bash
 agentcad init --name legacy-model --runtime cadquery
 agentcad docs quickstart --runtime cadquery
-agentcad run script.py --output first
+agentcad run script.py --label first
 ```
 
 For a one-off CadQuery script inside a build123d project:
 
 ```bash
 agentcad docs preamble --runtime cadquery
-agentcad run legacy.py --output legacy --runtime cadquery
+agentcad run legacy.py --label legacy --runtime cadquery
 ```
 
 Keep each script on one CAD API. If a script clearly targets the other engine,

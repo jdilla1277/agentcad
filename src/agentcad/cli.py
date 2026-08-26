@@ -21,7 +21,7 @@ from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.recover import recover
-from agentcad.commands.run import run
+from agentcad.commands.run import _OUTPUT_DEPRECATION, run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
 from agentcad.commands.view import view
@@ -36,9 +36,9 @@ __AUTHORING_GUIDE__
 QUICK START WORKFLOW
   1. Write script.py using the authoring API above and surface geometry with
      show_object(). Check metrics without consuming a version:
-       $ agentcad run script.py --output test --dry-run
+       $ agentcad run script.py --label test --dry-run
   2. Run for real. The interactive review viewer opens automatically:
-       $ agentcad run script.py --output first --render iso
+       $ agentcad run script.py --label first --render iso
   3. Verify dimensions and feature sizes from the generated STEP:
        $ agentcad measure v1_first/output.step
   4. Iterate with a new label and review the automatic previous/current diff.
@@ -55,9 +55,10 @@ EXAMPLE SESSION
   {"command": "init", "status": "success", "project": "myproject",
    "runtime": "__RUNTIME__"}
   # Write script.py (see `agentcad docs quickstart`), then:
-  $ agentcad run script.py --output first --render iso
+  $ agentcad run script.py --label first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
    "output_type": "single_part", "version": 1, "label": "first",
+   "artifact_created": true,
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
    "viewer": "v1_first/viewer.html", "viewer_glb": "v1_first/output.glb",
    "metrics": {"dimensions": {"x": 10.0, "y": 20.0, "z": 5.0},
@@ -97,9 +98,12 @@ COMMAND REFERENCE: CREATE AND IMPORT
     __INIT_COMMAND_DESCRIPTION__
     --force replaces an existing manifest.
 
-  agentcad run SCRIPT --output LABEL [OPTIONS]
+  agentcad run SCRIPT --label LABEL [OPTIONS]
     Execute a script and produce a versioned STEP, metrics, viewer, and preview.
     Passing a STEP/STP/BREP path dispatches to `agentcad import` automatically.
+    --label LABEL        Name this version; outputs.step is the artifact path.
+    --output LABEL       Deprecated compatibility alias for --label. It never
+                         denotes an output path.
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
@@ -275,7 +279,7 @@ SPEC AND MEASUREMENT CHECKS
 
 DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
-  $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
+  $ agentcad run script.py --label test --dry-run        # metrics, no disk artifacts
   $ agentcad measure v1_test/output.step                  # dimensions + feature sizes
   $ agentcad check-spec v1_test/output.step spec.json     # compare against intended features
   $ agentcad inspect v1_test/output.step                  # successful STEP deep-dive
@@ -374,6 +378,127 @@ def _build_guide(runtime: str = "build123d") -> str:
 
 class _LoggingGroup(click.Group):
     """Click Group that auto-logs every command invocation to session.jsonl."""
+
+    def main(
+        self,
+        args=None,
+        prog_name=None,
+        complete_var=None,
+        standalone_mode=True,
+        **extra,
+    ):
+        """Run Click while keeping every usage failure on the JSON contract."""
+        raw_args = list(sys.argv[1:] if args is None else args)
+        try:
+            return super().main(
+                args=raw_args,
+                prog_name=prog_name,
+                complete_var=complete_var,
+                standalone_mode=False,
+                **extra,
+            )
+        except click.UsageError as exc:
+            click.echo(json.dumps(self._usage_error_payload(exc, raw_args)))
+            if standalone_mode:
+                raise SystemExit(exc.exit_code)
+            raise
+
+    def _usage_error_payload(self, exc, raw_args):
+        command = (
+            raw_args[0]
+            if raw_args and not raw_args[0].startswith("-")
+            else None
+        )
+        message = exc.format_message()
+        if isinstance(exc, click.NoSuchOption):
+            error_kind = "unknown_option"
+            invalid_option = exc.option_name
+        elif isinstance(exc, click.BadOptionUsage):
+            error_kind = (
+                "missing_parameter"
+                if "requires an argument" in message
+                else "usage_error"
+            )
+            invalid_option = exc.option_name
+        elif isinstance(exc, click.MissingParameter):
+            error_kind = "missing_parameter"
+            invalid_option = (
+                exc.param_hint if exc.param_type == "option" else None
+            )
+        elif isinstance(exc, click.BadParameter):
+            error_kind = "invalid_value"
+            invalid_option = None
+            param = getattr(exc, "param", None)
+            if isinstance(param, click.Option) and param.opts:
+                invalid_option = param.opts[0]
+        elif message.startswith("No such command"):
+            error_kind = "unknown_command"
+            invalid_option = None
+        else:
+            error_kind = "usage_error"
+            invalid_option = getattr(exc, "option_name", None)
+
+        if command in self.commands:
+            command_obj = self.commands[command]
+            usage_ctx = click.Context(
+                command_obj,
+                info_name=f"agentcad {command}",
+            )
+            usage = command_obj.get_usage(usage_ctx).strip()
+            next_actions = [f"agentcad {command} --help"]
+        else:
+            usage = (
+                exc.ctx.get_usage().strip()
+                if exc.ctx is not None
+                else "Usage: agentcad [OPTIONS] COMMAND [ARGS]..."
+            )
+            next_actions = ["agentcad --help"]
+
+        payload = {
+            "command": command,
+            "status": "error",
+            "error_kind": error_kind,
+            "message": message,
+            "usage": usage,
+            "invalid_option": invalid_option,
+            "next_actions": next_actions,
+        }
+        if command == "run":
+            label, used_output = self._run_label_from_args(raw_args)
+            payload.update({
+                "label": label,
+                "artifact_created": False,
+                "outputs": {"step": None},
+            })
+            if used_output:
+                payload["deprecation"] = _OUTPUT_DEPRECATION
+        return payload
+
+    @staticmethod
+    def _run_label_from_args(raw_args):
+        label = None
+        used_output = False
+        for index, token in enumerate(raw_args):
+            for option in ("--label", "--output"):
+                if token == option:
+                    value = (
+                        raw_args[index + 1]
+                        if index + 1 < len(raw_args)
+                        and not raw_args[index + 1].startswith("-")
+                        else None
+                    )
+                else:
+                    prefix = f"{option}="
+                    if not token.startswith(prefix):
+                        continue
+                    value = token[len(prefix):]
+                if option == "--label":
+                    label = value
+                else:
+                    used_output = True
+                    if label is None:
+                        label = value
+        return label, used_output
 
     def format_epilog(self, ctx, formatter):
         # Write the guide verbatim rather than passing it through Click's

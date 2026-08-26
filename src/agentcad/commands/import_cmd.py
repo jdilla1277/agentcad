@@ -665,7 +665,7 @@ def _edit_scaffold_build123d(version_dir: str, original_filename: str, label: st
 
 Modify the imported part below, then run:
 
-    agentcad run edit.py --output my_edit
+    agentcad run edit.py --label my_edit
 
 Each run produces a new version that auto-diffs against the most recent
 prior version (the imported baseline on first run; your previous edit
@@ -712,7 +712,7 @@ def _edit_scaffold_cadquery(version_dir: str, original_filename: str, label: str
 
 Modify the imported part below, then run:
 
-    agentcad run edit.py --output my_edit
+    agentcad run edit.py --label my_edit
 
 Each run produces a new version that auto-diffs against the most recent
 prior version. Use `agentcad diff {label} my_edit` for an explicit

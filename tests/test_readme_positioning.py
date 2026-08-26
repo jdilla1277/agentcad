@@ -14,7 +14,7 @@ def test_readme_keeps_cadquery_as_explicit_compatibility_mode():
     assert "## CadQuery compatibility" in README
     assert "agentcad init --name legacy-model --runtime cadquery" in README
     assert "agentcad docs quickstart --runtime cadquery" in README
-    assert "agentcad run legacy.py --output legacy --runtime cadquery" in README
+    assert "agentcad run legacy.py --label legacy --runtime cadquery" in README
 
 
 def test_readme_preview_claim_matches_cli_behavior():
