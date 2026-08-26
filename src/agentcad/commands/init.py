@@ -7,6 +7,7 @@ import click
 
 from agentcad import __version__
 from agentcad.manifest import MANIFEST_FILE
+from agentcad.runners import dispatch
 
 
 @click.command()
@@ -19,8 +20,8 @@ from agentcad.manifest import MANIFEST_FILE
         "Default CAD engine for `agentcad run` in this project. "
         "Pins the project mode; scripts written for the other engine require "
         "an explicit `agentcad run --runtime` override. Engine-specific docs "
-        "follow this mode. Defaults to build123d and is recorded in the "
-        "manifest."
+        "follow this mode. Defaults to the global default runtime (currently "
+        f"{dispatch.DEFAULT_RUNTIME}) and is recorded in the manifest."
     ),
 )
 @click.option(
