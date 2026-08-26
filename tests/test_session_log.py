@@ -70,10 +70,11 @@ def test_friction_signals_counts_errors(tmp_path):
     logger.log("run", {}, {"command": "run", "status": "failed", "error": "bad"})
     logger.log("run", {}, {"command": "run", "status": "error", "message": "missing"})
     logger.log("run", {}, {"command": "run", "status": "validation_error"})
+    logger.log("run", {}, {"command": "run", "status": "invalid_geometry"})
 
     signals = logger.friction_signals()
-    assert signals["total_commands"] == 4
-    assert signals["errors"] == 3  # failed + error + validation_error
+    assert signals["total_commands"] == 5
+    assert signals["errors"] == 4
     assert signals["successes"] == 1
 
 

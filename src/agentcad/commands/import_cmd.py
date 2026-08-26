@@ -15,14 +15,15 @@ from pathlib import Path
 
 import click
 
+from agentcad import __version__
 from agentcad import file_detect
-from agentcad.commands.context import TOOL_VERSION
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.commands.init import _bootstrap_manifest
-from agentcad.manifest import MANIFEST_FILE, save_manifest
+from agentcad.comparison_phases import ComparisonPhaseRecorder
+from agentcad.manifest import MANIFEST_FILE
 from agentcad.native_io import silence_native_stdout
 
 
@@ -37,22 +38,80 @@ from agentcad.native_io import silence_native_stdout
     "--view/--no-view", "open_view", default=True,
     help="Open the generated review viewer after a successful import (default on).",
 )
+@click.option(
+    "--diff/--no-diff",
+    "auto_diff",
+    default=True,
+    help=(
+        "Automatically compare against the previous successful version "
+        "(default on). --no-diff skips automatic comparison; explicit "
+        "`agentcad diff` remains available."
+    ),
+)
+@click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["cadquery", "build123d"]),
+    help=(
+        "Pin the CAD engine of the manifest bootstrapped by --init, and so of "
+        "the edit.py scaffold. Mirrors `agentcad init --runtime`. Only valid "
+        "together with --init: an existing manifest already records its "
+        "runtime. Defaults to build123d."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def import_cmd(file, label, init_flag, open_view, no_daemon):
+def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
     tracking. Every other command (run, diff, render, view) works on it
     just like a scripted version.
     """
+    # --runtime pins only the manifest that --init creates. Refuse it when a
+    # manifest already exists even if --init was also passed: --init is a
+    # no-op in that case, so accepting the flag would silently ignore the
+    # requested runtime and recreate the wrong-engine footgun this option
+    # exists to remove.
+    manifest_path = Path.cwd() / MANIFEST_FILE
+    if runtime and manifest_path.exists():
+        _emit({
+            "command": "import", "status": "error",
+            "message": (
+                f"--runtime only applies when --init creates a new "
+                f"{MANIFEST_FILE}; the manifest already exists."
+            ),
+            "suggestion": (
+                f"Run `agentcad import {file}` to use the project's recorded "
+                f"runtime, or use `agentcad import --init --runtime {runtime} "
+                f"{file}` in a fresh directory. To override the engine for one "
+                f"script, use `agentcad run --runtime {runtime} <script>`."
+            ),
+        }, exit_code=1)
+        return
+
+    if runtime and not init_flag:
+        _emit({
+            "command": "import", "status": "error",
+            "message": f"--runtime requires --init to create {MANIFEST_FILE}.",
+            "suggestion": (
+                f"Use `agentcad import --init --runtime {runtime} {file}` to "
+                "bootstrap the project and import in one command."
+            ),
+        }, exit_code=1)
+        return
+
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["import", file]
     if label:
         argv.extend(["--label", label])
     if init_flag:
         argv.append("--init")
+    if runtime:
+        argv.extend(["--runtime", runtime])
     if not open_view:
         argv.append("--no-view")
+    if not auto_diff:
+        argv.append("--no-diff")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -64,10 +123,9 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
         return
 
     # 2. Manifest handling.
-    manifest_path = Path.cwd() / MANIFEST_FILE
     if not manifest_path.exists():
         if init_flag:
-            _bootstrap_manifest()
+            _bootstrap_manifest(runtime=runtime)
         else:
             _emit({
                 "command": "import", "status": "error",
@@ -83,31 +141,14 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
     manifest = json.loads(manifest_path.read_text())
     versions = manifest.get("versions", [])
 
-    # 3. Allocate version number + label.
-    version_num = len(versions) + 1
+    # 3. Resolve the label. Version numbers are reserved atomically only after
+    # parsing/metrics establish whether this is valid or diagnostic output.
     if label is None:
         label = file_path.stem or "import"
     label = _safe_label(label)
-    dir_name = f"v{version_num}_{label}"
-    version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True, exist_ok=True)
-
-    # 4. Verbatim source copy. Done before parsing so we have provenance even
-    #    if the kernel rejects the file.
     ext = file_path.suffix.lower()
-    source_copy = version_dir / f"source{ext}"
-    try:
-        shutil.copy2(str(file_path), str(source_copy))
-    except OSError as exc:
-        shutil.rmtree(version_dir, ignore_errors=True)
-        _emit({
-            "command": "import", "status": "error",
-            "format_detected": detection.get("format"),
-            "message": f"Could not copy source file: {exc}",
-        }, exit_code=1)
-        return
 
-    # 5. Read the shape via the consolidated loader. It silences fd-1
+    # 4. Read the shape via the consolidated loader. It silences fd-1
     #    around the OCCT call and raises a clean ValueError with an
     #    agent-actionable message on empty compounds / null shapes /
     #    parser failures.
@@ -115,7 +156,6 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
         from agentcad.step_io import load_cad_shape
         topo_shape = load_cad_shape(file_path)
     except Exception as exc:
-        shutil.rmtree(version_dir, ignore_errors=True)
         # load_cad_shape's message is already complete (what + why + what to
         # do) — don't wrap it with another sentence that duplicates content.
         _emit({
@@ -131,7 +171,79 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
         }, exit_code=1)
         return
 
-    # 6. Re-export normalized output.step. Every other command reads this,
+    # 5. Aggregate metrics and final validity are core work. Invalid geometry
+    # is preserved for diagnosis but never normalized, previewed, or made
+    # current.
+    from agentcad.metrics import compute_metrics
+
+    with silence_native_stdout():
+        metrics = compute_metrics(topo_shape)
+
+    from agentcad.core_build import invalid_geometry_payload
+
+    invalid_response = invalid_geometry_payload("import", metrics)
+    if invalid_response is not None:
+        from agentcad.versioning import commit_version, reserve_version
+
+        reservation = reserve_version(Path.cwd(), label, suffix="_invalid")
+        version_num = reservation.number
+        invalid_dir_name = reservation.dir_name
+        invalid_dir = reservation.path
+        source_copy = invalid_dir / f"source{ext}"
+        try:
+            shutil.copy2(str(file_path), str(source_copy))
+        except OSError as exc:
+            shutil.rmtree(invalid_dir, ignore_errors=True)
+            _emit({
+                "command": "import", "status": "error",
+                "format_detected": detection.get("format"),
+                "message": f"Could not copy source file: {exc}",
+            }, exit_code=1)
+            return
+
+        invalid_meta = {
+            **invalid_response,
+            "version_recorded": True,
+            "version": version_num,
+            "label": label,
+            "source": "import",
+            "original_filename": file_path.name,
+            "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
+            "tool_version": __version__,
+            "created": datetime.now(timezone.utc).isoformat(),
+            "outputs": {"source": f"{invalid_dir_name}/source{ext}"},
+        }
+        commit_version(reservation, invalid_meta, {
+            "version": version_num,
+            "label": label,
+            "status": "invalid_geometry",
+            "source": "import",
+            "path": f"{invalid_dir_name}/",
+        }, advance_current=False)
+        _emit({**invalid_meta, "path": f"{invalid_dir_name}/"}, exit_code=1)
+        return
+
+    # 6. Materialize provenance only after the input has parsed and passed
+    # validity. Parser errors do not consume a version.
+    from agentcad.versioning import reserve_version
+
+    reservation = reserve_version(Path.cwd(), label)
+    version_num = reservation.number
+    dir_name = reservation.dir_name
+    version_dir = reservation.path
+    source_copy = version_dir / f"source{ext}"
+    try:
+        shutil.copy2(str(file_path), str(source_copy))
+    except OSError as exc:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        _emit({
+            "command": "import", "status": "error",
+            "format_detected": detection.get("format"),
+            "message": f"Could not copy source file: {exc}",
+        }, exit_code=1)
+        return
+
+    # 7. Re-export normalized output.step. Every other command reads this,
     #    so we standardize on STEP regardless of input format.
     try:
         with silence_native_stdout():
@@ -147,153 +259,335 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
         }, exit_code=1)
         return
 
-    # 7. Metrics + visual artifacts (preview, glb, viewer).
-    from agentcad.metrics import compute_metrics
-    from agentcad.render import (
-        render_composite_4view, render_diff_overlay, render_diff_side_by_side,
+    # Core build boundary: source loading, metrics, validity, provenance copy,
+    # and normalized STEP export have succeeded. Commit before visual work.
+    from agentcad.core_build import ArtifactLifecycle
+    from agentcad.versioning import commit_version
+
+    prev = _find_prev_success(versions)
+    has_previous_step = bool(
+        prev
+        and (Path.cwd() / prev["path"].rstrip("/") / "output.step").exists()
     )
+
+    def _artifact_state(enabled, skipped_message):
+        if enabled:
+            return {"status": "pending"}
+        return {"status": "skipped", "message": skipped_message}
+
+    sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+    created = datetime.now(timezone.utc).isoformat()
+    meta = {
+        "command": "import",
+        "status": "success",
+        "core": {"status": "success", "committed_at": created},
+        "version": version_num,
+        "label": label,
+        "source": "import",
+        "original_filename": file_path.name,
+        "sha256": sha256,
+        "tool_version": __version__,
+        "created": created,
+        "outputs": {
+            "step": f"{dir_name}/output.step",
+            "source": f"{dir_name}/source{ext}",
+        },
+        "metrics": metrics,
+        "artifacts": {
+            "preview": {"status": "pending"},
+            "viewer_glb": {"status": "pending"},
+            "diff": _artifact_state(
+                auto_diff and has_previous_step,
+                (
+                    "Automatic comparison disabled with --no-diff."
+                    if not auto_diff
+                    else "No previous successful STEP to compare."
+                ),
+            ),
+            "viewer": {"status": "pending"},
+            "browser": _artifact_state(
+                open_view, "Browser launch disabled with --no-view."
+            ),
+            "edit_scaffold": {"status": "pending"},
+        },
+    }
+    comparison_enabled = auto_diff and has_previous_step
+    if comparison_enabled:
+        meta["comparison_phases"] = ComparisonPhaseRecorder().entries
+    commit_version(reservation, meta, {
+        "version": version_num,
+        "label": label,
+        "status": "success",
+        "source": "import",
+        "path": f"{dir_name}/",
+    }, advance_current=True)
+    lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
+    comparison_recorder = None
+    if comparison_enabled:
+        comparison_recorder = ComparisonPhaseRecorder(
+            lifecycle.meta["comparison_phases"],
+            persist=lifecycle.persist,
+        )
+
+    def _attempt_artifact(name, callback):
+        try:
+            value = callback()
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            lifecycle.set_artifact(name, "failed", message=message)
+            lifecycle.add_warning(
+                f"Optional {name} work failed; core STEP remains successful: {message}"
+            )
+            return False, None
+        lifecycle.set_artifact(name, "success")
+        return True, value
+
+    # 8. Visual artifacts (preview, glb, viewer).
+    from agentcad.render import render_composite_4view
     from agentcad.export import export_glb
     from agentcad.commands.view import _render_unified
 
-    with silence_native_stdout():
-        metrics = compute_metrics(topo_shape)
-
     preview_path = version_dir / "preview.png"
-    with silence_native_stdout():
-        render_composite_4view(topo_shape, preview_path, per_view_size=512)
+
+    def _render_preview():
+        with silence_native_stdout():
+            render_composite_4view(topo_shape, preview_path, per_view_size=512)
+
+    preview_ok, _ = _attempt_artifact("preview", _render_preview)
+    if preview_ok:
+        lifecycle.meta["preview"] = f"{dir_name}/preview.png"
+        lifecycle.persist()
 
     glb_path = version_dir / "output.glb"
-    with silence_native_stdout():
-        export_glb(topo_shape, str(glb_path))
+    def _export_viewer_glb():
+        with silence_native_stdout():
+            export_glb(topo_shape, str(glb_path))
+
+    glb_ok, _ = _attempt_artifact("viewer_glb", _export_viewer_glb)
+    if glb_ok:
+        lifecycle.meta["outputs"]["glb"] = f"{dir_name}/output.glb"
+        lifecycle.persist()
 
     # 8. Auto-diff against most recent successful prior version.
     diff_meta = None
-    prev = _find_prev_success(versions)
-    if prev is not None:
+    if comparison_recorder is not None:
         prev_step = Path.cwd() / prev["path"].rstrip("/") / "output.step"
-        if prev_step.exists():
-            try:
+        prev_shape = None
+        try:
+            with comparison_recorder.observe("source_loading"):
                 from agentcad.step_io import load_cad_shape
                 prev_shape = load_cad_shape(prev_step)
-                side = version_dir / "diff_side.png"
-                overlay = version_dir / "diff_overlay.png"
-                render_diff_side_by_side(
-                    prev_shape, topo_shape, prev["label"], label,
-                    side, width=512, height=512,
-                )
-                comparison = render_diff_overlay(
-                    prev_shape, topo_shape, prev["label"], label,
-                    overlay, width=1024, height=1024,
-                )
-                from agentcad.solid_compare import (
-                    compare_solid_volumes,
-                    write_solid_comparison_artifacts,
+        except Exception as exc:
+            lifecycle.add_warning(
+                "Could not load the prior comparison source; core STEP remains "
+                f"successful: {type(exc).__name__}: {exc}"
+            )
+
+        if prev_shape is not None:
+            from agentcad.render import (
+                render_comparison_source_views,
+                render_diff_overlay,
+                render_diff_side_by_side,
+            )
+
+            diff_meta = {"against": prev["label"]}
+            side = version_dir / "diff_side.png"
+            overlay = version_dir / "diff_overlay.png"
+            source_views = None
+            try:
+                with comparison_recorder.observe("comparison_rendering"):
+                    source_views = render_comparison_source_views(
+                        prev_shape,
+                        topo_shape,
+                        per_view_size=512,
+                    )
+                    render_diff_side_by_side(
+                        prev_shape, topo_shape, prev["label"], label,
+                        side, width=512, height=512,
+                        source_views=source_views,
+                    )
+                diff_meta["side_by_side"] = f"{dir_name}/diff_side.png"
+            except Exception as exc:
+                lifecycle.add_warning(
+                    "Could not render the side-by-side comparison; core STEP "
+                    f"remains successful: {type(exc).__name__}: {exc}"
                 )
 
-                solid_comparison = compare_solid_volumes(
+            try:
+                if source_views is None:
+                    raise RuntimeError(
+                        "Comparison source views were unavailable."
+                    )
+                with comparison_recorder.observe("projection_comparison"):
+                    comparison = render_diff_overlay(
+                        prev_shape, topo_shape, prev["label"], label,
+                        overlay, width=1024, height=1024,
+                        source_views=source_views,
+                    )
+                diff_meta["overlay"] = f"{dir_name}/diff_overlay.png"
+                diff_meta["projection_comparison"] = comparison
+            except Exception as exc:
+                lifecycle.add_warning(
+                    "Could not compute the 2D projection comparison; core STEP "
+                    f"remains successful: {type(exc).__name__}: {exc}"
+                )
+
+            solid_comparison = None
+            try:
+                from agentcad.solid_compare import (
+                    compare_solid_volumes_with_fallback,
+                )
+
+                solid_comparison = compare_solid_volumes_with_fallback(
                     prev_shape,
                     topo_shape,
+                    phase_recorder=comparison_recorder,
                 )
-                diff_meta = {
-                    "against": prev["label"],
-                    "side_by_side": f"{dir_name}/diff_side.png",
-                    "overlay": f"{dir_name}/diff_overlay.png",
-                    "projection_comparison": comparison,
-                    "comparison_3d": solid_comparison.data,
-                }
-                volume_glb = version_dir / "diff_volume.glb"
-                volume_png = version_dir / "diff_volume.png"
+                diff_meta["comparison_3d"] = solid_comparison.data
+            except Exception as exc:
+                lifecycle.add_warning(
+                    "Could not compute the exact 3D comparison; core STEP "
+                    f"remains successful: {type(exc).__name__}: {exc}"
+                )
+
+            if solid_comparison is not None and solid_comparison.available:
                 try:
-                    if write_solid_comparison_artifacts(
-                        solid_comparison,
-                        volume_glb,
-                        volume_png,
-                    ):
+                    from agentcad.solid_compare import (
+                        write_solid_comparison_artifacts,
+                    )
+
+                    with comparison_recorder.observe(
+                        "difference_artifact_export"
+                    ) as phase:
+                        volume_glb = version_dir / "diff_volume.glb"
+                        volume_png = version_dir / "diff_volume.png"
+                        written = write_solid_comparison_artifacts(
+                            solid_comparison,
+                            volume_glb,
+                            volume_png,
+                        )
+                        if not written:
+                            phase.status = "unavailable"
+                            phase.message = (
+                                "3D difference artifacts were not available."
+                            )
+                    if written:
                         diff_meta["volume_glb"] = (
                             f"{dir_name}/diff_volume.glb"
                         )
                         diff_meta["volume_png"] = (
                             f"{dir_name}/diff_volume.png"
                         )
-                except Exception:
-                    # Numeric comparison remains useful if artifact export fails.
-                    pass
-            except Exception:
-                # Diff is best-effort — never fail the whole import.
-                diff_meta = None
+                except Exception as exc:
+                    lifecycle.add_warning(
+                        "Could not write 3D volume comparison artifacts; core "
+                        "STEP remains successful: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+            else:
+                comparison_recorder.skip(
+                    "difference_artifact_export",
+                    "Exact 3D comparison produced no exportable geometry.",
+                )
+
+        comparison_recorder.finalize_pending(
+            "Skipped because an earlier comparison phase was unavailable."
+        )
+        useful_diff = bool(diff_meta and any(
+            key in diff_meta
+            for key in (
+                "side_by_side",
+                "overlay",
+                "projection_comparison",
+                "comparison_3d",
+            )
+        ))
+        if not useful_diff:
+            lifecycle.set_artifact(
+                "diff",
+                "unavailable",
+                message="Comparison artifacts could not be generated.",
+            )
+        else:
+            lifecycle.meta["diff"] = diff_meta
+            lifecycle.set_artifact("diff", "success")
 
     # 9. Unified viewer HTML.
     prev_glb = None
-    if prev is not None:
+    if auto_diff and prev is not None:
         cand = Path.cwd() / prev["path"].rstrip("/") / "output.glb"
         if cand.exists():
             prev_glb = cand
     viewer_path = version_dir / "viewer.html"
-    _render_unified(
-        viewer_path, prev_glb or glb_path, glb_path if prev_glb else None,
-        label_a=prev["label"] if prev_glb else label,
-        label_b=label if prev_glb else None,
-        default_mode="side-by-side" if prev_glb else "single-a",
-        preview_png=preview_path,
-        diff_side_png=(version_dir / "diff_side.png") if diff_meta else None,
-        diff_overlay_png=(version_dir / "diff_overlay.png") if diff_meta else None,
-        diff_volume_png=(
-            version_dir / "diff_volume.png"
-            if diff_meta and diff_meta.get("volume_png")
-            else None
-        ),
-    )
+    viewer_ok = False
+    if glb_ok:
+        def _write_viewer():
+            def _render():
+                _render_unified(
+                    viewer_path,
+                    prev_glb or glb_path,
+                    glb_path if prev_glb else None,
+                    label_a=prev["label"] if prev_glb else label,
+                    label_b=label if prev_glb else None,
+                    default_mode="side-by-side" if prev_glb else "single-a",
+                    preview_png=preview_path if preview_ok else None,
+                    diff_side_png=(
+                        version_dir / "diff_side.png"
+                        if diff_meta and diff_meta.get("side_by_side")
+                        else None
+                    ),
+                    diff_overlay_png=(
+                        version_dir / "diff_overlay.png"
+                        if diff_meta and diff_meta.get("overlay")
+                        else None
+                    ),
+                    diff_volume_png=(
+                        version_dir / "diff_volume.png"
+                        if diff_meta and diff_meta.get("volume_png")
+                        else None
+                    ),
+                )
+
+            if comparison_recorder is not None:
+                with comparison_recorder.observe("viewer_generation"):
+                    _render()
+            else:
+                _render()
+
+        viewer_ok, _ = _attempt_artifact("viewer", _write_viewer)
+        if viewer_ok:
+            lifecycle.meta["viewer"] = f"{dir_name}/viewer.html"
+            lifecycle.persist()
+    else:
+        lifecycle.set_artifact(
+            "viewer",
+            "skipped",
+            message="Viewer GLB was unavailable.",
+        )
 
     viewer_opened = False
-    if open_view:
+    if open_view and viewer_ok:
         try:
             from agentcad.commands.view import _open_browser
 
             viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
-        except Exception:
+            lifecycle.set_artifact(
+                "browser",
+                "success" if viewer_opened else "unavailable",
+                message=None if viewer_opened else "Browser did not open.",
+            )
+        except Exception as exc:
             # Browser launch is best-effort and must not discard a valid import.
             viewer_opened = False
+            lifecycle.set_artifact(
+                "browser", "failed", message=f"{type(exc).__name__}: {exc}"
+            )
+    elif open_view:
+        lifecycle.set_artifact(
+            "browser", "skipped", message="Viewer artifact was unavailable."
+        )
 
-    # 10. Provenance metadata in meta.json.
-    sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-    outputs = {
-        "step": f"{dir_name}/output.step",
-        "source": f"{dir_name}/source{ext}",
-        "glb": f"{dir_name}/output.glb",
-    }
-    meta = {
-        "command": "import",
-        "status": "success",
-        "version": version_num,
-        "label": label,
-        "source": "import",
-        "original_filename": file_path.name,
-        "sha256": sha256,
-        "tool_version": TOOL_VERSION,
-        "created": datetime.now(timezone.utc).isoformat(),
-        "outputs": outputs,
-        "preview": f"{dir_name}/preview.png",
-        "viewer": f"{dir_name}/viewer.html",
-        "metrics": metrics,
-    }
-    if diff_meta:
-        meta["diff"] = diff_meta
-    (version_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-
-    # 11. Update manifest with the new version. `source: "import"` flags it
-    #     for downstream commands (context, diff) that distinguish journeys.
-    versions.append({
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "source": "import",
-        "path": f"{dir_name}/",
-    })
-    manifest["versions"] = versions
-    manifest["current"] = label
-    save_manifest(manifest)
-
-    # 12. Edit scaffold — write `edit.py` if absent, so the agent has a
+    # 10. Edit scaffold — write `edit.py` if absent, so the agent has a
     #     templated starting point. The scaffold must match the project's
     #     pinned runtime (b3d uses the M60 edit helpers, cq uses the
     #     kernel-neutral `importers.importStep` fallback documented in
@@ -303,14 +597,27 @@ def import_cmd(file, label, init_flag, open_view, no_daemon):
     scaffold_path = Path.cwd() / "edit.py"
     scaffold_written = False
     if not scaffold_path.exists():
-        scaffold_path.write_text(
-            _edit_scaffold(dir_name, file_path.name, label, project_rt)
-        )
-        scaffold_written = True
+        def _write_scaffold():
+            scaffold_path.write_text(
+                _edit_scaffold(dir_name, file_path.name, label, project_rt)
+            )
 
-    # 13. Output JSON. Mirrors meta.json plus next_actions per the
+        scaffold_written, _ = _attempt_artifact(
+            "edit_scaffold", _write_scaffold
+        )
+        if scaffold_written:
+            lifecycle.meta["scaffold"] = "edit.py"
+            lifecycle.persist()
+    else:
+        lifecycle.set_artifact(
+            "edit_scaffold", "skipped", message="edit.py already exists."
+        )
+
+    lifecycle.finish_pending(message="Optional artifact was not needed.")
+
+    # 11. Output JSON. Mirrors committed metadata plus next_actions per the
     #     `next_actions` design convention.
-    response = dict(meta)
+    response = lifecycle.response()
     response["viewer_opened"] = viewer_opened
     if scaffold_written:
         response["scaffold"] = "edit.py"

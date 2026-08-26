@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -8,11 +9,47 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
+from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import load_manifest
 from agentcad.metrics import compute_metrics
 from agentcad.step_io import load_cad_shape
 
 _CAD_FILE_SUFFIXES = {".step", ".stp", ".brep"}
+
+
+def _add_exact_recovery_suggestion(data, ref1, ref2):
+    """Make explicit-diff recovery advice directly runnable."""
+    comparison = data
+    data = comparison.get("exact_attempt", comparison)
+    command = "agentcad diff {} {}".format(
+        shlex.quote(str(ref1)),
+        shlex.quote(str(ref2)),
+    )
+    status = data.get("status")
+    if status == "timeout":
+        timeout_s = data.get("timeout_s")
+        next_timeout = max(60.0, float(timeout_s or 0) * 2)
+        data["suggestion"] = (
+            "Retry this saved-model comparison with "
+            f"`AGENTCAD_DIFF_TIMEOUT_S={next_timeout:g} {command}`; "
+            "do not rerun the CAD build or import."
+        )
+    elif status == "unavailable" and data.get("kernel") is not None:
+        data["suggestion"] = (
+            "Review comparison_3d.kernel, then run "
+            f"`{command} --visual` to retain the independent projection "
+            "comparison; an unavailable exact result does not mean the CAD "
+            "build failed."
+        )
+    approximate = comparison.get("approximate_attempt", {})
+    if approximate.get("status") == "timeout":
+        timeout_s = approximate.get("timeout_s")
+        next_timeout = max(60.0, float(timeout_s or 0) * 2)
+        approximate["suggestion"] = (
+            "Retry this saved-model comparison with "
+            f"`AGENTCAD_APPROX_DIFF_TIMEOUT_S={next_timeout:g} {command}`; "
+            "do not rerun the CAD build or import."
+        )
 
 
 def _resolve_version(manifest, ref):
@@ -75,6 +112,16 @@ def _load_file_shape_and_metrics(path):
     return shape, compute_metrics(shape)
 
 
+def _file_display_labels(path_a, path_b):
+    """Keep repeated CAD filenames distinct in structured output."""
+    if path_a.name != path_b.name:
+        return path_a.name, path_b.name
+    return (
+        f"{path_a.parent.name}/{path_a.name}",
+        f"{path_b.parent.name}/{path_b.name}",
+    )
+
+
 def _metric_changes(metrics_a, metrics_b):
     all_keys = sorted(set(metrics_a.keys()) | set(metrics_b.keys()))
     return {k: _scalar_diff(metrics_a.get(k), metrics_b.get(k)) for k in all_keys}
@@ -87,7 +134,19 @@ def _metric_changes(metrics_a, metrics_b):
 @click.option("--overlay", is_flag=True, default=False, help="With --visual, use tinted overlay mode instead of side-by-side.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 def diff(ref1, ref2, visual, overlay, no_daemon):
-    """Compare two versions of a model."""
+    """Compare two versions or CAD files.
+
+    Closed solids return exact shared and directional occupied volumes when the
+    native comparison succeeds. Exact failure automatically runs a bounded
+    approximate voxel comparison; it reports resolution and error estimates and
+    keeps exact diagnostics under comparison_3d.exact_attempt, including
+    exact_attempt.kernel when native diagnostics exist.
+
+    Exact work has a 30-second budget. Set AGENTCAD_DIFF_TIMEOUT_S=N to override
+    it (0 disables the limit for diagnostics). Approximate work has its own 30s
+    budget via AGENTCAD_APPROX_DIFF_TIMEOUT_S. Retry this saved diff for exact
+    results; do not rerun the CAD build or import.
+    """
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["diff", ref1, ref2]
     if visual:
@@ -119,9 +178,11 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             }))
             sys.exit(1)
 
+        phase_recorder = ComparisonPhaseRecorder()
         try:
-            shape_a, metrics_a = _load_file_shape_and_metrics(file_a)
-            shape_b, metrics_b = _load_file_shape_and_metrics(file_b)
+            with phase_recorder.observe("source_loading"):
+                shape_a, metrics_a = _load_file_shape_and_metrics(file_a)
+                shape_b, metrics_b = _load_file_shape_and_metrics(file_b)
         except ValueError as exc:
             click.echo(json.dumps({
                 "command": "diff",
@@ -130,19 +191,35 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             }))
             sys.exit(1)
 
-        from agentcad.solid_compare import compare_solid_volumes
+        from agentcad.solid_compare import compare_solid_volumes_with_fallback
 
-        solid_comparison = compare_solid_volumes(shape_a, shape_b)
+        solid_comparison = None
+        try:
+            solid_comparison = compare_solid_volumes_with_fallback(
+                shape_a,
+                shape_b,
+                phase_recorder=phase_recorder,
+            )
+            _add_exact_recovery_suggestion(
+                solid_comparison.data,
+                ref1,
+                ref2,
+            )
+        except Exception:
+            pass
+        label_a, label_b = _file_display_labels(file_a, file_b)
         response = {
             "command": "diff",
             "status": "success",
-            "v1": {"file": _relative_to_cwd(file_a), "label": file_a.name},
-            "v2": {"file": _relative_to_cwd(file_b), "label": file_b.name},
+            "v1": {"file": _relative_to_cwd(file_a), "label": label_a},
+            "v2": {"file": _relative_to_cwd(file_b), "label": label_b},
             "changes": {
                 "metrics": _metric_changes(metrics_a, metrics_b),
             },
-            "comparison_3d": solid_comparison.data,
+            "comparison_phases": phase_recorder.entries,
         }
+        if solid_comparison is not None:
+            response["comparison_3d"] = solid_comparison.data
 
         if visual:
             _add_visual_response(
@@ -151,7 +228,10 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
                 file_b,
                 overlay,
                 solid_comparison=solid_comparison,
+                phase_recorder=phase_recorder,
             )
+        else:
+            phase_recorder.finalize_pending("Visual comparison not requested.")
 
         click.echo(json.dumps(response))
         maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
@@ -177,8 +257,10 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
         }))
         sys.exit(1)
 
-    meta1 = _load_version_meta(v1_entry)
-    meta2 = _load_version_meta(v2_entry)
+    phase_recorder = ComparisonPhaseRecorder()
+    with phase_recorder.observe("source_loading"):
+        meta1 = _load_version_meta(v1_entry)
+        meta2 = _load_version_meta(v2_entry)
 
     # Compute changes
     changes = {
@@ -273,14 +355,29 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
     solid_comparison = None
     if step_a is not None and step_b is not None:
         try:
-            from agentcad.solid_compare import compare_solid_volumes
+            from agentcad.solid_compare import compare_solid_volumes_with_fallback
 
-            shape_a = load_cad_shape(step_a)
-            shape_b = load_cad_shape(step_b)
-            solid_comparison = compare_solid_volumes(shape_a, shape_b)
+            with phase_recorder.observe("source_loading"):
+                shape_a = load_cad_shape(step_a)
+                shape_b = load_cad_shape(step_b)
+            solid_comparison = compare_solid_volumes_with_fallback(
+                shape_a,
+                shape_b,
+                phase_recorder=phase_recorder,
+            )
+            _add_exact_recovery_suggestion(
+                solid_comparison.data,
+                ref1,
+                ref2,
+            )
             response["comparison_3d"] = solid_comparison.data
-        except ValueError:
+        except Exception:
             solid_comparison = None
+    else:
+        phase_recorder.skip(
+            "exact_3d_comparison",
+            "No STEP outputs were available for exact comparison.",
+        )
 
     if visual:
         if step_a is None or step_b is None:
@@ -296,7 +393,12 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
             step_b,
             overlay,
             solid_comparison=solid_comparison,
+            phase_recorder=phase_recorder,
         )
+    else:
+        phase_recorder.finalize_pending("Visual comparison not requested.")
+
+    response["comparison_phases"] = phase_recorder.entries
 
     click.echo(json.dumps(response))
 
@@ -314,6 +416,7 @@ def _add_visual_response(
     overlay,
     *,
     solid_comparison=None,
+    phase_recorder=None,
 ):
     from agentcad.commands.view import (
         _open_browser,
@@ -338,32 +441,83 @@ def _add_visual_response(
     volume_glb_path = None
     volume_png_path = None
     projection_comparison = None
+    if phase_recorder is None:
+        phase_recorder = ComparisonPhaseRecorder()
     if shape_a is not None and shape_b is not None:
-        png_path = _render_diff_png(shape_a, shape_b, glb_a, glb_b, Path.cwd())
-        overlay_png_path, projection_comparison = _render_diff_overlay_png(
-            shape_a, shape_b, glb_a, glb_b, Path.cwd()
-        )
-        if solid_comparison is None:
-            from agentcad.solid_compare import compare_solid_volumes
+        with phase_recorder.observe("comparison_rendering"):
+            png_path, source_views = _render_diff_png(
+                shape_a, shape_b, glb_a, glb_b, Path.cwd()
+            )
+        with phase_recorder.observe("projection_comparison"):
+            overlay_png_path, projection_comparison = _render_diff_overlay_png(
+                shape_a,
+                shape_b,
+                glb_a,
+                glb_b,
+                Path.cwd(),
+                source_views=source_views,
+            )
+        if (
+            solid_comparison is None
+            and phase_recorder.entries["exact_3d_comparison"].get("status")
+            == "pending"
+        ):
+            from agentcad.solid_compare import compare_solid_volumes_with_fallback
 
-            solid_comparison = compare_solid_volumes(shape_a, shape_b)
-            response["comparison_3d"] = solid_comparison.data
-        volume_glb_path, volume_png_path = _render_solid_comparison_artifacts(
-            solid_comparison,
+            try:
+                solid_comparison = compare_solid_volumes_with_fallback(
+                    shape_a,
+                    shape_b,
+                    phase_recorder=phase_recorder,
+                )
+                _add_exact_recovery_suggestion(
+                    solid_comparison.data,
+                    step_a,
+                    step_b,
+                )
+                response["comparison_3d"] = solid_comparison.data
+            except Exception:
+                pass
+        if solid_comparison is not None and solid_comparison.available:
+            with phase_recorder.observe("difference_artifact_export") as phase:
+                volume_glb_path, volume_png_path = (
+                    _render_solid_comparison_artifacts(
+                        solid_comparison,
+                        glb_a,
+                        glb_b,
+                        Path.cwd(),
+                    )
+                )
+                if volume_glb_path is None and volume_png_path is None:
+                    phase.status = "unavailable"
+                    phase.message = "3D difference artifacts were not available."
+        else:
+            phase_recorder.skip(
+                "difference_artifact_export",
+                "3D comparison produced no exportable geometry.",
+            )
+    else:
+        phase_recorder.skip(
+            "comparison_rendering", "Loaded inputs did not include B-rep shapes."
+        )
+        phase_recorder.skip(
+            "projection_comparison", "Loaded inputs did not include B-rep shapes."
+        )
+        phase_recorder.skip(
+            "difference_artifact_export",
+            "Loaded inputs did not include B-rep shapes.",
+        )
+
+    with phase_recorder.observe("viewer_generation"):
+        html_path, url, mode = _render_diff(
             glb_a,
             glb_b,
-            Path.cwd(),
+            overlay=overlay,
+            out_dir=Path.cwd(),
+            diff_side_png=png_path,
+            diff_overlay_png=overlay_png_path,
+            diff_volume_png=volume_png_path,
         )
-
-    html_path, url, mode = _render_diff(
-        glb_a,
-        glb_b,
-        overlay=overlay,
-        out_dir=Path.cwd(),
-        diff_side_png=png_path,
-        diff_overlay_png=overlay_png_path,
-        diff_volume_png=volume_png_path,
-    )
 
     visual_resp = {
         "mode": mode,

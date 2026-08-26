@@ -21,7 +21,8 @@ from agentcad.commands.export_cmd import (
     parse_export_formats,
     unsupported_export_formats,
 )
-from agentcad.manifest import MANIFEST_FILE, load_manifest, save_manifest
+from agentcad.comparison_phases import ComparisonPhaseRecorder
+from agentcad.manifest import MANIFEST_FILE, load_manifest
 
 
 _DEFAULT_RUN_TIMEOUT_S = 115.0
@@ -29,6 +30,25 @@ _RUN_TIMEOUT_ENV = "AGENTCAD_RUN_TIMEOUT_S"
 _ACTIVE_PHASE_TRACKER = None
 _PREVIOUS_ALARM_HANDLER = None
 _RUN_TIMEOUT_INSTALLED = False
+
+_PHASE_ARTIFACTS = {
+    "export_mesh": "mesh_exports",
+    "render_views": "renders",
+    "preview": "preview",
+    "parts_preview": "parts_preview",
+    "export_viewer_glb": "viewer_glb",
+    "source_loading": "diff",
+    "comparison_rendering": "diff",
+    "projection_comparison": "diff",
+    "exact_3d_comparison": "diff",
+    "approximate_3d_comparison": "diff",
+    "difference_artifact_export": "diff",
+    "viewer_generation": "viewer",
+    # Backward-compatible names accepted by injected failure harnesses and
+    # older daemon payloads created before comparison phases were split.
+    "diff": "diff",
+    "viewer": "viewer",
+}
 
 
 class _RunTimeout(BaseException):
@@ -46,6 +66,8 @@ class _PhaseTracker:
         self.active_phase = None
         self.active_started_at = None
         self.next_phase = None
+        self.lifecycle = None
+        self.reservation = None
 
     def start(self, phase):
         self.active_phase = phase
@@ -126,9 +148,33 @@ def _timeout_suggestion(phase, completed):
             "Viewer GLB export timed out; inspect shape validity and consider "
             "simplifying the model before generating viewer assets."
         ),
+        "source_loading": (
+            "Loading the prior comparison source timed out; the current STEP is "
+            "already saved and can be compared explicitly later."
+        ),
+        "comparison_rendering": (
+            "Comparison rendering timed out; the current STEP is already saved."
+        ),
+        "projection_comparison": (
+            "The 2D projection comparison timed out; the current STEP is already saved."
+        ),
+        "exact_3d_comparison": (
+            "Exact 3D comparison timed out; the current STEP is already saved."
+        ),
+        "approximate_3d_comparison": (
+            "Approximate 3D comparison timed out; the current STEP is already saved."
+        ),
+        "difference_artifact_export": (
+            "Difference artifact export timed out; numeric results produced earlier "
+            "remain available."
+        ),
+        "viewer_generation": (
+            "The geometry exported, but viewer generation timed out; use the STEP "
+            "and metrics artifacts directly for this iteration."
+        ),
         "diff": (
-            "Diff rendering against the previous version timed out; continue from "
-            "the latest STEP and skip visual comparison for this iteration."
+            "Diff work timed out; continue from the saved STEP and compare it "
+            "explicitly later."
         ),
         "viewer": (
             "The geometry exported, but viewer generation timed out; use the STEP "
@@ -210,6 +256,67 @@ def _clear_run_timeout():
     _ACTIVE_PHASE_TRACKER = None
     _PREVIOUS_ALARM_HANDLER = None
     _RUN_TIMEOUT_INSTALLED = False
+
+
+def _recover_committed_core(error, *, timeout_payload=None):
+    """Turn post-core failures into successful builds with artifact status."""
+    tracker = _ACTIVE_PHASE_TRACKER
+    if tracker is None or tracker.lifecycle is None:
+        return None
+
+    lifecycle = tracker.lifecycle
+    phase = (
+        (timeout_payload or {}).get("timeout_phase")
+        or tracker.active_phase
+        or tracker.next_phase
+        or "post_processing"
+    )
+    artifact = _PHASE_ARTIFACTS.get(phase)
+    status = "timeout" if timeout_payload is not None else "failed"
+    if timeout_payload is not None:
+        message = timeout_payload.get("message", str(error))
+    else:
+        message = f"{type(error).__name__}: {error}"
+    if artifact is not None:
+        lifecycle.set_artifact(artifact, status, message=message)
+    comparison_entries = lifecycle.meta.get("comparison_phases", {})
+    phase_entry = comparison_entries.get(phase)
+    if phase_entry is not None:
+        phase_entry.clear()
+        phase_entry["status"] = status
+        if timeout_payload is not None:
+            phase_entry["duration_ms"] = timeout_payload.get(
+                "active_phase_elapsed_ms", 0
+            )
+        phase_entry["message"] = message
+    for entry in comparison_entries.values():
+        if entry.get("status") == "pending":
+            entry["status"] = "skipped"
+            entry["message"] = f"Skipped after {phase} {status}."
+    lifecycle.finish_pending(
+        message=f"Skipped after {phase} {status}."
+    )
+    lifecycle.add_warning(
+        f"Optional {phase} work {status}; core STEP remains successful: {message}"
+    )
+    lifecycle.meta["completed_phases"] = list(tracker.completed)
+    lifecycle.meta["phase_timings"] = dict(tracker.timings)
+    lifecycle.persist()
+    return lifecycle.response()
+
+
+def _cleanup_uncommitted_reservation():
+    """Remove only this run's exact reserved directory before core commit."""
+    tracker = _ACTIVE_PHASE_TRACKER
+    if (
+        tracker is None
+        or tracker.lifecycle is not None
+        or tracker.reservation is None
+    ):
+        return
+    reservation = tracker.reservation
+    if not (reservation.path / "meta.json").exists():
+        shutil.rmtree(reservation.path, ignore_errors=True)
 
 
 def _parse_params(raw):
@@ -409,18 +516,19 @@ def _part_change_summary(previous_parts, current_parts, previous_label):
 
 
 def _record_failure(
-    manifest,
     script_path,
     label,
-    version_num,
+    reservation,
     error_msg,
     runtime=None,
     guidance=None,
 ):
     """Record a script failure on disk and in the manifest."""
-    dir_name = f"v{version_num}_{label}_failed"
-    version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True, exist_ok=True)
+    from agentcad.versioning import commit_version
+
+    version_num = reservation.number
+    dir_name = reservation.dir_name
+    version_dir = reservation.path
 
     # Copy script into failed directory
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
@@ -439,18 +547,12 @@ def _record_failure(
         meta["runtime"] = runtime
     if guidance:
         meta.update(guidance)
-    (version_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-
-    # Update manifest (current does NOT advance)
-    versions = manifest.get("versions", [])
-    versions.append({
+    commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
         "status": "failed",
         "path": f"{dir_name}/",
-    })
-    manifest["versions"] = versions
-    save_manifest(manifest)
+    }, advance_current=False)
 
     # Output failure JSON
     output_json = {
@@ -465,6 +567,68 @@ def _record_failure(
         output_json["runtime"] = runtime
     if guidance:
         output_json.update(guidance)
+    click.echo(json.dumps(output_json))
+    sys.exit(1)
+
+
+def _record_invalid_geometry(
+    script_path,
+    label,
+    reservation,
+    runtime,
+    output_type,
+    metrics,
+    parts,
+    groups,
+    warnings,
+    response,
+):
+    """Preserve invalid-geometry diagnostics without advancing current."""
+    from agentcad.versioning import commit_version
+
+    version_num = reservation.number
+    dir_name = reservation.dir_name
+    version_dir = reservation.path
+    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+
+    meta = {
+        **response,
+        "version_recorded": True,
+        "version": version_num,
+        "label": label,
+        "runtime": runtime,
+        "output_type": output_type,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "script": f"{dir_name}/script.py",
+    }
+    if parts:
+        meta["parts"] = parts
+    if groups:
+        meta["groups"] = groups
+    if warnings:
+        meta["warnings"] = warnings
+    commit_version(reservation, meta, {
+        "version": version_num,
+        "label": label,
+        "status": "invalid_geometry",
+        "path": f"{dir_name}/",
+    }, advance_current=False)
+
+    output_json = {
+        **response,
+        "version_recorded": True,
+        "version": version_num,
+        "label": label,
+        "runtime": runtime,
+        "output_type": output_type,
+        "path": f"{dir_name}/",
+    }
+    if parts:
+        output_json["parts"] = parts
+    if groups:
+        output_json["groups"] = groups
+    if warnings:
+        output_json["warnings"] = warnings
     click.echo(json.dumps(output_json))
     sys.exit(1)
 
@@ -541,9 +705,19 @@ def _assign_part_identity(raw_parts):
     default=True,
     help=(
         "4-view composite PNG + per-part previews (default on, ~2-4s). "
-        "The viewer.html, GLB, and diff PNGs always generate regardless — "
-        "--no-preview skips the composite and per-part previews. Use it when "
-        "you don't need agent-readable PNGs this iteration."
+        "By itself, --no-preview skips only those PNGs; viewer.html, its GLB, "
+        "and automatic diff work remain enabled. Combine it with --no-diff "
+        "--no-view for the core-only fast path."
+    ),
+)
+@click.option(
+    "--diff/--no-diff",
+    "auto_diff",
+    default=True,
+    help=(
+        "Automatically compare against the previous successful version "
+        "(default on). --no-diff skips all automatic comparison work; "
+        "`agentcad diff` remains available for later review."
     ),
 )
 @click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
@@ -561,7 +735,10 @@ def _assign_part_identity(raw_parts):
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
-def run(ctx, script, output, render, export, preview, open_view, params, dry_run, runtime, no_daemon):
+def run(
+    ctx, script, output, render, export, preview, auto_diff, open_view,
+    params, dry_run, runtime, no_daemon,
+):
     """Execute the project's CAD script and produce a versioned STEP file.
 
     New projects use build123d. CadQuery scripts remain supported in projects
@@ -612,6 +789,7 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
             file=script,
             label=output,
             init_flag=False,
+            auto_diff=auto_diff,
             open_view=open_view,
             no_daemon=no_daemon,
         )
@@ -626,16 +804,26 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
     try:
         _run_impl(
             ctx, script, output, render, export,
-            preview, open_view, params, dry_run, runtime, no_daemon,
+            preview, auto_diff, open_view, params, dry_run, runtime, no_daemon,
         )
     except SystemExit:
         # Explicit sys.exit() calls inside _run_impl are intentional —
         # they already emitted the proper JSON. Pass through.
         raise
     except _RunTimeout as e:
+        recovered = _recover_committed_core(e, timeout_payload=e.payload)
+        if recovered is not None:
+            click.echo(json.dumps(recovered))
+            return
+        _cleanup_uncommitted_reservation()
         click.echo(json.dumps(e.payload))
         sys.exit(1)
     except Exception as e:
+        recovered = _recover_committed_core(e)
+        if recovered is not None:
+            click.echo(json.dumps(recovered))
+            return
+        _cleanup_uncommitted_reservation()
         import traceback as _tb
         click.echo(json.dumps({
             "command": "run",
@@ -648,8 +836,10 @@ def run(ctx, script, output, render, export, preview, open_view, params, dry_run
         _clear_run_timeout()
 
 
-def _run_impl(ctx, script, output, render, export, preview, open_view, params,
-              dry_run, runtime, no_daemon):
+def _run_impl(
+    ctx, script, output, render, export, preview, auto_diff, open_view,
+    params, dry_run, runtime, no_daemon,
+):
     _t_total_start = time.perf_counter()
     _timings = {}
     _phase_tracker = _PhaseTracker(_timings)
@@ -665,6 +855,12 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     def _finish_phase(phase, start, key=None):
         _mark(key or f"{phase}_ms", start)
         _phase_tracker.complete(phase)
+        artifact = _PHASE_ARTIFACTS.get(phase)
+        lifecycle = _phase_tracker.lifecycle
+        if artifact and lifecycle is not None:
+            current = lifecycle.meta.get("artifacts", {}).get(artifact, {})
+            if current.get("status") == "pending":
+                lifecycle.set_artifact(artifact, "success")
 
     def _heartbeat(message):
         # Stderr progress line so callers can distinguish "still working"
@@ -682,6 +878,8 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         argv.extend(["--export", export])
     if not preview:
         argv.append("--no-preview")
+    if not auto_diff:
+        argv.append("--no-diff")
     if not open_view:
         argv.append("--no-view")
     if params:
@@ -800,12 +998,15 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         }))
         sys.exit(1)
 
-    # Determine version number before recording failures (failures consume a number)
+    # Keep the current history snapshot for previous-version comparison. A
+    # directory reservation, not list length, allocates version numbers.
     versions = manifest.get("versions", [])
-    version_num = len(versions) + 1
     label = output
 
     if result.status == "execution_error":
+        from agentcad.versioning import reserve_version
+
+        reservation = reserve_version(Path.cwd(), label, suffix="_failed")
         error_msg = _enrich_error(result.exception)
         guidance = _execution_error_guidance(
             error_msg,
@@ -813,10 +1014,9 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             source=raw_source,
         )
         _record_failure(
-            manifest,
             script_path,
             label,
-            version_num,
+            reservation,
             error_msg,
             runtime=runtime_name,
             guidance=guidance,
@@ -901,14 +1101,49 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         for entry, raw in zip(parts_output, raw_parts)
     ]
 
-    # Surface validity issues as top-level warnings
-    if not metrics.get("is_valid", True):
-        warnings.append(
-            "Invalid geometry detected (is_valid: false). "
-            "Run 'agentcad inspect' on the STEP file for diagnostic details."
-        )
     if metrics.get("warnings"):
         warnings.extend(metrics["warnings"])
+
+    # Final geometry validity is part of core CAD success. Stop before STEP
+    # export and before every visual/post-processing phase when it fails.
+    from agentcad.core_build import invalid_geometry_payload
+
+    invalid_response = invalid_geometry_payload("run", metrics)
+    if invalid_response is not None:
+        if dry_run:
+            invalid_response.update({
+                "runtime": runtime_name,
+                "output_type": output_type,
+            })
+            if parts_output:
+                invalid_response["parts"] = parts_output
+            if groups_output:
+                invalid_response["groups"] = groups_output
+            if warnings:
+                invalid_response["warnings"] = warnings
+            _timings["total_ms"] = round(
+                (time.perf_counter() - _t_total_start) * 1000
+            )
+            invalid_response["timings"] = _timings
+            invalid_response["completed_phases"] = list(_phase_tracker.completed)
+            invalid_response["phase_timings"] = dict(_timings)
+            click.echo(json.dumps(invalid_response))
+            sys.exit(1)
+        from agentcad.versioning import reserve_version
+
+        reservation = reserve_version(Path.cwd(), label, suffix="_invalid")
+        _record_invalid_geometry(
+            script_path,
+            label,
+            reservation,
+            runtime_name,
+            output_type,
+            metrics,
+            parts_output,
+            groups_output,
+            warnings,
+            invalid_response,
+        )
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:
@@ -932,10 +1167,14 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         click.echo(json.dumps(output_json))
         return
 
-    # Script succeeded — create version directory and write files
-    dir_name = f"v{version_num}_{label}" if label != f"v{version_num}" else label
-    version_dir = Path.cwd() / dir_name
-    version_dir.mkdir(parents=True, exist_ok=True)
+    # Atomically reserve a unique version directory before writing core files.
+    from agentcad.versioning import reserve_version
+
+    reservation = reserve_version(Path.cwd(), label)
+    _phase_tracker.reservation = reservation
+    version_num = reservation.number
+    dir_name = reservation.dir_name
+    version_dir = reservation.path
 
     # Copy script into version directory
     shutil.copy2(str(script_path), str(version_dir / "script.py"))
@@ -945,6 +1184,121 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     _t = _start_phase("export_step")
     runner.export_step(shape, str(version_dir / "output.step"))
     _finish_phase("export_step", _t, "export_step_ms")
+
+    # Core build boundary: commit the valid STEP and its metadata before any
+    # optional export/render/diff/viewer work begins.
+    from agentcad.core_build import ArtifactLifecycle
+    from agentcad.versioning import commit_version
+
+    previous = _find_prev_success(versions)
+    has_previous_step = bool(
+        previous
+        and (Path.cwd() / previous["path"] / "output.step").exists()
+    )
+    comparison_enabled = auto_diff and has_previous_step
+    fast_path = not preview and not auto_diff and not open_view
+
+    def _artifact_state(enabled, skipped_message):
+        if enabled:
+            return {"status": "pending"}
+        return {"status": "skipped", "message": skipped_message}
+
+    created = datetime.now(timezone.utc).isoformat()
+    meta = {
+        "command": "run",
+        "status": "success",
+        "core": {
+            "status": "success",
+            "committed_at": created,
+        },
+        "version": version_num,
+        "label": label,
+        "runtime": runtime_name,
+        "output_type": output_type,
+        "created": created,
+        "script": f"{dir_name}/script.py",
+        "outputs": {
+            "step": f"{dir_name}/output.step",
+            "script": f"{dir_name}/script.py",
+        },
+        "metrics": metrics,
+        "artifacts": {
+            "mesh_exports": _artifact_state(
+                bool(export), "No optional mesh exports requested."
+            ),
+            "renders": _artifact_state(
+                bool(render), "No explicit renders requested."
+            ),
+            "preview": _artifact_state(
+                preview, "Preview disabled with --no-preview."
+            ),
+            "parts_preview": _artifact_state(
+                preview and bool(parts_output),
+                "No per-part preview work requested.",
+            ),
+            "viewer_glb": _artifact_state(
+                not fast_path,
+                "Viewer artifacts disabled on the core-only fast path.",
+            ),
+            "diff": _artifact_state(
+                auto_diff and has_previous_step,
+                (
+                    "Automatic comparison disabled with --no-diff."
+                    if not auto_diff
+                    else "No previous successful STEP to compare."
+                ),
+            ),
+            "viewer": _artifact_state(
+                not fast_path,
+                "Viewer artifacts disabled on the core-only fast path.",
+            ),
+            "browser": _artifact_state(
+                open_view, "Browser launch disabled with --no-view."
+            ),
+        },
+        "completed_phases": list(_phase_tracker.completed),
+        "phase_timings": dict(_timings),
+    }
+    if parts_output:
+        meta["parts"] = parts_output
+    if groups_output:
+        meta["groups"] = groups_output
+    if parsed_params:
+        meta["params"] = parsed_params
+    if warnings:
+        meta["warnings"] = warnings
+    if comparison_enabled:
+        meta["comparison_phases"] = ComparisonPhaseRecorder().entries
+
+    commit_version(reservation, meta, {
+        "version": version_num,
+        "label": label,
+        "status": "success",
+        "path": f"{dir_name}/",
+    }, advance_current=True)
+    lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
+    _phase_tracker.lifecycle = lifecycle
+
+    comparison_recorder = None
+    if comparison_enabled:
+        def _comparison_phase_finished(name, entry):
+            duration_ms = entry.get("duration_ms")
+            if duration_ms is not None:
+                _timings[f"{name}_ms"] = duration_ms
+                # Leave a failed phase active until the caller either starts
+                # another comparison phase or the outer recovery boundary
+                # attributes an uncaught optional failure to this stage.
+                if entry.get("status") != "failed":
+                    _phase_tracker.complete(name)
+            lifecycle.meta["completed_phases"] = list(_phase_tracker.completed)
+            lifecycle.meta["phase_timings"] = dict(_timings)
+
+        comparison_recorder = ComparisonPhaseRecorder(
+            lifecycle.meta["comparison_phases"],
+            on_start=_phase_tracker.start,
+            on_finish=_comparison_phase_finished,
+            persist=lifecycle.persist,
+        )
 
     # Export mesh formats if requested
     exports_meta = {}
@@ -970,6 +1324,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 obj_path = version_dir / "output.obj"
                 export_obj(topo_shape, str(obj_path))
                 exports_meta["obj"] = f"{dir_name}/output.obj"
+        lifecycle.meta["outputs"].update(exports_meta)
         _finish_phase("export_mesh", _t, "export_mesh_ms")
 
     # Render views if requested
@@ -997,10 +1352,11 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 out_path = renders_dir / f"{name}.png"
                 render_shape_custom(topo_shape, az, el, out_path, parts=glb_parts)
                 renders_meta[name] = f"{dir_name}/renders/{name}.png"
+        lifecycle.meta["renders"] = renders_meta
         _finish_phase("render_views", _t, "render_views_ms")
 
     # Visual feedback pipeline. Three tiers, decoupled by cost:
-    #   1. Always (cheap, agent depends on these for the viewer to work):
+    #   1. Default visual review (unless the core-only fast path is selected):
     #      - GLB export
     #      - diff PNGs against the most recent successful prior version
     #      - unified viewer.html
@@ -1029,6 +1385,7 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             parts=glb_parts,
         )
         preview_meta = f"{dir_name}/preview.png"
+        lifecycle.meta["preview"] = preview_meta
         _finish_phase("preview", _t, "preview_ms")
 
         # Per-part previews use the resolved part id, which is unique and
@@ -1053,82 +1410,152 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                     parts=[{**entry, "topo_shape": raw["topo_shape"]}],
                 )
                 entry["preview"] = f"{dir_name}/parts/{fname}"
+            lifecycle.meta["parts"] = parts_output
             _finish_phase("parts_preview", _t, "parts_preview_ms")
 
-    # Tier 1: GLB + diff + viewer.html — always run, regardless of --preview.
-    # These are what make the viewer experience work; they're cheap enough
-    # that there's no agent-side reason to opt out.
-    from agentcad.export import export_glb
-    from agentcad.commands.view import _render_unified
+    # Tier 1: GLB + diff + viewer.html normally run regardless of --preview.
+    # The explicit --no-preview --no-diff --no-view combination is the
+    # core-only fast path and bypasses this entire visual pipeline.
+    if not fast_path:
+        from agentcad.export import export_glb
+        from agentcad.commands.view import _render_unified
 
     viewer_glb_path = version_dir / "output.glb"
-    if not viewer_glb_path.exists():
+    if not fast_path and not viewer_glb_path.exists():
         _heartbeat("exporting viewer GLB…")
         _t = _start_phase("export_viewer_glb")
         export_glb(topo_shape_for_metrics, str(viewer_glb_path), parts=glb_parts)
+        lifecycle.meta["viewer_glb"] = f"{dir_name}/output.glb"
         _finish_phase("export_viewer_glb", _t, "export_viewer_glb_ms")
+    elif not fast_path:
+        lifecycle.meta["viewer_glb"] = f"{dir_name}/output.glb"
+        lifecycle.set_artifact("viewer_glb", "success")
 
-    prev = _find_prev_success(versions)
+    prev = previous
     previous_parts = []
     part_changes = None
-    if prev is not None:
-        previous_meta_path = Path.cwd() / prev["path"] / "meta.json"
-        try:
-            previous_parts = json.loads(previous_meta_path.read_text()).get("parts", [])
-        except (OSError, json.JSONDecodeError):
-            previous_parts = []
-        part_changes = _part_change_summary(previous_parts, parts_output, prev["label"])
-    if prev is not None:
+    prev_shape = None
+    if comparison_recorder is not None:
         from agentcad.render import (
+            render_comparison_source_views,
             render_diff_side_by_side,
             render_diff_overlay,
         )
         prev_step_path = Path.cwd() / prev["path"] / "output.step"
-        if prev_step_path.exists():
-            _heartbeat("rendering diff against previous version…")
-            _t = _start_phase("diff")
-            try:
+        _heartbeat("loading prior comparison source…")
+        try:
+            with comparison_recorder.observe("source_loading"):
+                previous_meta_path = Path.cwd() / prev["path"] / "meta.json"
+                try:
+                    previous_parts = json.loads(
+                        previous_meta_path.read_text()
+                    ).get("parts", [])
+                except (OSError, json.JSONDecodeError):
+                    previous_parts = []
+                part_changes = _part_change_summary(
+                    previous_parts, parts_output, prev["label"]
+                )
                 from agentcad.step_io import load_cad_shape
                 prev_shape = load_cad_shape(prev_step_path)
+        except Exception as exc:
+            warnings.append(
+                "Could not load the prior comparison source: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
-                side_path = version_dir / "diff_side.png"
-                overlay_path = version_dir / "diff_overlay.png"
-                render_diff_side_by_side(
-                    prev_shape, topo_shape_for_metrics,
-                    prev["label"], label, side_path,
-                    width=512, height=512,
-                    parts_b=glb_parts,
+        if prev_shape is not None:
+            diff_meta = {"against": prev["label"]}
+            side_path = version_dir / "diff_side.png"
+            overlay_path = version_dir / "diff_overlay.png"
+            source_views = None
+
+            _heartbeat("rendering side-by-side comparison…")
+            try:
+                with comparison_recorder.observe("comparison_rendering"):
+                    source_views = render_comparison_source_views(
+                        prev_shape,
+                        topo_shape_for_metrics,
+                        per_view_size=512,
+                        parts_b=glb_parts,
+                    )
+                    render_diff_side_by_side(
+                        prev_shape, topo_shape_for_metrics,
+                        prev["label"], label, side_path,
+                        width=512, height=512,
+                        parts_b=glb_parts,
+                        source_views=source_views,
+                    )
+                diff_meta["side_by_side"] = f"{dir_name}/diff_side.png"
+            except Exception as exc:
+                warnings.append(
+                    "Could not render the side-by-side comparison: "
+                    f"{type(exc).__name__}: {exc}"
                 )
-                comparison = render_diff_overlay(
-                    prev_shape, topo_shape_for_metrics,
-                    prev["label"], label, overlay_path,
-                    width=1024, height=1024,
-                    parts_b=glb_parts,
+
+            _heartbeat("computing 2D projection comparison…")
+            try:
+                if source_views is None:
+                    raise RuntimeError(
+                        "Comparison source views were unavailable."
+                    )
+                with comparison_recorder.observe("projection_comparison"):
+                    comparison = render_diff_overlay(
+                        prev_shape, topo_shape_for_metrics,
+                        prev["label"], label, overlay_path,
+                        width=1024, height=1024,
+                        parts_b=glb_parts,
+                        source_views=source_views,
+                    )
+                diff_meta["overlay"] = f"{dir_name}/diff_overlay.png"
+                diff_meta["projection_comparison"] = comparison
+            except Exception as exc:
+                warnings.append(
+                    "Could not compute the 2D projection comparison: "
+                    f"{type(exc).__name__}: {exc}"
                 )
+
+            solid_comparison = None
+            _heartbeat("computing exact 3D comparison…")
+            try:
                 from agentcad.solid_compare import (
-                    compare_solid_volumes,
-                    write_solid_comparison_artifacts,
+                    compare_solid_volumes_with_fallback,
                 )
 
-                solid_comparison = compare_solid_volumes(
+                solid_comparison = compare_solid_volumes_with_fallback(
                     prev_shape,
                     topo_shape_for_metrics,
+                    phase_recorder=comparison_recorder,
                 )
-                diff_meta = {
-                    "against": prev["label"],
-                    "side_by_side": f"{dir_name}/diff_side.png",
-                    "overlay": f"{dir_name}/diff_overlay.png",
-                    "projection_comparison": comparison,
-                    "comparison_3d": solid_comparison.data,
-                }
+                diff_meta["comparison_3d"] = solid_comparison.data
+            except Exception as exc:
+                warnings.append(
+                    "Could not compute the exact 3D comparison: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+            if solid_comparison is not None and solid_comparison.available:
+                _heartbeat("exporting 3D difference artifacts…")
                 try:
-                    volume_glb_path = version_dir / "diff_volume.glb"
-                    volume_png_path = version_dir / "diff_volume.png"
-                    if write_solid_comparison_artifacts(
-                        solid_comparison,
-                        volume_glb_path,
-                        volume_png_path,
-                    ):
+                    from agentcad.solid_compare import (
+                        write_solid_comparison_artifacts,
+                    )
+
+                    with comparison_recorder.observe(
+                        "difference_artifact_export"
+                    ) as phase:
+                        volume_glb_path = version_dir / "diff_volume.glb"
+                        volume_png_path = version_dir / "diff_volume.png"
+                        written = write_solid_comparison_artifacts(
+                            solid_comparison,
+                            volume_glb_path,
+                            volume_png_path,
+                        )
+                        if not written:
+                            phase.status = "unavailable"
+                            phase.message = (
+                                "3D difference artifacts were not available."
+                            )
+                    if written:
                         diff_meta["volume_glb"] = (
                             f"{dir_name}/diff_volume.glb"
                         )
@@ -1140,18 +1567,39 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                         "Could not write 3D volume comparison artifacts: "
                         f"{type(exc).__name__}: {exc}"
                     )
-            except Exception as e:
-                warnings.append(
-                    f"Could not render diff against v{prev['version']}_{prev['label']}: {type(e).__name__}: {e}"
+            else:
+                comparison_recorder.skip(
+                    "difference_artifact_export",
+                    "Exact 3D comparison produced no exportable geometry.",
                 )
-            finally:
-                _finish_phase("diff", _t, "diff_ms")
+
+        comparison_recorder.finalize_pending(
+            "Skipped because an earlier comparison phase was unavailable."
+        )
+        useful_diff = bool(diff_meta and any(
+            key in diff_meta
+            for key in (
+                "side_by_side",
+                "overlay",
+                "projection_comparison",
+                "comparison_3d",
+            )
+        ))
+        if useful_diff:
+            lifecycle.meta["diff"] = diff_meta
+            lifecycle.set_artifact("diff", "success")
+        else:
+            lifecycle.set_artifact(
+                "diff",
+                "unavailable",
+                message="Comparison artifacts could not be generated.",
+            )
 
     # Resolve the prior version's GLB for the viewer's side-by-side / overlay
     # modes. Decoupled from diff_meta: even if the diff PNG render failed,
     # we still want the 3D comparison to work in the viewer.
     prev_glb_path = None
-    if prev is not None:
+    if auto_diff and prev is not None:
         candidate = Path.cwd() / prev["path"] / "output.glb"
         if candidate.exists():
             prev_glb_path = candidate
@@ -1166,32 +1614,53 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
                 except Exception:
                     prev_glb_path = None
 
-    _heartbeat("writing viewer.html…")
-    _t = _start_phase("viewer")
     viewer_path = version_dir / "viewer.html"
-    _render_unified(
-        viewer_path,
-        glb_a=prev_glb_path or viewer_glb_path,
-        glb_b=viewer_glb_path if prev_glb_path else None,
-        label_a=prev["label"] if prev_glb_path else label,
-        label_b=label if prev_glb_path else "",
-        default_mode="side-by-side" if prev_glb_path else "single-a",
-        preview_png=version_dir / "preview.png" if preview_meta else None,
-        diff_side_png=version_dir / "diff_side.png" if diff_meta else None,
-        diff_overlay_png=version_dir / "diff_overlay.png" if diff_meta else None,
-        diff_volume_png=(
-            version_dir / "diff_volume.png"
-            if diff_meta and diff_meta.get("volume_png")
-            else None
-        ),
-        parts=parts_output,
-        parts_model="b" if prev_glb_path else "a",
-        part_changes=part_changes,
-        groups=groups_output,
-    )
-    viewer_meta = f"{dir_name}/viewer.html"
-    viewer_glb_meta = f"{dir_name}/output.glb"
-    _finish_phase("viewer", _t, "viewer_ms")
+    if not fast_path:
+        _heartbeat("writing viewer.html…")
+        def _write_viewer():
+            _render_unified(
+                viewer_path,
+                glb_a=prev_glb_path or viewer_glb_path,
+                glb_b=viewer_glb_path if prev_glb_path else None,
+                label_a=prev["label"] if prev_glb_path else label,
+                label_b=label if prev_glb_path else "",
+                default_mode="side-by-side" if prev_glb_path else "single-a",
+                preview_png=version_dir / "preview.png" if preview_meta else None,
+                diff_side_png=(
+                    version_dir / "diff_side.png"
+                    if diff_meta and diff_meta.get("side_by_side")
+                    else None
+                ),
+                diff_overlay_png=(
+                    version_dir / "diff_overlay.png"
+                    if diff_meta and diff_meta.get("overlay")
+                    else None
+                ),
+                diff_volume_png=(
+                    version_dir / "diff_volume.png"
+                    if diff_meta and diff_meta.get("volume_png")
+                    else None
+                ),
+                parts=parts_output,
+                parts_model="b" if prev_glb_path else "a",
+                part_changes=part_changes,
+                groups=groups_output,
+            )
+
+        if comparison_recorder is not None:
+            with comparison_recorder.observe("viewer_generation"):
+                _write_viewer()
+        else:
+            _t = _start_phase("viewer_generation")
+            _write_viewer()
+            _finish_phase(
+                "viewer_generation", _t, "viewer_generation_ms"
+            )
+        viewer_meta = f"{dir_name}/viewer.html"
+        viewer_glb_meta = f"{dir_name}/output.glb"
+        lifecycle.meta["viewer"] = viewer_meta
+        lifecycle.meta["viewer_glb"] = viewer_glb_meta
+        lifecycle.set_artifact("viewer", "success")
 
     viewer_opened = False
     if open_view:
@@ -1199,57 +1668,41 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
             from agentcad.commands.view import _open_browser
 
             viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+            lifecycle.set_artifact(
+                "browser",
+                "success" if viewer_opened else "unavailable",
+                message=None if viewer_opened else "Browser did not open.",
+            )
         except Exception as exc:
             warnings.append(f"Could not open the review viewer: {type(exc).__name__}: {exc}")
+            lifecycle.set_artifact(
+                "browser",
+                "failed",
+                message=f"{type(exc).__name__}: {exc}",
+            )
 
-    # Write meta.json
-    created = datetime.now(timezone.utc).isoformat()
-    meta = {
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "runtime": runtime_name,
-        "output_type": output_type,
-        "created": created,
-        "script": f"{dir_name}/script.py",
-        "outputs": {
-            "step": f"{dir_name}/output.step",
-            **exports_meta,
-        },
-    }
-    meta["metrics"] = metrics
+    # Finalize metadata only; the successful manifest entry was committed at
+    # the core boundary and is never rolled back by optional artifact work.
     if parts_output:
-        meta["parts"] = parts_output
+        lifecycle.meta["parts"] = parts_output
     if groups_output:
-        meta["groups"] = groups_output
+        lifecycle.meta["groups"] = groups_output
     if parsed_params:
-        meta["params"] = parsed_params
+        lifecycle.meta["params"] = parsed_params
     if warnings:
-        meta["warnings"] = warnings
+        lifecycle.meta["warnings"] = warnings
     if preview_meta:
-        meta["preview"] = preview_meta
+        lifecycle.meta["preview"] = preview_meta
     if diff_meta:
-        meta["diff"] = diff_meta
+        lifecycle.meta["diff"] = diff_meta
     if viewer_meta:
-        meta["viewer"] = viewer_meta
-        meta["viewer_glb"] = viewer_glb_meta
+        lifecycle.meta["viewer"] = viewer_meta
+        lifecycle.meta["viewer_glb"] = viewer_glb_meta
     if renders_meta:
-        meta["renders"] = renders_meta
-    meta["completed_phases"] = list(_phase_tracker.completed)
-    meta["phase_timings"] = dict(_timings)
-    meta_path = version_dir / "meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
-
-    # Update manifest
-    versions.append({
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "path": f"{dir_name}/",
-    })
-    manifest["versions"] = versions
-    manifest["current"] = label
-    save_manifest(manifest)
+        lifecycle.meta["renders"] = renders_meta
+    lifecycle.meta["completed_phases"] = list(_phase_tracker.completed)
+    lifecycle.meta["phase_timings"] = dict(_timings)
+    lifecycle.finish_pending(message="Optional artifact was not needed.")
 
     hint = None
     if viewer_meta:
@@ -1265,6 +1718,8 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
     output_json = {
         "command": "run",
         "status": "success",
+        "core": lifecycle.meta["core"],
+        "artifacts": lifecycle.meta["artifacts"],
         "runtime": runtime_name,
         "output_type": output_type,
         "version": version_num,
@@ -1284,6 +1739,8 @@ def _run_impl(ctx, script, output, render, export, preview, open_view, params,
         output_json["params"] = parsed_params
     if warnings:
         output_json["warnings"] = warnings
+    if comparison_recorder is not None:
+        output_json["comparison_phases"] = comparison_recorder.entries
     if preview_meta:
         output_json["preview"] = preview_meta
     if diff_meta:

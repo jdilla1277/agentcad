@@ -58,6 +58,55 @@ def _start_slow_request_server(name, delay_s=0.15):
     return sock_path, thread, submissions, errors
 
 
+def _start_progress_response_server(name, *, interval_s=0.02, count=4):
+    """Send progress often enough to outlive one response-idle deadline."""
+    from agentcad.daemon import _read_one_message, encode_message
+
+    sock_path = _short_sock_path(name)
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(sock_path)
+    listener.listen(1)
+    submissions = []
+    errors = []
+
+    def _serve():
+        try:
+            conn, _ = listener.accept()
+            try:
+                submissions.append(_read_one_message(conn))
+                for index in range(count):
+                    time.sleep(interval_s)
+                    conn.sendall(encode_message({
+                        "type": "progress",
+                        "elapsed_s": round((index + 1) * interval_s, 3),
+                        "message": "daemon command still running",
+                    }))
+                conn.sendall(encode_message({
+                    "type": "result",
+                    "exit_code": 0,
+                    "output": json.dumps({
+                        "command": "run",
+                        "status": "success",
+                        "version": 1,
+                    }),
+                    "stderr": "",
+                }))
+            finally:
+                conn.close()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            listener.close()
+            if os.path.exists(sock_path):
+                os.unlink(sock_path)
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    return sock_path, thread, submissions, errors
+
+
 def _start_unresponsive_daemon(sock_path, pid_path, *, ignore_sigterm=False):
     """Start a real DaemonServer that accepts shutdown but never answers."""
     source = """
@@ -245,6 +294,34 @@ class TestSendRequest:
         assert payload["outcome"] == "unknown"
         assert payload["retry_safe"] is False
 
+    def test_progress_frames_extend_response_idle_deadline(self):
+        """A command can outlive 30s if progress keeps the socket active."""
+        from agentcad.daemon import send_request
+
+        sock_path, thread, submissions, errors = (
+            _start_progress_response_server("progress-extends-deadline")
+        )
+        progress = []
+        response = send_request(
+            {
+                "type": "run",
+                "cwd": "/tmp",
+                "argv": ["run", "slow.py", "--output", "slow"],
+            },
+            socket_path=sock_path,
+            response_timeout_s=0.03,
+            progress_callback=progress.append,
+        )
+        thread.join(timeout=2)
+
+        assert not thread.is_alive()
+        assert errors == []
+        assert len(submissions) == 1
+        assert len(progress) == 4
+        assert response["type"] == "result"
+        assert response["exit_code"] == 0
+        assert json.loads(response["output"])["status"] == "success"
+
     def test_run_eof_after_submission_returns_unknown_outcome(self):
         """A daemon disconnect after reading the request is also unsafe to
         retry because the child may have completed its side effects."""
@@ -331,6 +408,73 @@ class TestDaemonServer:
         output = json.loads(response["output"])
         assert output["status"] == "success"
         assert output["label"] == "box"
+
+    def test_run_child_emits_progress_until_final_result(self, monkeypatch):
+        from agentcad.daemon import (
+            _read_one_message,
+            _run_in_child,
+        )
+
+        class SlowServer:
+            _version = "test"
+
+            @staticmethod
+            def _handle_run(_request):
+                time.sleep(0.08)
+                return {
+                    "type": "result",
+                    "exit_code": 0,
+                    "output": '{"status":"success"}',
+                    "stderr": "",
+                }
+
+        monkeypatch.setattr("agentcad.daemon._PROGRESS_INTERVAL_S", 0.02)
+        reader, writer = socket.socketpair()
+        thread = threading.Thread(
+            target=_run_in_child,
+            args=(SlowServer(), {"type": "run", "argv": ["run"]}, writer),
+        )
+        thread.start()
+        messages = []
+        try:
+            while True:
+                message = _read_one_message(reader, timeout_s=0.5)
+                messages.append(message)
+                if message["type"] == "result":
+                    break
+        finally:
+            reader.close()
+            writer.close()
+            thread.join(timeout=1)
+
+        progress = [item for item in messages if item["type"] == "progress"]
+        assert not thread.is_alive()
+        assert len(progress) >= 2
+        assert all(item["command"] == "run" for item in progress)
+        assert messages[-1]["type"] == "result"
+
+    def test_run_child_reports_progress_monitor_fork_failure(self, monkeypatch):
+        from agentcad.daemon import _read_one_message, _run_in_child
+
+        server = _bare_server()
+        monkeypatch.setattr(
+            "agentcad.daemon.os.fork",
+            lambda: (_ for _ in ()).throw(OSError("process limit")),
+        )
+        reader, writer = socket.socketpair()
+        try:
+            _run_in_child(server, {"type": "run", "argv": ["import"]}, writer)
+            response = _read_one_message(reader, timeout_s=0.5)
+        finally:
+            reader.close()
+            writer.close()
+
+        assert response["type"] == "result"
+        assert response["exit_code"] == 97
+        payload = json.loads(response["output"])
+        assert payload["command"] == "import"
+        assert payload["status"] == "error"
+        assert "progress monitor fork failed" in payload["message"]
 
     def test_run_returns_json_when_click_captures_empty_exception(self, monkeypatch):
         """Daemon-routed failures must never surface as empty stdout.
@@ -1911,7 +2055,8 @@ class TestRunSpawnsDaemonForNextInvocation:
         try:
             r1 = subprocess.run(
                 [str(pathlib.Path(sys.executable).parent / "agentcad"), "run",
-                 str(script), "--output", "v1", "--no-preview"],
+                 str(script), "--output", "v1", "--no-preview",
+                 "--no-diff", "--no-view"],
                 cwd=tmp_path, env=env, capture_output=True, text=True,
                 timeout=120,
             )
@@ -1937,7 +2082,8 @@ class TestRunSpawnsDaemonForNextInvocation:
             # not wait 60s before noticing.
             r2 = subprocess.run(
                 [str(pathlib.Path(sys.executable).parent / "agentcad"), "run",
-                 str(script), "--output", "v2", "--no-preview"],
+                 str(script), "--output", "v2", "--no-preview",
+                 "--no-diff", "--no-view"],
                 cwd=tmp_path, env=env, capture_output=True, text=True,
                 timeout=5,
             )
@@ -2002,7 +2148,7 @@ class TestRunSpawnsDaemonForNextInvocation:
         try:
             r1 = subprocess.run(
                 [agentcad_exe, "run", str(script), "--output", "v1",
-                 "--no-preview"],
+                 "--no-preview", "--no-diff", "--no-view"],
                 cwd=tmp_path, env=env, capture_output=True, text=True,
                 timeout=120,
             )
@@ -2021,7 +2167,7 @@ class TestRunSpawnsDaemonForNextInvocation:
             # With the fix, run 2 routes through the daemon at ~0.1s.
             r2 = subprocess.run(
                 [agentcad_exe, "run", str(script), "--output", "v2",
-                 "--no-preview"],
+                 "--no-preview", "--no-diff", "--no-view"],
                 cwd=tmp_path, env=env, capture_output=True, text=True,
                 timeout=20,  # tight timeout — daemon-routed run must be FAST
             )
@@ -2076,7 +2222,7 @@ class TestRunSpawnsDaemonForNextInvocation:
         try:
             r1 = subprocess.run(
                 [agentcad_exe, "run", str(script), "--output", "v1",
-                 "--no-preview"],
+                 "--no-preview", "--no-diff", "--no-view"],
                 cwd=tmp_path, env=env, capture_output=True, text=True,
                 timeout=120,
             )
@@ -2095,7 +2241,7 @@ class TestRunSpawnsDaemonForNextInvocation:
             # is hung.
             r2 = subprocess.run(
                 [agentcad_exe, "run", str(script), "--output", "v2",
-                 "--no-preview"],
+                 "--no-preview", "--no-diff", "--no-view"],
                 cwd=tmp_path, env=env, capture_output=True, text=True,
                 timeout=10,
             )
@@ -2146,7 +2292,7 @@ class TestRunSpawnsDaemonForNextInvocation:
             # First run spawns the daemon (direct execution).
             subprocess.run(
                 [agentcad_exe, "run", str(script), "--output", "v0",
-                 "--no-preview"],
+                 "--no-preview", "--no-diff", "--no-view"],
                 cwd=tmp_path, env=env, capture_output=True, text=True,
                 timeout=120,
             )
@@ -2164,7 +2310,7 @@ class TestRunSpawnsDaemonForNextInvocation:
             for i in range(1, n_iterations + 1):
                 r = subprocess.run(
                     [agentcad_exe, "run", str(script), "--output", f"v{i}",
-                     "--no-preview"],
+                     "--no-preview", "--no-diff", "--no-view"],
                     cwd=tmp_path, env=env, capture_output=True, text=True,
                     timeout=5,
                 )
@@ -2179,6 +2325,86 @@ class TestRunSpawnsDaemonForNextInvocation:
                     f"iteration {i} stopped routing via daemon: {output!r}. "
                     f"Daemon may have died or hung mid-session."
                 )
+        finally:
+            stop_daemon(socket_path=sock_path, pid_path=pid_path)
+
+    def test_daemon_run_exact_timeout_commits_version(
+        self, tmp_path, daemon_paths
+    ):
+        """A bounded exact worker must also be safe from a routed run."""
+        from agentcad.daemon import daemon_status, stop_daemon
+
+        sock_path, pid_path = daemon_paths
+        script = tmp_path / "bounded.py"
+        script.write_text(
+            "import cadquery as cq\n"
+            "result = cq.Workplane('XY').box(10, 10, 10)"
+            ".faces('>Z').workplane().hole(2)\n"
+            "show_object(result)\n"
+        )
+        env = self._agentcad_env(sock_path, pid_path)
+        env["AGENTCAD_DIFF_TIMEOUT_S"] = "0.001"
+        env["AGENTCAD_APPROX_RESOLUTION_MM"] = "1"
+        agentcad_exe = str(pathlib.Path(sys.executable).parent / "agentcad")
+        subprocess.run(
+            [agentcad_exe, "init", "--name", "bounded_daemon",
+             "--runtime", "cadquery"],
+            cwd=tmp_path, env=env, check=True, capture_output=True,
+        )
+
+        try:
+            first = subprocess.run(
+                [agentcad_exe, "run", str(script), "--output", "first",
+                 "--no-preview", "--no-diff"],
+                cwd=tmp_path, env=env, capture_output=True, text=True,
+                timeout=120,
+            )
+            assert first.returncode == 0, first.stderr
+            for _ in range(50):
+                if daemon_status(
+                    socket_path=sock_path, pid_path=pid_path
+                ).get("running"):
+                    break
+                time.sleep(0.1)
+
+            script.write_text(
+                "import cadquery as cq\n"
+                "result = cq.Workplane('XY').box(12, 10, 10)"
+                ".faces('>Z').workplane().hole(2)\n"
+                "show_object(result)\n"
+            )
+            second = subprocess.run(
+                [agentcad_exe, "run", str(script), "--output", "bounded",
+                 "--no-preview", "--no-view"],
+                cwd=tmp_path, env=env, capture_output=True, text=True,
+                timeout=20,
+            )
+
+            assert second.returncode == 0, second.stderr
+            response = json.loads(second.stdout)
+            assert response["status"] == "success"
+            assert response["core"]["status"] == "success"
+            assert response.get("via") == "daemon"
+            assert (
+                response["comparison_phases"]["projection_comparison"]["status"]
+                == "success"
+            )
+            assert (
+                response["comparison_phases"]["exact_3d_comparison"]["status"]
+                == "timeout"
+            )
+            assert response["diff"]["comparison_3d"]["status"] == "success"
+            assert (
+                response["diff"]["comparison_3d"]["method"]
+                == "approximate_voxel_volume"
+            )
+            exact_attempt = response["diff"]["comparison_3d"]["exact_attempt"]
+            assert exact_attempt["status"] == "timeout"
+            assert exact_attempt["timeout_s"] == 0.001
+            assert response["version"] == 2
+            assert (tmp_path / "v2_bounded" / "output.step").exists()
+            manifest = json.loads((tmp_path / "agentcad.json").read_text())
+            assert manifest["current"] == "bounded"
         finally:
             stop_daemon(socket_path=sock_path, pid_path=pid_path)
 
@@ -2507,6 +2733,58 @@ class TestRoutingStalenessWarning:
     initialized in another thread.
     """
 
+    def test_routing_prints_progress_before_final_json(
+        self, isolated_dir, monkeypatch
+    ):
+        from agentcad.cli import cli
+
+        monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+        runner = CliRunner()
+        runner.invoke(
+            cli,
+            ["init", "--name", "progress", "--runtime", "cadquery"],
+        )
+        script = isolated_dir / "box.py"
+        script.write_text(
+            "import cadquery as cq\n"
+            "show_object(cq.Workplane('XY').box(10, 10, 10))\n"
+        )
+
+        def fake_send_request(
+            _msg, socket_path=None, progress_callback=None, **_kwargs
+        ):
+            progress_callback({
+                "type": "progress",
+                "command": "run",
+                "elapsed_s": 35.0,
+            })
+            return {
+                "type": "result",
+                "exit_code": 0,
+                "output": json.dumps({
+                    "command": "run",
+                    "status": "success",
+                    "version": 1,
+                    "label": "slow",
+                }),
+                "stderr": "",
+            }
+
+        monkeypatch.setattr(
+            "agentcad.commands._daemon_routing._daemon.send_request",
+            fake_send_request,
+        )
+        result = runner.invoke(
+            cli,
+            ["run", str(script), "--output", "slow", "--no-preview"],
+        )
+
+        assert result.exit_code == 0
+        assert "daemon command still running (35s)" in result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "success"
+        assert payload["via"] == "daemon"
+
     def test_routing_warns_when_daemon_version_mismatches(
         self, isolated_dir, monkeypatch
     ):
@@ -2531,7 +2809,7 @@ class TestRoutingStalenessWarning:
 
         # Simulate the daemon's response with an older in-memory version
         # than the client's on-disk install.
-        def fake_send_request(msg, socket_path=None):
+        def fake_send_request(msg, socket_path=None, **_kwargs):
             assert msg.get("type") == "run", (
                 f"unexpected request type to fake daemon: {msg!r}"
             )
@@ -2591,7 +2869,7 @@ class TestRoutingStalenessWarning:
             "show_object(result)\n"
         )
 
-        def fake_send_request(msg, socket_path=None):
+        def fake_send_request(msg, socket_path=None, **_kwargs):
             return {
                 "type": "result",
                 "exit_code": 0,

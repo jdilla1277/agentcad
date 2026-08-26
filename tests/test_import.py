@@ -13,6 +13,7 @@ import cadquery as cq
 import pytest
 from cadquery import exporters
 
+from agentcad import __version__
 from agentcad.cli import cli
 
 
@@ -34,6 +35,30 @@ def _box_step(directory: Path, name: str = "box.step") -> Path:
     box = cq.Workplane("XY").box(10, 10, 10)
     path = directory / name
     exporters.export(box, str(path))
+    return path
+
+
+def _invalid_brep(directory: Path, name: str = "invalid.brep") -> Path:
+    """Write a solid containing an open one-face shell: parseable but invalid."""
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.BRepTools import BRepTools
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS, TopoDS_Shell, TopoDS_Solid
+
+    box = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
+    face = TopoDS.Face_s(TopExp_Explorer(box, TopAbs_FACE).Current())
+    builder = BRep_Builder()
+    shell = TopoDS_Shell()
+    builder.MakeShell(shell)
+    builder.Add(shell, face)
+    solid = TopoDS_Solid()
+    builder.MakeSolid(solid)
+    builder.Add(solid, shell)
+
+    path = directory / name
+    assert BRepTools.Write_s(solid, str(path))
     return path
 
 
@@ -99,7 +124,7 @@ class TestImportCore:
         assert meta["source"] == "import"
         assert meta["original_filename"] == "bracket.step"
         assert meta["sha256"] == original_sha
-        assert "tool_version" in meta
+        assert meta["tool_version"] == __version__
 
     def test_manifest_entry_marks_source_as_import(self, runner, isolated_dir):
         _init_project(runner, isolated_dir)
@@ -124,6 +149,112 @@ class TestImportCore:
         assert "metrics" in parsed
         # Bracket has a real volume; sanity check.
         assert parsed["metrics"]["volume"] > 0
+
+    def test_invalid_geometry_is_recorded_but_not_made_current(
+        self, runner, isolated_dir
+    ):
+        _init_project(runner, isolated_dir)
+        manifest_path = isolated_dir / "agentcad.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["versions"] = [{
+            "version": 1,
+            "label": "baseline",
+            "status": "success",
+            "source": "import",
+            "path": "v1_baseline/",
+        }]
+        manifest["current"] = "baseline"
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        source = _invalid_brep(isolated_dir)
+
+        result = runner.invoke(
+            cli, ["import", str(source), "--no-view"]
+        )
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_geometry"
+        assert parsed["metrics"]["is_valid"] is False
+        assert parsed["version_recorded"] is True
+        assert parsed["current_advanced"] is False
+        invalid_dir = isolated_dir / "v2_invalid_invalid"
+        assert (invalid_dir / "source.brep").exists()
+        assert not (invalid_dir / "output.step").exists()
+        assert not (invalid_dir / "output.glb").exists()
+        assert not (invalid_dir / "preview.png").exists()
+        assert not (invalid_dir / "viewer.html").exists()
+        meta = json.loads((invalid_dir / "meta.json").read_text())
+        manifest = json.loads(manifest_path.read_text())
+        assert meta["status"] == "invalid_geometry"
+        assert manifest["current"] == "baseline"
+        assert manifest["versions"][-1]["status"] == "invalid_geometry"
+
+    def test_preview_failure_preserves_registered_core(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        source = _box_step(isolated_dir)
+        observed = {}
+
+        def fail_preview(*_args, **_kwargs):
+            meta_path = isolated_dir / "v1_box" / "meta.json"
+            observed["meta"] = json.loads(meta_path.read_text())
+            observed["manifest"] = json.loads(
+                (isolated_dir / "agentcad.json").read_text()
+            )
+            raise RuntimeError("injected import preview failure")
+
+        monkeypatch.setattr(
+            "agentcad.render.render_composite_4view",
+            fail_preview,
+        )
+
+        result = runner.invoke(
+            cli, ["import", str(source), "--no-view", "--no-daemon"]
+        )
+
+        assert result.exit_code == 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["core"]["status"] == "success"
+        assert parsed["artifacts"]["preview"]["status"] == "failed"
+        assert observed["meta"]["artifacts"]["preview"]["status"] == "pending"
+        assert observed["manifest"]["current"] == "box"
+        assert observed["manifest"]["versions"][0]["status"] == "success"
+        assert (isolated_dir / "v1_box" / "output.step").exists()
+        assert (isolated_dir / "v1_box" / "meta.json").exists()
+
+    @pytest.mark.parametrize(
+        ("artifact", "target"),
+        [
+            ("preview", "agentcad.render.render_composite_4view"),
+            ("viewer_glb", "agentcad.export.export_glb"),
+            ("viewer", "agentcad.commands.view._render_unified"),
+        ],
+    )
+    def test_optional_phase_failure_never_reverses_core_success(
+        self, runner, isolated_dir, monkeypatch, artifact, target
+    ):
+        _init_project(runner, isolated_dir)
+        source = _box_step(isolated_dir)
+
+        def injected_failure(*_args, **_kwargs):
+            raise RuntimeError(f"injected import {artifact} failure")
+
+        monkeypatch.setattr(target, injected_failure)
+        result = runner.invoke(
+            cli, ["import", str(source), "--no-view", "--no-daemon"]
+        )
+
+        assert result.exit_code == 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["core"]["status"] == "success"
+        assert parsed["artifacts"][artifact]["status"] == "failed"
+        assert (isolated_dir / "v1_box" / "output.step").exists()
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["current"] == "box"
+        assert manifest["versions"][0]["status"] == "success"
 
     def test_response_includes_next_actions_per_convention(
         self, runner, isolated_dir
@@ -185,6 +316,167 @@ class TestImportAutoDiff:
         assert side.exists()
         assert (isolated_dir / "v2_rev_b" / "diff_volume.png").exists()
         assert (isolated_dir / "v2_rev_b" / "diff_volume.glb").exists()
+
+    def test_auto_diff_reports_observable_comparison_phases(
+        self, runner, isolated_dir
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        expected = [
+            "source_loading",
+            "comparison_rendering",
+            "projection_comparison",
+            "exact_3d_comparison",
+            "approximate_3d_comparison",
+            "difference_artifact_export",
+            "viewer_generation",
+        ]
+        assert list(parsed["comparison_phases"]) == expected
+        for phase in expected:
+            entry = parsed["comparison_phases"][phase]
+            if phase == "approximate_3d_comparison":
+                assert entry["status"] == "skipped"
+                continue
+            assert entry["status"] == "success"
+            assert isinstance(entry["duration_ms"], int)
+            assert entry["duration_ms"] >= 0
+        meta = json.loads((isolated_dir / "v2_rev_b" / "meta.json").read_text())
+        assert meta["comparison_phases"] == parsed["comparison_phases"]
+
+    def test_exact_failure_is_attributed_and_projection_survives(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        def fail_exact(*_args, **_kwargs):
+            raise RuntimeError("injected import exact failure")
+
+        monkeypatch.setattr(
+            "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
+        )
+        monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        phases = parsed["comparison_phases"]
+        assert phases["projection_comparison"]["status"] == "success"
+        assert phases["exact_3d_comparison"]["status"] == "failed"
+        assert "injected import exact failure" in (
+            phases["exact_3d_comparison"]["message"]
+        )
+        assert phases["approximate_3d_comparison"]["status"] == "success"
+        assert phases["difference_artifact_export"]["status"] == "success"
+        assert parsed["artifacts"]["diff"]["status"] == "success"
+        assert (
+            parsed["diff"]["projection_comparison"]["method"]
+            == "four_view_image_mask"
+        )
+        assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+        assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "unavailable"
+
+    def test_exact_timeout_is_attributed_and_projection_survives(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        def exact_timeout(*_args, **_kwargs):
+            from agentcad.solid_compare import SolidComparison
+
+            return SolidComparison({
+                "method": "source_frame_boolean_volume",
+                "status": "timeout",
+                "timeout_s": 0.05,
+                "reason": {
+                    "code": "exact_comparison_timeout",
+                    "message": "Exact comparison timed out.",
+                },
+            })
+
+        monkeypatch.setattr(
+            "agentcad.solid_compare.bounded_compare_solid_volumes",
+            exact_timeout,
+        )
+        monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        phases = parsed["comparison_phases"]
+        assert parsed["status"] == "success"
+        assert phases["projection_comparison"]["status"] == "success"
+        assert phases["exact_3d_comparison"]["status"] == "timeout"
+        assert parsed["diff"]["comparison_3d"]["status"] == "success"
+        assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+        assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "timeout"
+        assert phases["approximate_3d_comparison"]["status"] == "success"
+        assert parsed["artifacts"]["diff"]["status"] == "success"
+
+    def test_no_diff_skips_every_automatic_comparison_call(
+        self, runner, isolated_dir, monkeypatch
+    ):
+        _init_project(runner, isolated_dir)
+        first = _box_step(isolated_dir, "rev_a.step")
+        baseline = runner.invoke(cli, [
+            "import", str(first), "--no-view", "--no-daemon",
+        ])
+        assert baseline.exit_code == 0, baseline.output
+        second = _bracket_step(isolated_dir, "rev_b.step")
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("comparison work must not run with --no-diff")
+
+        for target in (
+            "agentcad.render.render_diff_side_by_side",
+            "agentcad.render.render_diff_overlay",
+            "agentcad.solid_compare.bounded_compare_solid_volumes",
+            "agentcad.solid_compare.write_solid_comparison_artifacts",
+        ):
+            monkeypatch.setattr(target, forbidden)
+
+        result = runner.invoke(cli, [
+            "import", str(second), "--no-diff", "--no-view", "--no-daemon",
+        ])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        version_dir = isolated_dir / "v2_rev_b"
+        assert parsed["artifacts"]["diff"] == {
+            "status": "skipped",
+            "message": "Automatic comparison disabled with --no-diff.",
+        }
+        assert "diff" not in parsed
+        assert not list(version_dir.glob("diff_*"))
+        meta = json.loads((version_dir / "meta.json").read_text())
+        assert meta["artifacts"]["diff"]["status"] == "skipped"
+        viewer_html = (version_dir / "viewer.html").read_text()
+        assert 'DEFAULT_MODE = "single-a"' in viewer_html
 
 
 # --- non-Tier-0 inputs ------------------------------------------------------
@@ -383,6 +675,31 @@ def test_import_routes_through_daemon_when_available(runner, isolated_dir, monke
     assert parsed["command"] == "import"
 
 
+def test_import_routes_no_diff_flag_through_daemon(
+    runner, isolated_dir, monkeypatch
+):
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    requests = []
+
+    def fake_send_request(message, **_kwargs):
+        requests.append(message)
+        return {
+            "type": "result",
+            "exit_code": 0,
+            "output": json.dumps({"command": "import", "status": "success"}),
+        }
+
+    monkeypatch.setattr("agentcad.daemon.send_request", fake_send_request)
+    result = runner.invoke(cli, [
+        "import", "any.step", "--label", "fast", "--no-diff", "--no-view",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert requests[0]["argv"] == [
+        "import", "any.step", "--label", "fast", "--no-view", "--no-diff",
+    ]
+
+
 def test_import_no_daemon_flag_skips_routing_and_spawn(
     runner, isolated_dir, monkeypatch
 ):
@@ -442,3 +759,132 @@ def test_successful_import_without_flag_still_routes_then_spawns(
     assert result.exit_code == 0, result.output
     assert len(route_calls) == 1
     assert len(spawn_calls) == 1
+
+
+# --- --init --runtime (issue #129) ------------------------------------------
+
+class TestImportInitRuntime:
+    """`import --init --runtime <rt>` pins the bootstrapped manifest.
+
+    Before this, --init always produced a build123d manifest, so a CadQuery
+    agent taking the natural one-command path was silently pinned to the
+    wrong engine and only found out when the scaffolded edit script hit a
+    runtime mismatch. The docs worked around it by prescribing the two-step
+    `init --runtime cadquery` then `import` dance.
+    """
+
+    def test_init_runtime_cadquery_pins_the_manifest(self, runner, isolated_dir):
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+        )
+        assert result.exit_code == 0, result.output
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "cadquery"
+
+    def test_init_runtime_cadquery_scaffolds_a_cadquery_edit_script(
+        self, runner, isolated_dir
+    ):
+        """The scaffold follows the manifest, so pinning cq must reach edit.py."""
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+        )
+        assert result.exit_code == 0, result.output
+        scaffold = (isolated_dir / "edit.py").read_text()
+        assert "import cadquery" in scaffold
+        assert "importers.importStep" in scaffold
+        assert "from build123d" not in scaffold
+
+    def test_scaffolded_cq_edit_runs_without_a_runtime_flag(
+        self, runner, isolated_dir
+    ):
+        """The acceptance criterion: no `--runtime` needed on the follow-up run."""
+        step = _bracket_step(isolated_dir)
+        runner.invoke(cli, ["import", "--init", "--runtime", "cadquery", str(step)])
+        result = runner.invoke(cli, ["run", "edit.py", "--output", "scaffold_baseline"])
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success", parsed
+        assert parsed["runtime"] == "cadquery"
+
+    def test_init_runtime_build123d_is_explicit_but_unchanged(
+        self, runner, isolated_dir
+    ):
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "build123d", str(step)]
+        )
+        assert result.exit_code == 0, result.output
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+
+    def test_init_without_runtime_still_defaults_to_build123d(
+        self, runner, isolated_dir
+    ):
+        """Unchanged behaviour, pinned so the default cannot drift silently."""
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(cli, ["import", "--init", str(step)])
+        assert result.exit_code == 0, result.output
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+
+    def test_runtime_without_init_is_rejected_not_ignored(
+        self, runner, isolated_dir
+    ):
+        """An existing manifest already records its runtime.
+
+        Silently ignoring the flag would recreate the footgun this flag exists
+        to remove, so it is an error that names the alternatives.
+        """
+        _init_project(runner, isolated_dir)
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(cli, ["import", "--runtime", "cadquery", str(step)])
+        assert result.exit_code != 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "error"
+        assert "the manifest already exists" in parsed["message"]
+        # The project must be left untouched.
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+        assert manifest["versions"] == []
+
+    def test_runtime_with_init_is_rejected_when_manifest_exists(
+        self, runner, isolated_dir
+    ):
+        """--init is a no-op for an existing manifest, so runtime must error."""
+        _init_project(runner, isolated_dir)
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+        )
+        assert result.exit_code != 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "error"
+        assert "the manifest already exists" in parsed["message"]
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["runtime"] == "build123d"
+        assert manifest["versions"] == []
+        assert not (isolated_dir / "edit.py").exists()
+
+    def test_runtime_without_init_in_fresh_directory_reports_requires_init(
+        self, runner, isolated_dir
+    ):
+        result = runner.invoke(
+            cli,
+            ["import", "--runtime", "cadquery", str(isolated_dir / "part.step")],
+        )
+        assert result.exit_code != 0
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "error"
+        assert "--runtime requires --init" in parsed["message"]
+        assert "--init --runtime cadquery" in parsed["suggestion"]
+        assert not (isolated_dir / "agentcad.json").exists()
+
+    def test_runtime_rejects_an_unknown_engine(self, runner, isolated_dir):
+        step = _bracket_step(isolated_dir)
+        result = runner.invoke(
+            cli, ["import", "--init", "--runtime", "openscad", str(step)]
+        )
+        assert result.exit_code != 0
+        assert "openscad" in result.output

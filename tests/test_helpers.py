@@ -10,13 +10,14 @@ from OCP.Bnd import Bnd_Box
 from OCP.GProp import GProp_GProps
 from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID, TopAbs_VERTEX
 from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS
+from OCP.TopoDS import TopoDS, TopoDS_Shape
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
 
 from agentcad.helpers import (
     annular_boss,
     assemble,
     bbox_point,
+    copy_shape,
     ellipse_wire,
     elliptical_sweep,
     involute_gear_profile,
@@ -284,6 +285,47 @@ class TestMirrorFuse:
 # ── translate tests ───────────────────────────────────────────
 
 
+class TestCopyShape:
+    def test_copy_has_independent_topology_and_same_geometry(self):
+        source = cq.Workplane("XY").box(10, 20, 30).val().wrapped
+        copied = copy_shape(source)
+
+        assert not source.IsPartner(copied)
+        assert _volume(copied) == pytest.approx(_volume(source))
+        assert _bounding_box(copied) == pytest.approx(_bounding_box(source))
+
+        source_face = TopExp_Explorer(source, TopAbs_FACE).Current()
+        copied_face = TopExp_Explorer(copied, TopAbs_FACE).Current()
+        assert not source_face.IsPartner(copied_face)
+
+    def test_copy_accepts_wrapped_cadquery_shape(self):
+        source = cq.Workplane("XY").box(10, 10, 10).val()
+        copied = copy_shape(source)
+
+        assert not source.wrapped.IsPartner(copied)
+        assert _volume(copied) == pytest.approx(1000.0)
+
+    def test_copy_rejects_non_shape(self):
+        with pytest.raises(TypeError, match="TopoDS_Shape"):
+            copy_shape("not a shape")
+
+    def test_copy_rejects_null_shape(self):
+        with pytest.raises(ValueError, match="null shape"):
+            copy_shape(TopoDS_Shape())
+
+    def test_copy_rebuilds_empty_compound_independently(self):
+        from OCP.BRep import BRep_Builder
+        from OCP.TopoDS import TopoDS_Compound, TopoDS_Iterator
+
+        source = TopoDS_Compound()
+        BRep_Builder().MakeCompound(source)
+
+        copied = copy_shape(source)
+
+        assert not source.IsPartner(copied)
+        assert not TopoDS_Iterator(copied).More()
+
+
 class TestTranslate:
     def test_translate_moves_bounding_box(self):
         box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
@@ -304,6 +346,7 @@ class TestTranslate:
     def test_translate_zero_is_identity(self):
         box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
         moved = translate(box, 0, 0, 0)
+        assert not box.IsPartner(moved)
         bb_orig = _bounding_box(box)
         bb_moved = _bounding_box(moved)
         for a, b in zip(bb_orig, bb_moved):
@@ -326,6 +369,7 @@ class TestRotate:
     def test_rotate_preserves_volume(self):
         box = cq.Workplane("XY").box(10, 20, 5).val().wrapped
         rotated = rotate(box, "X", 45)
+        assert not box.IsPartner(rotated)
         from OCP.GProp import GProp_GProps
         from OCP.BRepGProp import BRepGProp
         props_orig, props_rotated = GProp_GProps(), GProp_GProps()

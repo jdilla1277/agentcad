@@ -80,7 +80,8 @@ def test_cadquery_preamble_docs_list_helpers(runner, isolated_dir):
     result = runner.invoke(cli, ["docs", "preamble", "--runtime", "cadquery"])
     content = json.loads(result.stdout)["content"]
     for helper in ["loft_sections", "tapered_sweep", "naca_wire",
-                   "mirror_fuse", "translate", "rotate"]:
+                   "mirror_fuse", "copy_shape", "safe_cut",
+                   "safe_intersection", "safe_fuse", "translate", "rotate"]:
         assert helper in content
 
 
@@ -92,7 +93,7 @@ def test_help_documents_all_commands(runner):
     output = result.output
     guide = output.split("QUICK START", 1)[1]
     for cmd in ["init", "run", "import", "render", "export", "measure",
-                "check-spec", "inspect", "parts", "diff", "context", "view",
+                "check-spec", "inspect", "parts", "diff", "context", "recover", "view",
                 "docs", "skill", "feedback", "subscribe"]:
         assert f"agentcad {cmd}" in guide
     assert "parts view" in output
@@ -155,10 +156,18 @@ def test_help_documents_feature_flags_missing_from_old_guide(runner):
 def test_help_documents_status_values(runner):
     result = runner.invoke(cli, ["--help"])
     output = result.output
+    normalized = " ".join(output.split())
     assert "success" in output
     assert "failed" in output
     assert "error" in output
     assert "validation_error" in output
+    assert "invalid_geometry" in output
+    assert "An `invalid_geometry` run has" in output
+    assert "no output STEP" in output
+    assert "--dry-run is explicitly metrics" in output
+    assert "artifacts" in output
+    assert "pending, success, unavailable, timeout, failed, or skipped" in normalized
+    assert "Keep and use that STEP" in normalized
 
 
 def test_help_mentions_metrics(runner):
@@ -211,6 +220,16 @@ def test_help_mentions_docs_command(runner):
     result = runner.invoke(cli, ["--help"])
     output = result.output
     assert "agentcad docs" in output
+
+
+def test_help_documents_explicit_interrupted_version_recovery(runner):
+    output = runner.invoke(cli, ["--help"]).output
+    normalized = " ".join(output.split())
+    assert "agentcad recover VERSION_DIR" in normalized
+    assert "never deletes the directory" in normalized
+    assert "source files" in normalized
+    assert "does not change current" in normalized
+    assert "--make-current" in normalized
 
 
 def test_help_shows_example_json_output(runner):
@@ -291,6 +310,45 @@ def test_run_subcommand_help_no_preview_scoped_to_preview_pngs(runner):
     # Old "iterating to keep runs sub-second" framing is gone.
     assert "sub-second" not in output
     assert "256x256" not in output
+
+
+def test_help_documents_no_diff_and_core_only_fast_path(runner):
+    full_help = runner.invoke(cli, ["--help"]).output
+    run_help = runner.invoke(cli, ["run", "--help"]).output
+    import_help = runner.invoke(cli, ["import", "--help"]).output
+
+    assert "--diff / --no-diff" in run_help
+    assert "--diff / --no-diff" in import_help
+    assert "--no-preview --no-diff --no-view" in full_help
+    assert "core-only fast path" in full_help
+    assert "agentcad diff" in full_help
+    assert "remains available" in full_help
+    assert "always generate regardless" not in run_help
+    assert "GLB backing viewer.html (always)" not in full_help
+    assert "when used by itself" in full_help.lower()
+    assert "meta.json" in full_help
+
+
+def test_help_points_to_observable_comparison_phases(runner):
+    output = runner.invoke(cli, ["--help"]).output
+    assert "comparison_phases" in output
+    assert "exact_3d_comparison" in output
+    assert "duration_ms" in output
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in output
+    assert "30s default budget" in output
+    assert "approximate_3d_comparison" in output
+    assert "Exact diagnostics remain in exact_attempt" in output
+    assert "instead of rerunning CAD" in output
+
+
+def test_diff_help_explains_exact_result_recovery(runner):
+    output = runner.invoke(cli, ["diff", "--help"]).output
+
+    assert "comparison_3d.exact_attempt" in output
+    assert "approximate voxel comparison" in output
+    assert "exact_attempt.kernel" in output
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in output
+    assert "do not rerun the CAD build or import" in output
 
 
 def test_help_presents_automatic_previous_current_review(runner):

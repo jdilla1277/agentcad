@@ -1,11 +1,13 @@
 from pathlib import Path
 
+import agentcad.render as render_module
 import cadquery as cq
 from PIL import Image, ImageChops, ImageDraw
 
 import pytest
 
 from agentcad.render import (
+    _COMPOSITE_VIEWS,
     _comparison_frame_scales,
     _semantic_diff_panel,
     _setup_render,
@@ -88,6 +90,15 @@ def test_render_shape_different_views_differ(tmp_path):
     assert iso_path.read_bytes() != front_path.read_bytes()
 
 
+def test_default_composite_balances_top_bottom_upper_and_lower_views():
+    assert _COMPOSITE_VIEWS == [
+        ("TOP", "top"),
+        ("BOTTOM", "bottom"),
+        ("UPPER ISO", (45, -25)),
+        ("LOWER ISO", (45, 25)),
+    ]
+
+
 def test_render_diff_side_by_side_contains_four_views_per_shape(tmp_path):
     shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
     shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
@@ -115,11 +126,97 @@ def test_render_diff_overlay_contains_four_aligned_views(tmp_path):
         # A 2x2 grid of 96px overlays, with view labels and a shared legend.
         assert image.size == (192, 368)
     assert comparison["method"] == "four_view_image_mask"
+    assert comparison["meaning"] == (
+        "Visual silhouette overlap across four rendered viewpoints; "
+        "not shared physical volume or model correctness."
+    )
     assert comparison["alignment"]["mode"] == "bounding_box_center"
     assert comparison["score"]["classification"] in {
         "low", "moderate", "high",
     }
     assert len(comparison["views"]) == 4
+
+
+def test_side_by_side_and_overlay_reuse_each_source_view_render(
+    tmp_path, monkeypatch
+):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
+    render_calls = []
+    original = render_module.render_shape_batch
+
+    def track_render_batch(*args, **kwargs):
+        render_calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(render_module, "render_shape_batch", track_render_batch)
+    source_views = render_diff_side_by_side(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        tmp_path / "diff_side.png",
+        width=96,
+        height=96,
+    )
+    comparison = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        tmp_path / "diff_overlay.png",
+        width=192,
+        height=192,
+        source_views=source_views,
+    )
+
+    assert len(render_calls) == 2
+    assert all(len(args[1]) == 4 for args, _kwargs in render_calls)
+    assert comparison["method"] == "four_view_image_mask"
+
+
+def test_reused_source_views_preserve_overlay_pixels_and_measurements(tmp_path):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(20, 10, 5).val().wrapped
+    source_views = render_diff_side_by_side(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        tmp_path / "diff_side.png",
+        width=96,
+        height=96,
+    )
+    reused_path = tmp_path / "reused_overlay.png"
+    standalone_path = tmp_path / "standalone_overlay.png"
+
+    reused = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        reused_path,
+        width=192,
+        height=192,
+        source_views=source_views,
+    )
+    standalone = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "previous",
+        "current",
+        standalone_path,
+        width=192,
+        height=192,
+    )
+
+    assert reused == standalone
+    with Image.open(reused_path) as reused_image:
+        with Image.open(standalone_path) as standalone_image:
+            pixel_difference = ImageChops.difference(
+                reused_image, standalone_image
+            )
+            assert pixel_difference.getbbox() is None
 
 
 def test_render_diff_overlay_classifies_same_geometry_as_high_overlap(tmp_path):
@@ -140,6 +237,28 @@ def test_render_diff_overlay_classifies_same_geometry_as_high_overlap(tmp_path):
 
     assert comparison["score"]["classification"] == "high"
     assert comparison["score"]["value"] > 0.95
+
+
+def test_projection_mask_ignores_different_display_materials(tmp_path):
+    shape_a = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+    shape_b = cq.Workplane("XY").box(10, 10, 10).val().wrapped
+
+    comparison = render_diff_overlay(
+        shape_a,
+        shape_b,
+        "neutral reference",
+        "colored candidate",
+        tmp_path / "material_independent.png",
+        width=192,
+        height=192,
+        parts_b=[{"topo_shape": shape_b, "color": "#6699cc"}],
+    )
+
+    assert comparison["score"]["value"] == 1.0
+    for view in comparison["views"]:
+        assert view["coincident_fraction_of_union"] == 1.0
+        assert view["reference_only_fraction_of_union"] == 0.0
+        assert view["candidate_only_fraction_of_union"] == 0.0
 
 
 def test_semantic_diff_panel_classifies_shared_removed_and_added_pixels():

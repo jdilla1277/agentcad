@@ -1,10 +1,11 @@
 import json
+from pathlib import Path
 
 import click
 
+from agentcad import __version__
 from agentcad.manifest import load_manifest
-
-TOOL_VERSION = "0.1.0"
+from agentcad.recovery import recovery_summary
 
 
 @click.command()
@@ -14,6 +15,7 @@ def context():
 
     versions = manifest.get("versions", [])
     current = manifest.get("current", None)
+    recovery = recovery_summary(Path.cwd(), manifest)
 
     versions_summary = [
         {
@@ -32,8 +34,9 @@ def context():
         "command": "context",
         "status": "success",
         "project": manifest["name"],
-        "tool_version": TOOL_VERSION,
+        "tool_version": __version__,
         "current": current,
         "version_count": len(versions),
         "versions": versions_summary,
+        "recovery": recovery,
     }))

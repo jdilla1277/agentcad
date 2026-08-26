@@ -90,6 +90,34 @@ def test_diff_accepts_standalone_step_paths_without_manifest(runner, isolated_di
     assert comparison["ratios"]["reference_coverage"] == 1.0
     assert comparison["ratios"]["candidate_coverage"] == 0.125
 
+    phases = data["comparison_phases"]
+    assert phases["source_loading"]["status"] == "success"
+    assert phases["exact_3d_comparison"]["status"] == "success"
+    for name in (
+        "comparison_rendering",
+        "projection_comparison",
+        "difference_artifact_export",
+        "viewer_generation",
+    ):
+        assert phases[name]["status"] == "skipped"
+        assert "duration_ms" not in phases[name]
+
+
+def test_diff_disambiguates_repeated_standalone_filenames(runner, isolated_dir):
+    baseline_dir = isolated_dir / "baseline"
+    candidate_dir = isolated_dir / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    baseline = _write_box_step(baseline_dir / "output.step", 10)
+    candidate = _write_box_step(candidate_dir / "output.step", 20)
+
+    result = runner.invoke(cli, ["diff", str(baseline), str(candidate)])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["v1"]["label"] == "baseline/output.step"
+    assert data["v2"]["label"] == "candidate/output.step"
+
 
 def test_diff_standalone_step_path_missing_file_error(runner, isolated_dir):
     input_step = _write_box_step(isolated_dir / "input.step", 10)
@@ -101,6 +129,125 @@ def test_diff_standalone_step_path_missing_file_error(runner, isolated_dir):
     assert data["command"] == "diff"
     assert data["status"] == "error"
     assert data["message"] == "File 'missing.step' not found."
+
+
+def test_diff_exact_exception_is_attributed_without_losing_metric_changes(
+    runner, isolated_dir, monkeypatch
+):
+    input_step = _write_box_step(isolated_dir / "input.step", 10)
+    output_step = _write_box_step(isolated_dir / "output.step", 20)
+
+    def fail_exact(*_args, **_kwargs):
+        raise RuntimeError("injected explicit exact failure")
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
+    )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
+    result = runner.invoke(cli, [
+        "diff", str(input_step), str(output_step), "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert data["changes"]["metrics"]["volume"] == {
+        "from": 1000.0,
+        "to": 8000.0,
+    }
+    assert data["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert data["comparison_3d"]["status"] == "success"
+    assert data["comparison_3d"]["exact_attempt"]["status"] == "unavailable"
+    phase = data["comparison_phases"]["exact_3d_comparison"]
+    assert phase["status"] == "failed"
+    assert "injected explicit exact failure" in phase["message"]
+    assert data["comparison_phases"]["approximate_3d_comparison"]["status"] == "success"
+
+
+def test_diff_exact_timeout_is_structured(
+    runner, isolated_dir, monkeypatch
+):
+    input_step = _write_box_step(isolated_dir / "input.step", 10)
+    output_step = _write_box_step(isolated_dir / "output.step", 20)
+
+    def exact_timeout(*_args, **_kwargs):
+        from agentcad.solid_compare import SolidComparison
+
+        return SolidComparison({
+            "method": "source_frame_boolean_volume",
+            "status": "timeout",
+            "timeout_s": 0.05,
+            "reason": {
+                "code": "exact_comparison_timeout",
+                "message": "Exact comparison timed out.",
+            },
+        })
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
+        exact_timeout,
+    )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
+    result = runner.invoke(cli, [
+        "diff", str(input_step), str(output_step), "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["status"] == "success"
+    assert data["comparison_3d"]["status"] == "success"
+    assert data["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert data["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
+    assert data["comparison_phases"]["approximate_3d_comparison"]["status"] == "success"
+    exact_attempt = data["comparison_3d"]["exact_attempt"]
+    assert exact_attempt["status"] == "timeout"
+    suggestion = exact_attempt["suggestion"]
+    assert str(input_step) in suggestion
+    assert str(output_step) in suggestion
+    assert "AGENTCAD_DIFF_TIMEOUT_S=60" in suggestion
+
+
+def test_diff_both_3d_methods_timeout_have_copyable_retries(
+    runner, isolated_dir, monkeypatch
+):
+    from agentcad.solid_compare import SolidComparison
+
+    input_step = _write_box_step(isolated_dir / "input.step", 10)
+    output_step = _write_box_step(isolated_dir / "output.step", 20)
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
+        lambda *_args, **_kwargs: SolidComparison({
+            "method": "source_frame_boolean_volume",
+            "status": "timeout",
+            "timeout_s": 1,
+            "reason": {"code": "exact_comparison_timeout", "message": "timeout"},
+        }),
+    )
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_approximate_solid_volumes",
+        lambda *_args, **_kwargs: SolidComparison({
+            "method": "approximate_voxel_volume",
+            "status": "timeout",
+            "timeout_s": 2,
+            "reason": {
+                "code": "approximate_comparison_timeout",
+                "message": "timeout",
+            },
+        }),
+    )
+
+    result = runner.invoke(cli, [
+        "diff", str(input_step), str(output_step), "--no-daemon",
+    ])
+
+    data = json.loads(result.stdout)["comparison_3d"]
+    assert data["status"] == "timeout"
+    assert "AGENTCAD_DIFF_TIMEOUT_S=60" in data["suggestion"]
+    approximate = data["approximate_attempt"]
+    assert "AGENTCAD_APPROX_DIFF_TIMEOUT_S=60" in approximate["suggestion"]
+    assert str(input_step) in approximate["suggestion"]
+    assert str(output_step) in approximate["suggestion"]
 
 
 def test_diff_by_version_number(runner, isolated_dir):

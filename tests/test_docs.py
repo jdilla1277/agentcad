@@ -73,9 +73,13 @@ def test_cadquery_editing_docs_lead_with_native_path(runner, isolated_dir):
     assert "Sketch()" not in content
     # the native selector path comes before the build123d-only pointer
     assert content.index("importers.importStep") < content.index("build123d-only")
-    # init-first flow: `import --init` pins build123d and breaks step 4
-    assert "agentcad init --name legacy --runtime cadquery" in content
-    assert "import vendor.step --init" not in content
+    # One-command flow (#129). `import --init --runtime cadquery` now pins cq,
+    # so the docs no longer prescribe the two-step init-first dance nor warn
+    # against the --init shortcut. This previously required the
+    # `agentcad init --name legacy --runtime cadquery` line and forbade
+    # `import vendor.step --init`; both were workarounds for the missing flag.
+    assert "agentcad import vendor.step --init --runtime cadquery" in content
+    assert "Do not use the `import --init` shortcut" not in content
 
 
 def test_cadquery_full_docs_contain_no_build123d_imports(runner, isolated_dir):
@@ -114,6 +118,7 @@ def test_docs_lists_sections(runner):
     assert "inspect" in sections
     assert "parts" in sections
     assert "feedback" in sections
+    assert "recovery" in sections
 
 
 def test_docs_commands_section(runner):
@@ -123,7 +128,7 @@ def test_docs_commands_section(runner):
     content = data["content"]
     for cmd in [
         "init", "run", "render", "measure", "check-spec", "parts",
-        "context", "docs", "diff", "feedback",
+        "context", "recover", "docs", "diff", "feedback",
     ]:
         assert cmd in content
     assert "part review viewers" in content
@@ -140,18 +145,49 @@ def test_docs_render_section(runner):
     assert "focus" in content
 
 
+def test_docs_recovery_section_is_explicit_and_non_destructive(runner):
+    result = runner.invoke(cli, ["docs", "recovery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "agentcad context" in content
+    assert "agentcad recover v3_edit" in content
+    assert "--make-current" in content
+    assert "never deletes" in content
+    assert "source files" in content
+    assert "never repairs history by itself" in content
+    assert "atomic JSON" in content
+    assert "safely retryable" in content
+    assert "malformed/invalid STEP" in content
+    assert "pending by the interruption become unavailable" in content
+    assert "does not rerun" in content
+
+
+def test_mcp_docs_include_recovery_tool(runner):
+    content = json.loads(runner.invoke(cli, ["docs", "mcp"]).stdout)["content"]
+    assert "context" in content
+    assert "recover" in content
+    assert "interrupted version history" in content
+
+
 def test_docs_schema_section(runner):
     result = runner.invoke(cli, ["docs", "schema"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)
     content = data["content"]
+    normalized = " ".join(content.split())
     assert "success" in content
     assert "failed" in content
     assert "error" in content
+    assert "validation_error" in content
+    assert "invalid_geometry" in content
     assert "unknown_format" in content
     assert "recognized_deferred" in content
     assert "viewer_glb" in content
     assert "outputs.glb appears only when --export glb" in content
+    assert "artifacts" in content
+    assert "pending, success, unavailable, timeout, failed, or skipped" in normalized
+    assert "Keep and use that STEP" in normalized
+    assert "run core, artifacts" in normalized
 
 
 def test_docs_schema_documents_stdout_vs_stderr(runner):
@@ -242,6 +278,11 @@ def test_docs_helpers_section(runner):
     assert "tapered_sweep" in content
     assert "naca_wire" in content
     assert "mirror_fuse" in content
+    assert "copy_shape" in content
+    assert "independent" in content
+    assert "safe_cut" in content
+    assert "safe_intersection" in content
+    assert "safe_fuse" in content
 
 
 def test_docs_install_section(runner):
@@ -439,6 +480,62 @@ def test_docs_commands_mentions_preview(runner):
     assert "preview" in content
 
 
+def test_docs_commands_mentions_no_diff_fast_path(runner):
+    result = runner.invoke(cli, ["docs", "commands"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "--no-diff" in content
+    assert "--no-preview --no-diff --no-view" in content
+    assert "agentcad diff" in content
+    assert "meta.json" in content
+
+
+def test_docs_schemas_explains_observable_comparison_phases(runner):
+    result = runner.invoke(cli, ["docs", "schema"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "comparison_phases" in content
+    for name in (
+        "source_loading",
+        "comparison_rendering",
+        "projection_comparison",
+        "exact_3d_comparison",
+        "approximate_3d_comparison",
+        "difference_artifact_export",
+        "viewer_generation",
+    ):
+        assert name in content
+    assert "duration_ms" in content
+    assert "most expensive" in content
+    assert "explanatory\n              message" in content
+    assert "omitted when no\n              comparison was attempted" in content
+    assert "Source panels are captured once" in content
+    assert "reuses those pixels" in content
+    assert "independent of display material and lighting" in content
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in content
+    assert "terminable worker" in content
+    assert "method=approximate_voxel_volume" in content
+    assert "comparison_3d.exact_attempt" in content
+    assert "one non-destructive exact" in content
+    assert "comparison_3d.kernel" in content
+    assert "comparison_3d.exact_attempt.kernel" in content
+    assert "exact_partition_runs" in content
+    assert "counts instead of duplicate entries" in content
+    assert "Unavailable results include a suggestion" in content
+    assert "volume_semantics" in content
+    assert "only when an input" in content
+    assert "never published" in content
+    assert "create a duplicate version" in content
+
+
+def test_docs_commands_mentions_exact_comparison_budget(runner):
+    result = runner.invoke(cli, ["docs", "commands"])
+    content = json.loads(result.output)["content"]
+
+    assert "30s default worker budget" in content
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in content
+
+
 # --- M19: Colored GLB in export docs ---
 
 
@@ -536,6 +633,18 @@ def test_docs_daemon_section(runner):
     assert "self-heal" not in lower_content
     assert "pip" in lower_content and "upgrade" in lower_content
     assert "loaded at" in lower_content and "startup" in lower_content
+    assert "progress heartbeat" in lower_content
+    assert "30-second response-idle window" in lower_content
+    assert "never resubmitted" in lower_content
+    assert "stderr" in lower_content
+    assert "stdout" in lower_content
+    assert "via='daemon'" in lower_content
+    assert "exits 124" in lower_content
+    assert "daemon_response_timeout" in lower_content
+    assert "retry_safe=false" in lower_content
+    assert "agentcad context" in lower_content
+    assert "before retrying" in lower_content
+    assert "any daemon-routed" in lower_content
 
 
 def test_docs_commands_does_not_list_daemon(runner):
@@ -665,6 +774,12 @@ def test_docs_build123d_mentions_annular_edit_helpers(runner):
     assert "Compound(result)" in content
     assert "fragile boolean fuse" in content
     assert "loft_sections([lower, upper])" in content
+    assert "copy_shape" in content
+    assert "independent geometry copy" in content
+    assert "safe_cut" in content
+    assert "subtraction" in content
+    assert "safe_intersection" in content
+    assert "safe_fuse" in content
 
 
 def test_docs_preamble_mentions_annular_edit_helpers(runner):

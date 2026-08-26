@@ -20,6 +20,7 @@ from agentcad.commands.inspect_cmd import inspect_cmd
 from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
+from agentcad.commands.recover import recover
 from agentcad.commands.run import run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
@@ -67,10 +68,10 @@ VERSION OUTPUTS
   A successful first run creates:
     v1_first/
       output.step       STEP geometry
-      output.glb        GLB backing viewer.html (always)
+      output.glb        GLB backing viewer.html (normally; skipped by fast path)
       script.py         copy of the executed script
       meta.json         full run metadata, including runtime and parts
-      preview.png       4-view composite: front, right, top, iso
+      preview.png       4-view composite: top, bottom, upper iso, lower iso
       diff_side.png     side-by-side vs. prior success (from v2 onward)
       diff_overlay.png  centered 2D projection map vs. prior (from v2 onward)
       diff_volume.png   source-frame shared/reference-only/candidate-only
@@ -81,9 +82,15 @@ VERSION OUTPUTS
       renders/          requested PNG views
 
   The viewer can inspect parts and groups, compare versions, and export an
-  on-demand turntable GIF. `--no-preview` skips only preview.png and per-part
-  previews; viewer.html, its GLB, and diff PNGs still generate. `--no-view`
-  prevents the automatic browser launch without removing viewer artifacts.
+  on-demand turntable GIF. When used by itself, `--no-preview` skips only
+  preview.png and per-part previews; viewer.html, its GLB, and diff PNGs still
+  generate. `--no-view` prevents the automatic browser launch without removing
+  viewer artifacts.
+  `--no-diff` skips automatic comparison with the prior version; an explicit
+  `agentcad diff` remains available. Combine
+  `--no-preview --no-diff --no-view` for the core-only fast path: output.step,
+  the saved script, meta.json (including metrics), and only explicitly
+  requested exports.
 
 COMMAND REFERENCE: CREATE AND IMPORT
   agentcad init [--name NAME]__INIT_RUNTIME_OPTION__ [--force]
@@ -96,22 +103,25 @@ COMMAND REFERENCE: CREATE AND IMPORT
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
-                         outputs.glb; viewer_glb is always generated.
+                         outputs.glb; viewer_glb normally generates separately.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
     --view / --no-view   Open the review viewer after success (default on).
                          From v2, previous/current comparison is preloaded.
+    --diff / --no-diff   Generate or skip automatic comparison with the prior
+                         successful version (default on).
     --params K=V,...     Override top-level constants; values may be numbers,
                          booleans, or strings.
     __RUN_RUNTIME_HELP__
     --dry-run            Return validation and metrics without consuming a
                          version or writing artifacts.
 
-  agentcad import FILE [--label LABEL] [--init]
+  agentcad import FILE [--label LABEL] [--init] [--no-diff]
     Adopt STEP/STP/BREP as a versioned baseline with provenance. --init creates
     a manifest when needed. Later render, view, measure, parts, and diff commands
-    work on an imported version like a scripted one.
+    work on an imported version like a scripted one. --no-diff skips the
+    automatic prior-version comparison without disabling explicit diff commands.
 
 COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
   agentcad render STEP --view SPEC [OPTIONS]
@@ -136,6 +146,26 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     reference-only, and candidate-only source-frame volumes; no alignment is
     applied. --visual opens the browser comparison and writes colored volume
     artifacts; --overlay selects its tinted interactive mode.
+    Comparison responses expose comparison_phases; read each status and
+    duration_ms to distinguish source loading, rendering, 2D projection,
+    exact_3d_comparison, approximate_3d_comparison, artifact export, and viewer
+    generation.
+    Exact 3D work runs in a terminable worker with a 30s default budget.
+    Set AGENTCAD_DIFF_TIMEOUT_S=N to override it; 0 disables this dedicated
+    limit for diagnostics. A timeout preserves completed projection results
+    and the committed version, then automatically runs a bounded approximate
+    voxel comparison. Approximate results report method, resolution_mm, and a
+    non-strict error_estimate; its absolute_volume values are heuristic errors,
+    not measurements. Exact diagnostics remain in exact_attempt.
+    Set AGENTCAD_APPROX_DIFF_TIMEOUT_S or AGENTCAD_APPROX_RESOLUTION_MM to tune
+    the fallback. Exact results use independent inputs and one non-destructive
+    exact partition. Native diagnostics appear at comparison_3d.kernel for an
+    exact result and comparison_3d.exact_attempt.kernel after fallback;
+    exact_partition_runs distinguishes that pass from compound canonicalization,
+    and repeated native messages include counts. volume_semantics explains
+    compound overlap only when applicable.
+    Impossible or non-conserving volumes are rejected. If exact volumes are needed,
+    retry `agentcad diff OLD NEW` with a larger budget instead of rerunning CAD.
 
   agentcad parts list REF
   agentcad parts show REF PART_ID
@@ -174,12 +204,20 @@ COMMAND REFERENCE: VERIFY AND DEBUG
 
 COMMAND REFERENCE: PROJECT AND INTEGRATIONS
   agentcad context
-    Return project name, current version, version history, and tool version.
+    Return project name, current version, version history, tool version, and any
+    interrupted version directories that need explicit recovery.
+
+  agentcad recover VERSION_DIR [--make-current]
+    Validate an interrupted directory's output.step and safely restore its
+    metadata/history entry with atomic JSON replacements. Recovery never deletes
+    the directory, STEP, or source files and does not change current unless
+    --make-current is explicitly passed.
 
   agentcad docs [SECTION] [--runtime ENGINE]
     Read the full built-in documentation or one section. Useful sections include
-    quickstart, preamble, commands, workflow, render, measure, check-spec,
-    inspect, parts, editing, helpers, patterns, runtimes, feedback, and mcp.
+    quickstart, preamble, commands, workflow, recovery, render, measure,
+    check-spec, inspect, parts, editing, helpers, patterns, runtimes, feedback,
+    and mcp.
 
   agentcad instructions install
     Record a short project note so future agents read `agentcad --help`.
@@ -199,15 +237,27 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
 JSON RESPONSE CONTRACT
   Agent-facing command results are JSON with "command" and "status" keys.
   Successful `run` results also include "runtime". Run-specific statuses:
-    "success"          completed normally
+    "success"          primary command work completed; inspect artifact statuses
     "failed"           script execution failed; consumes a version and creates
                        v{N}_{label}_failed/ with the script and metadata
     "error"            CLI/input error; no version or artifacts
     "validation_error" static script check failed; no version or artifacts
+    "invalid_geometry" script/import produced an invalid final B-rep; records
+                       a numbered diagnostic attempt unless --dry-run, writes no
+                       STEP, and does not advance current; see
+                       version_recorded/current_advanced
 
-  Successful run metrics include bounding_box, dimensions, volume, surface_area,
-  center_of_mass, face_count, edge_count, and is_valid. Check metrics before
-  rendering; visual appearance alone does not prove dimensional correctness.
+  Run/import metrics include bounding_box, dimensions, volume, surface_area,
+  center_of_mass, face_count, edge_count, and is_valid. A successful materialized
+  build has is_valid=true and an exported STEP; --dry-run is explicitly metrics
+  only. Check metrics before rendering; visual appearance alone does not prove
+  dimensional correctness.
+
+  Materialized run/import responses separate `core.status` from `artifacts`.
+  Core success is committed before optional work. Each artifact reports pending,
+  success, unavailable, timeout, failed, or skipped; a non-success artifact does
+  not reverse core success or remove the registered STEP. Keep and use that STEP;
+  retry only the optional render/view work if you need it.
 
 SPEC AND MEASUREMENT CHECKS
   When requirements include explicit holes, bores, diameters, counts, or
@@ -217,9 +267,9 @@ SPEC AND MEASUREMENT CHECKS
     3. Run `agentcad measure` on output.step.
     4. Run `agentcad check-spec` for explicit cylindrical requirements.
        Revise before marking the model done when `passed` is false.
-    5. Run `agentcad inspect` when geometry is invalid or topology looks wrong.
-       free_edge_count > 0 suggests an open shell; face_orientations helps find
-       inverted faces.
+    5. Run `agentcad inspect` when an existing source CAD file or successful
+       output STEP has topology that looks wrong. An `invalid_geometry` run has
+       no output STEP; repair its recorded script/source using response metrics.
     6. Review the automatically opened viewer with the user. Use
        `agentcad view old.step new.step` for an explicit non-adjacent comparison.
 
@@ -228,7 +278,7 @@ DEBUGGING
   $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
   $ agentcad measure v1_test/output.step                  # dimensions + feature sizes
   $ agentcad check-spec v1_test/output.step spec.json     # compare against intended features
-  $ agentcad inspect v1_test/output.step                  # topology deep-dive
+  $ agentcad inspect v1_test/output.step                  # successful STEP deep-dive
     Hollow shape?     -> free_edge_count > 0, shell not closed
     Inverted normals? -> face_orientations imbalanced
     Invalid?          -> is_valid: false
@@ -398,6 +448,7 @@ cli.add_command(inspect_cmd)
 cli.add_command(measure)
 cli.add_command(parts_cmd)
 cli.add_command(render)
+cli.add_command(recover)
 cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)

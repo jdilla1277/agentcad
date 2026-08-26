@@ -4,6 +4,8 @@ import struct
 import time
 from pathlib import Path
 
+import pytest
+
 from agentcad.cli import cli
 from agentcad.manifest import MANIFEST_FILE
 
@@ -415,6 +417,236 @@ def test_run_timeout_during_step_export_reports_completed_phases(
     assert "script_exec_ms" in parsed["phase_timings"]
     assert "metrics_ms" in parsed["phase_timings"]
     assert "export" in parsed["suggestion"].lower()
+
+
+def test_run_preview_failure_preserves_registered_core(
+    runner, isolated_dir, monkeypatch
+):
+    """Core STEP/meta/manifest must exist before optional preview starts."""
+    _init_project(runner)
+    _write_script(isolated_dir)
+    observed = {}
+
+    def fail_preview(*_args, **_kwargs):
+        meta_path = isolated_dir / "v1_post_fail" / "meta.json"
+        manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+        observed["meta"] = json.loads(meta_path.read_text())
+        observed["manifest"] = manifest
+        raise RuntimeError("injected preview failure")
+
+    monkeypatch.setattr(
+        "agentcad.render.render_composite_4view",
+        fail_preview,
+    )
+
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "post_fail", "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["core"]["status"] == "success"
+    assert parsed["artifacts"]["preview"]["status"] == "failed"
+    assert "injected preview failure" in parsed["artifacts"]["preview"]["message"]
+    assert observed["meta"]["artifacts"]["preview"]["status"] == "pending"
+    assert observed["manifest"]["current"] == "post_fail"
+    assert observed["manifest"]["versions"][0]["status"] == "success"
+    version_dir = isolated_dir / "v1_post_fail"
+    assert (version_dir / "output.step").exists()
+    assert (version_dir / "meta.json").exists()
+    assert not (isolated_dir / "v1_post_fail_failed").exists()
+
+
+def test_run_preview_timeout_preserves_registered_core(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    # Warm native imports before starting a deliberately tiny watchdog.
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
+    warmup = runner.invoke(cli, [
+        "run", "script.py", "--output", "warmup", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert warmup.exit_code == 0, warmup.output
+
+    def slow_preview(*_args, **_kwargs):
+        time.sleep(1)
+
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    monkeypatch.setattr(
+        "agentcad.render.render_composite_4view",
+        slow_preview,
+    )
+
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "timeout", "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["artifacts"]["preview"]["status"] == "timeout"
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == "timeout"
+    assert manifest["versions"][-1]["status"] == "success"
+    assert (isolated_dir / "v2_timeout" / "output.step").exists()
+    assert (isolated_dir / "v2_timeout" / "meta.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("artifact", "target", "extra_args"),
+    [
+        (
+            "mesh_exports",
+            "agentcad.runners.cadquery.export_stl",
+            ["--export", "stl", "--no-preview"],
+        ),
+        (
+            "renders",
+            "agentcad.render.render_shape",
+            ["--render", "front", "--no-preview"],
+        ),
+        (
+            "preview",
+            "agentcad.render.render_composite_4view",
+            [],
+        ),
+        (
+            "viewer_glb",
+            "agentcad.export.export_glb",
+            ["--no-preview"],
+        ),
+        (
+            "viewer",
+            "agentcad.commands.view._render_unified",
+            ["--no-preview"],
+        ),
+    ],
+)
+def test_run_optional_phase_exception_never_reverses_core_success(
+    runner, isolated_dir, monkeypatch, artifact, target, extra_args
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+
+    def injected_failure(*_args, **_kwargs):
+        raise RuntimeError(f"injected {artifact} failure")
+
+    monkeypatch.setattr(target, injected_failure)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", artifact,
+        "--no-view", "--no-daemon", *extra_args,
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["core"]["status"] == "success"
+    assert parsed["artifacts"][artifact]["status"] == "failed"
+    assert (isolated_dir / f"v1_{artifact}" / "output.step").exists()
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == artifact
+    assert manifest["versions"][0]["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("phase", "target"),
+    [
+        ("diff", "agentcad.render.render_diff_side_by_side"),
+        ("viewer", "agentcad.commands.view._render_unified"),
+    ],
+)
+def test_run_optional_phase_timeout_never_reverses_core_success(
+    runner, isolated_dir, monkeypatch, phase, target
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "baseline", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    from agentcad.commands.run import _RunTimeout
+
+    def injected_timeout(*_args, **_kwargs):
+        raise _RunTimeout({
+            "command": "run",
+            "status": "failed",
+            "error_kind": "timeout",
+            "timeout_phase": phase,
+            "message": f"injected {phase} timeout",
+        })
+
+    monkeypatch.setattr(target, injected_timeout)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", f"{phase}_timeout", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["artifacts"][phase]["status"] == "timeout"
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == f"{phase}_timeout"
+    assert manifest["versions"][-1]["status"] == "success"
+
+
+def test_run_comparison_timeout_is_attributed_to_active_subphase(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, [
+        "run", "script.py", "--output", "baseline", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    from agentcad.commands.run import _RunTimeout
+
+    def injected_timeout(*_args, **_kwargs):
+        raise _RunTimeout({
+            "command": "run",
+            "status": "failed",
+            "error_kind": "timeout",
+            "timeout_phase": "comparison_rendering",
+            "active_phase_elapsed_ms": 12,
+            "message": "injected comparison rendering timeout",
+        })
+
+    monkeypatch.setattr(
+        "agentcad.render.render_diff_side_by_side", injected_timeout
+    )
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "phase_timeout", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    phases = parsed["comparison_phases"]
+    assert parsed["status"] == "success"
+    assert parsed["artifacts"]["diff"]["status"] == "timeout"
+    assert phases["source_loading"]["status"] == "success"
+    assert phases["comparison_rendering"] == {
+        "status": "timeout",
+        "duration_ms": 12,
+        "message": "injected comparison rendering timeout",
+    }
+    for name in (
+        "projection_comparison",
+        "exact_3d_comparison",
+        "approximate_3d_comparison",
+        "difference_artifact_export",
+        "viewer_generation",
+    ):
+        assert phases[name]["status"] == "skipped"
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == "phase_timeout"
 
 
 def test_run_no_show_object_caught_by_validation(runner, isolated_dir):
@@ -995,6 +1227,349 @@ def test_run_no_preview_second_run_still_writes_diff(runner, isolated_dir):
     assert (isolated_dir / "v2_second" / "diff_volume.glb").exists()
 
 
+def test_run_auto_diff_reports_observable_comparison_phases(
+    runner, isolated_dir
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    _write_script(isolated_dir, content=(
+        'import cadquery as cq\n'
+        'result = cq.Workplane("XY").box(20, 20, 20)\n'
+        'show_object(result)\n'
+    ))
+
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    expected = [
+        "source_loading",
+        "comparison_rendering",
+        "projection_comparison",
+        "exact_3d_comparison",
+        "approximate_3d_comparison",
+        "difference_artifact_export",
+        "viewer_generation",
+    ]
+    assert list(parsed["comparison_phases"]) == expected
+    for phase in expected:
+        entry = parsed["comparison_phases"][phase]
+        if phase == "approximate_3d_comparison":
+            assert entry["status"] == "skipped"
+            continue
+        assert entry["status"] == "success"
+        assert isinstance(entry["duration_ms"], int)
+        assert entry["duration_ms"] >= 0
+        assert parsed["timings"][f"{phase}_ms"] == entry["duration_ms"]
+        assert phase in parsed["completed_phases"]
+    assert parsed["artifacts"]["viewer"]["status"] == "success"
+    assert "diff_ms" not in parsed["timings"]
+
+    meta = json.loads((isolated_dir / "v2_second" / "meta.json").read_text())
+    assert meta["comparison_phases"] == parsed["comparison_phases"]
+
+
+def test_run_exact_diff_failure_is_attributed_without_losing_projection(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    def fail_exact(*_args, **_kwargs):
+        raise RuntimeError("injected exact comparison failure")
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
+    )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    phases = parsed["comparison_phases"]
+    assert parsed["status"] == "success"
+    assert phases["source_loading"]["status"] == "success"
+    assert phases["comparison_rendering"]["status"] == "success"
+    assert phases["projection_comparison"]["status"] == "success"
+    assert phases["exact_3d_comparison"]["status"] == "failed"
+    assert "injected exact comparison failure" in (
+        phases["exact_3d_comparison"]["message"]
+    )
+    assert phases["approximate_3d_comparison"]["status"] == "success"
+    assert phases["difference_artifact_export"]["status"] == "success"
+    assert phases["viewer_generation"]["status"] == "success"
+    assert parsed["artifacts"]["diff"]["status"] == "success"
+    assert (
+        parsed["diff"]["projection_comparison"]["method"]
+        == "four_view_image_mask"
+    )
+    assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "unavailable"
+
+
+def test_run_exact_worker_timeout_preserves_projection_and_version(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    def exact_timeout(*_args, **_kwargs):
+        from agentcad.solid_compare import SolidComparison
+
+        return SolidComparison({
+            "method": "source_frame_boolean_volume",
+            "status": "timeout",
+            "timeout_s": 0.05,
+            "reason": {
+                "code": "exact_comparison_timeout",
+                "message": "Exact 3D comparison exceeded its 0.05s budget.",
+            },
+        })
+
+    monkeypatch.setattr(
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
+        exact_timeout,
+    )
+    monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "bounded", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["comparison_phases"]["projection_comparison"]["status"] == "success"
+    assert parsed["comparison_phases"]["exact_3d_comparison"]["status"] == "timeout"
+    assert parsed["diff"]["comparison_3d"]["status"] == "success"
+    assert parsed["diff"]["comparison_3d"]["method"] == "approximate_voxel_volume"
+    assert parsed["diff"]["comparison_3d"]["exact_attempt"]["status"] == "timeout"
+    assert parsed["artifacts"]["diff"]["status"] == "success"
+    assert parsed["comparison_phases"]["approximate_3d_comparison"]["status"] == "success"
+    assert parsed["comparison_phases"]["difference_artifact_export"]["status"] == "success"
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == "bounded"
+    assert (isolated_dir / "v2_bounded" / "output.step").exists()
+
+
+def test_run_missing_side_by_side_does_not_prevent_viewer_generation(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    def fail_side_by_side(*_args, **_kwargs):
+        raise RuntimeError("injected side-by-side render failure")
+
+    monkeypatch.setattr(
+        "agentcad.render.render_diff_side_by_side", fail_side_by_side
+    )
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    phases = parsed["comparison_phases"]
+    assert phases["comparison_rendering"]["status"] == "failed"
+    assert phases["projection_comparison"]["status"] == "success"
+    assert phases["viewer_generation"]["status"] == "success"
+    assert parsed["artifacts"]["viewer"]["status"] == "success"
+    assert "side_by_side" not in parsed["diff"]
+    assert "overlay" in parsed["diff"]
+    assert (isolated_dir / "v2_second" / "viewer.html").exists()
+
+
+def test_run_comparison_viewer_failure_is_attributed_to_viewer_phase(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    def fail_viewer(*_args, **_kwargs):
+        raise RuntimeError("injected comparison viewer failure")
+
+    monkeypatch.setattr("agentcad.commands.view._render_unified", fail_viewer)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["artifacts"]["viewer"]["status"] == "failed"
+    phase = parsed["comparison_phases"]["viewer_generation"]
+    assert phase["status"] == "failed"
+    assert "injected comparison viewer failure" in phase["message"]
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["current"] == "second"
+
+
+def test_run_failure_before_comparison_finalizes_pending_phase_states(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    def fail_glb(*_args, **_kwargs):
+        raise RuntimeError("injected viewer GLB failure")
+
+    monkeypatch.setattr("agentcad.export.export_glb", fail_glb)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["artifacts"]["viewer_glb"]["status"] == "failed"
+    assert all(
+        entry["status"] == "skipped"
+        for entry in parsed["comparison_phases"].values()
+    )
+    assert all(
+        entry["status"] != "pending"
+        for entry in parsed["comparison_phases"].values()
+    )
+
+
+def test_run_no_diff_skips_every_automatic_comparison_call(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    first = runner.invoke(cli, [
+        "run", "script.py", "--output", "first", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert first.exit_code == 0, first.output
+    _write_script(isolated_dir, content=(
+        'import cadquery as cq\n'
+        'result = cq.Workplane("XY").box(20, 20, 20)\n'
+        'show_object(result)\n'
+    ))
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("comparison work must not run with --no-diff")
+
+    for target in (
+        "agentcad.render.render_diff_side_by_side",
+        "agentcad.render.render_diff_overlay",
+        "agentcad.solid_compare.bounded_compare_solid_volumes",
+        "agentcad.solid_compare.write_solid_comparison_artifacts",
+    ):
+        monkeypatch.setattr(target, forbidden)
+
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "second", "--no-diff",
+        "--no-preview", "--no-daemon",
+    ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    version_dir = isolated_dir / "v2_second"
+    assert parsed["artifacts"]["diff"] == {
+        "status": "skipped",
+        "message": "Automatic comparison disabled with --no-diff.",
+    }
+    assert "diff" not in parsed
+    assert "diff_ms" not in parsed["timings"]
+    assert "diff" not in parsed["completed_phases"]
+    assert not list(version_dir.glob("diff_*"))
+    meta = json.loads((version_dir / "meta.json").read_text())
+    assert meta["artifacts"]["diff"]["status"] == "skipped"
+    viewer_html = (version_dir / "viewer.html").read_text()
+    assert 'DEFAULT_MODE = "single-a"' in viewer_html
+
+
+def test_run_fast_path_writes_only_core_and_explicit_exports(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    baseline = runner.invoke(cli, [
+        "run", "script.py", "--output", "baseline", "--no-preview",
+        "--no-view", "--no-daemon",
+    ])
+    assert baseline.exit_code == 0, baseline.output
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("optional visual work ran on the fast path")
+
+    with monkeypatch.context() as fast_path_patches:
+        for target in (
+            "agentcad.render.render_diff_side_by_side",
+            "agentcad.render.render_diff_overlay",
+            "agentcad.solid_compare.bounded_compare_solid_volumes",
+            "agentcad.solid_compare.write_solid_comparison_artifacts",
+            "agentcad.export.export_glb",
+            "agentcad.commands.view._render_unified",
+        ):
+            fast_path_patches.setattr(target, forbidden)
+
+        result = runner.invoke(cli, [
+            "run", "script.py", "--output", "fast", "--no-preview",
+            "--no-diff", "--no-view", "--export", "stl", "--no-daemon",
+        ])
+
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    version_dir = isolated_dir / "v2_fast"
+    assert parsed["status"] == "success"
+    assert parsed["outputs"] == {
+        "step": "v2_fast/output.step",
+        "script": "v2_fast/script.py",
+        "stl": "v2_fast/output.stl",
+    }
+    assert parsed["artifacts"]["diff"]["status"] == "skipped"
+    assert parsed["artifacts"]["viewer_glb"]["status"] == "skipped"
+    assert parsed["artifacts"]["viewer"]["status"] == "skipped"
+    assert set(path.name for path in version_dir.iterdir()) == {
+        "meta.json", "output.step", "output.stl", "script.py",
+    }
+    assert not any("diff" in key for key in parsed["timings"])
+
+    explicit = runner.invoke(cli, ["diff", "1", "2", "--no-daemon"])
+    assert explicit.exit_code == 0, explicit.output
+    assert json.loads(explicit.stdout)["status"] == "success"
+
+
 def test_run_no_preview_second_run_viewer_includes_prior(runner, isolated_dir):
     """The viewer for a --no-preview run #2 still embeds the prior version's
     GLB so side-by-side comparison works. This is the actual user-facing
@@ -1060,7 +1635,7 @@ def test_run_viewer_glb_uses_requested_part_colors(runner, isolated_dir):
 
 
 def test_run_preview_is_4view_composite_1024(runner, isolated_dir):
-    """Preview is now a 2x2 composite of front/right/top/iso, 512px per quadrant."""
+    """Preview is a balanced 2x2 composite with 512px per quadrant."""
     _init_project(runner)
     _write_script(isolated_dir)
     runner.invoke(cli, ["run", "script.py", "--output", "label", "--preview"])
@@ -1344,6 +1919,35 @@ def test_run_via_daemon_field_in_output(runner, isolated_dir, monkeypatch):
     assert parsed["via"] == "daemon"
 
 
+def test_run_routes_no_diff_flag_through_daemon(
+    runner, isolated_dir, monkeypatch
+):
+    _init_project(runner)
+    _write_script(isolated_dir)
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    requests = []
+
+    def fake_send_request(message, **_kwargs):
+        requests.append(message)
+        return {
+            "type": "result",
+            "exit_code": 0,
+            "output": json.dumps({"command": "run", "status": "success"}),
+        }
+
+    monkeypatch.setattr("agentcad.daemon.send_request", fake_send_request)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "fast", "--no-preview",
+        "--no-diff", "--no-view",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert requests[0]["argv"] == [
+        "run", "script.py", "--output", "fast", "--no-preview",
+        "--no-diff", "--no-view",
+    ]
+
+
 def test_run_direct_no_via_field(runner, isolated_dir):
     """Direct execution (no daemon) should not include 'via' field."""
     _init_project(runner)
@@ -1354,7 +1958,7 @@ def test_run_direct_no_via_field(runner, isolated_dir):
     assert "via" not in parsed
 
 
-# --- M36: Validity warnings & diagnostics ---
+# --- M68 1.2: invalid geometry is a core build failure ---
 
 def _fake_metrics_invalid(real_compute):
     """Wrap compute_metrics to force is_valid=False."""
@@ -1366,8 +1970,8 @@ def _fake_metrics_invalid(real_compute):
     return wrapper
 
 
-def test_run_invalid_shape_has_warnings_in_output(runner, isolated_dir, monkeypatch):
-    """is_valid: false in metrics should produce top-level warnings."""
+def test_run_invalid_shape_returns_explicit_outcome(runner, isolated_dir, monkeypatch):
+    """Invalid final geometry must never be reported as an ordinary success."""
     _init_project(runner)
     _write_script(isolated_dir)
     from agentcad import metrics
@@ -1376,10 +1980,16 @@ def test_run_invalid_shape_has_warnings_in_output(runner, isolated_dir, monkeypa
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv"])
+    assert result.exit_code == 1
     parsed = json.loads(result.stdout)
-    assert parsed["status"] == "success"
-    assert "warnings" in parsed
-    assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+    assert parsed["status"] == "invalid_geometry"
+    assert parsed["metrics"]["is_valid"] is False
+    assert parsed["metrics"]["validity_errors"] == [
+        "BRepCheck_InvalidToleranceValue"
+    ]
+    assert parsed["version_recorded"] is True
+    assert parsed["current_advanced"] is False
+    assert not (isolated_dir / "v1_inv" / "output.step").exists()
 
 
 def test_run_emits_json_error_on_unexpected_exception_after_script_start(
@@ -1414,23 +2024,44 @@ def test_run_emits_json_error_on_unexpected_exception_after_script_start(
     assert "Bnd_Box is void" in (parsed.get("message", "") + parsed.get("traceback", ""))
 
 
-def test_run_invalid_shape_warnings_in_meta(runner, isolated_dir, monkeypatch):
-    """is_valid: false should also appear in meta.json warnings."""
+def test_run_invalid_shape_is_recorded_without_advancing_current(
+    runner, isolated_dir, monkeypatch
+):
+    """Keep diagnostics, but never make invalid geometry the current version."""
     _init_project(runner)
     _write_script(isolated_dir)
+    manifest_path = isolated_dir / MANIFEST_FILE
+    manifest = json.loads(manifest_path.read_text())
+    manifest["versions"] = [{
+        "version": 1,
+        "label": "baseline",
+        "status": "success",
+        "path": "v1_baseline/",
+    }]
+    manifest["current"] = "baseline"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     from agentcad import metrics
     monkeypatch.setattr(
         "agentcad.metrics.compute_metrics",
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     runner.invoke(cli, ["run", "script.py", "--output", "inv"])
-    meta = json.loads((isolated_dir / "v1_inv" / "meta.json").read_text())
-    assert "warnings" in meta
-    assert any("invalid geometry" in w.lower() for w in meta["warnings"])
+
+    meta = json.loads(
+        (isolated_dir / "v2_inv_invalid" / "meta.json").read_text()
+    )
+    manifest = json.loads(manifest_path.read_text())
+    assert meta["status"] == "invalid_geometry"
+    assert meta["metrics"]["is_valid"] is False
+    assert manifest["current"] == "baseline"
+    assert manifest["versions"][-1]["status"] == "invalid_geometry"
+    assert manifest["versions"][-1]["path"] == "v2_inv_invalid/"
 
 
-def test_run_invalid_shape_dry_run_has_warnings(runner, isolated_dir, monkeypatch):
-    """Dry-run should also surface validity warnings."""
+def test_run_invalid_shape_dry_run_is_explicit_without_artifacts(
+    runner, isolated_dir, monkeypatch
+):
+    """Dry-run surfaces invalidity without allocating a version."""
     _init_project(runner)
     _write_script(isolated_dir)
     from agentcad import metrics
@@ -1439,9 +2070,15 @@ def test_run_invalid_shape_dry_run_has_warnings(runner, isolated_dir, monkeypatc
         _fake_metrics_invalid(metrics.compute_metrics),
     )
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv", "--dry-run"])
+    assert result.exit_code == 1
     parsed = json.loads(result.stdout)
-    assert "warnings" in parsed
-    assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+    assert parsed["status"] == "invalid_geometry"
+    assert parsed["metrics"]["is_valid"] is False
+    assert parsed["version_recorded"] is False
+    assert parsed["current_advanced"] is False
+    manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
+    assert manifest["versions"] == []
+    assert not (isolated_dir / "v1_inv_invalid").exists()
 
 
 def test_run_valid_shape_no_warnings(runner, isolated_dir):

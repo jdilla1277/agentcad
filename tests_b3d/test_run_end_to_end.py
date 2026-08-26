@@ -124,6 +124,24 @@ BROKEN = """\
 from build123d import Box
 show_object(Box(0, 0, 0))
 """
+INVALID_SOLID = """\
+from OCP.BRep import BRep_Builder
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+from OCP.TopoDS import TopoDS, TopoDS_Shell, TopoDS_Solid
+from OCP.TopExp import TopExp_Explorer
+from OCP.TopAbs import TopAbs_FACE
+
+box = BRepPrimAPI_MakeBox(10, 10, 10).Shape()
+face = TopoDS.Face_s(TopExp_Explorer(box, TopAbs_FACE).Current())
+builder = BRep_Builder()
+shell = TopoDS_Shell()
+builder.MakeShell(shell)
+builder.Add(shell, face)
+solid = TopoDS_Solid()
+builder.MakeSolid(solid)
+builder.Add(solid, shell)
+show_object(solid)
+"""
 
 
 def _init(runner, isolated_dir):
@@ -1393,7 +1411,7 @@ class TestMultiShow:
             assert isinstance(parsed["warnings"], list)
 
 
-# ---------- warnings surface (parity with tests/test_run.py) ----------
+# ---------- invalid geometry contract + warnings parity ----------
 
 def _fake_metrics_invalid(real_compute):
     """Wrap compute_metrics to force is_valid=False (mirrors cq fixture)."""
@@ -1406,17 +1424,17 @@ def _fake_metrics_invalid(real_compute):
 
 
 class TestWarnings:
-    """Mirror of test_run.py's M36 validity-warnings + diagnostics coverage
+    """Mirror invalid-geometry and remaining warning coverage from test_run.py
     on the b3d runtime. Locks the contract that:
-      - is_valid=False in metrics produces a top-level warnings array
-      - validity warnings surface in run JSON, meta.json, and --dry-run
+      - is_valid=False is an explicit non-success in JSON, metadata, and dry-run
+      - invalid builds record diagnostics without exporting STEP or advancing current
       - negative volume warnings from metrics surface
       - valid shapes emit no warnings
       - warnings.warn() from the script body lands in the run JSON
         (this last one regressed in #142 and was fixed in #146 — pin
         the contract here so future regressions are caught on b3d)."""
 
-    def test_invalid_shape_has_warnings_in_output(self, runner, isolated_dir, monkeypatch):
+    def test_invalid_shape_returns_explicit_outcome(self, runner, isolated_dir, monkeypatch):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
         from agentcad import metrics
@@ -1425,12 +1443,14 @@ class TestWarnings:
             _fake_metrics_invalid(metrics.compute_metrics),
         )
         r = _run(runner, "s.py", "--output", "inv")
+        assert r.exit_code == 1
         parsed = json.loads(r.stdout)
-        assert parsed["status"] == "success"
-        assert "warnings" in parsed
-        assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+        assert parsed["status"] == "invalid_geometry"
+        assert parsed["metrics"]["is_valid"] is False
 
-    def test_invalid_shape_warnings_in_meta(self, runner, isolated_dir, monkeypatch):
+    def test_invalid_shape_is_recorded_without_becoming_current(
+        self, runner, isolated_dir, monkeypatch
+    ):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
         from agentcad import metrics
@@ -1439,11 +1459,15 @@ class TestWarnings:
             _fake_metrics_invalid(metrics.compute_metrics),
         )
         _run(runner, "s.py", "--output", "inv")
-        meta = json.loads((isolated_dir / "v1_inv" / "meta.json").read_text())
-        assert "warnings" in meta
-        assert any("invalid geometry" in w.lower() for w in meta["warnings"])
+        meta = json.loads(
+            (isolated_dir / "v1_inv_invalid" / "meta.json").read_text()
+        )
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert meta["status"] == "invalid_geometry"
+        assert manifest.get("current") is None
+        assert manifest["versions"][0]["status"] == "invalid_geometry"
 
-    def test_invalid_shape_dry_run_has_warnings(self, runner, isolated_dir, monkeypatch):
+    def test_invalid_shape_dry_run_is_explicit(self, runner, isolated_dir, monkeypatch):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
         from agentcad import metrics
@@ -1452,9 +1476,38 @@ class TestWarnings:
             _fake_metrics_invalid(metrics.compute_metrics),
         )
         r = _run(runner, "s.py", "--output", "inv", "--dry-run")
+        assert r.exit_code == 1
         parsed = json.loads(r.stdout)
-        assert "warnings" in parsed
-        assert any("invalid geometry" in w.lower() for w in parsed["warnings"])
+        assert parsed["status"] == "invalid_geometry"
+        assert parsed["metrics"]["is_valid"] is False
+
+    def test_known_invalid_brep_never_reaches_step_export(
+        self, runner, isolated_dir
+    ):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "invalid.py", INVALID_SOLID)
+
+        result = _run(
+            runner,
+            "invalid.py",
+            "--output",
+            "bad",
+            "--no-preview",
+            "--no-view",
+        )
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_geometry"
+        assert parsed["metrics"]["is_valid"] is False
+        assert parsed["version_recorded"] is True
+        assert parsed["current_advanced"] is False
+        assert "reported validity errors" not in parsed["suggestion"].lower()
+        invalid_dir = isolated_dir / "v1_bad_invalid"
+        assert not (invalid_dir / "output.step").exists()
+        assert not (invalid_dir / "output.glb").exists()
+        assert not (invalid_dir / "preview.png").exists()
+        assert not (invalid_dir / "viewer.html").exists()
 
     def test_valid_shape_no_warnings(self, runner, isolated_dir):
         _init(runner, isolated_dir)

@@ -76,6 +76,8 @@ def test_skill_show_content_mentions_commands(runner):
     assert "agentcad run" in content
     assert "agentcad init" in content
     assert "agentcad check-spec" in content
+    assert "agentcad recover VERSION_DIR" in content
+    assert "without deleting files" in content
     assert "`passed` is false" in content
     assert "cylindrical_features[].axis" in content
     assert "show_object" in content
@@ -87,6 +89,23 @@ def test_skill_show_content_mentions_commands(runner):
     assert "base.edges()" in content
     assert "base.bounding_box()" in content
     assert "agentcad docs editing" in content
+    assert "--no-preview --no-diff --no-view" in content
+    assert "agentcad diff" in content
+    assert "explicit" in content
+    assert "comparison_phases" in content
+    assert "exact_3d_comparison" in content
+    assert "duration_ms" in content
+    assert "AGENTCAD_DIFF_TIMEOUT_S" in content
+    assert "30-second default worker budget" in content
+    assert "method=approximate_voxel_volume" in content
+    assert "exact_attempt" in content
+    assert "create a duplicate version" in content
+    assert "Progress heartbeats" in content
+    assert "stdout stays reserved for the final JSON response" in content
+    assert '`outcome: "unknown"`' in content
+    assert "`retry_safe: false`" in content
+    assert "agentcad context" in content
+    assert "before retrying" in content
 
 
 def test_skill_install_creates_file(runner, isolated_dir):

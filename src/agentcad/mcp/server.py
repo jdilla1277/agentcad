@@ -68,6 +68,8 @@ def run(
     preview: bool = True,
     params: str | None = None,
     dry_run: bool = False,
+    diff: bool = True,
+    view: bool = True,
 ) -> dict:
     """Execute a build123d script and produce a versioned STEP file with metrics.
 
@@ -83,6 +85,11 @@ def run(
         preview: Render a quick 256x256 iso preview. Default True — pass False to suppress.
         params: Parameter overrides as key=value,key=value.
         dry_run: Compute metrics without creating a version.
+        diff: Compare automatically with the prior successful version. Pass
+            False to skip it; explicit diff remains available.
+        view: Open the generated review viewer. Pass False with preview=False
+            and diff=False to also bypass viewer generation on the core-only
+            fast path.
     """
     args = ["run", script, "--output", output]
     if render:
@@ -91,6 +98,10 @@ def run(
         args.extend(["--export", export])
     if not preview:
         args.append("--no-preview")
+    if not diff:
+        args.append("--no-diff")
+    if not view:
+        args.append("--no-view")
     if params:
         args.extend(["--params", params])
     if dry_run:
@@ -254,12 +265,27 @@ def docs(
 
 @mcp.tool()
 def context(cwd: str) -> dict:
-    """Show project state (versions, current version, tool version).
+    """Show project state, including interrupted-version recovery candidates.
 
     Args:
         cwd: Project directory (must contain agentcad.json).
     """
     return _invoke(["context"], cwd=cwd)
+
+
+@mcp.tool()
+def recover(version_dir: str, cwd: str, make_current: bool = False) -> dict:
+    """Validate and reconcile an interrupted version directory safely.
+
+    Args:
+        version_dir: Direct version directory name reported by context.
+        cwd: Project directory containing agentcad.json and the version directory.
+        make_current: Explicitly make the recovered successful version current.
+    """
+    args = ["recover", version_dir]
+    if make_current:
+        args.append("--make-current")
+    return _invoke(args, cwd=cwd)
 
 
 @mcp.tool()
