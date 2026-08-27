@@ -1,6 +1,10 @@
 import json
 import shlex
+import signal
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import click
@@ -13,6 +17,171 @@ from agentcad.commands._daemon_routing import (
 from agentcad.native_io import suppress_native_output
 
 DEFAULT_ID_LIMIT = 100
+DEFAULT_VALIDATION_TIMEOUT_S = 90.0
+VALIDATION_TIMEOUT_ENV = "AGENTCAD_INSPECT_TIMEOUT_S"
+LARGE_FILE_PROGRESS_BYTES = 5_000_000
+VALIDATION_PHASES = (
+    "native_load",
+    "structural_validation",
+    "topology_extraction",
+    "feature_extraction",
+)
+
+
+class _InspectValidationTimeout(BaseException):
+    """Keep the inspect budget outside broad native-parser catches."""
+
+
+class _ValidationPhaseTracker:
+    def __init__(self, budget_s: float | None, *, progress: bool):
+        self.budget_s = budget_s
+        self.progress = progress
+        self.started_at = time.perf_counter()
+        self.active_phase = None
+        self.active_started_at = None
+        self.entries = {
+            name: {"status": "pending"} for name in VALIDATION_PHASES
+        }
+
+    @contextmanager
+    def observe(self, phase: str):
+        self.active_phase = phase
+        self.active_started_at = time.perf_counter()
+        if self.progress:
+            click.echo(
+                f"[agentcad] inspect phase: {phase.replace('_', ' ')}…",
+                err=True,
+            )
+        try:
+            yield
+        except Exception as exc:
+            self.entries[phase] = {
+                "status": "failed",
+                "duration_ms": self._active_duration_ms(),
+                "message": f"{type(exc).__name__}: {exc}",
+            }
+            self._clear_active()
+            raise
+        else:
+            duration_ms = self._active_duration_ms()
+            if self.expired:
+                self.mark_timeout(phase, duration_ms=duration_ms)
+                raise _InspectValidationTimeout()
+            self.entries[phase] = {
+                "status": "success",
+                "duration_ms": duration_ms,
+            }
+            self._clear_active()
+
+    @property
+    def expired(self) -> bool:
+        return (
+            self.budget_s is not None
+            and time.perf_counter() - self.started_at >= self.budget_s
+        )
+
+    @property
+    def elapsed_s(self) -> float:
+        return round(time.perf_counter() - self.started_at, 6)
+
+    def skip(self, phase: str, message: str) -> None:
+        self.entries[phase] = {"status": "skipped", "message": message}
+
+    def mark_timeout(
+        self,
+        phase: str | None = None,
+        *,
+        duration_ms: float | None = None,
+    ) -> str:
+        phase = phase or self.active_phase
+        if phase is None:
+            phase = next(
+                (
+                    name
+                    for name, entry in self.entries.items()
+                    if entry.get("status") == "pending"
+                ),
+                None,
+            )
+        if phase is None:
+            phase = next(
+                (
+                    name
+                    for name in reversed(VALIDATION_PHASES)
+                    if self.entries[name].get("status") == "success"
+                ),
+                "native_load",
+            )
+        if phase in self.entries:
+            self.entries[phase] = {
+                "status": "timeout",
+                "duration_ms": (
+                    self._active_duration_ms()
+                    if duration_ms is None
+                    else duration_ms
+                ),
+            }
+        for name, entry in self.entries.items():
+            if entry.get("status") == "pending":
+                self.skip(name, f"Not reached after {phase} timed out.")
+        self._clear_active()
+        return phase
+
+    def _active_duration_ms(self) -> float:
+        if self.active_started_at is None:
+            return 0
+        return round(
+            (time.perf_counter() - self.active_started_at) * 1000,
+            3,
+        )
+
+    def _clear_active(self) -> None:
+        self.active_phase = None
+        self.active_started_at = None
+
+
+def _install_validation_timeout(tracker: _ValidationPhaseTracker):
+    if tracker.budget_s is None:
+        return None
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    if (
+        not hasattr(signal, "SIGALRM")
+        or not hasattr(signal, "setitimer")
+        or not hasattr(signal, "getitimer")
+    ):
+        return None
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    if 0 < previous_timer[0] <= tracker.budget_s:
+        # A host-level deadline (for example pytest-timeout) is already
+        # stricter. Do not mask or postpone it.
+        return None
+
+    def _handle_timeout(_signum, _frame):
+        tracker.mark_timeout()
+        raise _InspectValidationTimeout()
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, tracker.budget_s)
+    return previous_handler, previous_timer, time.perf_counter()
+
+
+def _clear_validation_timeout(previous_state) -> None:
+    if previous_state is None:
+        return
+    previous_handler, previous_timer, installed_at = previous_state
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    signal.signal(signal.SIGALRM, previous_handler)
+    if previous_timer[0] > 0:
+        elapsed = time.perf_counter() - installed_at
+        remaining = max(previous_timer[0] - elapsed, 0.000001)
+        signal.setitimer(
+            signal.ITIMER_REAL,
+            remaining,
+            previous_timer[1],
+        )
 
 
 @click.command("inspect")
@@ -43,10 +212,38 @@ DEFAULT_ID_LIMIT = 100
     is_flag=True,
     help="Return complete --ids and summary ID lists. Can be very large.",
 )
+@click.option(
+    "--validate-only",
+    is_flag=True,
+    help="Load CAD and run structural validity checks without deep topology extraction.",
+)
+@click.option(
+    "--validation-timeout",
+    type=click.FloatRange(min=0),
+    default=DEFAULT_VALIDATION_TIMEOUT_S,
+    envvar=VALIDATION_TIMEOUT_ENV,
+    show_envvar=True,
+    show_default=True,
+    help="Validation budget in seconds; 0 disables the timeout.",
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def inspect_cmd(file, with_ids, with_summary, id_limit, no_limit, no_daemon):
+def inspect_cmd(
+    file,
+    with_ids,
+    with_summary,
+    id_limit,
+    no_limit,
+    validate_only,
+    validation_timeout,
+    no_daemon,
+):
     """Inspect any file. STEP/BREP get a full topology report; other formats
     get a structured 'recognized but not editable here' response. Never throws."""
+    if validate_only and (with_ids or with_summary):
+        raise click.UsageError(
+            "--validate-only cannot be combined with --ids or --summary; "
+            "remove --validate-only to request deep feature extraction."
+        )
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
     if with_ids:
@@ -57,6 +254,9 @@ def inspect_cmd(file, with_ids, with_summary, id_limit, no_limit, no_daemon):
         argv.extend(["--limit", str(id_limit)])
     if no_limit:
         argv.append("--no-limit")
+    if validate_only:
+        argv.append("--validate-only")
+    argv.extend(["--validation-timeout", str(validation_timeout)])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -175,6 +375,10 @@ def inspect_cmd(file, with_ids, with_summary, id_limit, no_limit, no_daemon):
             with_ids=with_ids,
             with_summary=with_summary,
             id_limit=None if no_limit else id_limit,
+            validate_only=validate_only,
+            validation_timeout=(
+                None if validation_timeout == 0 else validation_timeout
+            ),
         )
         # Fork off the warm process as the daemon — only the Tier 0 path
         # paid the OCP cost worth keeping around. Idempotent on its own.
@@ -260,18 +464,106 @@ def _inspect_tier0(
     with_ids: bool = False,
     with_summary: bool = False,
     id_limit: int | None = DEFAULT_ID_LIMIT,
+    validate_only: bool = False,
+    validation_timeout: float | None = DEFAULT_VALIDATION_TIMEOUT_S,
+) -> None:
+    tracker = _ValidationPhaseTracker(
+        validation_timeout,
+        progress=detection.get("size_bytes", 0) >= LARGE_FILE_PROGRESS_BYTES,
+    )
+    previous_timeout = _install_validation_timeout(tracker)
+    try:
+        _inspect_tier0_impl(
+            file_path,
+            detection,
+            with_ids=with_ids,
+            with_summary=with_summary,
+            id_limit=id_limit,
+            validate_only=validate_only,
+            tracker=tracker,
+        )
+    except _InspectValidationTimeout:
+        _emit_validation_timeout(
+            file_path,
+            detection,
+            tracker,
+            validate_only=validate_only,
+        )
+    finally:
+        _clear_validation_timeout(previous_timeout)
+
+
+def _emit_validation_timeout(
+    file_path: str,
+    detection: dict,
+    tracker: _ValidationPhaseTracker,
+    *,
+    validate_only: bool,
+) -> None:
+    phase = next(
+        (
+            name
+            for name, entry in tracker.entries.items()
+            if entry.get("status") == "timeout"
+        ),
+        None,
+    )
+    if phase is None:
+        phase = tracker.mark_timeout()
+    budget_s = tracker.budget_s or 0
+    retry_budget = max(180.0, budget_s * 2)
+    command_path = shlex.quote(file_path)
+    _emit({
+        "command": "inspect",
+        "status": "validation_timeout",
+        "error_kind": "validation_timeout",
+        "file": file_path,
+        "retryable": True,
+        "timed_out_phase": phase,
+        "elapsed_s": tracker.elapsed_s,
+        "validation_budget_s": budget_s,
+        "validation_mode": (
+            "structural_only" if validate_only else "deep"
+        ),
+        "validation_phases": tracker.entries,
+        "format_detected": detection.get("format"),
+        "extension": detection.get("extension"),
+        "size_bytes": detection.get("size_bytes"),
+        "message": (
+            f"CAD validation exceeded its {budget_s:g}s budget during "
+            f"{phase.replace('_', ' ')}. The file was not classified as "
+            "malformed."
+        ),
+        "next_actions": [
+            f"agentcad inspect {command_path} --validate-only "
+            f"--validation-timeout {retry_budget:g}",
+            f"agentcad inspect {command_path} "
+            f"--validation-timeout {retry_budget:g}",
+        ],
+    }, exit_code=1)
+
+
+def _inspect_tier0_impl(
+    file_path: str,
+    detection: dict,
+    *,
+    with_ids: bool,
+    with_summary: bool,
+    id_limit: int | None,
+    validate_only: bool,
+    tracker: _ValidationPhaseTracker,
 ) -> None:
     """Full topology report for STEP/BREP files. OCCT failures are caught and
     surfaced as malformed — never as a stack trace, never as a leaked native
     diagnostic on stdout."""
     try:
-        # The structured error below replaces all raw native parser output.
-        with suppress_native_output():
-            payload, topo_shape = _topology_report(
-                file_path,
-                return_shape=True,
-                format_hint=detection.get("format"),
-            )
+        payload, topo_shape = _topology_report(
+            file_path,
+            return_shape=True,
+            format_hint=detection.get("format"),
+            validate_only=validate_only,
+            tracker=tracker,
+        )
     except Exception:
         _emit_malformed_recovery(
             file_path,
@@ -289,7 +581,22 @@ def _inspect_tier0(
         "format_detected": detection.get("format"),
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
+        "validation_mode": (
+            "structural_only" if validate_only else "deep"
+        ),
+        "validation_budget_s": tracker.budget_s or 0,
+        "validation_phases": tracker.entries,
     })
+    if validate_only:
+        tracker.skip("feature_extraction", "Skipped by --validate-only.")
+        payload["validation_phases"] = tracker.entries
+        payload["next_actions"] = [
+            f"agentcad inspect {command_path} "
+            f"--validation-timeout {(tracker.budget_s or 0):g}"
+        ]
+        payload["more_at"] = "agentcad docs inspect"
+        _emit(payload, exit_code=0)
+        return
     if is_versioned:
         payload.update({
             "next_actions": [
@@ -312,28 +619,48 @@ def _inspect_tier0(
         })
 
     if with_ids or with_summary:
-        from agentcad import topo_ids
-        truncations = []
-        if with_ids:
-            counts = topo_ids.topology_counts(topo_shape)
-            payload["solids"] = topo_ids.solid_entries(topo_shape, limit=id_limit)
-            payload["faces"] = topo_ids.face_entries(topo_shape, limit=id_limit)
-            payload["edges"] = topo_ids.edge_entries(topo_shape, limit=id_limit)
-            truncations.extend(_list_truncations(
-                counts,
-                {
-                    "solids": len(payload["solids"]),
-                    "faces": len(payload["faces"]),
-                    "edges": len(payload["edges"]),
-                },
-                id_limit,
-            ))
-        if with_summary:
-            payload["summary"] = topo_ids.summary_entries(
-                topo_shape,
-                id_limit=id_limit,
-            )
-            truncations.extend(_summary_truncations(payload["summary"]))
+        with tracker.observe("feature_extraction"):
+            from agentcad import topo_ids
+            truncations = []
+            if with_ids:
+                counts = topo_ids.topology_counts(topo_shape)
+                payload["solids"] = topo_ids.solid_entries(
+                    topo_shape, limit=id_limit
+                )
+                payload["faces"] = topo_ids.face_entries(
+                    topo_shape, limit=id_limit
+                )
+                payload["edges"] = topo_ids.edge_entries(
+                    topo_shape, limit=id_limit
+                )
+                truncations.extend(_list_truncations(
+                    counts,
+                    {
+                        "solids": len(payload["solids"]),
+                        "faces": len(payload["faces"]),
+                        "edges": len(payload["edges"]),
+                    },
+                    id_limit,
+                ))
+            if with_summary:
+                payload["summary"] = topo_ids.summary_entries(
+                    topo_shape,
+                    id_limit=id_limit,
+                )
+                truncations.extend(
+                    _summary_truncations(payload["summary"])
+                )
+            if truncations:
+                payload["truncation"] = {
+                    "limited": True,
+                    "limit": id_limit,
+                    "fields": truncations,
+                    "recommended_commands": _recommended_limit_commands(
+                        file_path,
+                        with_ids=with_ids,
+                        with_summary=with_summary,
+                    ),
+                }
         # When the agent has IDs (or summary IDs), the most-likely next
         # action shifts: they're here because they want to write an edit
         # script that targets specific features. Point them at the
@@ -351,17 +678,11 @@ def _inspect_tier0(
                 "pick_face/pick_edge in edit.py",
             ]
         payload["more_at"] = "agentcad docs editing"
-        if truncations:
-            payload["truncation"] = {
-                "limited": True,
-                "limit": id_limit,
-                "fields": truncations,
-                "recommended_commands": _recommended_limit_commands(
-                    file_path,
-                    with_ids=with_ids,
-                    with_summary=with_summary,
-                ),
-            }
+    else:
+        tracker.skip(
+            "feature_extraction",
+            "Not requested; use --ids or --summary for feature details.",
+        )
 
     # A zero-solid input cannot use the normal import/pick/edit flow, even when
     # OCCT considers its surface topology valid. Give the categorical guidance
@@ -404,6 +725,8 @@ def _inspect_tier0(
         )
     if notes:
         payload["notes"] = notes
+
+    payload["validation_phases"] = tracker.entries
 
     _emit(payload, exit_code=0)
 
@@ -550,110 +873,140 @@ def _topology_report(
     *,
     return_shape: bool = False,
     format_hint: str | None = None,
+    validate_only: bool = False,
+    tracker: _ValidationPhaseTracker,
 ):
     from agentcad.step_io import load_cad_shape
     from OCP.BRepCheck import BRepCheck_Analyzer
-    from OCP.ShapeAnalysis import ShapeAnalysis_Shell
-    from OCP.TopAbs import (
-        TopAbs_EDGE, TopAbs_FACE, TopAbs_FORWARD, TopAbs_REVERSED,
-        TopAbs_SHELL, TopAbs_SOLID,
-    )
-    from OCP.TopExp import TopExp, TopExp_Explorer
-    from OCP.TopoDS import TopoDS
-    from OCP.TopTools import TopTools_IndexedMapOfShape
 
-    shape = load_cad_shape(file_path, format_hint=format_hint)
+    with tracker.observe("native_load"):
+        # Raw OCCT parser output is replaced by the structured error contract.
+        with suppress_native_output():
+            shape = load_cad_shape(file_path, format_hint=format_hint)
 
-    solid_count = 0
-    exp = TopExp_Explorer(shape, TopAbs_SOLID)
-    while exp.More():
-        solid_count += 1
-        exp.Next()
-
-    shells = []
-    exp = TopExp_Explorer(shape, TopAbs_SHELL)
-    while exp.More():
-        shell = TopoDS.Shell_s(exp.Current())
-        sa = ShapeAnalysis_Shell()
-        sa.LoadShells(shell)
-        sa.CheckOrientedShells(shell, True)
-        has_free = sa.HasFreeEdges()
-        shell_face_count = 0
-        face_exp = TopExp_Explorer(shell, TopAbs_FACE)
-        while face_exp.More():
-            shell_face_count += 1
-            face_exp.Next()
-        shells.append({"closed": not has_free, "face_count": shell_face_count})
-        exp.Next()
-
-    face_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_FACE, face_map)
-    face_count = face_map.Extent()
-
-    forward = reversed_count = 0
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    while exp.More():
-        orient = exp.Current().Orientation()
-        if orient == TopAbs_FORWARD:
-            forward += 1
-        elif orient == TopAbs_REVERSED:
-            reversed_count += 1
-        exp.Next()
-
-    edge_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_EDGE, edge_map)
-    edge_count = edge_map.Extent()
-
-    free_edge_count = 0
-    for i in range(1, edge_count + 1):
-        edge = edge_map.FindKey(i)
-        face_ref_count = 0
-        face_exp = TopExp_Explorer(shape, TopAbs_FACE)
-        while face_exp.More():
-            edge_exp = TopExp_Explorer(face_exp.Current(), TopAbs_EDGE)
-            while edge_exp.More():
-                if edge_exp.Current().IsSame(edge):
-                    face_ref_count += 1
-                    break
-                edge_exp.Next()
-            face_exp.Next()
-        if face_ref_count < 2:
-            free_edge_count += 1
-
-    analyzer = BRepCheck_Analyzer(shape)
-    is_valid = analyzer.IsValid()
+    with tracker.observe("structural_validation"):
+        with suppress_native_output():
+            analyzer = BRepCheck_Analyzer(shape)
+            is_valid = analyzer.IsValid()
+            validity_errors = []
+            if not is_valid:
+                from agentcad.metrics import extract_validity_errors
+                validity_errors = extract_validity_errors(analyzer, shape)
 
     payload = {
         "command": "inspect",
         "status": "success",
         "file": file_path,
-        "solid_count": solid_count,
-        "shell_count": len(shells),
-        "shells": shells,
-        "face_count": face_count,
-        "face_orientations": {"forward": forward, "reversed": reversed_count},
-        "edge_count": edge_count,
-        "free_edge_count": free_edge_count,
         "is_valid": is_valid,
     }
+    if validity_errors:
+        payload["validity_errors"] = validity_errors
 
-    validity_errors = []
-    if not is_valid:
-        from agentcad.metrics import extract_validity_errors
-        validity_errors = extract_validity_errors(analyzer, shape)
-        if validity_errors:
-            payload["validity_errors"] = validity_errors
+    if validate_only:
+        tracker.skip("topology_extraction", "Skipped by --validate-only.")
+        if return_shape:
+            return payload, shape
+        return payload
 
-    from agentcad.edit_risk import classify_edit_risk
-    risk = classify_edit_risk(
-        face_count=face_count,
-        edge_count=edge_count,
-        is_valid=is_valid,
-        free_edge_count=free_edge_count,
-        validity_errors=validity_errors,
-    )
-    if risk:
-        payload.update(risk)
+    with tracker.observe("topology_extraction"):
+        from OCP.ShapeAnalysis import ShapeAnalysis_Shell
+        from OCP.TopAbs import (
+            TopAbs_EDGE, TopAbs_FACE, TopAbs_FORWARD, TopAbs_REVERSED,
+            TopAbs_SHELL, TopAbs_SOLID,
+        )
+        from OCP.TopExp import TopExp, TopExp_Explorer
+        from OCP.TopoDS import TopoDS
+        from OCP.TopTools import (
+            TopTools_IndexedDataMapOfShapeListOfShape,
+            TopTools_IndexedMapOfShape,
+        )
+
+        with suppress_native_output():
+            solid_count = 0
+            exp = TopExp_Explorer(shape, TopAbs_SOLID)
+            while exp.More():
+                solid_count += 1
+                exp.Next()
+
+            shells = []
+            exp = TopExp_Explorer(shape, TopAbs_SHELL)
+            while exp.More():
+                shell = TopoDS.Shell_s(exp.Current())
+                sa = ShapeAnalysis_Shell()
+                sa.LoadShells(shell)
+                sa.CheckOrientedShells(shell, True)
+                has_free = sa.HasFreeEdges()
+                shell_face_count = 0
+                face_exp = TopExp_Explorer(shell, TopAbs_FACE)
+                while face_exp.More():
+                    shell_face_count += 1
+                    face_exp.Next()
+                shells.append({
+                    "closed": not has_free,
+                    "face_count": shell_face_count,
+                })
+                exp.Next()
+
+            face_map = TopTools_IndexedMapOfShape()
+            TopExp.MapShapes_s(shape, TopAbs_FACE, face_map)
+            face_count = face_map.Extent()
+
+            forward = reversed_count = 0
+            exp = TopExp_Explorer(shape, TopAbs_FACE)
+            while exp.More():
+                orient = exp.Current().Orientation()
+                if orient == TopAbs_FORWARD:
+                    forward += 1
+                elif orient == TopAbs_REVERSED:
+                    reversed_count += 1
+                exp.Next()
+
+            edge_map = TopTools_IndexedMapOfShape()
+            TopExp.MapShapes_s(shape, TopAbs_EDGE, edge_map)
+            edge_count = edge_map.Extent()
+
+            # Build edge→face ancestry once. The previous nested traversal
+            # rescanned every face and its edges for every edge (effectively
+            # cubic on large compounds), which dominated fixture-202 inspect.
+            edge_faces = TopTools_IndexedDataMapOfShapeListOfShape()
+            TopExp.MapShapesAndAncestors_s(
+                shape,
+                TopAbs_EDGE,
+                TopAbs_FACE,
+                edge_faces,
+            )
+            free_edge_count = 0
+            for i in range(1, edge_count + 1):
+                edge = edge_map.FindKey(i)
+                if (
+                    not edge_faces.Contains(edge)
+                    or edge_faces.FindFromKey(edge).Extent() < 2
+                ):
+                    free_edge_count += 1
+
+        payload.update({
+            "solid_count": solid_count,
+            "shell_count": len(shells),
+            "shells": shells,
+            "face_count": face_count,
+            "face_orientations": {
+                "forward": forward,
+                "reversed": reversed_count,
+            },
+            "edge_count": edge_count,
+            "free_edge_count": free_edge_count,
+        })
+
+        from agentcad.edit_risk import classify_edit_risk
+        risk = classify_edit_risk(
+            face_count=face_count,
+            edge_count=edge_count,
+            is_valid=is_valid,
+            free_edge_count=free_edge_count,
+            validity_errors=validity_errors,
+        )
+        if risk:
+            payload.update(risk)
     if return_shape:
         return payload, shape
     return payload

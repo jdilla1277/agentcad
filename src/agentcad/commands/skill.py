@@ -195,7 +195,7 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | `agentcad export STEP --format stl,glb` | Post-hoc mesh export |
 | `agentcad measure STEP` | Dimensional report (overall metrics + feature sizes) |
 | `agentcad check-spec STEP spec.json` | Pass/fail checklist against intended cylindrical features |
-| `agentcad inspect STEP` | Topology report (validity, free edges) |
+| `agentcad inspect STEP` | Bounded topology report with observable validation phases |
 | `agentcad parts list REF` | List parts captured for a version |
 | `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
@@ -225,6 +225,9 @@ agentcad --help   # Read the built-in how-to guide and command reference
     fix the script and execute the returned `next_actions` command. Do not write
     or truncate STEP text — `agentcad run` or `agentcad import` must create it
     through the CAD kernel.
+11. **Large inspect timed out?** It is not automatically malformed. Execute the
+    returned `--validate-only` action for a structural check, or the larger-budget
+    deep retry. Configure the default with `AGENTCAD_INSPECT_TIMEOUT_S`.
 
 ## Patterns
 

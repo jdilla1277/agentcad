@@ -55,7 +55,7 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
-- **`agentcad inspect output.step`** — topology deep-dive (shells, free edges, validity)
+- **`agentcad inspect output.step`** — bounded topology deep-dive with observable loading, validity, and extraction phases
 - **`agentcad parts list REF`** — list named/captured parts for a version
 - **`agentcad parts show REF ID`** — show one versioned part by stable id
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
