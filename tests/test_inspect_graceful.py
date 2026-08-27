@@ -527,6 +527,8 @@ class TestSubprocessContract:
         assert parsed["status"] == "malformed"
         assert parsed["format_detected"] == "step"
         assert "Traceback" not in result.stderr
+        assert "\x1b" not in result.stderr
+        assert "StepFile" not in result.stderr
 
     def test_real_step_stdout_is_pure_json(self, isolated_dir):
         """Sanity check: the success path also produces clean JSON via

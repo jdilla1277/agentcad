@@ -31,3 +31,29 @@ def silence_native_stdout():
     finally:
         os.dup2(saved_fd, 1)
         os.close(saved_fd)
+
+
+@contextmanager
+def suppress_native_output():
+    """Discard fd-level stdout/stderr around a fully handled native call.
+
+    Use when the caller converts native failure into its own structured error
+    and raw OCCT diagnostics would only duplicate that response or leak ANSI
+    control sequences. Keep the scope tight so useful Python diagnostics are
+    never hidden.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved_stdout = os.dup(1)
+    saved_stderr = os.dup(2)
+    null_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(null_fd, 1)
+        os.dup2(null_fd, 2)
+        yield
+    finally:
+        os.dup2(saved_stdout, 1)
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stdout)
+        os.close(saved_stderr)
+        os.close(null_fd)
