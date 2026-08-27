@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,9 +55,53 @@ def init(name, runtime, force):
         "project": project_name,
         "runtime": manifest["runtime"],
     }
+    cad_input = _preferred_cad_input(Path.cwd())
+    if cad_input is not None:
+        response["next_actions"] = [
+            f"agentcad import {shlex.quote(cad_input.name)} — adopt the existing "
+            "CAD as a versioned baseline and create edit.py"
+        ]
+        response["more_at"] = "agentcad docs editing"
+    else:
+        response["next_actions"] = [
+            "agentcad docs quickstart — follow the first-script workflow for "
+            "this project",
+            f"agentcad docs preamble — see the names available in "
+            f"{manifest['runtime']} scripts",
+        ]
+        response["more_at"] = "agentcad docs quickstart"
     if force:
         response["overwrote_existing"] = True
     click.echo(json.dumps(response))
+
+
+def _preferred_cad_input(directory: Path) -> Path | None:
+    """Return one deterministic editable CAD file from ``directory``.
+
+    ``init`` intentionally looks only at direct children. Descending into
+    version folders would make a generated ``vN_*/output.step`` look like a
+    new source input. STEP/STP sort ahead of BREP because they are the common
+    interchange path; names break ties so the response is stable.
+    """
+    ranks = {".step": 0, ".stp": 0, ".brep": 1}
+    try:
+        candidates = [
+            path
+            for path in directory.iterdir()
+            if path.is_file() and path.suffix.lower() in ranks
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda path: (
+            ranks[path.suffix.lower()],
+            path.name.casefold(),
+            path.name,
+        ),
+    )
 
 
 def _build_manifest(project_name: str, runtime: str | None) -> dict:

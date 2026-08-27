@@ -108,7 +108,9 @@ class TestTier0FullEdit:
         assert all(" — " in a for a in parsed["next_actions"])
         assert "more_at" in parsed
 
-    def test_tier0_more_at_points_to_inspect_docs(self, monkeypatch, capsys):
+    def test_unversioned_tier0_more_at_points_to_editing_docs(
+        self, monkeypatch, capsys
+    ):
         import agentcad.commands.inspect_cmd as inspect_module
 
         def fake_topology_report(*args, **kwargs):
@@ -136,7 +138,7 @@ class TestTier0FullEdit:
         )
 
         parsed = json.loads(capsys.readouterr().out)
-        assert parsed["more_at"] == "agentcad docs inspect"
+        assert parsed["more_at"] == "agentcad docs editing"
 
     def test_asymmetric_face_orientations_on_valid_solid_gets_note(
         self, runner, isolated_dir

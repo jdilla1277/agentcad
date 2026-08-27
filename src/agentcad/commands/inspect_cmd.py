@@ -1,4 +1,5 @@
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -252,16 +253,33 @@ def _inspect_tier0(
         }, exit_code=1)
         return
 
+    command_path = shlex.quote(file_path)
+    is_versioned = _is_recorded_version_file(Path(file_path))
     payload.update({
         "format_detected": detection.get("format"),
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
-        "next_actions": [
-            f"agentcad view {file_path} — open in a browser to inspect or share with humans",
-            f"agentcad measure {file_path} — get dimensions, edge lengths, and hole diameters",
-        ],
-        "more_at": "agentcad docs inspect",
     })
+    if is_versioned:
+        payload.update({
+            "next_actions": [
+                f"agentcad view {command_path} — open in a browser to inspect "
+                "or share with humans",
+                f"agentcad measure {command_path} — get dimensions, edge "
+                "lengths, and hole diameters",
+            ],
+            "more_at": "agentcad docs inspect",
+        })
+    else:
+        payload.update({
+            "next_actions": [
+                f"agentcad import {command_path} — adopt the existing CAD as a "
+                "versioned baseline and create edit.py",
+                f"agentcad inspect {command_path} --ids — get feature IDs for "
+                "targeted edits",
+            ],
+            "more_at": "agentcad docs editing",
+        })
 
     if with_ids or with_summary:
         from agentcad import topo_ids
@@ -290,11 +308,19 @@ def _inspect_tier0(
         # action shifts: they're here because they want to write an edit
         # script that targets specific features. Point them at the
         # import → load_step → pick_face flow.
-        payload["next_actions"] = [
-            f"agentcad import {file_path} — adopt as v1 so you can edit and diff",
-            "use pick_face(base, ID) / pick_edge(base, ID) in your edit script — "
-            "see `agentcad docs editing`",
-        ]
+        if is_versioned:
+            payload["next_actions"] = [
+                "agentcad docs editing — use the returned IDs with "
+                "pick_face/pick_edge in the existing edit script",
+            ]
+        else:
+            payload["next_actions"] = [
+                f"agentcad import {command_path} — adopt the existing CAD as a "
+                "versioned baseline and create edit.py",
+                "agentcad docs editing — use the returned IDs with "
+                "pick_face/pick_edge in edit.py",
+            ]
+        payload["more_at"] = "agentcad docs editing"
         if truncations:
             payload["truncation"] = {
                 "limited": True,
@@ -350,6 +376,39 @@ def _inspect_tier0(
         payload["notes"] = notes
 
     _emit(payload, exit_code=0)
+
+
+def _is_recorded_version_file(file_path: Path) -> bool:
+    """Whether ``file_path`` belongs to a version recorded by this project.
+
+    Manifest history records a version directory rather than every artifact.
+    Treating files beneath that directory as versioned covers normalized STEP
+    outputs and imported source copies without depending on optional metadata.
+    A missing or malformed manifest must not break ``inspect``'s never-throws
+    contract, so uncertain cases remain eligible for import guidance.
+    """
+    from agentcad.manifest import MANIFEST_FILE
+
+    manifest_path = Path.cwd() / MANIFEST_FILE
+    if not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text())
+        if not isinstance(manifest, dict):
+            return False
+        target = file_path.resolve()
+        for version in manifest.get("versions", []):
+            if not isinstance(version, dict):
+                continue
+            recorded_path = version.get("path")
+            if not isinstance(recorded_path, str) or not recorded_path:
+                continue
+            version_dir = (Path.cwd() / recorded_path).resolve()
+            if target == version_dir or version_dir in target.parents:
+                return True
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return False
+    return False
 
 
 def _list_truncations(

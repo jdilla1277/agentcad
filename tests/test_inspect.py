@@ -54,6 +54,77 @@ class TestInspectCommand:
         assert parsed["command"] == "inspect"
         assert parsed["status"] == "success"
 
+    def test_unversioned_inspect_routes_to_import_and_feature_ids(
+        self, runner, isolated_dir
+    ):
+        step = _make_step(isolated_dir, "input.step")
+
+        result = runner.invoke(cli, ["inspect", str(step), "--no-daemon"])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert len(parsed["next_actions"]) == 2
+        assert parsed["next_actions"][0].startswith("agentcad import ")
+        assert "create edit.py" in parsed["next_actions"][0]
+        assert "agentcad inspect" in parsed["next_actions"][1]
+        assert "--ids" in parsed["next_actions"][1]
+        assert parsed["more_at"] == "agentcad docs editing"
+
+    def test_versioned_inspect_does_not_recommend_reimport(
+        self, runner, isolated_dir
+    ):
+        version_dir = isolated_dir / "v1_baseline"
+        version_dir.mkdir()
+        step = _make_step(version_dir)
+        (isolated_dir / "agentcad.json").write_text(json.dumps({
+            "name": "project",
+            "versions": [{"version": 1, "path": "v1_baseline/"}],
+        }))
+
+        result = runner.invoke(cli, ["inspect", str(step), "--no-daemon"])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        joined = " ".join(parsed["next_actions"])
+        assert "agentcad import" not in joined
+        assert "agentcad view" in joined
+        assert "agentcad measure" in joined
+        assert parsed["more_at"] == "agentcad docs inspect"
+
+    def test_versioned_inspect_ids_does_not_recommend_reimport(
+        self, runner, isolated_dir
+    ):
+        version_dir = isolated_dir / "v1_baseline"
+        version_dir.mkdir()
+        step = _make_step(version_dir)
+        (isolated_dir / "agentcad.json").write_text(json.dumps({
+            "name": "project",
+            "versions": [{"version": 1, "path": "v1_baseline/"}],
+        }))
+
+        result = runner.invoke(
+            cli, ["inspect", str(step), "--ids", "--no-daemon"]
+        )
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        joined = " ".join(parsed["next_actions"])
+        assert "agentcad import" not in joined
+        assert "agentcad docs editing" in joined
+
+    def test_malformed_manifest_does_not_break_inspect_guidance(
+        self, runner, isolated_dir
+    ):
+        step = _make_step(isolated_dir, "input.step")
+        (isolated_dir / "agentcad.json").write_text("[]")
+
+        result = runner.invoke(cli, ["inspect", str(step), "--no-daemon"])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["next_actions"][0].startswith("agentcad import ")
+
     def test_inspect_reports_solid_count(self, runner, isolated_dir):
         step = _make_step(isolated_dir)
         result = runner.invoke(cli, ["inspect", str(step)])
