@@ -214,11 +214,15 @@ COMMAND REFERENCE: VERIFY AND DEBUG
     the model meets the spec. Results include matches, missing features, and
     count errors. Specs may set diameter/count tolerances and an axis.
 
-  agentcad inspect FILE [--ids] [--summary] [--limit N|--no-limit]
+  agentcad inspect FILE [--validate-only] [--validation-timeout SECONDS]
+                        [--ids] [--summary] [--limit N|--no-limit]
     Report recognized format and, for STEP/STP/BREP, solids, shells, face
     orientations, edges, free edges, and validity. --summary clusters topology;
     --ids returns 1-indexed feature IDs used by editing helpers. Lists are capped
-    unless --no-limit is requested.
+    unless --no-limit is requested. Validation reports native_load,
+    structural_validation, topology_extraction, and feature_extraction phases.
+    --validate-only skips deep topology; AGENTCAD_INSPECT_TIMEOUT_S configures
+    the same budget as --validation-timeout (90s default, 0 disables it).
 
 COMMAND REFERENCE: PROJECT AND INTEGRATIONS
   agentcad context
