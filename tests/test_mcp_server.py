@@ -120,7 +120,7 @@ def test_run_mcp_passes_core_only_fast_path(monkeypatch):
     assert result["status"] == "success"
     assert calls == [(
         [
-            "run", "part.py", "--output", "fast",
+            "run", "part.py", "--label", "fast",
             "--no-preview", "--no-diff", "--no-view",
         ],
         "/tmp/project",

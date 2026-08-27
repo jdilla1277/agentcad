@@ -16,7 +16,7 @@ INSTRUCTIONS_BLOCK = f"""\
 For CAD/modeling tasks, use `agentcad`. Start by running `agentcad --help`;
 it is the detailed operational briefing and command reference. Use
 `agentcad docs [section]` for deeper examples, write scripts that call
-`show_object(...)`, run with `agentcad run SCRIPT --output LABEL`, inspect the
+`show_object(...)`, run with `agentcad run SCRIPT --label LABEL`, inspect the
 generated `preview.png`, and open the result with `agentcad view ...` after
 successful builds.
 {END_MARKER}

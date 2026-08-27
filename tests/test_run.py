@@ -380,6 +380,9 @@ def test_run_timeout_during_script_execution_reports_phase(
     assert parsed["completed_phases"] == ["validation"]
     assert "validation_ms" in parsed["phase_timings"]
     assert "script" in parsed["suggestion"].lower()
+    assert parsed["label"] == "slow"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
 
 
 def test_run_timeout_during_step_export_reports_completed_phases(
@@ -417,6 +420,9 @@ def test_run_timeout_during_step_export_reports_completed_phases(
     assert "script_exec_ms" in parsed["phase_timings"]
     assert "metrics_ms" in parsed["phase_timings"]
     assert "export" in parsed["suggestion"].lower()
+    assert parsed["label"] == "slow_export"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
 
 
 def test_run_preview_failure_preserves_registered_core(
@@ -489,6 +495,8 @@ def test_run_preview_timeout_preserves_registered_core(
     parsed = json.loads(result.stdout)
     assert parsed["status"] == "success"
     assert parsed["artifacts"]["preview"]["status"] == "timeout"
+    assert parsed["artifact_created"] is True
+    assert parsed["outputs"]["step"] == "v2_timeout/output.step"
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
     assert manifest["current"] == "timeout"
     assert manifest["versions"][-1]["status"] == "success"
@@ -1989,6 +1997,9 @@ def test_run_invalid_shape_returns_explicit_outcome(runner, isolated_dir, monkey
     ]
     assert parsed["version_recorded"] is True
     assert parsed["current_advanced"] is False
+    assert parsed["label"] == "inv"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
     assert not (isolated_dir / "v1_inv" / "output.step").exists()
 
 
@@ -2019,6 +2030,9 @@ def test_run_emits_json_error_on_unexpected_exception_after_script_start(
     parsed = json.loads(result.stdout)
     assert parsed["command"] == "run"
     assert parsed["status"] == "error"
+    assert parsed["label"] == "boom"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
     # The error payload should help the agent — surface the exception text
     # so the agent can decide whether to retry or fix the script.
     assert "Bnd_Box is void" in (parsed.get("message", "") + parsed.get("traceback", ""))
@@ -2076,6 +2090,9 @@ def test_run_invalid_shape_dry_run_is_explicit_without_artifacts(
     assert parsed["metrics"]["is_valid"] is False
     assert parsed["version_recorded"] is False
     assert parsed["current_advanced"] is False
+    assert parsed["label"] == "inv"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
     assert manifest["versions"] == []
     assert not (isolated_dir / "v1_inv_invalid").exists()

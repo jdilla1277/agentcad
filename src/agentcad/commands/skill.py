@@ -39,13 +39,13 @@ agentcad --help   # Read the built-in how-to guide and command reference
 
 2. **Dry-run first** to check metrics without consuming a version:
    ```bash
-   agentcad run script.py --output test --dry-run
+   agentcad run script.py --label test --dry-run
    ```
    Check `volume`, `dimensions`, `is_valid` in the response.
 
 3. **Run for real.** Visual feedback is on by default:
    ```bash
-   agentcad run script.py --output label
+   agentcad run script.py --label label
    ```
    A normal successful iteration can produce (paths in the JSON response):
    - `preview.png` — balanced top, bottom, upper-iso, and lower-iso composite.
@@ -131,7 +131,7 @@ agentcad --help   # Read the built-in how-to guide and command reference
    comparison ran; `passed` is the actual spec-check result. If you include
    `axis`, copy it from `agentcad measure`'s `cylindrical_features[].axis`.
 
-8. **Iterate.** Fix the script, run with a new `--output` label. Use
+8. **Iterate.** Fix the script, run with a new `--label` value. Use
    `agentcad diff 1 2` to compare versions.
 
 ## Script writing rules
@@ -183,7 +183,7 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | Command | Purpose |
 |---------|---------|
 | `agentcad init --name NAME` | Initialize project |
-| `agentcad run SCRIPT --output LABEL` | Execute script, produce STEP + metrics |
+| `agentcad run SCRIPT --label LABEL` | Execute script, produce STEP + metrics |
 | `agentcad run ... --dry-run` | Metrics only, no version consumed |
 | `agentcad run ... --no-preview` | Suppress preview (on by default) |
 | `agentcad run ... --no-diff` | Suppress automatic prior-version comparison |
@@ -204,6 +204,9 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | `agentcad docs [SECTION]` | Runtime-aware built-in documentation |
 | `agentcad instructions install` | Record a short project note so future agents read `agentcad --help` |
 | `agentcad view FILE [FILE_B]` | Open one model or an explicit synchronized A/B comparison |
+
+`--label` names a version; read the generated file from `outputs.step`.
+`--output` remains a deprecated compatibility alias and is not a path option.
 
 ## Debugging playbook
 

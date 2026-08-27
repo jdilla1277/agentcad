@@ -31,6 +31,12 @@ _ACTIVE_PHASE_TRACKER = None
 _PREVIOUS_ALARM_HANDLER = None
 _RUN_TIMEOUT_INSTALLED = False
 
+_OUTPUT_DEPRECATION = (
+    "--output is deprecated because it names a version, not a destination; "
+    "use --label LABEL instead. The generated STEP path is returned in "
+    "outputs.step."
+)
+
 _PHASE_ARTIFACTS = {
     "export_mesh": "mesh_exports",
     "render_views": "renders",
@@ -49,6 +55,29 @@ _PHASE_ARTIFACTS = {
     "diff": "diff",
     "viewer": "viewer",
 }
+
+
+def _run_contract_payload(payload: dict) -> dict:
+    """Apply the stable label/artifact contract to one run response."""
+    ctx = click.get_current_context(silent=True)
+    contract = ctx.meta if ctx is not None else {}
+    label = contract.get("run_label")
+    payload.setdefault("label", label)
+
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, dict):
+        outputs = {}
+        payload["outputs"] = outputs
+    outputs.setdefault("step", None)
+    payload["artifact_created"] = outputs["step"] is not None
+
+    if contract.get("run_legacy_output"):
+        payload["deprecation"] = _OUTPUT_DEPRECATION
+    return payload
+
+
+def _emit_run(payload: dict) -> None:
+    click.echo(json.dumps(_run_contract_payload(payload)))
 
 
 class _RunTimeout(BaseException):
@@ -567,7 +596,7 @@ def _record_failure(
         output_json["runtime"] = runtime
     if guidance:
         output_json.update(guidance)
-    click.echo(json.dumps(output_json))
+    _emit_run(output_json)
     sys.exit(1)
 
 
@@ -629,7 +658,7 @@ def _record_invalid_geometry(
         output_json["groups"] = groups
     if warnings:
         output_json["warnings"] = warnings
-    click.echo(json.dumps(output_json))
+    _emit_run(output_json)
     sys.exit(1)
 
 
@@ -690,7 +719,17 @@ def _assign_part_identity(raw_parts):
 
 @click.command()
 @click.argument("script")
-@click.option("--output", required=True, help="Label for this version.")
+@click.option(
+    "--label",
+    default=None,
+    help="Label for this version. The STEP path is returned in outputs.step.",
+)
+@click.option(
+    "--output",
+    "legacy_output",
+    default=None,
+    help="Deprecated compatibility alias for --label; never a destination path.",
+)
 @click.option(
     "--render",
     default=None,
@@ -736,8 +775,8 @@ def _assign_part_identity(raw_parts):
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
 def run(
-    ctx, script, output, render, export, preview, auto_diff, open_view,
-    params, dry_run, runtime, no_daemon,
+    ctx, script, label, legacy_output, render, export, preview, auto_diff,
+    open_view, params, dry_run, runtime, no_daemon,
 ):
     """Execute the project's CAD script and produce a versioned STEP file.
 
@@ -749,6 +788,21 @@ def run(
     `agentcad import` instead — agents who instinctively reach for `run`
     when handed a CAD file get the right behavior automatically.
     """
+    output = label or legacy_output
+    ctx.meta["run_label"] = output
+    ctx.meta["run_legacy_output"] = legacy_output is not None
+    if label is not None and legacy_output is not None:
+        raise click.UsageError(
+            "Use --label or the deprecated --output alias, not both.",
+            ctx=ctx,
+        )
+    if output is None:
+        raise click.MissingParameter(
+            ctx=ctx,
+            param_hint="--label",
+            param_type="option",
+        )
+
     # Reject unsupported --export formats before anything else — before the
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
     # routing, version allocation, or any disk artifacts — so `run --export`
@@ -758,22 +812,22 @@ def run(
         # Without this the run would execute the whole script and consume a
         # version number, then export nothing and still report success.
         if not parse_export_formats(export):
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": NO_FORMATS_MESSAGE,
-            }))
+            })
             sys.exit(1)
         invalid = unsupported_export_formats(export)
         if invalid:
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": (
                     f"Unsupported format(s): {', '.join(invalid)}. "
                     f"Supported: stl, glb, obj"
                 ),
-            }))
+            })
             sys.exit(1)
 
     # M60 Phase 2 (slice 2b): suffix-dispatch CAD files to `agentcad import`.
@@ -813,24 +867,24 @@ def run(
     except _RunTimeout as e:
         recovered = _recover_committed_core(e, timeout_payload=e.payload)
         if recovered is not None:
-            click.echo(json.dumps(recovered))
+            _emit_run(recovered)
             return
         _cleanup_uncommitted_reservation()
-        click.echo(json.dumps(e.payload))
+        _emit_run(e.payload)
         sys.exit(1)
     except Exception as e:
         recovered = _recover_committed_core(e)
         if recovered is not None:
-            click.echo(json.dumps(recovered))
+            _emit_run(recovered)
             return
         _cleanup_uncommitted_reservation()
         import traceback as _tb
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "message": f"Internal error: {type(e).__name__}: {e}",
             "traceback": _tb.format_exc(),
-        }))
+        })
         sys.exit(1)
     finally:
         _clear_run_timeout()
@@ -871,7 +925,8 @@ def _run_impl(
 
 
     # Try routing through daemon. If reachable, this exits before returning.
-    argv = ["run", script, "--output", output]
+    label_option = "--output" if ctx.meta.get("run_legacy_output") else "--label"
+    argv = ["run", script, label_option, output]
     if render:
         argv.extend(["--render", render])
     if export:
@@ -896,7 +951,7 @@ def _run_impl(
 
     # Python version check (before CadQuery imports)
     if sys.version_info >= (3, 13):
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "message": (
@@ -904,16 +959,16 @@ def _run_impl(
                 f"(found {sys.version_info[0]}.{sys.version_info[1]}). "
                 f"CadQuery/OCP bindings are not available on newer Python versions."
             ),
-        }))
+        })
         sys.exit(1)
 
     script_path = Path(script)
     if not script_path.exists():
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "message": f"Script file '{script}' not found",
-        }))
+        })
         sys.exit(1)
 
     # Dispatch to the right runner. Precedence:
@@ -929,22 +984,22 @@ def _run_impl(
         )
     except ValueError as e:
         # Ambiguous/mismatched source or unknown --runtime — surface cleanly.
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "message": str(e),
-        }))
+        })
         sys.exit(1)
 
     # Pre-execution validation (before version allocation)
     validation_errors = runner.validate(raw_source)
     if validation_errors:
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "validation_error",
             "runtime": runtime_name,
             "checks": validation_errors,
-        }))
+        })
         sys.exit(1)
 
     # Parse --params before version allocation (errors should be cheap)
@@ -953,11 +1008,11 @@ def _run_impl(
         try:
             parsed_params = _parse_params(params)
         except ValueError as e:
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": str(e),
-            }))
+            })
             sys.exit(1)
 
     # Validate --render spec before version allocation (errors should be cheap)
@@ -966,11 +1021,11 @@ def _run_impl(
         try:
             _parse_view_spec(render)
         except ValueError as e:
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": str(e),
-            }))
+            })
             sys.exit(1)
     _finish_phase("validation", _t, "validation_ms")
 
@@ -990,12 +1045,12 @@ def _run_impl(
     # Param validation errors (unknown names, CQGI InvalidParameterError) —
     # surface them without consuming a version number.
     if result.status == "validation_error":
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "runtime": runtime_name,
             "message": result.exception,
-        }))
+        })
         sys.exit(1)
 
     # Keep the current history snapshot for previous-version comparison. A
@@ -1127,7 +1182,7 @@ def _run_impl(
             invalid_response["timings"] = _timings
             invalid_response["completed_phases"] = list(_phase_tracker.completed)
             invalid_response["phase_timings"] = dict(_timings)
-            click.echo(json.dumps(invalid_response))
+            _emit_run(invalid_response)
             sys.exit(1)
         from agentcad.versioning import reserve_version
 
@@ -1164,7 +1219,7 @@ def _run_impl(
         output_json["timings"] = _timings
         output_json["completed_phases"] = list(_phase_tracker.completed)
         output_json["phase_timings"] = dict(_timings)
-        click.echo(json.dumps(output_json))
+        _emit_run(output_json)
         return
 
     # Atomically reserve a unique version directory before writing core files.
@@ -1757,4 +1812,4 @@ def _run_impl(
     output_json["timings"] = _timings
     output_json["completed_phases"] = list(_phase_tracker.completed)
     output_json["phase_timings"] = dict(_timings)
-    click.echo(json.dumps(output_json))
+    _emit_run(output_json)

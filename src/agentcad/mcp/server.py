@@ -91,7 +91,7 @@ def run(
             and diff=False to also bypass viewer generation on the core-only
             fast path.
     """
-    args = ["run", script, "--output", output]
+    args = ["run", script, "--label", output]
     if render:
         args.extend(["--render", render])
     if export:
