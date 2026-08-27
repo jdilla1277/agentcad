@@ -221,6 +221,10 @@ agentcad --help   # Read the built-in how-to guide and command reference
 8. **Hollow shape?** `free_edge_count > 0` means open shell.
 9. **Complex profiles (gears, splines)?** Use subtractive construction — cut from
    a blank cylinder/box instead of building up. See `agentcad docs patterns`.
+10. **A run failed?** Trust `artifact_created: false` and `outputs.step: null`;
+    fix the script and execute the returned `next_actions` command. Do not write
+    or truncate STEP text — `agentcad run` or `agentcad import` must create it
+    through the CAD kernel.
 
 ## Patterns
 

@@ -2,6 +2,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import signal
 import shutil
 import sys
@@ -70,6 +71,31 @@ def _run_contract_payload(payload: dict) -> dict:
         payload["outputs"] = outputs
     outputs.setdefault("step", None)
     payload["artifact_created"] = outputs["step"] is not None
+
+    if (
+        not payload["artifact_created"]
+        and payload.get("status") in {
+            "validation_error",
+            "failed",
+            "invalid_geometry",
+        }
+    ):
+        script = contract.get("run_script")
+        if script:
+            recovery = (
+                f"agentcad run {shlex.quote(script)} --label "
+                f"{shlex.quote(str(label))}"
+            )
+            existing_message = payload.get("message")
+            no_artifact_message = (
+                f"No STEP was created. Fix {script} and rerun the command."
+            )
+            payload["message"] = (
+                f"{existing_message} {no_artifact_message}"
+                if existing_message
+                else no_artifact_message
+            )
+            payload.setdefault("next_actions", [recovery])
 
     if contract.get("run_legacy_output"):
         payload["deprecation"] = _OUTPUT_DEPRECATION
@@ -789,6 +815,7 @@ def run(
     when handed a CAD file get the right behavior automatically.
     """
     output = label or legacy_output
+    ctx.meta["run_script"] = script
     ctx.meta["run_label"] = output
     ctx.meta["run_legacy_output"] = legacy_output is not None
     if label is not None and legacy_output is not None:

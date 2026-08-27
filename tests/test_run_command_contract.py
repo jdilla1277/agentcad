@@ -214,7 +214,7 @@ def test_unknown_top_level_command_is_json_on_stdout(runner, isolated_dir):
     payload = json.loads(result.stdout)
     _assert_usage_error(payload, kind="unknown_command", command="fillet_edges")
     assert payload["invalid_option"] is None
-    assert any("agentcad --help" in action for action in payload["next_actions"])
+    assert payload["next_actions"] == ["agentcad docs editing"]
 
 
 def test_run_help_prefers_label_and_marks_output_compatibility_alias(runner):

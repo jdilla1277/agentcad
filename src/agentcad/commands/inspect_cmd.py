@@ -10,7 +10,7 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
-from agentcad.native_io import silence_native_stdout
+from agentcad.native_io import suppress_native_output
 
 DEFAULT_ID_LIMIT = 100
 
@@ -196,28 +196,60 @@ def _emit(payload: dict, exit_code: int = 0) -> None:
 
 
 def _emit_malformed(file: str, detection: dict) -> None:
-    expected = detection.get("expected_format")
+    expected = (
+        detection.get("expected_format")
+        or detection.get("extension")
+        or "CAD"
+    )
+    expected_name = str(expected).upper()
     actual = detection.get("format")
     if actual == "html":
-        message = (
-            f"Extension is .{expected} but content is HTML — likely a failed download "
-            "(error page saved instead of the file)."
+        reason = (
+            f"{Path(file).name} contains HTML instead of {expected_name} CAD, "
+            "likely because a download saved an error page."
         )
-        suggestion = "Re-download the file; verify the source URL returns the CAD file, not HTML."
     else:
-        message = (
-            f"Extension claims '{expected}' but content looks like '{actual}'. "
-            "File appears mislabeled or corrupted."
+        reason = (
+            f"{Path(file).name} claims to be {expected_name} CAD but its "
+            f"content looks like {actual or 'an unknown format'}."
         )
-        suggestion = f"Re-export as {expected} from your CAD tool, or rename to match the real format."
+    _emit_malformed_recovery(file, detection, reason)
+
+
+def _malformed_recovery_action() -> str:
+    """Return one executable route back to kernel-generated CAD."""
+    for script_name in ("edit.py", "script.py"):
+        if Path(script_name).is_file():
+            run_action = (
+                f"agentcad run {shlex.quote(script_name)} "
+                "--label recovered"
+            )
+            if not Path("agentcad.json").is_file():
+                return "agentcad init --name recovered && " + run_action
+            return run_action
+    return "agentcad docs quickstart"
+
+
+def _emit_malformed_recovery(
+    file: str,
+    detection: dict,
+    reason: str,
+) -> None:
+    """Emit one clean malformed-CAD error and one executable recovery."""
     _emit({
-        "command": "inspect", "status": "malformed",
-        "format_detected": actual,
-        "expected_format": expected,
+        "command": "inspect",
+        "status": "malformed",
+        "error_kind": "malformed_cad",
+        "format_detected": detection.get("format"),
+        "expected_format": detection.get("expected_format"),
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
-        "message": message,
-        "suggestion": suggestion,
+        "message": (
+            f"{reason} Do not create or repair STEP by writing or truncating "
+            "text; use AgentCAD's CAD-kernel-backed run workflow or import a "
+            "valid CAD export."
+        ),
+        "next_actions": [_malformed_recovery_action()],
     }, exit_code=1)
 
 
@@ -233,24 +265,22 @@ def _inspect_tier0(
     surfaced as malformed — never as a stack trace, never as a leaked native
     diagnostic on stdout."""
     try:
-        # load_cad_shape (called inside _topology_report) handles silencing.
-        payload, topo_shape = _topology_report(
+        # The structured error below replaces all raw native parser output.
+        with suppress_native_output():
+            payload, topo_shape = _topology_report(
+                file_path,
+                return_shape=True,
+                format_hint=detection.get("format"),
+            )
+    except Exception:
+        _emit_malformed_recovery(
             file_path,
-            return_shape=True,
-            format_hint=detection.get("format"),
-        )
-    except Exception as exc:
-        _emit({
-            "command": "inspect", "status": "malformed",
-            "format_detected": detection.get("format"),
-            "extension": detection.get("extension"),
-            "size_bytes": detection.get("size_bytes"),
-            "message": (
-                f"Recognized as {detection.get('format')} but the parser couldn't "
-                f"read it: {exc}. The file may be incomplete or corrupted."
+            detection,
+            (
+                f"AgentCAD's CAD kernel could not read {Path(file_path).name} "
+                f"as {str(detection.get('format')).upper()} CAD."
             ),
-            "suggestion": "Re-export from your CAD tool; the file may be incomplete or corrupted.",
-        }, exit_code=1)
+        )
         return
 
     command_path = shlex.quote(file_path)

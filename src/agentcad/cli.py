@@ -27,6 +27,20 @@ from agentcad.commands.subscribe import subscribe
 from agentcad.commands.view import view
 
 
+_SCRIPT_EDIT_HELPERS = {
+    "boss",
+    "chamfer_edges",
+    "cut_pocket",
+    "fillet_edges",
+    "load_step",
+    "load_step_shape",
+    "pick_edge",
+    "pick_face",
+    "shell_faces",
+    "split_by_plane",
+}
+
+
 # Runtime placeholders keep the how-to guide aligned with the current project.
 # A fresh/default project gets one build123d authoring guide; a CadQuery-pinned
 # project gets a compatibility-only guide.
@@ -283,6 +297,11 @@ DEBUGGING
   $ agentcad measure v1_test/output.step                  # dimensions + feature sizes
   $ agentcad check-spec v1_test/output.step spec.json     # compare against intended features
   $ agentcad inspect v1_test/output.step                  # successful STEP deep-dive
+
+  Geometry edits belong in script.py or an imported model's edit.py; helper
+  names such as fillet_edges are Python calls, not top-level commands. A failed
+  run returns outputs.step=null and an exact rerun command. Never repair STEP by
+  writing or truncating text; use agentcad run or import so the CAD kernel writes it.
     Hollow shape?     -> free_edge_count > 0, shell not closed
     Inverted normals? -> face_orientations imbalanced
     Invalid?          -> is_valid: false
@@ -453,6 +472,29 @@ class _LoggingGroup(click.Group):
                 else "Usage: agentcad [OPTIONS] COMMAND [ARGS]..."
             )
             next_actions = ["agentcad --help"]
+
+        if error_kind == "unknown_command" and command:
+            if command in _SCRIPT_EDIT_HELPERS:
+                message = (
+                    f"`{command}` is a script helper, not a top-level "
+                    "AgentCAD command. Call it inside edit.py, then run the "
+                    "script to create a STEP."
+                )
+            else:
+                message = (
+                    f"`{command}` is not a top-level AgentCAD command. "
+                    "AgentCAD geometry edits are written in a Python script "
+                    "such as edit.py, then executed with `agentcad run`."
+                )
+            if Path("edit.py").is_file():
+                run_action = "agentcad run edit.py --label recovered-edit"
+                if not Path("agentcad.json").is_file():
+                    run_action = (
+                        "agentcad init --name recovered && " + run_action
+                    )
+                next_actions = [run_action]
+            else:
+                next_actions = ["agentcad docs editing"]
 
         payload = {
             "command": command,
