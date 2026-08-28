@@ -7,8 +7,48 @@ from pathlib import Path
 import click
 
 from agentcad import __version__
+from agentcad.commands.instructions import install_instructions
+from agentcad.commands.skill import install_skill
+from agentcad.guide import guide_fingerprint
 from agentcad.manifest import MANIFEST_FILE
 from agentcad.runners import dispatch
+
+
+def install_agent_setup(cwd: Path, runtime: str) -> dict:
+    """Install every agent-guide surface for a project and report evidence.
+
+    A setup failure must not fail project initialization — the manifest is
+    already written and the CLI remains usable — so errors are reported in
+    the returned status instead of raised.
+    """
+    try:
+        skill_result = install_skill(cwd, runtime)
+        instructions_result = install_instructions(cwd, "auto", runtime)
+    except OSError as exc:
+        return {
+            "status": "error",
+            "message": f"agent guide install failed: {exc}",
+            "suggestion": (
+                "Run `agentcad instructions install` and `agentcad skill "
+                "install` once the underlying issue is fixed."
+            ),
+        }
+    return {
+        "status": "ready",
+        "guide_fingerprint": guide_fingerprint(runtime),
+        "targets": [
+            {
+                "name": "claude-skill",
+                "paths": [skill_result["path"]],
+                "activation": "skill-discovery",
+            },
+            {
+                "name": "project-instructions",
+                "paths": instructions_result["paths"],
+                "activation": "always-loaded",
+            },
+        ],
+    }
 
 
 @click.command()
@@ -29,7 +69,15 @@ from agentcad.runners import dispatch
     "--force", is_flag=True,
     help="Overwrite an existing agentcad.json. Use when re-initializing a project.",
 )
-def init(name, runtime, force):
+@click.option(
+    "--no-agent-setup", is_flag=True,
+    help=(
+        "Skip installing the agent guide (AGENTS.md/CLAUDE.md block and Claude "
+        "skill). By default init installs both so agents receive the operating "
+        "guide automatically."
+    ),
+)
+def init(name, runtime, force, no_agent_setup):
     """Initialize a new agentcad project."""
     manifest_path = Path.cwd() / MANIFEST_FILE
 
@@ -39,8 +87,10 @@ def init(name, runtime, force):
             "status": "error",
             "message": f"{MANIFEST_FILE} already exists",
             "suggestion": (
-                "Pass --force to overwrite, or run `agentcad context` to see "
-                "the current project state."
+                "The project is already initialized. Run `agentcad context` "
+                "to see its state and agent-guide status, or `agentcad "
+                "instructions install` to refresh the agent guide. Pass "
+                "--force only to recreate agentcad.json and start over."
             ),
         }))
         sys.exit(1)
@@ -55,6 +105,12 @@ def init(name, runtime, force):
         "project": project_name,
         "runtime": manifest["runtime"],
     }
+    if no_agent_setup:
+        response["agent_setup"] = {"status": "skipped"}
+    else:
+        response["agent_setup"] = install_agent_setup(
+            Path.cwd(), manifest["runtime"]
+        )
     cad_input = _preferred_cad_input(Path.cwd())
     if cad_input is not None:
         response["next_actions"] = [
@@ -120,8 +176,9 @@ def _build_manifest(project_name: str, runtime: str | None) -> dict:
 def _bootstrap_manifest(name: str | None = None, runtime: str | None = None) -> None:
     """Create a manifest in the current directory. Used by `agentcad import
     --init` so an agent handed a STEP in a fresh folder doesn't have to
-    issue two commands."""
+    issue two commands. Installs the agent guide like `agentcad init` does."""
     manifest_path = Path.cwd() / MANIFEST_FILE
     project_name = name if name else Path.cwd().name
     manifest = _build_manifest(project_name, runtime)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    install_agent_setup(Path.cwd(), manifest["runtime"])

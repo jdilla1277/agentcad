@@ -1,26 +1,34 @@
-"""agentcad instructions — install durable project guidance for future agents."""
+"""agentcad instructions — install durable project guidance for future agents.
+
+The installed block is the complete canonical guide from `agentcad.guide`,
+not a pointer to it. AGENTS.md/CLAUDE.md are loaded unconditionally by agent
+harnesses, so this is the one surface that guarantees the guide is in context
+before CAD work starts — skill files and `--help` only work when the agent
+chooses to read them. `agentcad init` installs this block automatically.
+"""
 
 import json
+import re
 from pathlib import Path
 
 import click
 
+from agentcad.guide import effective_runtime, guide_body, guide_fingerprint
+
 
 START_MARKER = "<!-- agentcad:start -->"
 END_MARKER = "<!-- agentcad:end -->"
+_FINGERPRINT_RE = re.compile(r"<!-- agentcad-guide: ([0-9a-f]+) -->")
 
-INSTRUCTIONS_BLOCK = f"""\
-{START_MARKER}
-## agentcad
 
-For CAD/modeling tasks, use `agentcad`. Start by running `agentcad --help`;
-it is the detailed operational briefing and command reference. Use
-`agentcad docs [section]` for deeper examples, write scripts that call
-`show_object(...)`, run with `agentcad run SCRIPT --label LABEL`, inspect the
-generated `preview.png`, and open the result with `agentcad view ...` after
-successful builds.
-{END_MARKER}
-"""
+def instructions_block(runtime: str) -> str:
+    """The AGENTS.md/CLAUDE.md managed block: full guide plus fingerprint."""
+    return (
+        f"{START_MARKER}\n"
+        f"<!-- agentcad-guide: {guide_fingerprint(runtime)} -->\n"
+        f"{guide_body(runtime).rstrip()}\n"
+        f"{END_MARKER}\n"
+    )
 
 
 def _replace_or_append(content: str, block: str) -> str:
@@ -29,7 +37,10 @@ def _replace_or_append(content: str, block: str) -> str:
 
     if start != -1 and end != -1 and start < end:
         end += len(END_MARKER)
-        updated = content[:start].rstrip() + "\n\n" + block.rstrip() + content[end:]
+        prefix = content[:start].rstrip()
+        if prefix:
+            prefix += "\n\n"
+        updated = prefix + block.rstrip() + content[end:]
         return updated.rstrip() + "\n"
 
     if not content.strip():
@@ -53,18 +64,73 @@ def _target_paths(target: str, cwd: Path) -> list[Path]:
     return existing or [agents]
 
 
+def install_instructions(cwd: Path, target: str, runtime: str) -> dict:
+    """Install or refresh the managed block and return install evidence.
+
+    User-authored content outside the markers is always preserved; only the
+    marked block is replaced.
+    """
+    block = instructions_block(runtime)
+    written = []
+    for path in _target_paths(target, cwd):
+        original = path.read_text() if path.exists() else ""
+        path.write_text(_replace_or_append(original, block))
+        written.append(str(path))
+    return {
+        "runtime": runtime,
+        "target": target,
+        "paths": written,
+        "guide_fingerprint": guide_fingerprint(runtime),
+    }
+
+
+def instructions_status(cwd: Path, runtime: str) -> dict:
+    """Report whether any instruction file carries the current guide."""
+    expected = guide_fingerprint(runtime)
+    files = {}
+    for path in (cwd / "AGENTS.md", cwd / "CLAUDE.md"):
+        if not path.exists():
+            continue
+        try:
+            content = path.read_text()
+        except OSError:
+            continue
+        if START_MARKER not in content:
+            continue
+        match = _FINGERPRINT_RE.search(content)
+        installed = match.group(1) if match else None
+        files[path.name] = "current" if installed == expected else "stale"
+
+    if not files:
+        state = "missing"
+    elif "current" in files.values():
+        state = "current"
+    else:
+        state = "stale"
+    return {"state": state, "files": files}
+
+
 @click.group()
 def instructions():
     """Manage project instruction snippets for future agents."""
 
 
 @instructions.command()
-def show():
-    """Print the project instruction snippet as JSON."""
+@click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["cadquery", "build123d"]),
+    help="Show the block for an explicit runtime instead of the project mode.",
+)
+def show(runtime):
+    """Print the project instruction block as JSON."""
+    runtime = effective_runtime(runtime)
     click.echo(json.dumps({
         "command": "instructions show",
         "status": "success",
-        "content": INSTRUCTIONS_BLOCK,
+        "runtime": runtime,
+        "guide_fingerprint": guide_fingerprint(runtime),
+        "content": instructions_block(runtime),
     }))
 
 
@@ -79,22 +145,21 @@ def show():
         "or creates AGENTS.md when neither exists."
     ),
 )
-def install(target):
-    """Install the agentcad snippet into AGENTS.md and/or CLAUDE.md."""
-    cwd = Path.cwd()
-    paths = _target_paths(target, cwd)
-    written = []
-
-    for path in paths:
-        original = path.read_text() if path.exists() else ""
-        updated = _replace_or_append(original, INSTRUCTIONS_BLOCK)
-        path.write_text(updated)
-        written.append(str(path))
-
+@click.option(
+    "--runtime",
+    default=None,
+    type=click.Choice(["cadquery", "build123d"]),
+    help="Install the block for an explicit runtime instead of the project mode.",
+)
+def install(target, runtime):
+    """Install the agentcad guide into AGENTS.md and/or CLAUDE.md."""
+    result = install_instructions(Path.cwd(), target, effective_runtime(runtime))
     click.echo(json.dumps({
         "command": "instructions install",
         "status": "success",
-        "target": target,
-        "paths": written,
-        "message": "agentcad instructions installed. Future agents should read agentcad --help for the detailed briefing.",
+        **result,
+        "message": (
+            "agentcad guide installed. Future agents in this project receive it "
+            "automatically from their instruction file."
+        ),
     }))
