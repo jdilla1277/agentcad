@@ -47,6 +47,13 @@ def test_runtime_guides_differ_and_have_distinct_fingerprints():
     assert guide_fingerprint("build123d") != guide_fingerprint("cadquery")
 
 
+def test_guide_distinguishes_json_commands_from_human_readable_help():
+    for runtime in ("build123d", "cadquery"):
+        body = guide_body(runtime)
+        assert "Operational commands return structured JSON" in body
+        assert "`--help` and `agentcad docs` return readable text" in body
+
+
 # --- init installs the guide by default ---
 
 

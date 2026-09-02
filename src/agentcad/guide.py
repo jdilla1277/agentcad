@@ -20,7 +20,8 @@ GUIDE_BODY = """\
 # agentcad — CAD tool for AI agents
 
 You have access to `agentcad`, a CLI that turns build123d Python scripts into 3D
-geometry. All output is JSON. Every command returns `"command"` and `"status"` keys.
+geometry. Operational commands return structured JSON with `"command"` and
+`"status"` keys. `--help` and `agentcad docs` return readable text.
 
 ## First-time setup
 
