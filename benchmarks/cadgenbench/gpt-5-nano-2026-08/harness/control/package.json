@@ -1,0 +1,22 @@
+{
+  "name": "agentcad-pi-trial-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cadbench": "src/cadbench.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "cadbench": "node src/cadbench.js",
+    "test": "node --test test/*.test.js",
+    "trial": "node src/trial-worker.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "typebox": "1.3.14",
+    "yaml": "2.9.0"
+  }
+}

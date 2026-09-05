@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "condition": "with_agentcad",
+  "experiment_id": "published-skill-20260827T192612863Z-e6e29701",
+  "cadgenbench": {
+    "report_url": "https://huggingai4engineering-cadgenbench.hf.space/reports/james-dillard_gpt-5-nano-candidate-c-pi-harness-2026-0_20260828-001340.html",
+    "cad_score": 0.184,
+    "valid_outputs": 67,
+    "total_fixtures": 81,
+    "generation_cad_score": 0.142,
+    "editing_cad_score": 0.249
+  },
+  "harness": {
+    "attempted": 81,
+    "eligible_trials": 80,
+    "completed": 68,
+    "meaningful_completed": 63,
+    "candidate_failures": 12,
+    "harness_failures": 1,
+    "candidate_failures_by_reason": {
+      "no_submission": 10,
+      "invalid_submission": 2
+    },
+    "harness_failures_by_stage": {
+      "submission_validation": 1
+    },
+    "valid_outputs_by_classification": {
+      "new_valid_output": 41,
+      "changed_valid_output": 22,
+      "unchanged_input": 5,
+      "unclassified_valid_output": 0
+    }
+  },
+  "usage": {
+    "input_tokens": 1871744,
+    "output_tokens": 249825,
+    "cached_input_tokens": 7523328,
+    "cache_write_tokens": 0,
+    "total_tokens": 9644897,
+    "estimated_model_cost_usd": 0.23113384
+  }
+}
