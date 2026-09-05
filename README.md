@@ -30,12 +30,12 @@ Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
 Create a Python 3.12 virtual environment, then:
 
 pip install agentcad
-agentcad skill install
-agentcad instructions install
-agentcad --help
 agentcad init --name phone-stand
+agentcad --help
 
-Read the --help output — it's your guide to creating, checking, and sharing a model.
+init installs the agent operating guide into AGENTS.md and the Claude Code
+skill automatically. Read the --help output — it's your guide to creating,
+checking, and sharing a model.
 Use the default build123d runtime unless the task explicitly requires
 CadQuery compatibility.
 

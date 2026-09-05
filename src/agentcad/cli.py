@@ -242,12 +242,14 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
     and mcp.
 
   agentcad instructions install
-    Record a short project note so future agents read `agentcad --help`.
+    Install or refresh the full agent guide in AGENTS.md/CLAUDE.md so future
+    agents receive it automatically. `agentcad init` runs this by default.
 
   agentcad skill install
   agentcad skill show
-    Install the Claude Code skill in the current project, or return its content
-    as JSON for another agent integration.
+    Install or refresh the Claude Code skill in the current project (also run
+    by `agentcad init` by default), or return its content as JSON for another
+    agent integration.
 
   agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
     Save a diagnostic bundle under .agentcad/feedback and, unless --local-only,
