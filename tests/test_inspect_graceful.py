@@ -210,37 +210,28 @@ class TestTier0FullEdit:
         assert not any("free_edge_count" in n for n in notes), \
             f"unexpected open-shell note on a closed box: {notes}"
 
-    def test_open_shell_triggers_clarification_note(self, runner, isolated_dir):
-        """When is_valid is true AND free_edge_count > 0 (the friction-test
-        scenario that read as contradictory), a `notes` entry must explain
-        what the agent is looking at."""
-        # Build a single open face — a 10x10 plate as a Face/Shell, not a Solid.
-        # This produces is_valid: true with free edges along the perimeter.
+    def test_open_shell_is_not_valid_and_names_the_layer(self, runner, isolated_dir):
+        """M71: an open shell is kernel-consistent but not deliverable, so
+        is_valid is false, the failing layer is shell_closure, and the notes
+        say why instead of explaining away a contradiction."""
         import cadquery as cq
         from cadquery import exporters
-        face = cq.Workplane("XY").rect(10, 10).extrude(0.001)  # near-zero-thickness plate
-        # Better approach: use an actual non-closed shell. Use a half-box.
-        # Simplest reliable trigger: a single rectangular face wrapped in a Shell.
         from cadquery.occ_impl.shapes import Face, Shell
         f = Face.makePlane(length=10, width=10)
         shell = Shell.makeShell([f])
         path = isolated_dir / "open_shell.step"
         exporters.export(cq.Workplane("XY").newObject([shell]), str(path))
 
-        result = runner.invoke(cli, ["inspect", str(path)])
+        result = runner.invoke(cli, ["inspect", str(path), "--no-daemon"])
         parsed = _assert_clean_json(result)
-        # The condition must hold for the test to be meaningful.
-        if parsed.get("is_valid") and parsed.get("free_edge_count", 0) > 0:
-            assert "notes" in parsed, \
-                f"open shell with is_valid={parsed['is_valid']} and " \
-                f"free_edge_count={parsed['free_edge_count']} should have notes"
-            assert any("free_edge_count" in n for n in parsed["notes"])
-        else:
-            pytest.skip(
-                f"open-shell fixture didn't trigger condition "
-                f"(is_valid={parsed.get('is_valid')}, "
-                f"free_edge_count={parsed.get('free_edge_count')})"
-            )
+        assert parsed["is_valid"] is False
+        assert parsed["free_edge_count"] > 0
+        validation = parsed["validation"]
+        assert validation["first_failure"] == "shell_closure"
+        assert validation["layers"]["brep_check"]["status"] == "pass"
+        assert validation["layers"]["shell_closure"]["free_edge_count"] == 4
+        assert validation["layers"]["mesh_manifold"]["status"] == "skipped"
+        assert any("shell_closure" in n for n in parsed["notes"])
 
     @pytest.mark.parametrize("flags", [[], ["--ids"], ["--summary"]])
     def test_surface_only_input_explains_zero_solids(

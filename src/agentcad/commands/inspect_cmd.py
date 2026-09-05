@@ -860,10 +860,21 @@ def _compute_notes(payload: dict) -> list:
 
     if payload.get("is_valid") and payload.get("free_edge_count", 0) > 0:
         notes.append(
-            "is_valid: true means the shape is topologically consistent — "
-            "free_edge_count > 0 doesn't contradict that. Free edges can "
-            "appear on intentionally open shells (sheet metal, surfaces) "
-            "or as artifacts of boolean/fillet operations on closed solids."
+            "is_valid: true means every shell is closed and the surface "
+            "meshes as a closed manifold, so free_edge_count > 0 here counts "
+            "seam edges or shared-edge bookkeeping, not holes."
+        )
+    validation = payload.get("validation") or {}
+    if payload.get("is_valid") is False and validation.get("first_failure"):
+        notes.append(
+            f"is_valid: false because the {validation['first_failure']} layer "
+            f"failed: {validation.get('message')}"
+        )
+    if payload.get("is_valid") is None:
+        notes.append(
+            "is_valid: null means a validation layer could not finish inside "
+            "its budget; see validation.undetermined_layer. The shape was not "
+            "classified as invalid."
         )
     return notes
 
@@ -877,7 +888,7 @@ def _topology_report(
     tracker: _ValidationPhaseTracker,
 ):
     from agentcad.step_io import load_cad_shape
-    from OCP.BRepCheck import BRepCheck_Analyzer
+    from agentcad.validation import validate_shape
 
     with tracker.observe("native_load"):
         # Raw OCCT parser output is replaced by the structured error contract.
@@ -885,19 +896,20 @@ def _topology_report(
             shape = load_cad_shape(file_path, format_hint=format_hint)
 
     with tracker.observe("structural_validation"):
-        with suppress_native_output():
-            analyzer = BRepCheck_Analyzer(shape)
-            is_valid = analyzer.IsValid()
-            validity_errors = []
-            if not is_valid:
-                from agentcad.metrics import extract_validity_errors
-                validity_errors = extract_validity_errors(analyzer, shape)
+        # M71: is_valid is the full deliverable verdict (kernel check, shell
+        # closure, manifold mesh), not the kernel check alone. The mesh layer
+        # runs in its own bounded worker; the kernel-only result stays
+        # available as validation.layers.brep_check.
+        report = validate_shape(shape)
+        is_valid = report["is_valid"]
+        validity_errors = list(report["layers"]["brep_check"].get("errors") or [])
 
     payload = {
         "command": "inspect",
         "status": "success",
         "file": file_path,
         "is_valid": is_valid,
+        "validation": report,
     }
     if validity_errors:
         payload["validity_errors"] = validity_errors
