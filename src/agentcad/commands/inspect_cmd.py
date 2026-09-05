@@ -864,6 +864,13 @@ def _compute_notes(payload: dict) -> list:
             "meshes as a closed manifold, so free_edge_count > 0 here counts "
             "seam edges or shared-edge bookkeeping, not holes."
         )
+    if payload.get("is_valid") and (payload.get("solid_count") or 0) > 1:
+        notes.append(
+            f"{payload['solid_count']} separate closed solids: deliverable, but "
+            "not one connected body. Bodies that only touch along an edge or "
+            "at a corner stay separate after a fuse; overlap them if you want "
+            "one solid."
+        )
     validation = payload.get("validation") or {}
     if payload.get("is_valid") is False and validation.get("first_failure"):
         notes.append(
@@ -901,6 +908,11 @@ def _topology_report(
         # runs in its own bounded worker; the kernel-only result stays
         # available as validation.layers.brep_check.
         report = validate_shape(shape)
+        # Loading happened in native_load; reflect its cost in the layer report
+        # so the two views of the same work agree.
+        native = tracker.entries.get("native_load") or {}
+        if native.get("duration_ms") is not None:
+            report["layers"]["kernel_load"]["duration_ms"] = native["duration_ms"]
         is_valid = report["is_valid"]
         validity_errors = list(report["layers"]["brep_check"].get("errors") or [])
 

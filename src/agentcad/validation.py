@@ -774,7 +774,7 @@ def _explain(report: dict) -> tuple[str, str | None]:
         return (
             f"The shape is not watertight: {' and '.join(parts)} with {entry.get('free_edge_count', 0)} free edge(s){edge_text}.",
             "Close the profile before extruding, add the missing face, or remove the loose face. "
-            "Run 'agentcad inspect FILE --ids' to see the listed edges.",
+            "The listed free edges include their endpoints so you can see where the gap is.",
         )
     if first == "mesh_manifold":
         defect = entry.get("defect") or {}

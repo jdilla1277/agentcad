@@ -185,6 +185,9 @@ class TestInspectCommand:
         parsed = json.loads(result.stdout)
         assert parsed["solid_count"] == 2
         assert parsed["shell_count"] == 2
+        # M71: a valid multi-solid part says so instead of looking like one body.
+        assert parsed["is_valid"] is True
+        assert any("separate closed solids" in n for n in parsed.get("notes", []))
 
     def test_inspect_is_valid(self, runner, isolated_dir):
         step = _make_step(isolated_dir)
