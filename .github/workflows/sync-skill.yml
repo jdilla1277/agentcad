@@ -7,6 +7,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "src/agentcad/guide.py"
       - "src/agentcad/commands/skill.py"
       - "pyproject.toml"
       - "scripts/generate_skill_md.py"
