@@ -8,7 +8,7 @@ fixtures:
 - **Without agentcad:** GPT-5 Nano with a Pi harness and direct build123d
   access.
 - **With agentcad:** the same model and Pi harness with agentcad 0.4.1 and the
-  distributed agentcad skill. Version 0.5.0 makes that skill part of the
+  distributed agentcad skill. Version 0.5.1 makes that skill part of the
   default `agentcad init` experience.
 
 ## Headline results
