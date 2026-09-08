@@ -31,15 +31,8 @@ Create a Python 3.12 virtual environment, then:
 
 pip install agentcad
 agentcad init --name phone-stand
-agentcad --help
 
-init installs the agent operating guide into AGENTS.md and the Claude Code
-skill automatically. Read the --help output — it's your guide to creating,
-checking, and sharing a model.
-Use the default build123d runtime unless the task explicitly requires
-CadQuery compatibility.
-
-Then design me a phone stand: a simple angled cradle that holds a phone
+Design me a phone stand: a simple angled cradle that holds a phone
 at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
 to keep the phone from sliding. Show me a preview when you're done.
 ```
