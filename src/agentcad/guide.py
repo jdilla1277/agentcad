@@ -27,8 +27,11 @@ geometry. Operational commands return structured JSON with `"command"` and
 
 ```bash
 agentcad init --name <project_name>
-agentcad --help   # Read the built-in how-to guide and command reference
 ```
+
+`init` creates the project and installs this guide, so nothing else is
+required before the core workflow. `agentcad --help` and `agentcad docs` hold
+the full command reference when you need more than this guide.
 
 If `agentcad.json` already exists, this project is already initialized — skip
 `init` and go straight to the core workflow.
@@ -303,12 +306,10 @@ def _cadquery_guide_body() -> str:
         "## First-time setup\n\n"
         "```bash\n"
         "agentcad init --name <project_name>\n"
-        "agentcad --help   # Read the built-in how-to guide and command reference\n"
         "```",
         "## CadQuery compatibility setup\n\n"
         "```bash\n"
         "agentcad init --name <project_name> --runtime cadquery\n"
-        "agentcad --help   # Read the project-scoped compatibility how-to guide\n"
         "```",
     )
     content = content.replace(
