@@ -1413,14 +1413,14 @@ class TestMultiShow:
 
 # ---------- invalid geometry contract + warnings parity ----------
 
-def _fake_metrics_invalid(real_compute):
-    """Wrap compute_metrics to force is_valid=False (mirrors cq fixture)."""
-    def wrapper(topo_shape):
-        m = real_compute(topo_shape)
-        m["is_valid"] = False
-        m["validity_errors"] = ["BRepCheck_InvalidToleranceValue"]
-        return m
-    return wrapper
+def _force_kernel_invalid(monkeypatch):
+    """Make the delivered STEP fail the validator's kernel layer."""
+    from agentcad import validation
+
+    def failing_brep_check(shape, **_):
+        return {"status": "fail", "errors": ["BRepCheck_InvalidToleranceValue"]}
+
+    monkeypatch.setitem(validation._RUNNERS, "brep_check", failing_brep_check)
 
 
 class TestWarnings:
@@ -1437,11 +1437,7 @@ class TestWarnings:
     def test_invalid_shape_returns_explicit_outcome(self, runner, isolated_dir, monkeypatch):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
-        from agentcad import metrics
-        monkeypatch.setattr(
-            "agentcad.metrics.compute_metrics",
-            _fake_metrics_invalid(metrics.compute_metrics),
-        )
+        _force_kernel_invalid(monkeypatch)
         r = _run(runner, "s.py", "--output", "inv")
         assert r.exit_code == 1
         parsed = json.loads(r.stdout)
@@ -1453,11 +1449,7 @@ class TestWarnings:
     ):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
-        from agentcad import metrics
-        monkeypatch.setattr(
-            "agentcad.metrics.compute_metrics",
-            _fake_metrics_invalid(metrics.compute_metrics),
-        )
+        _force_kernel_invalid(monkeypatch)
         _run(runner, "s.py", "--output", "inv")
         meta = json.loads(
             (isolated_dir / "v1_inv_invalid" / "meta.json").read_text()
@@ -1470,11 +1462,7 @@ class TestWarnings:
     def test_invalid_shape_dry_run_is_explicit(self, runner, isolated_dir, monkeypatch):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
-        from agentcad import metrics
-        monkeypatch.setattr(
-            "agentcad.metrics.compute_metrics",
-            _fake_metrics_invalid(metrics.compute_metrics),
-        )
+        _force_kernel_invalid(monkeypatch)
         r = _run(runner, "s.py", "--output", "inv", "--dry-run")
         assert r.exit_code == 1
         parsed = json.loads(r.stdout)

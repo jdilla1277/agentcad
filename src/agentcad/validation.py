@@ -38,6 +38,14 @@ from pathlib import Path
 MESH_TIMEOUT_ENV = "AGENTCAD_MESH_VALIDATION_TIMEOUT_S"
 DEFAULT_MESH_TIMEOUT_S = 60.0
 
+# Daemon requests run in forked children. A parallel OCCT algorithm in one of
+# those children can deadlock if the daemon parent had already initialized
+# TBB: fork preserves the pool state but not its worker threads. The daemon
+# sets this private marker while invoking a command so in-process validation
+# can keep its mesher sequential. Large shapes still use the fresh worker
+# subprocess below, where parallel meshing is safe.
+_DAEMON_CHILD_ENV = "_AGENTCAD_DAEMON_CHILD"
+
 # Shapes at or below this many faces mesh in-process: the check takes tens of
 # milliseconds there, while a worker subprocess costs about half a second of
 # interpreter start-up on every run. Larger shapes use the bounded worker so
@@ -101,12 +109,16 @@ def validate_shape(
     *,
     profile: str = "deliverable",
     in_process: bool = False,
+    mesh_parallel: bool | None = None,
     mesh_timeout_s: float | None = None,
     evidence_limit: int = _EVIDENCE_LIMIT,
 ) -> dict:
     """Run every layer of ``profile`` on a loaded shape and return the report."""
     if profile not in PROFILES:
         raise ValueError(f"Unknown validation profile: {profile}")
+
+    if mesh_parallel is None:
+        mesh_parallel = os.environ.get(_DAEMON_CHILD_ENV) != "1"
 
     layers: dict[str, dict] = {name: {"status": "pass", "duration_ms": 0} for name in _LOADER_LAYERS}
     verdict_blocked_by: str | None = None
@@ -127,6 +139,7 @@ def validate_shape(
             entry = _RUNNERS[layer.name](
                 topo_shape,
                 in_process=in_process,
+                mesh_parallel=mesh_parallel,
                 mesh_timeout_s=mesh_timeout_s,
                 evidence_limit=evidence_limit,
             )
@@ -269,10 +282,23 @@ def _layer_shell_closure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
     }
 
 
-def _layer_mesh_manifold(shape, *, in_process=False, mesh_timeout_s=None, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
+def _layer_mesh_manifold(
+    shape,
+    *,
+    in_process=False,
+    mesh_parallel=True,
+    mesh_timeout_s=None,
+    evidence_limit=_EVIDENCE_LIMIT,
+    **_,
+) -> dict:
     deflection = deflection_for_shape(shape)
     if in_process or _face_count(shape) <= MESH_INPROCESS_FACE_LIMIT:
-        entry = mesh_manifold_report(shape, deflection, evidence_limit=evidence_limit)
+        entry = mesh_manifold_report(
+            shape,
+            deflection,
+            evidence_limit=evidence_limit,
+            parallel=mesh_parallel,
+        )
         entry["worker"] = "in_process"
         return entry
     return bounded_mesh_manifold(shape, deflection, timeout_s=mesh_timeout_s, evidence_limit=evidence_limit)
@@ -424,7 +450,13 @@ DEFLECTION_LADDER = (1, 4, 16, 32)
 MAX_TRIANGLES = 1_000_000
 
 
-def mesh_manifold_report(shape, deflection_mm: float, *, evidence_limit: int = _EVIDENCE_LIMIT) -> dict:
+def mesh_manifold_report(
+    shape,
+    deflection_mm: float,
+    *,
+    evidence_limit: int = _EVIDENCE_LIMIT,
+    parallel: bool = True,
+) -> dict:
     """Tessellate, stitch by shared topology, and check the closed-manifold rules.
 
     Vertices are merged only where the B-rep says they are the same entity:
@@ -441,7 +473,12 @@ def mesh_manifold_report(shape, deflection_mm: float, *, evidence_limit: int = _
     """
     last = None
     for divisor in DEFLECTION_LADDER:
-        entry = _mesh_manifold_once(shape, deflection_mm / divisor, evidence_limit=evidence_limit)
+        entry = _mesh_manifold_once(
+            shape,
+            deflection_mm / divisor,
+            evidence_limit=evidence_limit,
+            parallel=parallel,
+        )
         entry["ladder_divisor"] = divisor
         entry["requested_deflection_mm"] = _round(deflection_mm, 6)
         if entry["status"] == "pass":
@@ -452,7 +489,14 @@ def mesh_manifold_report(shape, deflection_mm: float, *, evidence_limit: int = _
     return last
 
 
-def _mesh_manifold_once(shape, deflection_mm: float, *, evidence_limit: int = _EVIDENCE_LIMIT, _debug: dict | None = None) -> dict:
+def _mesh_manifold_once(
+    shape,
+    deflection_mm: float,
+    *,
+    evidence_limit: int = _EVIDENCE_LIMIT,
+    parallel: bool = True,
+    _debug: dict | None = None,
+) -> dict:
     from OCP.BRep import BRep_Tool
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.BRepTools import BRepTools
@@ -465,7 +509,7 @@ def _mesh_manifold_once(shape, deflection_mm: float, *, evidence_limit: int = _E
 
     with suppress_native_output():
         BRepTools.Clean_s(shape)
-        BRepMesh_IncrementalMesh(shape, deflection_mm, False, 0.5, True)
+        BRepMesh_IncrementalMesh(shape, deflection_mm, False, 0.5, parallel)
 
         face_map = TopTools_IndexedMapOfShape()
         TopExp.MapShapes_s(shape, TopAbs_FACE, face_map)

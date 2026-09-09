@@ -203,6 +203,23 @@ def test_small_shapes_mesh_in_process_and_large_ones_in_a_bounded_worker(monkeyp
     assert report["layers"]["mesh_manifold"]["worker"] == "subprocess"
 
 
+def test_daemon_child_keeps_in_process_meshing_sequential(monkeypatch):
+    parallel_modes = []
+
+    def record_mesh_mode(shape, deflection, *, evidence_limit, parallel):
+        parallel_modes.append(parallel)
+        return {"status": "pass", "deflection_mm": deflection}
+
+    monkeypatch.setattr(validation, "mesh_manifold_report", record_mesh_mode)
+    monkeypatch.delenv(validation._DAEMON_CHILD_ENV, raising=False)
+    validation.validate_shape(_load("closed_box"), in_process=True)
+
+    monkeypatch.setenv(validation._DAEMON_CHILD_ENV, "1")
+    validation.validate_shape(_load("closed_box"), in_process=True)
+
+    assert parallel_modes == [True, False]
+
+
 def test_mesh_timeout_yields_null_verdict_and_keeps_earlier_layers(monkeypatch):
     monkeypatch.setattr(validation, "MESH_INPROCESS_FACE_LIMIT", 0)
     monkeypatch.setenv(validation.MESH_TIMEOUT_ENV, "0.001")
