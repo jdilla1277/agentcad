@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcad"
-version = "0.5.1"
+version = "0.5.2"
 description = "CLI CAD tool for AI agents. Write build123d scripts, with CadQuery compatibility, and get STEP files, renders, and metrics."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -34,6 +34,13 @@ dependencies = [
     # "TopoDS has no attribute 'Vertex'", breaking the default runtime on a
     # clean install. 0.10.x shares cadquery's cadquery-ocp 7.8 — no conflict.
     "build123d>=0.10,<0.11",
+    # build123d 0.10 pins cadquery-ocp 7.8 but leaves ocp_gordon unbounded.
+    # ocp_gordon 0.2+ targets OCP 7.9/8.0 (via cadquery-ocp-novtk / -proxy),
+    # so pip happily installs a second OCP generation on top of the 7.8 one
+    # and every `agentcad run` fails with "No module named 'OCP.collections'".
+    # 0.1.18 is the last release on the 7.8 line. Drop this pin only together
+    # with the build123d cap above.
+    "ocp_gordon<0.2",
 ]
 
 [project.optional-dependencies]
