@@ -38,6 +38,12 @@ from pathlib import Path
 MESH_TIMEOUT_ENV = "AGENTCAD_MESH_VALIDATION_TIMEOUT_S"
 DEFAULT_MESH_TIMEOUT_S = 60.0
 
+# Shapes at or below this many faces mesh in-process: the check takes tens of
+# milliseconds there, while a worker subprocess costs about half a second of
+# interpreter start-up on every run. Larger shapes use the bounded worker so
+# a pathological part becomes a timeout instead of a hang.
+MESH_INPROCESS_FACE_LIMIT = 500
+
 # Tessellation deflection relative to part size, clamped. Matches the policy
 # of the downstream gate this layer is measured against, so the parity corpus
 # exercises the same regime.
@@ -74,6 +80,12 @@ LAYERS: tuple[Layer, ...] = (
 _LAYERS_BY_NAME = {layer.name: layer for layer in LAYERS}
 _LOADER_LAYERS = ("file_parse", "kernel_load")
 
+# ``deliverable`` gates on every gating layer. ``kernel`` restores the
+# pre-M71 contract (the kernel check alone) for intentional surfaces and
+# sheet bodies; the skipped layers stay visible in the report.
+PROFILES = ("deliverable", "kernel")
+_KERNEL_PROFILE_SKIPS = ("shell_closure", "mesh_manifold")
+
 
 def layer_by_name(name: str) -> Layer:
     return _LAYERS_BY_NAME[name]
@@ -93,7 +105,7 @@ def validate_shape(
     evidence_limit: int = _EVIDENCE_LIMIT,
 ) -> dict:
     """Run every layer of ``profile`` on a loaded shape and return the report."""
-    if profile != "deliverable":
+    if profile not in PROFILES:
         raise ValueError(f"Unknown validation profile: {profile}")
 
     layers: dict[str, dict] = {name: {"status": "pass", "duration_ms": 0} for name in _LOADER_LAYERS}
@@ -102,6 +114,9 @@ def validate_shape(
 
     for layer in LAYERS:
         if layer.name in _LOADER_LAYERS:
+            continue
+        if profile == "kernel" and layer.name in _KERNEL_PROFILE_SKIPS:
+            layers[layer.name] = {"status": "skipped", "message": "Not run under the kernel profile."}
             continue
         if layer.gates and (verdict_blocked_by or undetermined):
             reason = verdict_blocked_by or undetermined
@@ -256,11 +271,21 @@ def _layer_shell_closure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
 
 def _layer_mesh_manifold(shape, *, in_process=False, mesh_timeout_s=None, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
     deflection = deflection_for_shape(shape)
-    if in_process:
+    if in_process or _face_count(shape) <= MESH_INPROCESS_FACE_LIMIT:
         entry = mesh_manifold_report(shape, deflection, evidence_limit=evidence_limit)
         entry["worker"] = "in_process"
         return entry
     return bounded_mesh_manifold(shape, deflection, timeout_s=mesh_timeout_s, evidence_limit=evidence_limit)
+
+
+def _face_count(shape) -> int:
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedMapOfShape
+
+    faces = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_FACE, faces)
+    return faces.Extent()
 
 
 def _layer_structure(shape, **_) -> dict:
@@ -751,6 +776,9 @@ def _explain(report: dict) -> tuple[str, str | None]:
             "Rerun with a larger budget, or inspect the earlier layers, which did pass.",
         )
     if first is None:
+        if report.get("profile") == "kernel":
+            return ("The shape passed the kernel consistency check; shell closure and "
+                    "mesh checks were not run under the kernel profile.", None)
         return ("The shape passed every deliverable validation layer.", None)
     entry = layers[first]
     if first == "file_parse":

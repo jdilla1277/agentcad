@@ -272,10 +272,12 @@ JSON RESPONSE CONTRACT
                        version_recorded/current_advanced
 
   Run/import metrics include bounding_box, dimensions, volume, surface_area,
-  center_of_mass, face_count, edge_count, and is_valid. A successful materialized
-  build has is_valid=true and an exported STEP; --dry-run is explicitly metrics
-  only. Check metrics before rendering; visual appearance alone does not prove
-  dimensional correctness.
+  center_of_mass, face_count, edge_count, is_valid, and reliable. is_valid is
+  the deliverable verdict (kernel check, closed shells, manifold mesh); false
+  takes the invalid_geometry path with validation.first_failure named, null
+  means a layer could not finish. --dry-run is explicitly metrics only. Check
+  metrics before rendering; visual appearance alone does not prove dimensional
+  correctness. See `agentcad docs validation`.
 
   Materialized run/import responses separate `core.status` from `artifacts`.
   Core success is committed before optional work. Each artifact reports pending,

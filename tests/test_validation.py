@@ -191,7 +191,12 @@ def test_real_world_parts_are_deliverable(name):
 # ---------------------------------------------------------------------------
 
 
-def test_mesh_layer_runs_in_a_bounded_worker_by_default():
+def test_small_shapes_mesh_in_process_and_large_ones_in_a_bounded_worker(monkeypatch):
+    report = validation.validate_shape(_load("closed_box"))
+    assert report["is_valid"] is True
+    assert report["layers"]["mesh_manifold"]["worker"] == "in_process"
+
+    monkeypatch.setattr(validation, "MESH_INPROCESS_FACE_LIMIT", 0)
     report = validation.validate_shape(_load("closed_box"))
     assert report["is_valid"] is True
     assert report["layers"]["mesh_manifold"]["status"] == "pass"
@@ -199,6 +204,7 @@ def test_mesh_layer_runs_in_a_bounded_worker_by_default():
 
 
 def test_mesh_timeout_yields_null_verdict_and_keeps_earlier_layers(monkeypatch):
+    monkeypatch.setattr(validation, "MESH_INPROCESS_FACE_LIMIT", 0)
     monkeypatch.setenv(validation.MESH_TIMEOUT_ENV, "0.001")
     report = validation.validate_shape(_load("closed_box"))
     assert report["layers"]["brep_check"]["status"] == "pass"

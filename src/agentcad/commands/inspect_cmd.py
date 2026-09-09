@@ -226,6 +226,16 @@ def _clear_validation_timeout(previous_state) -> None:
     show_default=True,
     help="Validation budget in seconds; 0 disables the timeout.",
 )
+@click.option(
+    "--validation-profile",
+    type=click.Choice(["deliverable", "kernel"]),
+    default="deliverable",
+    show_default=True,
+    help=(
+        "Which layers decide is_valid. 'deliverable' requires the kernel check, "
+        "closed shells, and a manifold mesh; 'kernel' reports the kernel check alone."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 def inspect_cmd(
     file,
@@ -235,6 +245,7 @@ def inspect_cmd(
     no_limit,
     validate_only,
     validation_timeout,
+    validation_profile,
     no_daemon,
 ):
     """Inspect any file. STEP/BREP get a full topology report; other formats
@@ -257,6 +268,8 @@ def inspect_cmd(
     if validate_only:
         argv.append("--validate-only")
     argv.extend(["--validation-timeout", str(validation_timeout)])
+    if validation_profile != "deliverable":
+        argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -379,6 +392,7 @@ def inspect_cmd(
             validation_timeout=(
                 None if validation_timeout == 0 else validation_timeout
             ),
+            validation_profile=validation_profile,
         )
         # Fork off the warm process as the daemon — only the Tier 0 path
         # paid the OCP cost worth keeping around. Idempotent on its own.
@@ -466,6 +480,7 @@ def _inspect_tier0(
     id_limit: int | None = DEFAULT_ID_LIMIT,
     validate_only: bool = False,
     validation_timeout: float | None = DEFAULT_VALIDATION_TIMEOUT_S,
+    validation_profile: str = "deliverable",
 ) -> None:
     tracker = _ValidationPhaseTracker(
         validation_timeout,
@@ -481,6 +496,7 @@ def _inspect_tier0(
             id_limit=id_limit,
             validate_only=validate_only,
             tracker=tracker,
+            validation_profile=validation_profile,
         )
     except _InspectValidationTimeout:
         _emit_validation_timeout(
@@ -552,6 +568,7 @@ def _inspect_tier0_impl(
     id_limit: int | None,
     validate_only: bool,
     tracker: _ValidationPhaseTracker,
+    validation_profile: str = "deliverable",
 ) -> None:
     """Full topology report for STEP/BREP files. OCCT failures are caught and
     surfaced as malformed — never as a stack trace, never as a leaked native
@@ -563,6 +580,7 @@ def _inspect_tier0_impl(
             format_hint=detection.get("format"),
             validate_only=validate_only,
             tracker=tracker,
+            validation_profile=validation_profile,
         )
     except Exception:
         _emit_malformed_recovery(
@@ -893,6 +911,7 @@ def _topology_report(
     format_hint: str | None = None,
     validate_only: bool = False,
     tracker: _ValidationPhaseTracker,
+    validation_profile: str = "deliverable",
 ):
     from agentcad.step_io import load_cad_shape
     from agentcad.validation import validate_shape
@@ -907,7 +926,7 @@ def _topology_report(
         # closure, manifold mesh), not the kernel check alone. The mesh layer
         # runs in its own bounded worker; the kernel-only result stays
         # available as validation.layers.brep_check.
-        report = validate_shape(shape)
+        report = validate_shape(shape, profile=validation_profile)
         # Loading happened in native_load; reflect its cost in the layer report
         # so the two views of the same work agree.
         native = tracker.entries.get("native_load") or {}

@@ -293,12 +293,12 @@ def measure_tier0_payload(
     axis: str | None = None,
     feature_limit: int | None = DEFAULT_FEATURE_LIMIT,
 ) -> dict:
-    from agentcad.metrics import compute_metrics
+    from agentcad.core_build import validated_metrics
     from agentcad.step_io import load_cad_shape
     from agentcad import topo_ids
 
     topo_shape = load_cad_shape(file_path, format_hint=detection.get("format"))
-    metrics = compute_metrics(topo_shape)
+    metrics, validation = validated_metrics(topo_shape)
     solid_count = topo_ids.topology_counts(topo_shape)["solids"]
     cylindrical_features = _filter_cylindrical_features(
         _cylindrical_features(topo_shape),
@@ -324,6 +324,7 @@ def measure_tier0_payload(
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
         "metrics": metrics,
+        "validation": validation,
         "cylindrical_features": cylindrical_features,
         "next_actions": next_actions,
         "more_at": "agentcad docs measure",
@@ -405,14 +406,21 @@ def measure_tier0_payload(
     return payload
 
 
-def validity_from_metrics(metrics: dict) -> dict:
+def validity_from_metrics(metrics: dict, validation: dict | None = None) -> dict:
     """Build the compact validity summary used by higher-level review commands.
 
     ``agentcad measure`` keeps shape validity in ``metrics.is_valid`` so there
     is one authoritative field in the measurement payload. Commands that have
-    their own top-level validity section can derive it from the same metrics.
+    their own top-level validity section can derive it from the same metrics,
+    plus the failing layer when the layered report is available.
     """
-    return {"is_valid": metrics["is_valid"]}
+    summary = {"is_valid": metrics["is_valid"]}
+    if validation is not None:
+        summary["first_failure"] = validation.get("first_failure")
+        summary["profile"] = validation.get("profile")
+        if validation.get("is_valid") is not True and validation.get("message"):
+            summary["message"] = validation["message"]
+    return summary
 
 
 def _feature_lists(topo_shape, limit: int | None) -> tuple[dict, list[dict]]:

@@ -59,8 +59,19 @@ from agentcad.native_io import silence_native_stdout
         "runtime. Defaults to build123d."
     ),
 )
+@click.option(
+    "--validation-profile",
+    type=click.Choice(["deliverable", "kernel"]),
+    default="deliverable",
+    show_default=True,
+    help=(
+        "Which validation gates the import. 'deliverable' requires the kernel "
+        "check, closed shells, and a manifold mesh; 'kernel' restores the "
+        "kernel-only check for intentional surfaces or sheet bodies."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon):
+def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
@@ -112,6 +123,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
         argv.append("--no-view")
     if not auto_diff:
         argv.append("--no-diff")
+    if validation_profile != "deliverable":
+        argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -174,14 +187,17 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
     # 5. Aggregate metrics and final validity are core work. Invalid geometry
     # is preserved for diagnosis but never normalized, previewed, or made
     # current.
-    from agentcad.metrics import compute_metrics
+    from agentcad.core_build import (
+        invalid_geometry_payload,
+        validated_metrics,
+        validation_warning,
+    )
 
     with silence_native_stdout():
-        metrics = compute_metrics(topo_shape)
+        metrics, validation = validated_metrics(topo_shape, profile=validation_profile)
+    undetermined = validation_warning(validation)
 
-    from agentcad.core_build import invalid_geometry_payload
-
-    invalid_response = invalid_geometry_payload("import", metrics)
+    invalid_response = invalid_geometry_payload("import", metrics, validation)
     if invalid_response is not None:
         from agentcad.versioning import commit_version, reserve_version
 
@@ -293,6 +309,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
             "source": f"{dir_name}/source{ext}",
         },
         "metrics": metrics,
+        "validation": validation,
+        "validation_profile": validation_profile,
         "artifacts": {
             "preview": {"status": "pending"},
             "viewer_glb": {"status": "pending"},
