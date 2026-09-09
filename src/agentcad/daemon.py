@@ -1329,6 +1329,33 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
 
 # ---------- __main__ ----------
 
+def _warm_step_reader():
+    """Pay the STEP reader's one-time initialization in the daemon parent.
+
+    ``agentcad run`` validates the STEP it exports by reloading it, and the
+    first STEP load in a process costs about a second of reader set-up.
+    Doing it once here means every routed run inherits a warm reader.
+    """
+    import tempfile
+    from pathlib import Path
+
+    try:
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+        from agentcad.native_io import suppress_native_output
+        from agentcad.runners.build123d import export_step
+        from agentcad.step_io import load_cad_shape
+        from agentcad.validation import validate_shape
+
+        with tempfile.TemporaryDirectory(prefix="agentcad-warm-") as temp:
+            path = Path(temp) / "warm.step"
+            with suppress_native_output():
+                export_step(BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape(), str(path))
+                validate_shape(load_cad_shape(path), in_process=True)
+    except Exception:
+        # Warm-up is an optimization; a failure here must never stop the daemon.
+        pass
+
+
 def _main():
     """Entry point for daemon subprocess."""
     import argparse
@@ -1342,11 +1369,12 @@ def _main():
     # forked child inherits OCP in memory via copy-on-write.
     import cadquery  # noqa: F401
     from cadquery import cqgi, exporters  # noqa: F401
-    from agentcad import helpers, metrics, render, export  # noqa: F401
+    from agentcad import helpers, metrics, render, export, validation  # noqa: F401
     try:
         import build123d  # noqa: F401
     except ImportError:
         pass
+    _warm_step_reader()
 
     server = DaemonServer(
         socket_path=args.socket,

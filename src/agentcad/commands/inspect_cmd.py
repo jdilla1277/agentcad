@@ -876,12 +876,24 @@ def _compute_notes(payload: dict) -> list:
             "free_edge_count: 0 confirms the topology is sound."
         )
 
+    validation_report = payload.get("validation") or {}
+    closure_status = (
+        (validation_report.get("layers") or {}).get("shell_closure", {}).get("status")
+    )
     if payload.get("is_valid") and payload.get("free_edge_count", 0) > 0:
-        notes.append(
-            "is_valid: true means every shell is closed and the surface "
-            "meshes as a closed manifold, so free_edge_count > 0 here counts "
-            "seam edges or shared-edge bookkeeping, not holes."
-        )
+        if validation_report.get("profile") == "kernel" or closure_status == "skipped":
+            notes.append(
+                "is_valid: true under the kernel profile means only the kernel "
+                "consistency check ran; shell closure and mesh manifoldness were "
+                "not checked. free_edge_count > 0 with an open shell in shells[] "
+                "means this is a surface or open body, not a closed solid."
+            )
+        else:
+            notes.append(
+                "is_valid: true means every shell is closed and the surface "
+                "meshes as a closed manifold, so free_edge_count > 0 here counts "
+                "seam edges or shared-edge bookkeeping, not holes."
+            )
     if payload.get("is_valid") and (payload.get("solid_count") or 0) > 1:
         notes.append(
             f"{payload['solid_count']} separate closed solids: deliverable, but "

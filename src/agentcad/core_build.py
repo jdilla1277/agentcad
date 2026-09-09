@@ -56,35 +56,72 @@ class ArtifactLifecycle:
         return deepcopy(self.meta)
 
 
-def validated_metrics(topo_shape, *, profile: str = "deliverable") -> tuple[dict, dict]:
-    """Metrics plus the layered validation report, with one meaning of is_valid.
+def apply_validation(metrics: dict, report: dict) -> dict:
+    """Fold a layered validation report into a metrics dict.
 
-    ``metrics.is_valid`` becomes the validator's verdict for ``profile``
-    (true, false, or null when a gating layer could not finish). The kernel
-    check's own result stays in ``validation.layers.brep_check``.
-    ``metrics.reliable`` is false when the shape has no solid or an open
-    shell, because volume and surface area are not physical quantities then.
+    ``metrics.is_valid`` becomes the validator's verdict (true, false, or null
+    when a gating layer could not finish). The kernel check's own result
+    stays in ``report.layers.brep_check``. ``metrics.reliable`` is false when
+    the shape has no solid or an open shell, because volume and surface area
+    are not physical quantities then.
     """
-    from agentcad.metrics import compute_metrics
-    from agentcad.validation import validate_shape
-
-    metrics = compute_metrics(topo_shape)
-    report = validate_shape(topo_shape, profile=profile)
     layers = report["layers"]
-
     metrics["is_valid"] = report["is_valid"]
     errors = layers.get("brep_check", {}).get("errors") or []
     if errors:
         metrics["validity_errors"] = errors
     else:
         metrics.pop("validity_errors", None)
-
     structure = layers.get("structure", {})
     closure = layers.get("shell_closure", {})
     metrics["reliable"] = bool(
         structure.get("solid_count", 0) >= 1 and closure.get("status") != "fail"
     )
-    return metrics, report
+    return metrics
+
+
+def validated_metrics(topo_shape, *, profile: str = "deliverable") -> tuple[dict, dict]:
+    """Metrics plus the layered validation report for an in-memory shape.
+
+    Commands that operate on a file (import, measure, inspect, recover) use
+    this directly: the loaded shape is the artifact. ``run`` validates the
+    STEP it is about to deliver instead; see ``validate_delivered_step``.
+    """
+    from agentcad.metrics import compute_metrics
+    from agentcad.validation import validate_shape
+
+    metrics = compute_metrics(topo_shape)
+    report = validate_shape(topo_shape, profile=profile)
+    return apply_validation(metrics, report), report
+
+
+def validate_delivered_step(step_path, *, profile: str = "deliverable") -> dict:
+    """Validate a STEP file the way every downstream consumer will see it.
+
+    STEP export changes topology: two bodies fused along a shared edge are
+    one non-manifold edge in memory but two clean bodies in the file. The
+    verdict must describe the artifact that ships, so ``run`` writes the STEP
+    first and validates the reloaded shape.
+    """
+    from agentcad.native_io import suppress_native_output
+    from agentcad.step_io import load_cad_shape
+    from agentcad.validation import load_failure_report, validate_shape
+
+    try:
+        with suppress_native_output():
+            shape = load_cad_shape(step_path)
+    except Exception as exc:
+        return load_failure_report("file_parse", f"{type(exc).__name__}: {exc}", profile=profile)
+    return validate_shape(shape, profile=profile)
+
+
+def reliability_warning(metrics: dict) -> str | None:
+    if metrics.get("reliable", True):
+        return None
+    return (
+        "volume, surface_area, and center_of_mass are not physical quantities "
+        "here: the shape has no closed solid (reliable: false)."
+    )
 
 
 def validation_warning(report: dict) -> str | None:

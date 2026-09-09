@@ -815,8 +815,8 @@ def _explain(report: dict) -> tuple[str, str | None]:
             return (
                 f"The tessellated surface has an edge shared by {defect.get('triangle_count')} triangles{where}{face_text}; "
                 "a printer or grader cannot tell inside from outside there.",
-                "Separate the bodies so they do not share the edge, or overlap them by at least 0.01 mm before fusing, "
-                "or rebuild the profile without the self-crossing.",
+                "Overlap the bodies by at least 0.01 mm before fusing, keep them as separate "
+                "bodies with show_assembly([a, b]), or rebuild the profile without the self-crossing.",
             )
         if kind == "open_edge":
             return (

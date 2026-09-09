@@ -5,6 +5,7 @@ import re
 import shlex
 import signal
 import shutil
+import tempfile
 import sys
 import threading
 import time
@@ -1127,14 +1128,16 @@ def _run_impl(
     # Compute geometric metrics
     _heartbeat("computing metrics…")
     _t = _start_phase("metrics")
-    from agentcad.core_build import validated_metrics, validation_warning
+    from agentcad.core_build import (
+        apply_validation,
+        reliability_warning,
+        validate_delivered_step,
+        validation_warning,
+    )
     from agentcad.metrics import compute_metrics  # per-part metrics stay kernel-only
 
     topo_shape_for_metrics = result.topo_shape
-    metrics, validation = validated_metrics(
-        topo_shape_for_metrics, profile=validation_profile
-    )
-    undetermined = validation_warning(validation)
+    metrics = compute_metrics(topo_shape_for_metrics)
 
     # Per-part breakdown (feedback #190): one entry per show_object() call.
     # Metrics computed now so --dry-run also surfaces them; per-part previews
@@ -1203,15 +1206,37 @@ def _run_impl(
 
     if metrics.get("warnings"):
         warnings.extend(metrics["warnings"])
+
+    # Export the deliverable to a staging file and validate what will ship.
+    # STEP export can change topology (a fused shared edge becomes two clean
+    # bodies), so the verdict is computed on the reloaded artifact, exactly
+    # as inspect, a slicer, or a grader will see it. On success the staged
+    # file is moved into the version directory instead of exported again.
+    _heartbeat("exporting and validating STEP…")
+    _t = _start_phase("export_step")
+    staging_dir = Path(tempfile.mkdtemp(prefix="agentcad-stage-"))
+    staged_step = staging_dir / "output.step"
+    runner.export_step(shape, str(staged_step))
+    validation = validate_delivered_step(staged_step, profile=validation_profile)
+    _finish_phase("export_step", _t, "export_step_ms")
+    apply_validation(metrics, validation)
+    undetermined = validation_warning(validation)
     if undetermined:
         warnings.append(undetermined)
+    unreliable = reliability_warning(metrics)
+    if unreliable:
+        warnings.append(unreliable)
 
-    # Final geometry validity is part of core CAD success. Stop before STEP
-    # export and before every visual/post-processing phase when it fails.
+    def _discard_staged_step():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+    # Final geometry validity is part of core CAD success. Stop before every
+    # visual/post-processing phase when it fails.
     from agentcad.core_build import invalid_geometry_payload
 
     invalid_response = invalid_geometry_payload("run", metrics, validation)
     if invalid_response is not None:
+        _discard_staged_step()
         if dry_run:
             invalid_response.update({
                 "runtime": runtime_name,
@@ -1249,6 +1274,7 @@ def _run_impl(
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:
+        _discard_staged_step()
         output_json = {
             "command": "run",
             "status": "success",
@@ -1285,9 +1311,12 @@ def _run_impl(
 
     # Export STEP file via the runner (each engine has its own writer)
     _heartbeat("exporting STEP…")
-    _t = _start_phase("export_step")
-    runner.export_step(shape, str(version_dir / "output.step"))
-    _finish_phase("export_step", _t, "export_step_ms")
+    # The STEP was exported and validated before the version was reserved;
+    # move the staged artifact into place so the delivered bytes are the
+    # validated bytes.
+    shutil.move(str(staged_step), str(version_dir / "output.step"))
+    _discard_staged_step()
+    _phase_tracker.complete("export_step")
 
     # Core build boundary: commit the valid STEP and its metadata before any
     # optional export/render/diff/viewer work begins.

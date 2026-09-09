@@ -189,13 +189,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # current.
     from agentcad.core_build import (
         invalid_geometry_payload,
+        reliability_warning,
         validated_metrics,
         validation_warning,
     )
 
     with silence_native_stdout():
         metrics, validation = validated_metrics(topo_shape, profile=validation_profile)
-    undetermined = validation_warning(validation)
+    undetermined = validation_warning(validation) or reliability_warning(metrics)
 
     invalid_response = invalid_geometry_payload("import", metrics, validation)
     if invalid_response is not None:
