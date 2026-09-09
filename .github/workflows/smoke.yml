@@ -21,6 +21,12 @@ jobs:
       - name: Install agentcad + test dependencies
         run: pip install -e .[mcp,dev]
 
+      - name: Verify the geometry runtime imports on a clean install
+        # Catches dependency-resolution breakage (e.g. a second OCP generation
+        # pulled in by an unpinned transitive dep) that pip and `pip check`
+        # both miss. Nothing else in this workflow imports build123d.
+        run: python -c "import build123d, cadquery; print(build123d.__version__)"
+
       - name: Collect tests
         run: pytest --collect-only -q
 
