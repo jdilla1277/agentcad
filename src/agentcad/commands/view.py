@@ -68,9 +68,14 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     position: absolute; top: 10px; color: #333;
     padding: 4px 10px; background: rgba(255,255,255,0.85);
     border-radius: 4px; font-size: 12px; user-select: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   #label-left { left: 16px; }
   #label-right { left: calc(50% + 16px); }
+  body.split-open .label {
+    top: 54px;
+    max-width: calc(50% - 32px);
+  }
   #divider {
     position: fixed; top: 0; bottom: 0; left: 50%;
     width: 1px; background: rgba(0,0,0,0.2);
@@ -1700,6 +1705,7 @@ function setMode(mode) {
 
   currentMode = mode;
   document.body.classList.toggle('spec-open', mode === 'spec');
+  document.body.classList.toggle('split-open', mode === 'side-by-side');
   document.querySelectorAll('#modes button').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === mode);
   });

@@ -244,5 +244,17 @@ def test_previous_current_modes_preserve_camera_orientation(runner, isolated_dir
                 page.click(button)
                 after = page.evaluate("window.agentcadViewer.debugState().camera")
                 assert after == before
+
+            # At the narrow width used by the live viewer, the two version
+            # labels have their own row instead of sitting underneath the
+            # mode switcher.
+            page.set_viewport_size({"width": 712, "height": 443})
+            modes = page.locator("#modes").bounding_box()
+            label_a = page.locator("#label-left").bounding_box()
+            label_b = page.locator("#label-right").bounding_box()
+            assert label_a["y"] > modes["y"] + modes["height"]
+            assert label_b["y"] > modes["y"] + modes["height"]
+            assert label_a["x"] + label_a["width"] <= 712 / 2
+            assert label_b["x"] >= 712 / 2
         finally:
             browser.close()
