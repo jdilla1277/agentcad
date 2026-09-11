@@ -37,6 +37,26 @@ at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
 to keep the phone from sliding. Show me a preview when you're done.
 ```
 
+### Keep generated files in a build directory
+
+Create `agentcad.toml` in your source project before initialization:
+
+```toml
+build_dir = "./build"
+```
+
+Then run `agentcad init`. Version directories, the generated manifest, viewers,
+exports, and logs go under `build/`; authored scripts and installed guidance
+stay in the source project. Add the build directory to your own `.gitignore`.
+
+For CI, initialize and select an independent root with
+`agentcad init --build-dir /tmp/cad-build` and
+`agentcad run model.py --label first --build-dir /tmp/cad-build`.
+Overrides do not edit project configuration. Relative build paths resolve from
+the project root, not the caller's working directory. Existing projects keep
+their current layout unless configured. `--output` remains a deprecated version
+label, never a destination. See `agentcad docs artifacts` for the full contract.
+
 ## What it does
 
 - **`agentcad run script.py --label label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)

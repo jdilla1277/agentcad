@@ -5,6 +5,7 @@ import webbrowser
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options, derived_dir
 
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 
@@ -2010,7 +2011,9 @@ def _resolve_to_glb_and_shape(file_str):
             # it as a clean error string so the command's JSON envelope picks
             # it up instead of a Python traceback escaping to stderr.
             return None, None, str(exc)
-        glb_path = file_path.with_suffix(".glb")
+        glb_path = derived_dir("view", file_path) / (file_path.stem + ".glb")
+        if get_project().configured:
+            glb_path = get_project().artifact_path(glb_path)
         export_glb(shape, str(glb_path))
         return glb_path, shape, None
 
@@ -2102,7 +2105,7 @@ def _render_unified(
 
 def _render_single(glb_path, *, review=None):
     """Write single-model viewer HTML. Returns (html_path, url)."""
-    html_path = glb_path.parent / f"{glb_path.stem}_viewer.html"
+    html_path = derived_dir("view", glb_path) / f"{glb_path.stem}_viewer.html"
     _render_unified(
         html_path,
         glb_a=glb_path,
@@ -2314,6 +2317,7 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
     "spec_file",
     help="Run check-spec with this JSON spec and open the viewer in Spec check mode.",
 )
+@project_options
 def view(file, file_b, overlay, with_measure, spec_file):
     """Open a GLB or STEP file in the browser.
 
@@ -2357,7 +2361,8 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if err:
         _error(err)
 
-    out_dir = glb_a.parent
+    out_dir = (derived_dir("view", Path(file), Path(file_b))
+               if get_project().configured else glb_a.parent)
     png_path = None
     overlay_png_path = None
     volume_glb_path = None
@@ -2431,6 +2436,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
             glb_b,
             overlay=overlay,
             review=review,
+            out_dir=out_dir,
             diff_side_png=png_path,
             diff_overlay_png=overlay_png_path,
             diff_volume_png=volume_png_path,

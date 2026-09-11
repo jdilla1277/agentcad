@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from agentcad.project import ProjectError, get_project, project_options, validate_version_label
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -23,7 +24,7 @@ from agentcad.commands.export_cmd import (
     unsupported_export_formats,
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
-from agentcad.manifest import MANIFEST_FILE, load_manifest
+from agentcad.manifest import load_manifest
 
 
 _DEFAULT_RUN_TIMEOUT_S = 115.0
@@ -800,6 +801,7 @@ def _assign_part_identity(raw_parts):
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
+@project_options
 def run(
     ctx, script, label, legacy_output, render, export, preview, auto_diff,
     open_view, params, dry_run, runtime, no_daemon,
@@ -830,6 +832,7 @@ def run(
             param_hint="--label",
             param_type="option",
         )
+    validate_version_label(output)
 
     # Reject unsupported --export formats before anything else — before the
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
@@ -891,6 +894,8 @@ def run(
     except SystemExit:
         # Explicit sys.exit() calls inside _run_impl are intentional —
         # they already emitted the proper JSON. Pass through.
+        raise
+    except ProjectError:
         raise
     except _RunTimeout as e:
         recovered = _recover_committed_core(e, timeout_payload=e.payload)
@@ -1089,13 +1094,19 @@ def _run_impl(
     if result.status == "execution_error":
         from agentcad.versioning import reserve_version
 
-        reservation = reserve_version(Path.cwd(), label, suffix="_failed")
         error_msg = _enrich_error(result.exception)
         guidance = _execution_error_guidance(
             error_msg,
             runtime=runtime_name,
             source=raw_source,
         )
+        if dry_run:
+            _emit_run({
+                "command": "run", "status": "error", "runtime": runtime_name,
+                "message": error_msg, **guidance,
+            })
+            sys.exit(1)
+        reservation = reserve_version(get_project().build_root, label, suffix="_failed")
         _record_failure(
             script_path,
             label,
@@ -1214,7 +1225,7 @@ def _run_impl(
             sys.exit(1)
         from agentcad.versioning import reserve_version
 
-        reservation = reserve_version(Path.cwd(), label, suffix="_invalid")
+        reservation = reserve_version(get_project().build_root, label, suffix="_invalid")
         _record_invalid_geometry(
             script_path,
             label,
@@ -1253,7 +1264,7 @@ def _run_impl(
     # Atomically reserve a unique version directory before writing core files.
     from agentcad.versioning import reserve_version
 
-    reservation = reserve_version(Path.cwd(), label)
+    reservation = reserve_version(get_project().build_root, label)
     _phase_tracker.reservation = reservation
     version_num = reservation.number
     dir_name = reservation.dir_name
@@ -1276,7 +1287,7 @@ def _run_impl(
     previous = _find_prev_success(versions)
     has_previous_step = bool(
         previous
-        and (Path.cwd() / previous["path"] / "output.step").exists()
+        and (get_project().version_dir(previous) / "output.step").exists()
     )
     comparison_enabled = auto_diff and has_previous_step
     fast_path = not preview and not auto_diff and not open_view
@@ -1524,11 +1535,11 @@ def _run_impl(
             render_diff_side_by_side,
             render_diff_overlay,
         )
-        prev_step_path = Path.cwd() / prev["path"] / "output.step"
+        prev_step_path = get_project().version_dir(prev) / "output.step"
         _heartbeat("loading prior comparison source…")
         try:
             with comparison_recorder.observe("source_loading"):
-                previous_meta_path = Path.cwd() / prev["path"] / "meta.json"
+                previous_meta_path = get_project().version_dir(prev) / "meta.json"
                 try:
                     previous_parts = json.loads(
                         previous_meta_path.read_text()
@@ -1683,11 +1694,11 @@ def _run_impl(
     # we still want the 3D comparison to work in the viewer.
     prev_glb_path = None
     if auto_diff and prev is not None:
-        candidate = Path.cwd() / prev["path"] / "output.glb"
+        candidate = get_project().version_dir(prev) / "output.glb"
         if candidate.exists():
             prev_glb_path = candidate
         else:
-            prev_step_path = Path.cwd() / prev["path"] / "output.step"
+            prev_step_path = get_project().version_dir(prev) / "output.step"
             if prev_step_path.exists():
                 try:
                     from agentcad.step_io import load_cad_shape as _load
@@ -1748,7 +1759,7 @@ def _run_impl(
     project_viewer = None
     if viewer_meta:
         from agentcad.project_viewer import handoff
-        project_viewer = handoff(Path.cwd(), version_dir, open_view=open_view)
+        project_viewer = handoff(get_project().build_root, version_dir, open_view=open_view)
 
     viewer_opened = bool(project_viewer and project_viewer.get("opened"))
     if open_view:

@@ -11,6 +11,8 @@ from agentcad.commands.instructions import install_instructions
 from agentcad.commands.skill import install_skill
 from agentcad.guide import guide_fingerprint
 from agentcad.manifest import MANIFEST_FILE
+from agentcad.project import ProjectError, get_project, project_options
+from agentcad.versioning import _version_lock, atomic_write_json
 from agentcad.runners import dispatch
 
 
@@ -77,9 +79,11 @@ def install_agent_setup(cwd: Path, runtime: str) -> dict:
         "guide automatically."
     ),
 )
+@project_options
 def init(name, runtime, force, no_agent_setup):
     """Initialize a new agentcad project."""
-    manifest_path = Path.cwd() / MANIFEST_FILE
+    layout = get_project()
+    manifest_path = layout.manifest_path
 
     if manifest_path.exists() and not force:
         click.echo(json.dumps({
@@ -95,9 +99,15 @@ def init(name, runtime, force, no_agent_setup):
         }))
         sys.exit(1)
 
-    project_name = name if name else Path.cwd().name
+    project_name = name if name else layout.project_root.name
     manifest = _build_manifest(project_name, runtime)
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    if layout.configured:
+        manifest["project_root"] = str(layout.project_root)
+    with _version_lock(layout.build_root):
+        if manifest_path.exists() and not force:
+            raise ProjectError("already_initialized", f"{manifest_path} already exists",
+                               "Run agentcad context to inspect the existing history.")
+        atomic_write_json(manifest_path, manifest)
 
     response = {
         "command": "init",
@@ -109,20 +119,21 @@ def init(name, runtime, force, no_agent_setup):
         response["agent_setup"] = {"status": "skipped"}
     else:
         response["agent_setup"] = install_agent_setup(
-            Path.cwd(), manifest["runtime"]
+            layout.project_root, manifest["runtime"]
         )
-    cad_input = _preferred_cad_input(Path.cwd())
+    cad_input = _preferred_cad_input(layout.project_root)
+    build_arg = " --build-dir " + shlex.quote(str(layout.build_root)) if layout.configured else ""
     if cad_input is not None:
         response["next_actions"] = [
-            f"agentcad import {shlex.quote(cad_input.name)} — adopt the existing "
+            f"agentcad import {shlex.quote(cad_input.name)}{build_arg} — adopt the existing "
             "CAD as a versioned baseline and create edit.py"
         ]
         response["more_at"] = "agentcad docs editing"
     else:
         response["next_actions"] = [
-            "agentcad docs quickstart — follow the first-script workflow for "
+            f"agentcad docs quickstart{build_arg} — follow the first-script workflow for "
             "this project",
-            f"agentcad docs preamble — see the names available in "
+            f"agentcad docs preamble{build_arg} — see the names available in "
             f"{manifest['runtime']} scripts",
         ]
         response["more_at"] = "agentcad docs quickstart"
@@ -174,11 +185,16 @@ def _build_manifest(project_name: str, runtime: str | None) -> dict:
 
 
 def _bootstrap_manifest(name: str | None = None, runtime: str | None = None) -> None:
-    """Create a manifest in the current directory. Used by `agentcad import
+    """Create a manifest in the selected build directory. Used by `agentcad import
     --init` so an agent handed a STEP in a fresh folder doesn't have to
     issue two commands. Installs the agent guide like `agentcad init` does."""
-    manifest_path = Path.cwd() / MANIFEST_FILE
-    project_name = name if name else Path.cwd().name
+    layout = get_project()
+    manifest_path = layout.manifest_path
+    project_name = name if name else layout.project_root.name
     manifest = _build_manifest(project_name, runtime)
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    install_agent_setup(Path.cwd(), manifest["runtime"])
+    if layout.configured:
+        manifest["project_root"] = str(layout.project_root)
+    with _version_lock(layout.build_root):
+        if not manifest_path.exists():
+            atomic_write_json(manifest_path, manifest)
+    install_agent_setup(layout.project_root, manifest["runtime"])

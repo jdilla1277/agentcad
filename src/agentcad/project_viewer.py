@@ -28,7 +28,13 @@ class ViewerUnavailable(RuntimeError):
 
 
 def runtime_dir() -> Path:
-    path = Path(os.environ.get("AGENTCAD_VIEWER_HOME", Path.home() / ".cache/agentcad/viewer"))
+    import click
+    ctx = click.get_current_context(silent=True)
+    layout = ctx.meta.get("project_layout") if ctx else None
+    # Configured builds own their complete viewer service state. The child
+    # receives this directory explicitly in its environment at startup.
+    path = (layout.artifact_path(".agentcad/viewer") if layout and layout.configured
+            else Path(os.environ.get("AGENTCAD_VIEWER_HOME", Path.home() / ".cache/agentcad/viewer")))
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     return path.resolve()
 
