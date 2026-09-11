@@ -145,6 +145,11 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
    Declare `show_object(part, options={"expect_solids": 1})` when one body is
    required. Read disconnected-part warnings; `options={"floating": True}`
    marks deliberate separation. Revalidate after any repair.
+   For exported meshes, check `mesh_validation.<format>.is_valid` before
+   handing off that file. Export success means it was written, not that it
+   passed. A mesh timeout/error is unknown; the CAD verdict does not certify
+   the mesh. `validation.step_round_trip` compares source/STEP layer outcomes
+   and solid counts, not shape fidelity or printability.
 
 6. **Measure feature sizes.** For dimensions beyond top-level metrics:
    ```bash

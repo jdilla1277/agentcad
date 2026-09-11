@@ -62,7 +62,7 @@ mcp = ["mcp>=1.0.0,<2.0"]
 # pyyaml: tests/test_generate_skill_md.py parses SKILL.md frontmatter. It
 # used to arrive transitively through CadQuery's trame dependency; the
 # default profile has no CadQuery, so declare it.
-dev = ["pytest>=8.0", "pytest-timeout>=2.0", "playwright>=1.40", "pyyaml>=6.0"]
+dev = ["pytest>=8.0", "pytest-timeout>=2.0", "playwright>=1.40", "pyyaml>=6.0", "trimesh>=4,<6"]
 
 [project.urls]
 Repository = "https://github.com/jdilla1277/agentcad"
