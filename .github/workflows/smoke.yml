@@ -8,7 +8,8 @@ on:
 jobs:
   collect:
     runs-on: ubuntu-22.04
-    name: pytest --collect-only (full profile)
+    # Keep this exact name: branch protection requires it by name.
+    name: pytest --collect-only
     steps:
       - uses: actions/checkout@v4
 
