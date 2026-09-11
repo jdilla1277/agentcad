@@ -38,12 +38,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri
 
-      - name: Run Linux render smoke under Xvfb
+      - name: Run Linux render guardrails under Xvfb
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_render.py::test_linux_render_window_uses_virtual_x11_drawable \
+            tests/test_render.py::test_linux_display_connection_failure_is_actionable \
             tests/test_render.py::test_render_shape_produces_png \
-            tests/test_render_cmd.py::test_render_defaults_to_800_by_600 -q
+            tests/test_render_cmd.py::test_render_defaults_to_800_by_600 \
+            tests/test_render_cmd.py::test_render_unavailable_returns_actionable_json -q
 
   windows-platform:
     runs-on: windows-latest
