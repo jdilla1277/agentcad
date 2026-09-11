@@ -99,12 +99,16 @@ class TestMediumRisk:
         )
         assert risk["edit_risk"] == "medium"
 
-    def test_invalid_small_guidance_suggests_heal(self):
+    def test_invalid_small_guidance_requires_inspection_before_repair(self):
         risk = classify_edit_risk(
             face_count=12, edge_count=30, is_valid=False, free_edge_count=0
         )
         workflow = " ".join(risk["recommended_workflow"]).lower()
-        assert "heal" in workflow or "sew" in workflow
+        assert "validation.guidance" in workflow
+        assert "unverified options" in workflow
+        assert "confirm the cause" in workflow
+        assert "once deliverable geometry is restored" in workflow
+        assert "heal" not in workflow and "sew" not in workflow
 
     def test_invalid_small_differs_from_invalid_large(self):
         small = classify_edit_risk(

@@ -189,7 +189,11 @@ def _assemble(profile, layers, *, first_failure, undetermined) -> dict:
     report["message"] = message
     if suggestion:
         report["suggestion"] = suggestion
-    from agentcad.validation_guidance import repair_guidance
+    from agentcad.validation_guidance import diagnostic_guidance, repair_guidance
+    guidance = diagnostic_guidance(report)
+    if guidance:
+        report["guidance"] = guidance
+        report["suggestion"] = " ".join(guidance["next_checks"])
     report["repairs"] = repair_guidance(report)
     return report
 

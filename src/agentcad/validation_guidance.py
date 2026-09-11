@@ -54,25 +54,76 @@ def with_structure_checks(report, checks):
     return _assemble(report["profile"], layers, first_failure=first, undetermined=undetermined)
 
 
+def diagnostic_guidance(report):
+    """Separate observed failures from causes that require inspection."""
+    first = report.get("first_failure")
+    unknown = "The cause of this failure has not been determined."
+    checks = []
+    if first == "shell_closure":
+        unknown = ("We have not determined whether intended faces are missing, existing faces "
+                   "are disconnected, or loose faces are unwanted. Closure alone does not "
+                   "establish which repair applies.")
+        checks = [
+            "Inspect the listed free edges and loose faces with inspect FILE --ids or "
+            "view FILE --validation; compare them with the intended surfaces in the source model.",
+            "Check whether each intended face exists. If faces exist on both sides of a gap, "
+            "check that their boundaries coincide before considering sewing. "
+            "Sewing cannot replace a missing face.",
+        ]
+    elif first == "mesh_manifold":
+        kind = report["layers"][first].get("defect", {}).get("kind")
+        if kind == "triangle_ceiling":
+            unknown = "The triangle budget was exceeded; this does not establish defective faces."
+            checks = ["Inspect model complexity and tiny features against the reported triangle budget "
+                      "before deciding whether simplification is acceptable."]
+        elif kind in ("non_manifold_edge", "pinch_vertex"):
+            unknown = ("The local surface connection failed, but we have not determined whether "
+                       "the design calls for separate bodies, a joined body, or a different profile.")
+            checks = [
+                "Inspect the reported edge or vertex and adjacent faces with inspect FILE --ids "
+                "or view FILE --validation; trace them to the source operation.",
+                "Confirm whether these regions should be separate closed bodies or one connected "
+                "body, and check for self-crossing profiles before choosing a repair.",
+            ]
+        else:
+            unknown = "The mesh check failed; the underlying modeling or tessellation cause is unverified."
+            checks = ["Inspect the reported mesh defect and any listed faces in the source model. "
+                      "Check shared boundaries, face orientation, and tessellation settings "
+                      "before changing geometry."]
+    elif first == "structure":
+        unknown = "Counts alone do not tell us which bodies are unwanted or should be joined."
+        checks = ["Compare the expected and actual counts, per-solid volumes and bounds, and any "
+                  "part IDs with the intended assembly. Confirm which bodies should exist "
+                  "before fusing, deleting, or changing an expectation."]
+    elif first == "brep_check":
+        unknown = "The kernel identified inconsistent entities, but the source operation responsible is unverified."
+        checks = ["Inspect the reported error classes and entity IDs. Trace those entities to the "
+                  "source operations and validate intermediate results to locate the first failing operation."]
+    else:
+        return None
+    return {"finding": report["message"], "unknown": unknown, "next_checks": checks}
+
+
 def repair_guidance(report):
-    """Suggestions are conditional instructions, never automatic repairs."""
+    """Possible repairs, not diagnoses: no applicability precondition is tested here."""
     first = report.get("first_failure")
     if first is None:
         return []
     entry = report["layers"][first]
     repairs = []
 
-    def add(kind, changes_intent, why, how, precondition=None):
-        item = dict(kind=kind, changes_intent=changes_intent, why=why, how=how)
-        if precondition:
-            item["precondition"] = precondition
+    def add(kind, changes_intent, why, how, precondition):
+        item = dict(kind=kind, changes_intent=changes_intent, why=why, how=how,
+                    precondition=precondition, applicability="unverified",
+                    evidence={"layer": first, "message": report["message"]})
         repairs.append(item)
 
     if first == "shell_closure":
         add("rebuild_closed_profile", True,
-            f"The boundary contains {entry.get('free_edge_count', 0)} free edges.",
+            "A missing intended face or incomplete profile is one possible cause of an open boundary.",
             "Close the intended profile before extruding, or construct the missing face "
-            "with Face(closed_wire) and rebuild the shell. Validate the exported STEP again.")
+            "with Face(closed_wire) and rebuild the shell. Validate the exported STEP again.",
+            "Inspection confirms an intended face is missing or its source profile is incomplete.")
         add("sew_coincident_faces", False,
             "Coincident face boundaries may have separate topology.",
             "Use Shell(existing_faces) to sew existing faces, then Solid(shell) only if closed. "
@@ -80,9 +131,9 @@ def repair_guidance(report):
             "Only when all intended faces already exist and their boundaries coincide; "
             "sewing must not add a face or change the occupied geometry.")
         if entry.get("loose_face_count"):
-            add("remove_loose_faces", True, "Faces exist outside the closed body.",
-                "Keep only intended bodies in the exported Compound, after confirming that "
-                "the listed loose faces are unwanted.")
+            add("remove_loose_faces", True, "Faces outside any shell may be unwanted export leftovers.",
+                "Keep only intended bodies in the exported Compound; revalidate the exported STEP.",
+                "The listed loose faces are confirmed unwanted, not intended surfaces that need rebuilding.")
     elif first == "mesh_manifold":
         kind = entry.get("defect", {}).get("kind")
         if kind in ("non_manifold_edge", "pinch_vertex"):
@@ -95,22 +146,27 @@ def repair_guidance(report):
             add("overlap_and_fuse", True,
                 "A single body needs a connection with positive volume.",
                 "Extend the intended connection to overlap the other body, then fuse using "
-                "a.fuse(b). Recheck dimensions and expect_solids; do not choose an overlap blindly.")
-        else:
+                "a.fuse(b). Recheck dimensions and expect_solids; do not choose an overlap blindly.",
+                "The design requires a single connected body, and the connection dimensions "
+                "permit adding material. The reported defect is at that intended connection.")
+        elif kind != "triangle_ceiling":
             add("rebuild_failed_faces", True,
                 f"The exported surface has a {kind or 'mesh'} defect.",
                 "Rebuild the listed faces from the intended closed profiles. Re-export and "
-                "validate the STEP before exporting a mesh.")
+                "validate the STEP before exporting a mesh.",
+                "Inspection identifies a defective source face or profile responsible for the mesh failure.")
     elif first == "structure":
         add("restore_expected_structure", True,
             "The declared body or shell count does not match the output.",
             "Inspect the per-solid volumes and bounds. Fuse intended overlapping bodies with "
             "a.fuse(b), or remove unintended bodies. Change the expectation only if the "
-            "design intentionally requires a different count.")
+            "design intentionally requires a different count.",
+            "The intended body arrangement and the specific source of the count mismatch are confirmed.")
     elif first == "brep_check":
         add("rebuild_invalid_geometry", True, "The kernel reports inconsistent geometry.",
             "Rebuild the failing operation from a closed, non-self-crossing profile; "
-            "validate after each Boolean or fillet.")
+            "validate after each Boolean or fillet.",
+            "Intermediate validation identifies the source operation responsible for the reported entities.")
     return repairs
 
 

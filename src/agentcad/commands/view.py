@@ -1315,21 +1315,46 @@ function setupReviewPanel() {
     const report = REVIEW.validation;
     document.getElementById('review-heading').textContent = 'Validation';
     document.getElementById('btn-spec').textContent = 'Validation';
-    document.querySelector('#review-measure-section h2').textContent = 'Failures and repairs';
+    document.querySelector('#review-measure-section h2').textContent = 'Findings and next checks';
     pill.textContent = report.is_valid === true ? 'pass' : report.is_valid === false ? 'fail' : 'undetermined';
     pill.className = 'pill ' + (report.is_valid === true ? 'pass' : report.is_valid === false ? 'fail' : 'info');
     document.getElementById('review-subtitle').textContent = report.message;
-    const row = makeReviewRow({label: report.first_failure || 'Validation',
+    const row = makeReviewRow({label: report.first_failure ? 'What we found' : 'Validation',
       status: report.is_valid === false ? 'fail' : 'info', badge: pill.textContent,
-      summary: 'Red markers locate the reported failures. IDs refer to this file only.'});
+      summary: report.message + ((REVIEW.validation_markers || []).length
+        ? ' Red markers locate the reported failures. IDs refer to this file only.' : '')});
     row._validationMarkers = REVIEW.validation_markers || [];
     measureRows.appendChild(row);
-    for (const repair of report.repairs || []) {
-      const entry = makeReviewRow({label: repair.kind, status: 'info',
-        badge: repair.changes_intent ? 'changes design' : 'safe if condition holds',
-        summary: [repair.why, repair.precondition, repair.how].filter(Boolean).join(' ')});
-      entry._validationMarkers = REVIEW.validation_markers || [];
-      measureRows.appendChild(entry);
+    if (report.guidance) {
+      measureRows.appendChild(makeReviewRow({label: "What we don't know", status: 'info',
+        badge: 'unknown', summary: report.guidance.unknown}));
+      for (const check of report.guidance.next_checks || []) {
+        measureRows.appendChild(makeReviewRow({label: 'Check next', status: 'info',
+          badge: 'inspect', summary: check}));
+      }
+    }
+    if ((report.repairs || []).length) {
+      const possible = document.createElement('details');
+      possible.id = 'validation-possible-repairs';
+      const heading = document.createElement('summary');
+      heading.textContent = 'Possible repairs (unverified)';
+      possible.appendChild(heading);
+      const disclaimer = document.createElement('p');
+      disclaimer.textContent = 'These are conditional options, not diagnosed causes or verified fixes. '
+        + 'Confirm the conditions before editing; no repair has been applied. Revalidate after any change.';
+      possible.appendChild(disclaimer);
+      for (const repair of report.repairs) {
+        const label = repair.kind.replaceAll('_', ' ');
+        const entry = makeReviewRow({label: label.charAt(0).toUpperCase() + label.slice(1), status: 'info',
+          badge: 'unverified',
+          summary: [repair.evidence && ('Related finding (not proof of cause): ' + repair.evidence.message),
+            'Possible explanation: ' + repair.why,
+            'Only consider if: ' + (repair.precondition || 'Applicability must be established by inspection.'),
+            repair.changes_intent ? 'Changes the design.' : 'Intended to preserve geometry only under these conditions; not verified.',
+            'If confirmed: ' + repair.how].filter(Boolean).join(' ')});
+        possible.appendChild(entry);
+      }
+      measureRows.appendChild(possible);
     }
   }
   for (const bucket of (REVIEW.validation ? [] : measure.cylindrical_features || [])) {

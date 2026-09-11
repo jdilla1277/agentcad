@@ -46,6 +46,42 @@ def test_open_shell_evidence_matches_inspect_ids(runner):
     assert len(validation_markers(shape, report)) == 4
 
 
+def test_open_shell_guidance_does_not_diagnose_a_missing_face_or_seam():
+    report = validate_shape(load_cad_shape(fixture("open_shell")))
+    guidance = report["guidance"]
+    assert guidance["finding"] == report["message"]
+    assert "4 free edge(s)" in guidance["finding"]
+    assert "not determined" in guidance["unknown"]
+    assert "missing" in guidance["unknown"] and "disconnected" in guidance["unknown"]
+    assert "Inspect" in report["suggestion"]
+    assert "add the missing face" not in report["suggestion"]
+    assert "Shell(" not in report["suggestion"]
+    for repair in report["repairs"]:
+        assert repair["applicability"] == "unverified"
+        assert repair["evidence"] == {"layer": "shell_closure", "message": report["message"]}
+        assert repair["precondition"]
+
+
+@pytest.mark.parametrize("case", [k for k, v in CATALOG.items() if v["expected_gate"] == "fail"])
+def test_every_geometry_repair_is_conditional_and_evidence_linked(case):
+    report = validate_shape(load_cad_shape(fixture(case)))
+    assert report["guidance"]["next_checks"]
+    assert report["suggestion"] == " ".join(report["guidance"]["next_checks"])
+    for repair in report["repairs"]:
+        assert repair["applicability"] == "unverified"
+        assert repair["precondition"]
+        assert repair["evidence"]["layer"] == report["first_failure"]
+
+
+def test_mesh_budget_failure_does_not_suggest_rebuilding_faces():
+    from agentcad.validation import _assemble
+    report = _assemble("deliverable", {"mesh_manifold": {
+        "status": "fail", "defect": {"kind": "triangle_ceiling", "ceiling": 1000000},
+    }}, first_failure="mesh_manifold", undetermined=None)
+    assert report["repairs"] == []
+    assert "triangle budget" in report["guidance"]["next_checks"][0]
+
+
 def test_mesh_edge_ids_match_shared_topology():
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
     from OCP.TopExp import TopExp
@@ -118,6 +154,13 @@ def test_run_expectation_failure_never_becomes_success(runner, isolated_dir, dry
     assert result.exit_code == 1, result.output
     assert data["status"] == "invalid_geometry"
     assert data["validation"]["first_failure"] == "structure"
+    guidance = data["validation"]["guidance"]
+    assert guidance["finding"] == data["validation"]["message"]
+    assert "Counts alone" in guidance["unknown"]
+    repair = data["validation"]["repairs"][0]
+    assert repair["applicability"] == "unverified"
+    assert repair["precondition"]
+    assert repair["evidence"]["layer"] == "structure"
     checks = data["validation"]["layers"]["structure"]["expectations"]
     assert checks[0]["expected"] == 1 and checks[0]["actual"] == 2
     assert "got 2" in data["validation"]["message"]
@@ -219,7 +262,12 @@ def test_geometry_failure_is_not_masked_by_counts():
 
 
 def test_real_workflow_solids_have_volume_and_bounds(real_world_step):
-    structure = _layer_structure(load_cad_shape(real_world_step))
+    shape = load_cad_shape(real_world_step)
+    report = validate_shape(shape)
+    assert report["is_valid"] is True
+    assert report["repairs"] == []
+    assert "guidance" not in report
+    structure = _layer_structure(shape)
     assert structure["solids"]
     for solid in structure["solids"]:
         assert solid["volume"] > 0
@@ -284,6 +332,16 @@ def test_missing_part_count_is_undetermined_not_invalid():
     assert updated["is_valid"] is None
     assert updated["first_failure"] is None
     assert updated["undetermined_layer"] == "structure"
+    assert updated["repairs"] == []
+    assert "guidance" not in updated
+
+
+def test_validation_docs_explain_unverified_options(runner):
+    result = runner.invoke(cli, ["docs", "validation"])
+    assert result.exit_code == 0
+    assert "validation.guidance" in result.output
+    assert "unverified" in result.output
+    assert "not a" in result.output and "safety verdict" in result.output
 
 
 @pytest.mark.browser
@@ -307,7 +365,18 @@ def test_validation_browser_shows_markers_and_repairs(runner, isolated_dir):
             page.wait_for_function("window.agentcadViewer && window.agentcadViewer.debugState().ready")
             assert page.locator("#review-heading").inner_text() == "Validation"
             assert page.locator("#review-validity").inner_text() == "Invalid"
-            assert page.locator("#review-measure-rows").inner_text().find("sew_coincident_faces") >= 0
+            rows = page.locator("#review-measure-rows")
+            assert "What we found" in rows.inner_text()
+            assert "What we don't know" in rows.inner_text()
+            assert "Check next" in rows.inner_text()
+            assert "Possible repairs (unverified)" in rows.inner_text()
+            assert "Sew coincident faces" not in rows.inner_text()
+            assert not page.locator("#validation-possible-repairs").evaluate("el => el.open")
+            page.locator("#validation-possible-repairs summary").click()
+            assert "Sew coincident faces" in rows.inner_text()
+            assert "Only consider if:" in rows.inner_text()
+            assert "Related finding (not proof of cause):" in rows.inner_text()
+            assert "safe" not in rows.inner_text().lower()
             page.locator("#review-measure-rows .review-row").first.click()
             page.wait_for_function("window.agentcadViewer.debugState().validation_marker_count === 4")
             red = page.evaluate('''() => {

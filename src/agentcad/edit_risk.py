@@ -112,21 +112,21 @@ def _recommended_workflow(level, *, invalid, large, many_free):
             )
         if invalid:
             steps.append(
-                "Read validation.repairs before editing in place. Use a heal/sew "
-                "pass only if its precondition holds; sewing cannot replace a missing "
-                "face. Re-run `inspect` to confirm is_valid before any boolean op."
+                "Read validation.guidance and inspect the reported entities before editing "
+                "in place. validation.repairs contains unverified options, not diagnosed "
+                "fixes. Re-run `inspect` to confirm is_valid before any boolean op."
             )
     elif invalid and not large:
-        # Invalid but small: recoverable. Heal, then edit.
+        # Small invalid shapes still need a diagnosis before a repair is chosen.
         steps.append(
-            "Topology is invalid but small — read validation.repairs and its "
-            "preconditions. Use heal/sew only for coincident existing boundaries; "
-            "rebuild missing or unwanted geometry according to the intended design. "
+            "Topology is invalid but small — read validation.guidance for next checks. "
+            "validation.repairs contains unverified options; confirm the cause and "
+            "each precondition before changing geometry. "
             "Then re-run `inspect` to confirm is_valid before boolean edits."
         )
         steps.append(
-            "Boolean/fillet edits may still work after healing; re-run "
-            "`inspect` after each step to catch regressions early."
+            "Once deliverable geometry is restored, make the intended edits and "
+            "re-run `inspect` after each step to catch regressions early."
         )
     else:
         # Large (or many free edges) but valid: editable, just slow/heavy.
