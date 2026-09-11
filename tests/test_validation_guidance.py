@@ -176,6 +176,18 @@ def test_cadquery_structure_gate(runner, isolated_dir):
     assert data["validation"]["first_failure"] == "structure"
 
 
+def test_cadquery_compound_capture_reaches_structure_gate(runner, isolated_dir):
+    pytest.importorskip("cadquery")
+    result, data = run_script(runner, isolated_dir,
+        'a = cq.Workplane("XY").box(2,2,2)\n'
+        'b = cq.Workplane("XY").box(2,2,2).translate((4,0,0))\n'
+        'show_object(cq.Compound.makeCompound([a.val(), b.val()]), '
+        'options={"expect_solids":1})', runtime="cadquery", dry=True)
+    assert result.exit_code == 1, result.output
+    assert data["status"] == "invalid_geometry", data
+    assert data["validation"]["first_failure"] == "structure"
+
+
 @pytest.mark.parametrize("expected,passed", [(1, True), (11, False)])
 def test_structure_only_spec(runner, isolated_dir, expected, passed):
     spec = isolated_dir / "spec.json"
