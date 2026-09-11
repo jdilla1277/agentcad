@@ -17,7 +17,8 @@
     "run",
     "skill",
     "subscribe",
-    "view"
+    "view",
+    "viewer"
   ],
   "docs_sections": [
     "build123d",
@@ -45,6 +46,7 @@
     "runtimes",
     "schema",
     "validation",
+    "viewer",
     "workflow"
   ]
 }
