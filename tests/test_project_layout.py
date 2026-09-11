@@ -20,6 +20,39 @@ def test_default_layout_unchanged(runner, isolated_dir):
     assert not (isolated_dir / "agentcad.toml").exists()
 
 
+def test_configured_live_viewer_owns_state_and_serves_build(runner, isolated_dir, monkeypatch):
+    from urllib.request import urlopen
+
+    (isolated_dir / "agentcad.toml").write_text('build_dir = "build"\n')
+    invoke(runner, "init", "--no-agent-setup")
+    sources = isolated_dir / "source"
+    sources.mkdir()
+    (sources / "model.py").write_text(SCRIPTS["build123d"])
+    monkeypatch.chdir(sources)
+    try:
+        first = invoke(runner, "run", "model.py", "--label", "first", "--no-daemon", "--no-diff")
+        url = first["project_viewer"]["url"]
+        with urlopen(url + "state", timeout=3) as response:
+            state = json.load(response)
+        assert state["latest"]["version"] == 1
+        with urlopen(url + state["latest"]["artifact"], timeout=3) as response:
+            assert b"<!DOCTYPE html>" in response.read()
+        assert (isolated_dir / "build/.agentcad/viewer/config.json").is_file()
+        assert not (isolated_dir / ".agentcad").exists()
+        assert not (sources / ".agentcad").exists()
+        (sources / "model.py").write_text("broken syntax !")
+        failed = runner.invoke(cli, ["run", "model.py", "--label", "bad", "--no-daemon"])
+        assert failed.exit_code != 0
+        with urlopen(url + "state", timeout=3) as response:
+            state = json.load(response)
+        assert state["latest"]["version"] == 1
+        assert state["attempt"]["status"] == "failed"
+        assert invoke(runner, "viewer", "status")["running"] is True
+    finally:
+        invoke(runner, "viewer", "stop")
+    assert invoke(runner, "viewer", "status")["running"] is False
+
+
 def test_help_does_not_log_before_build_override_is_selected(runner, isolated_dir):
     build = isolated_dir / "build"
     invoke(runner, "init", "--build-dir", str(build), "--no-agent-setup")
