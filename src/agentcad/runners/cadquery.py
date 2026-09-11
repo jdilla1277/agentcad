@@ -111,6 +111,8 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
     def _safe_show_object(self, shape, options=None, **kwargs):
         opts = dict(options) if options else {}
         opts.update(kwargs)
+        from agentcad.validation_guidance import structure_options
+        structure_options(opts)
         sr = cqgi.ShapeResult()
         sr.options = opts
         sr.shape = shape
@@ -191,9 +193,18 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
         parts: list[dict[str, Any]] = []
         for idx, r in enumerate(build_result.results):
             s = r.shape
-            wp = s.val() if hasattr(s, "val") else cq.Shape.cast(s)
+            # Shape.cast accepts raw TopoDS shapes, not an already wrapped
+            # cq.Shape (including Compound). Keep wrappers intact so their
+            # declared structure reaches the shared validator.
+            if isinstance(s, cq.Shape):
+                wp = s
+            elif hasattr(s, "val"):
+                wp = s.val()
+            else:
+                wp = cq.Shape.cast(s)
             per_part_shapes.append(wp)
             opts = r.options or {}
+            from agentcad.validation_guidance import structure_options
             parts.append({
                 "id": idx,
                 "explicit_id": opts.get("id"),
@@ -202,6 +213,7 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
                 "part_of": opts.get("part_of") or opts.get("group"),
                 "group_color": opts.get("group_color"),
                 "topo_shape": wp.wrapped,
+                "validation_options": structure_options(opts),
             })
 
         if len(per_part_shapes) == 1:

@@ -189,6 +189,12 @@ def _assemble(profile, layers, *, first_failure, undetermined) -> dict:
     report["message"] = message
     if suggestion:
         report["suggestion"] = suggestion
+    from agentcad.validation_guidance import diagnostic_guidance, repair_guidance
+    guidance = diagnostic_guidance(report)
+    if guidance:
+        report["guidance"] = guidance
+        report["suggestion"] = " ".join(guidance["next_checks"])
+    report["repairs"] = repair_guidance(report)
     return report
 
 
@@ -197,7 +203,7 @@ def _assemble(profile, layers, *, first_failure, undetermined) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _layer_brep_check(shape, **_) -> dict:
+def _layer_brep_check(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
     from OCP.BRepCheck import BRepCheck_Analyzer
     from agentcad.metrics import extract_validity_errors
     from agentcad.native_io import suppress_native_output
@@ -206,7 +212,31 @@ def _layer_brep_check(shape, **_) -> dict:
         analyzer = BRepCheck_Analyzer(shape)
         ok = analyzer.IsValid()
         errors = [] if ok else extract_validity_errors(analyzer, shape)
-    return {"status": "pass" if ok else "fail", "errors": errors}
+        entities = []
+        if not ok:
+            from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX, TopAbs_WIRE
+            from OCP.TopExp import TopExp_Explorer
+            from agentcad.topo_ids import _indexed_map
+
+            def statuses(entity):
+                result = analyzer.Result(entity)
+                return {s.name for s in result.Status() if s.value != 0} if result else set()
+
+            for kind, shape_type in (("face", TopAbs_FACE), ("edge", TopAbs_EDGE), ("vertex", TopAbs_VERTEX)):
+                indexed = _indexed_map(shape, shape_type)
+                for entity_id in range(1, indexed.Extent() + 1):
+                    entity = indexed.FindKey(entity_id)
+                    found = statuses(entity)
+                    if kind == "face":
+                        wires = TopExp_Explorer(entity, TopAbs_WIRE)
+                        while wires.More():
+                            found.update(statuses(wires.Current()))
+                            wires.Next()
+                    if found:
+                        entities.append({"kind": kind, "id": entity_id, "errors": sorted(found)})
+    return {"status": "pass" if ok else "fail", "errors": errors,
+            "entities": entities[:evidence_limit], "entity_count": len(entities),
+            "evidence_truncated": len(entities) > evidence_limit}
 
 
 def _layer_shell_closure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
@@ -249,6 +279,8 @@ def _layer_shell_closure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
 
         free_edges = []
         seen = set()
+        full_ancestry = TopTools_IndexedDataMapOfShapeListOfShape()
+        TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, full_ancestry)
 
         def collect_free_edges(container):
             ancestry = TopTools_IndexedDataMapOfShapeListOfShape()
@@ -261,7 +293,10 @@ def _layer_shell_closure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
                 if edge_id in seen:
                     continue
                 seen.add(edge_id)
-                free_edges.append(_edge_record(TopoDS.Edge_s(edge), edge_id))
+                record = _edge_record(TopoDS.Edge_s(edge), edge_id)
+                record["face_ids"] = sorted({all_faces.FindIndex(face)
+                    for face in full_ancestry.FindFromKey(edge)})
+                free_edges.append(record)
 
         for _, shell in open_shells:
             collect_free_edges(shell)
@@ -279,6 +314,7 @@ def _layer_shell_closure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
         "free_edge_count": len(free_edges),
         "free_edge_ids": [e["id"] for e in free_edges[:evidence_limit]],
         "free_edges": free_edges[:evidence_limit],
+        "evidence_truncated": len(free_edges) > evidence_limit or len(loose_faces) > evidence_limit,
     }
 
 
@@ -314,7 +350,7 @@ def _face_count(shape) -> int:
     return faces.Extent()
 
 
-def _layer_structure(shape, **_) -> dict:
+def _layer_structure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
     from OCP.TopExp import TopExp
     from OCP.TopTools import TopTools_IndexedMapOfShape
@@ -337,6 +373,7 @@ def _layer_structure(shape, **_) -> dict:
             1 for i in range(1, face_count + 1)
             if not faces_in_solids.Contains(all_faces.FindKey(i))
         )
+    from agentcad.topo_ids import solid_entries
     return {
         "status": "pass",
         "solid_count": solid_count,
@@ -344,6 +381,8 @@ def _layer_structure(shape, **_) -> dict:
         "face_count": face_count,
         "edge_count": edge_count,
         "faces_outside_solids": loose,
+        "solids": solid_entries(shape, limit=evidence_limit),
+        "evidence_truncated": solid_count > evidence_limit,
     }
 
 
@@ -666,33 +705,42 @@ def _mesh_manifold_once(
     def edge_defect(kind, key, uses):
         u, v = key
         mid = tuple((p + q) / 2 for p, q in zip(coords[u], coords[v]))
+        # A mesh edge inside a face has no B-rep edge ID. Publish an empty
+        # list there instead of guessing the nearest unrelated model edge.
+        ids = sorted(mesh_edge_ids.get(frozenset((u, v)), set()))
         return {
             "kind": kind,
             "location": {"x": _round(mid[0]), "y": _round(mid[1]), "z": _round(mid[2])},
             "triangle_count": len(uses),
             "face_ids": sorted({global_tris[i][3] for i, _ in uses}),
+            "edge_ids": ids,
+            "endpoints": [dict(zip(("x", "y", "z"), map(_round, coords[p]))) for p in (u, v)],
         }
+
+    mesh_edge_ids = {}
+    for edge_id, polygons in edge_polygons.items():
+        for nodes in polygons:
+            for a, b in zip(nodes, nodes[1:]):
+                mesh_edge_ids.setdefault(frozenset((root(a), root(b))), set()).add(edge_id)
+
+    def failed_edges(kind, failures):
+        defects = [edge_defect(kind, key, uses) for key, uses in failures[:evidence_limit]]
+        first = edge_defect(kind, *failures[0])
+        first["count"] = len(failures)
+        return {**base, "status": "fail", "defect": first, "defects": defects,
+                "evidence_truncated": len(failures) > evidence_limit}
 
     non_manifold = [(k, u) for k, u in edge_uses.items() if len(u) > 2]
     if non_manifold:
-        key, uses = non_manifold[0]
-        defect = edge_defect("non_manifold_edge", key, uses)
-        defect["count"] = len(non_manifold)
-        return {**base, "status": "fail", "defect": defect}
+        return failed_edges("non_manifold_edge", non_manifold)
 
     open_edges = [(k, u) for k, u in edge_uses.items() if len(u) == 1]
     if open_edges:
-        key, uses = open_edges[0]
-        defect = edge_defect("open_edge", key, uses)
-        defect["count"] = len(open_edges)
-        return {**base, "status": "fail", "defect": defect}
+        return failed_edges("open_edge", open_edges)
 
     inconsistent = [(k, u) for k, u in edge_uses.items() if len(u) == 2 and u[0][1] == u[1][1]]
     if inconsistent:
-        key, uses = inconsistent[0]
-        defect = edge_defect("inconsistent_winding", key, uses)
-        defect["count"] = len(inconsistent)
-        return {**base, "status": "fail", "defect": defect}
+        return failed_edges("inconsistent_winding", inconsistent)
 
     pinch = _find_pinch_vertex(global_tris, dropped, edge_uses)
     if pinch is not None:
@@ -705,6 +753,8 @@ def _mesh_manifold_once(
                 "kind": "pinch_vertex",
                 "location": {"x": _round(p[0]), "y": _round(p[1]), "z": _round(p[2])},
                 "face_ids": sorted(faces),
+                "vertex_ids": sorted(vid for vid, nodes in vertex_nodes.items()
+                                     if any(root(node) == vertex for node in nodes)),
             },
         }
 
@@ -825,6 +875,13 @@ def _explain(report: dict) -> tuple[str, str | None]:
                     "mesh checks were not run under the kernel profile.", None)
         return ("The shape passed every deliverable validation layer.", None)
     entry = layers[first]
+    if first == "structure":
+        failures = [c for c in entry.get("expectations", []) if c["passed"] is False]
+        detail = "; ".join(
+            (f"part {c['part_id']}: " if 'part_id' in c else '') +
+            f"{c['expectation']} expected {c['expected']}, got {c['actual']}" for c in failures)
+        return (f"Structure expectation failed: {detail}.",
+                "Inspect the per-solid volumes and bounds, then restore the intended body count.")
     if first == "file_parse":
         return (f"The file could not be read as CAD: {entry.get('message', '')}".strip(),
                 "Re-export from the source tool. Do not repair CAD by editing the file text.")

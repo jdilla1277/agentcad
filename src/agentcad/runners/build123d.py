@@ -114,7 +114,7 @@ def execute(
 
     # List of (obj, explicit_id, name, color, part_of, group_color) tuples
     # in declaration order.
-    captured: list[tuple[Any, Any, Any, Any, Any, Any]] = []
+    captured: list[tuple] = []
     assembly_requested = False
 
     def show_object(
@@ -167,7 +167,8 @@ def execute(
                 part_of = options.get("part_of") or options.get("group")
             if group_color is None:
                 group_color = options.get("group_color")
-        captured.append((obj, id, name, color, part_of, group_color))
+        from agentcad.validation_guidance import structure_options
+        captured.append((obj, id, name, color, part_of, group_color, structure_options(options)))
 
     def show_assembly(
         shapes,
@@ -219,8 +220,9 @@ def execute(
             if group_color is None:
                 group_color = options.get("group_color")
 
+        from agentcad.validation_guidance import structure_options
         captured.append(
-            (Compound(children=children), id, name, color, part_of, group_color)
+            (Compound(children=children), id, name, color, part_of, group_color, structure_options(options))
         )
         assembly_requested = True
 
@@ -346,7 +348,7 @@ def execute(
         if issubclass(w.category, UserWarning)
         and not issubclass(w.category, DeprecationWarning)
     ]
-    shapes = [obj for obj, _id, _n, _c, _g, _gc in captured]
+    shapes = [item[0] for item in captured]
     if len(shapes) == 1:
         native_shape = shapes[0]
     elif any(_is_topods_shape(s) for s in shapes):
@@ -368,8 +370,9 @@ def execute(
             "part_of": part_of,
             "group_color": group_color,
             "topo_shape": _topods_shape(obj),
+            "validation_options": validation_options,
         }
-        for idx, (obj, explicit_id, name, color, part_of, group_color) in enumerate(captured)
+        for idx, (obj, explicit_id, name, color, part_of, group_color, validation_options) in enumerate(captured)
     ]
 
     return ExecutionResult(

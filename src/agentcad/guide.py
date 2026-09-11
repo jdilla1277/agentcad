@@ -136,6 +136,15 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
    agentcad inspect v1_label/output.step
    ```
    Intentional surfaces or sheet bodies: pass `--validation-profile kernel`.
+   Use `agentcad view FILE --validation` or `agentcad render FILE --view iso
+   --highlight validation` to see the reported defects on an existing STEP.
+   Read `validation.guidance` for the finding, unknowns, and next checks.
+   `validation.repairs` contains unverified possibilities, not diagnosed fixes.
+   Check each precondition; `changes_intent: false` is not a safety verdict.
+   Never fuse or delete bodies just to clear a check.
+   Declare `show_object(part, options={"expect_solids": 1})` when one body is
+   required. Read disconnected-part warnings; `options={"floating": True}`
+   marks deliberate separation. Revalidate after any repair.
 
 6. **Measure feature sizes.** For dimensions beyond top-level metrics:
    ```bash
