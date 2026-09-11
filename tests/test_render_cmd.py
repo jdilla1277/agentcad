@@ -220,6 +220,35 @@ def test_render_json_response(runner, isolated_dir):
     assert "renders" in parsed
 
 
+def test_render_unavailable_returns_actionable_json(
+    runner, isolated_dir, monkeypatch
+):
+    from agentcad.render import RenderUnavailableError
+
+    step_path = isolated_dir / "model.step"
+    step_path.write_text("placeholder")
+    monkeypatch.setattr(
+        "agentcad.step_io.load_cad_shape",
+        lambda _path: object(),
+    )
+
+    def fail_render(*_args, **_kwargs):
+        raise RenderUnavailableError("X11 display unavailable")
+
+    monkeypatch.setattr("agentcad.render.render_shape", fail_render)
+    result = runner.invoke(cli, [
+        "render", str(step_path), "--view", "iso", "--no-daemon",
+    ])
+
+    assert result.exit_code == 1
+    parsed = json.loads(result.stdout)
+    assert parsed["command"] == "render"
+    assert parsed["status"] == "error"
+    assert parsed["error_kind"] == "render_unavailable"
+    assert "X11 display unavailable" in parsed["message"]
+    assert "xvfb-run -a" in parsed["suggestion"]
+
+
 def test_render_version_dir_saves_to_renders(runner, isolated_dir):
     step_path = _create_step(runner, isolated_dir)
     result = runner.invoke(cli, ["render", str(step_path), "--view", "iso"])

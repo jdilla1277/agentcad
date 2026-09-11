@@ -33,6 +33,18 @@ jobs:
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
 
+      - name: Install Linux render smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri
+
+      - name: Run Linux render smoke under Xvfb
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
+            env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_render.py::test_render_shape_produces_png \
+            tests/test_render_cmd.py::test_render_defaults_to_800_by_600 -q
+
   windows-platform:
     runs-on: windows-latest
     name: Windows platform check
