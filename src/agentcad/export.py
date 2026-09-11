@@ -12,7 +12,7 @@ from OCP.TCollection import TCollection_AsciiString, TCollection_ExtendedString
 from OCP.TDataStd import TDataStd_Name
 from OCP.TDocStd import TDocStd_Document
 from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
-from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
+from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID, TopAbs_REVERSED
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
@@ -148,9 +148,17 @@ def export_glb(shape, output_path, linear_deflection=0.1, parts=None):
                 r, g, b = _GLB_PALETTE[i % len(_GLB_PALETTE)]
                 color = Quantity_Color(r, g, b, Quantity_TOC_RGB)
                 color_tool.SetColor(label, color, XCAFDoc_ColorSurf)
+            # Coloring solids must not silently omit other exported surfaces.
+            # Such a file could otherwise look closed only because its loose
+            # faces disappeared during export.
+            loose = TopExp_Explorer(shape, TopAbs_FACE, TopAbs_SOLID)
+            while loose.More():
+                shape_tool.AddShape(loose.Current())
+                loose.Next()
 
     writer = RWGltf_CafWriter(TCollection_AsciiString(str(output_path)), True)
-    writer.Perform(doc, TColStd_IndexedDataMapOfStringString(), Message_ProgressRange())
+    if not writer.Perform(doc, TColStd_IndexedDataMapOfStringString(), Message_ProgressRange()):
+        raise RuntimeError(f"OCCT GLB write failed for {output_path}")
 
 
 def _cross_normalize(ax, ay, az, bx, by, bz):
@@ -209,6 +217,8 @@ def export_obj(shape, output_path, linear_deflection=0.1):
         for i in range(1, nb_tris + 1):
             tri = triangulation.Triangle(i)
             n1, n2, n3 = tri.Get()
+            if face.Orientation() == TopAbs_REVERSED:
+                n2, n3 = n3, n2
             i1 = n1 + v_offset
             i2 = n2 + v_offset
             i3 = n3 + v_offset

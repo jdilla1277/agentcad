@@ -1251,10 +1251,15 @@ def _run_impl(
     # file is moved into the version directory instead of exported again.
     _heartbeat("exporting and validating STEP…")
     _t = _start_phase("export_step")
+    from agentcad.validation import validate_shape
+    from agentcad.export_validation import compare_step_reports
+
+    source_validation = validate_shape(topo_shape_for_metrics, profile=validation_profile)
     staging_dir = Path(tempfile.mkdtemp(prefix="agentcad-stage-"))
     staged_step = staging_dir / "output.step"
     runner.export_step(shape, str(staged_step))
     validation = validate_delivered_step(staged_step, profile=validation_profile)
+    step_round_trip = compare_step_reports(source_validation, validation)
     # Expectations belong to each show_object result. Count the independently
     # exported/reloaded part, since STEP serialization can change containers.
     checks = []
@@ -1281,6 +1286,9 @@ def _run_impl(
                                "gates": True, "expectations": part_checks}
         checks.extend(part_checks)
     validation = with_structure_checks(validation, checks)
+    validation["step_round_trip"] = step_round_trip
+    if step_round_trip["matches"] is not True:
+        warnings.append(step_round_trip["message"])
     _finish_phase("export_step", _t, "export_step_ms")
     apply_validation(metrics, validation)
     undetermined = validation_warning(validation)
@@ -1500,7 +1508,10 @@ def _run_impl(
 
     # Export mesh formats if requested
     exports_meta = {}
+    mesh_validation = {}
     if export:
+        from agentcad.written_mesh import validate_written_mesh
+        from agentcad.export_validation import mesh_warnings
         _heartbeat("exporting requested mesh formats…")
         _t = _start_phase("export_mesh")
         formats = parse_export_formats(export)
@@ -1522,6 +1533,13 @@ def _run_impl(
                 obj_path = version_dir / "output.obj"
                 export_obj(topo_shape, str(obj_path))
                 exports_meta["obj"] = f"{dir_name}/output.obj"
+            mesh_validation[fmt] = validate_written_mesh(version_dir / f"output.{fmt}")
+            warnings.extend(mesh_warnings({fmt: mesh_validation[fmt]}))
+            lifecycle.meta["outputs"].update(exports_meta)
+            lifecycle.meta["mesh_validation"] = mesh_validation
+            if warnings:
+                lifecycle.meta["warnings"] = warnings
+            lifecycle.persist()
         lifecycle.meta["outputs"].update(exports_meta)
         _finish_phase("export_mesh", _t, "export_mesh_ms")
 
@@ -1936,6 +1954,8 @@ def _run_impl(
     output_json["metrics"] = metrics
     output_json["validation"] = validation
     output_json["validation_profile"] = validation_profile
+    if mesh_validation:
+        output_json["mesh_validation"] = mesh_validation
     if parts_output:
         output_json["parts"] = parts_output
     if groups_output:

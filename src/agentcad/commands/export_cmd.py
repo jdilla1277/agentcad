@@ -94,42 +94,61 @@ def export_cmd(step_file, formats, no_daemon):
         }))
         sys.exit(1)
     # Determine output directory
+    from agentcad.validation import validate_shape
+    from agentcad.written_mesh import validate_written_mesh
+    from agentcad.export_validation import mesh_warnings
+
+    validation = validate_shape(topo_shape)
     parent_dir = derived_dir("export", step_path)
     stem = step_path.stem  # e.g. "output"
 
     # Export each format
     outputs = {}
+    mesh_validation = {}
     for fmt in fmt_list:
         out_path = parent_dir / f"{stem}.{fmt}"
         if get_project().configured:
             out_path = get_project().artifact_path(out_path)
-        if fmt == "stl":
-            from agentcad.export import export_stl
-            export_stl(topo_shape, str(out_path))
-        elif fmt == "glb":
-            from agentcad.export import export_glb
-            export_glb(topo_shape, str(out_path))
-        elif fmt == "obj":
-            from agentcad.export import export_obj
-            export_obj(topo_shape, str(out_path))
+        try:
+            if fmt == "stl":
+                from agentcad.export import export_stl
+                export_stl(topo_shape, str(out_path))
+            elif fmt == "glb":
+                from agentcad.export import export_glb
+                export_glb(topo_shape, str(out_path))
+            elif fmt == "obj":
+                from agentcad.export import export_obj
+                export_obj(topo_shape, str(out_path))
+            if not out_path.is_file():
+                raise RuntimeError("Writer did not produce a file.")
+        except Exception as exc:
+            click.echo(json.dumps({
+                "command": "export", "status": "error", "failed_format": fmt,
+                "message": f"Could not write {fmt.upper()}: {exc}",
+                "outputs": outputs, "mesh_validation": mesh_validation,
+                "is_valid": validation["is_valid"], "validation": validation,
+                "warnings": mesh_warnings(mesh_validation),
+            }))
+            sys.exit(1)
         outputs[fmt] = str(out_path)
+        mesh_validation[fmt] = validate_written_mesh(out_path)
 
-    # Update meta.json if in a version directory
-    if _is_version_dir(parent_dir):
-        meta_path = parent_dir / "meta.json"
-        meta = json.loads(meta_path.read_text())
-        existing_outputs = meta.get("outputs", {})
-        existing_outputs.update({
-            fmt: f"{parent_dir.name}/{stem}.{fmt}"
-            for fmt in fmt_list
-        })
-        meta["outputs"] = existing_outputs
-        meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+        # Preserve earlier outputs/checks if a later requested writer fails.
+        if _is_version_dir(parent_dir):
+            meta_path = parent_dir / "meta.json"
+            meta = json.loads(meta_path.read_text())
+            meta.setdefault("outputs", {})[fmt] = f"{parent_dir.name}/{stem}.{fmt}"
+            meta.setdefault("mesh_validation", {})[fmt] = mesh_validation[fmt]
+            meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
     click.echo(json.dumps({
         "command": "export",
         "status": "success",
         "outputs": outputs,
+        "is_valid": validation["is_valid"],
+        "validation": validation,
+        "mesh_validation": mesh_validation,
+        "warnings": mesh_warnings(mesh_validation),
     }))
 
     maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)

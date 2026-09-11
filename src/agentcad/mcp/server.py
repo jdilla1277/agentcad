@@ -162,6 +162,10 @@ def render(
 def export(step_file: str, formats: str, cwd: str, build_dir: str | None = None) -> dict:
     """Export a STEP file to mesh formats (stl, glb, obj).
 
+    Returns source CAD validation separately from mesh_validation per written
+    format. Success means files were written; require that mesh's is_valid is
+    true before handoff. Failed/unknown mesh checks retain files and warn.
+
     Args:
         step_file: Path to the STEP file.
         formats: Comma-separated formats (stl, glb, obj).
