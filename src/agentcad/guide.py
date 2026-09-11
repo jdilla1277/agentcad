@@ -33,10 +33,19 @@ agentcad init --name <project_name>
 required before the core workflow. `agentcad --help` and `agentcad docs` hold
 the full command reference when you need more than this guide.
 
-If `agentcad.json` already exists, this project is already initialized — skip
-`init` and go straight to the core workflow.
+If `agentcad.json` already exists in the selected build directory (the project
+root by default), this project is already initialized — skip `init` and go
+straight to the core workflow. Use `agentcad context` to check configured state.
 
 ## Core workflow
+
+To separate generated artifacts from source, set `build_dir = "./build"` in
+`agentcad.toml` before `agentcad init`. Use `--build-dir PATH` for one command;
+it selects independent history and does not edit configuration. Relative build
+paths resolve from the project root, including from nested directories.
+`agentcad context` reports the resolved build root. Use returned artifact paths;
+`--label` names a version and deprecated `--output` is only a label alias.
+See `agentcad docs artifacts` for initialization, overrides, and recovery.
 
 1. **Write a script.** No imports needed — build123d primitives,
    `show_object`, and agentcad edit helpers are pre-injected by default.

@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
+    "tomli>=2; python_version < '3.11'",
     "click>=8.0",
     "cadquery>=2.0",
     # CasADi 3.8's new abi3 Windows wheel exits nonzero when CadQuery's native

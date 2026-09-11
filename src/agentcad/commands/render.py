@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options, derived_dir
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -79,6 +80,7 @@ def _parse_size(_ctx, _param, value):
 @click.option("--focus", default=None, help="Camera target point 'x,y,z'.")
 @click.option("--no-fit", is_flag=True, default=False, help="Skip FitAll (requires --focus).")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@project_options
 def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
     """Render PNG views of an existing STEP file."""
     if msaa and size[0] * size[1] > MAX_ANTIALIASED_PIXELS:
@@ -162,7 +164,7 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         sys.exit(1)
 
     # Determine output directory
-    parent_dir = step_path.parent
+    parent_dir = derived_dir("render", step_path)
     if _is_version_dir(parent_dir):
         output_dir = parent_dir / "renders"
     else:
@@ -196,6 +198,8 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
                 filename = f"{spec_value}.png"
                 key = spec_value
             out_path = output_dir / filename
+            if get_project().configured:
+                out_path = get_project().artifact_path(out_path)
             render_shape(shape, spec_value, out_path, width=width, height=height,
                          zoom=zoom, focus=focus_point, fit=fit, msaa=msaa)
             renders[key] = str(out_path)
@@ -208,6 +212,8 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
                 key = _format_custom_angle_name(azimuth, elevation)
                 filename = f"{key}.png"
             out_path = output_dir / filename
+            if get_project().configured:
+                out_path = get_project().artifact_path(out_path)
             render_shape_custom(shape, azimuth, elevation, out_path,
                                 width=width, height=height, zoom=zoom,
                                 focus=focus_point, fit=fit, msaa=msaa)

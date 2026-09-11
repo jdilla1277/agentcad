@@ -1,16 +1,19 @@
 import json
 import sys
-from pathlib import Path
 
 import click
+from agentcad.project import get_project
 
 MANIFEST_FILE = "agentcad.json"
 
 
 def load_manifest(command=None):
     """Load and return the manifest dict, or exit with error JSON if missing."""
-    manifest_path = Path.cwd() / MANIFEST_FILE
+    layout = get_project()
+    manifest_path = layout.manifest_path
     if not manifest_path.exists():
+        if layout.configured:
+            raise layout.missing_manifest()
         error = {}
         if command:
             error["command"] = command
@@ -18,12 +21,12 @@ def load_manifest(command=None):
         error["message"] = f"{MANIFEST_FILE} not found. Run 'agentcad init' first."
         click.echo(json.dumps(error))
         sys.exit(1)
-    return json.loads(manifest_path.read_text())
+    return layout.read_manifest()
 
 
 def save_manifest(manifest):
     """Atomically write the manifest to agentcad.json."""
     from agentcad.versioning import atomic_write_json
 
-    manifest_path = Path.cwd() / MANIFEST_FILE
+    manifest_path = get_project().manifest_path
     atomic_write_json(manifest_path, manifest)

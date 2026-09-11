@@ -1,7 +1,9 @@
 import json
+import shlex
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad import __version__
 from agentcad.commands.instructions import instructions_status
@@ -45,15 +47,23 @@ def _agent_setup_report(cwd: Path, runtime: str) -> tuple[dict, list[str]]:
 
 
 @click.command()
+@project_options
 def context():
     """Show the current project context."""
     manifest = load_manifest(command="context")
 
     versions = manifest.get("versions", [])
     current = manifest.get("current", None)
-    recovery = recovery_summary(Path.cwd(), manifest)
+    recovery = recovery_summary(get_project().build_root, manifest)
     runtime = manifest.get("runtime") or dispatch.DEFAULT_RUNTIME
-    agent_setup, setup_actions = _agent_setup_report(Path.cwd(), runtime)
+    agent_setup, setup_actions = _agent_setup_report(get_project().project_root, runtime)
+    if get_project().configured:
+        root_arg = " --build-dir " + shlex.quote(str(get_project().build_root))
+        setup_actions = [
+            action.replace("agentcad instructions install", f"agentcad instructions{root_arg} install")
+                  .replace("agentcad skill install", f"agentcad skill{root_arg} install")
+            for action in setup_actions
+        ]
 
     versions_summary = [
         {

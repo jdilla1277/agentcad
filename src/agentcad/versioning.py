@@ -118,6 +118,8 @@ def reserve_version(
     """Atomically claim a unique version number and empty directory."""
     project_dir = Path(project_dir)
     manifest_path = project_dir / "agentcad.json"
+    from agentcad.project import validate_version_label
+    validate_version_label(label)
     with _version_lock(project_dir):
         manifest = json.loads(manifest_path.read_text())
         used = _used_version_numbers(project_dir, manifest)

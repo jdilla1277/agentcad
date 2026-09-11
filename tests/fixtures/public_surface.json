@@ -20,6 +20,7 @@
     "view"
   ],
   "docs_sections": [
+    "artifacts",
     "build123d",
     "cadquery",
     "check-spec",
