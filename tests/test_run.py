@@ -1969,7 +1969,11 @@ def test_run_direct_no_via_field(runner, isolated_dir):
 # --- M68 1.2: invalid geometry is a core build failure ---
 
 def _fake_metrics_invalid(real_compute):
-    """Wrap compute_metrics to force is_valid=False."""
+    """Wrap compute_metrics to force is_valid=False (legacy helper).
+
+    The verdict now comes from the layered validator, so tests that need an
+    invalid shape patch its kernel layer with ``_force_kernel_invalid``.
+    """
     def wrapper(topo_shape):
         m = real_compute(topo_shape)
         m["is_valid"] = False
@@ -1978,15 +1982,21 @@ def _fake_metrics_invalid(real_compute):
     return wrapper
 
 
+def _force_kernel_invalid(monkeypatch):
+    """Make the validator's kernel layer report an invalid shape."""
+    from agentcad import validation
+
+    def failing_brep_check(shape, **_):
+        return {"status": "fail", "errors": ["BRepCheck_InvalidToleranceValue"]}
+
+    monkeypatch.setitem(validation._RUNNERS, "brep_check", failing_brep_check)
+
+
 def test_run_invalid_shape_returns_explicit_outcome(runner, isolated_dir, monkeypatch):
     """Invalid final geometry must never be reported as an ordinary success."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from agentcad import metrics
-    monkeypatch.setattr(
-        "agentcad.metrics.compute_metrics",
-        _fake_metrics_invalid(metrics.compute_metrics),
-    )
+    _force_kernel_invalid(monkeypatch)
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv"])
     assert result.exit_code == 1
     parsed = json.loads(result.stdout)
@@ -2054,11 +2064,7 @@ def test_run_invalid_shape_is_recorded_without_advancing_current(
     }]
     manifest["current"] = "baseline"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    from agentcad import metrics
-    monkeypatch.setattr(
-        "agentcad.metrics.compute_metrics",
-        _fake_metrics_invalid(metrics.compute_metrics),
-    )
+    _force_kernel_invalid(monkeypatch)
     runner.invoke(cli, ["run", "script.py", "--output", "inv"])
 
     meta = json.loads(
@@ -2078,11 +2084,7 @@ def test_run_invalid_shape_dry_run_is_explicit_without_artifacts(
     """Dry-run surfaces invalidity without allocating a version."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from agentcad import metrics
-    monkeypatch.setattr(
-        "agentcad.metrics.compute_metrics",
-        _fake_metrics_invalid(metrics.compute_metrics),
-    )
+    _force_kernel_invalid(monkeypatch)
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv", "--dry-run"])
     assert result.exit_code == 1
     parsed = json.loads(result.stdout)

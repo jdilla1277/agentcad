@@ -202,7 +202,9 @@ class DaemonServer:
         argv = request.get("argv", [])
         original_cwd = os.getcwd()
         original_env = os.environ.get("AGENTCAD_DAEMON")
+        original_child_env = os.environ.get("_AGENTCAD_DAEMON_CHILD")
         os.environ["AGENTCAD_DAEMON"] = "1"
+        os.environ["_AGENTCAD_DAEMON_CHILD"] = "1"
         try:
             if cwd:
                 os.chdir(cwd)
@@ -254,6 +256,10 @@ class DaemonServer:
                 os.environ.pop("AGENTCAD_DAEMON", None)
             else:
                 os.environ["AGENTCAD_DAEMON"] = original_env
+            if original_child_env is None:
+                os.environ.pop("_AGENTCAD_DAEMON_CHILD", None)
+            else:
+                os.environ["_AGENTCAD_DAEMON_CHILD"] = original_child_env
 
     def serve(self):
         """Run the accept-and-fork loop until ``shutdown`` arrives."""
@@ -1338,6 +1344,32 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
 
 # ---------- __main__ ----------
 
+def _warm_step_reader():
+    """Pay the STEP reader's one-time initialization in the daemon parent.
+
+    ``agentcad run`` validates the STEP it exports by reloading it, and the
+    first STEP load in a process costs about a second of reader set-up.
+    Doing it once here means every routed run inherits a warm reader.
+    """
+    import tempfile
+    from pathlib import Path
+
+    try:
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+        from agentcad.native_io import suppress_native_output
+        from agentcad.runners.build123d import export_step
+        from agentcad.step_io import load_cad_shape
+
+        with tempfile.TemporaryDirectory(prefix="agentcad-warm-") as temp:
+            path = Path(temp) / "warm.step"
+            with suppress_native_output():
+                export_step(BRepPrimAPI_MakeBox(1.0, 1.0, 1.0).Shape(), str(path))
+                load_cad_shape(path)
+    except Exception:
+        # Warm-up is an optimization; a failure here must never stop the daemon.
+        pass
+
+
 def _main():
     """Entry point for daemon subprocess."""
     import argparse
@@ -1352,13 +1384,14 @@ def _main():
     # the default runtime; CadQuery is an optional extra, so its warm-up is
     # best-effort and a missing extra must never keep the daemon from
     # starting.
-    from agentcad import helpers, metrics, render, export  # noqa: F401
+    from agentcad import helpers, metrics, render, export, validation  # noqa: F401
     import build123d  # noqa: F401
     try:
         import cadquery  # noqa: F401
         from cadquery import cqgi, exporters  # noqa: F401
     except ImportError:
         pass
+    _warm_step_reader()
 
     server = DaemonServer(
         socket_path=args.socket,

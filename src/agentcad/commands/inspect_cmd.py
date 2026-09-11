@@ -227,6 +227,16 @@ def _clear_validation_timeout(previous_state) -> None:
     show_default=True,
     help="Validation budget in seconds; 0 disables the timeout.",
 )
+@click.option(
+    "--validation-profile",
+    type=click.Choice(["deliverable", "kernel"]),
+    default="deliverable",
+    show_default=True,
+    help=(
+        "Which layers decide is_valid. 'deliverable' requires the kernel check, "
+        "closed shells, and a manifold mesh; 'kernel' reports the kernel check alone."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @project_options
 def inspect_cmd(
@@ -237,6 +247,7 @@ def inspect_cmd(
     no_limit,
     validate_only,
     validation_timeout,
+    validation_profile,
     no_daemon,
 ):
     """Inspect any file. STEP/BREP get a full topology report; other formats
@@ -259,6 +270,8 @@ def inspect_cmd(
     if validate_only:
         argv.append("--validate-only")
     argv.extend(["--validation-timeout", str(validation_timeout)])
+    if validation_profile != "deliverable":
+        argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -381,6 +394,7 @@ def inspect_cmd(
             validation_timeout=(
                 None if validation_timeout == 0 else validation_timeout
             ),
+            validation_profile=validation_profile,
         )
         # Fork off the warm process as the daemon — only the Tier 0 path
         # paid the OCP cost worth keeping around. Idempotent on its own.
@@ -468,6 +482,7 @@ def _inspect_tier0(
     id_limit: int | None = DEFAULT_ID_LIMIT,
     validate_only: bool = False,
     validation_timeout: float | None = DEFAULT_VALIDATION_TIMEOUT_S,
+    validation_profile: str = "deliverable",
 ) -> None:
     tracker = _ValidationPhaseTracker(
         validation_timeout,
@@ -483,6 +498,7 @@ def _inspect_tier0(
             id_limit=id_limit,
             validate_only=validate_only,
             tracker=tracker,
+            validation_profile=validation_profile,
         )
     except _InspectValidationTimeout:
         _emit_validation_timeout(
@@ -554,6 +570,7 @@ def _inspect_tier0_impl(
     id_limit: int | None,
     validate_only: bool,
     tracker: _ValidationPhaseTracker,
+    validation_profile: str = "deliverable",
 ) -> None:
     """Full topology report for STEP/BREP files. OCCT failures are caught and
     surfaced as malformed — never as a stack trace, never as a leaked native
@@ -565,6 +582,7 @@ def _inspect_tier0_impl(
             format_hint=detection.get("format"),
             validate_only=validate_only,
             tracker=tracker,
+            validation_profile=validation_profile,
         )
     except Exception:
         _emit_malformed_recovery(
@@ -859,12 +877,24 @@ def _compute_notes(payload: dict) -> list:
             "free_edge_count: 0 confirms the topology is sound."
         )
 
+    validation_report = payload.get("validation") or {}
+    closure_status = (
+        (validation_report.get("layers") or {}).get("shell_closure", {}).get("status")
+    )
     if payload.get("is_valid") and payload.get("free_edge_count", 0) > 0:
-        notes.append(
-            "is_valid: true means every shell is closed and the surface "
-            "meshes as a closed manifold, so free_edge_count > 0 here counts "
-            "seam edges or shared-edge bookkeeping, not holes."
-        )
+        if validation_report.get("profile") == "kernel" or closure_status == "skipped":
+            notes.append(
+                "is_valid: true under the kernel profile means only the kernel "
+                "consistency check ran; shell closure and mesh manifoldness were "
+                "not checked. free_edge_count > 0 with an open shell in shells[] "
+                "means this is a surface or open body, not a closed solid."
+            )
+        else:
+            notes.append(
+                "is_valid: true means every shell is closed and the surface "
+                "meshes as a closed manifold, so free_edge_count > 0 here counts "
+                "seam edges or shared-edge bookkeeping, not holes."
+            )
     if payload.get("is_valid") and (payload.get("solid_count") or 0) > 1:
         notes.append(
             f"{payload['solid_count']} separate closed solids: deliverable, but "
@@ -894,6 +924,7 @@ def _topology_report(
     format_hint: str | None = None,
     validate_only: bool = False,
     tracker: _ValidationPhaseTracker,
+    validation_profile: str = "deliverable",
 ):
     from agentcad.step_io import load_cad_shape
     from agentcad.validation import validate_shape
@@ -908,7 +939,7 @@ def _topology_report(
         # closure, manifold mesh), not the kernel check alone. The mesh layer
         # runs in its own bounded worker; the kernel-only result stays
         # available as validation.layers.brep_check.
-        report = validate_shape(shape)
+        report = validate_shape(shape, profile=validation_profile)
         # Loading happened in native_load; reflect its cost in the layer report
         # so the two views of the same work agree.
         native = tracker.entries.get("native_load") or {}

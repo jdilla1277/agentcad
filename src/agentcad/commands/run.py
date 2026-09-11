@@ -5,6 +5,7 @@ import re
 import shlex
 import signal
 import shutil
+import tempfile
 import sys
 import threading
 import time
@@ -799,12 +800,23 @@ def _assign_part_identity(raw_parts):
         "fall back to build123d."
     ),
 )
+@click.option(
+    "--validation-profile",
+    type=click.Choice(["deliverable", "kernel"]),
+    default="deliverable",
+    show_default=True,
+    help=(
+        "Which validation gates success. 'deliverable' requires the kernel check, "
+        "closed shells, and a manifold mesh; 'kernel' restores the kernel-only "
+        "check for intentional surfaces or sheet bodies."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
 @project_options
 def run(
     ctx, script, label, legacy_output, render, export, preview, auto_diff,
-    open_view, params, dry_run, runtime, no_daemon,
+    open_view, params, dry_run, runtime, validation_profile, no_daemon,
 ):
     """Execute the project's CAD script and produce a versioned STEP file.
 
@@ -890,6 +902,7 @@ def run(
         _run_impl(
             ctx, script, output, render, export,
             preview, auto_diff, open_view, params, dry_run, runtime, no_daemon,
+            validation_profile=validation_profile,
         )
     except SystemExit:
         # Explicit sys.exit() calls inside _run_impl are intentional —
@@ -925,7 +938,7 @@ def run(
 
 def _run_impl(
     ctx, script, output, render, export, preview, auto_diff, open_view,
-    params, dry_run, runtime, no_daemon,
+    params, dry_run, runtime, no_daemon, validation_profile="deliverable",
 ):
     _t_total_start = time.perf_counter()
     _timings = {}
@@ -976,6 +989,8 @@ def _run_impl(
         argv.append("--dry-run")
     if runtime:
         argv.extend(["--runtime", runtime])
+    if validation_profile != "deliverable":
+        argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     # Fallback: direct execution
@@ -1146,7 +1161,13 @@ def _run_impl(
     # Compute geometric metrics
     _heartbeat("computing metrics…")
     _t = _start_phase("metrics")
-    from agentcad.metrics import compute_metrics
+    from agentcad.core_build import (
+        apply_validation,
+        reliability_warning,
+        validate_delivered_step,
+        validation_warning,
+    )
+    from agentcad.metrics import compute_metrics  # per-part metrics stay kernel-only
 
     topo_shape_for_metrics = result.topo_shape
     metrics = compute_metrics(topo_shape_for_metrics)
@@ -1219,12 +1240,36 @@ def _run_impl(
     if metrics.get("warnings"):
         warnings.extend(metrics["warnings"])
 
-    # Final geometry validity is part of core CAD success. Stop before STEP
-    # export and before every visual/post-processing phase when it fails.
+    # Export the deliverable to a staging file and validate what will ship.
+    # STEP export can change topology (a fused shared edge becomes two clean
+    # bodies), so the verdict is computed on the reloaded artifact, exactly
+    # as inspect, a slicer, or a grader will see it. On success the staged
+    # file is moved into the version directory instead of exported again.
+    _heartbeat("exporting and validating STEP…")
+    _t = _start_phase("export_step")
+    staging_dir = Path(tempfile.mkdtemp(prefix="agentcad-stage-"))
+    staged_step = staging_dir / "output.step"
+    runner.export_step(shape, str(staged_step))
+    validation = validate_delivered_step(staged_step, profile=validation_profile)
+    _finish_phase("export_step", _t, "export_step_ms")
+    apply_validation(metrics, validation)
+    undetermined = validation_warning(validation)
+    if undetermined:
+        warnings.append(undetermined)
+    unreliable = reliability_warning(metrics)
+    if unreliable:
+        warnings.append(unreliable)
+
+    def _discard_staged_step():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+    # Final geometry validity is part of core CAD success. Stop before every
+    # visual/post-processing phase when it fails.
     from agentcad.core_build import invalid_geometry_payload
 
-    invalid_response = invalid_geometry_payload("run", metrics)
+    invalid_response = invalid_geometry_payload("run", metrics, validation)
     if invalid_response is not None:
+        _discard_staged_step()
         if dry_run:
             invalid_response.update({
                 "runtime": runtime_name,
@@ -1262,12 +1307,15 @@ def _run_impl(
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:
+        _discard_staged_step()
         output_json = {
             "command": "run",
             "status": "success",
             "runtime": runtime_name,
             "output_type": output_type,
             "metrics": metrics,
+            "validation": validation,
+            "validation_profile": validation_profile,
         }
         if parts_output:
             output_json["parts"] = parts_output
@@ -1296,9 +1344,12 @@ def _run_impl(
 
     # Export STEP file via the runner (each engine has its own writer)
     _heartbeat("exporting STEP…")
-    _t = _start_phase("export_step")
-    runner.export_step(shape, str(version_dir / "output.step"))
-    _finish_phase("export_step", _t, "export_step_ms")
+    # The STEP was exported and validated before the version was reserved;
+    # move the staged artifact into place so the delivered bytes are the
+    # validated bytes.
+    shutil.move(str(staged_step), str(version_dir / "output.step"))
+    _discard_staged_step()
+    _phase_tracker.complete("export_step")
 
     # Core build boundary: commit the valid STEP and its metadata before any
     # optional export/render/diff/viewer work begins.
@@ -1337,6 +1388,8 @@ def _run_impl(
             "script": f"{dir_name}/script.py",
         },
         "metrics": metrics,
+        "validation": validation,
+        "validation_profile": validation_profile,
         "artifacts": {
             "mesh_exports": _artifact_state(
                 bool(export), "No optional mesh exports requested."
@@ -1851,6 +1904,8 @@ def _run_impl(
         },
     }
     output_json["metrics"] = metrics
+    output_json["validation"] = validation
+    output_json["validation_profile"] = validation_profile
     if parts_output:
         output_json["parts"] = parts_output
     if groups_output:

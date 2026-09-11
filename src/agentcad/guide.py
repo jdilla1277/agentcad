@@ -55,7 +55,10 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
    ```bash
    agentcad run script.py --label test --dry-run
    ```
-   Check `volume`, `dimensions`, `is_valid` in the response.
+   Check `volume`, `dimensions`, `is_valid` in the response. `is_valid` is the
+   deliverable verdict: the kernel check, every shell closed, and a manifold
+   mesh. Do not hand a part off until it is `true`; `false` names the failing
+   layer in `validation.first_failure`, `null` means a check timed out.
 
 3. **Run for real.** Visual feedback is on by default:
    ```bash
@@ -125,10 +128,14 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
    without selecting files manually. Use `agentcad view old.step new.step` only
    for an explicit non-adjacent comparison.
 
-5. **Inspect if invalid.** If `is_valid: false` or geometry looks wrong:
+5. **Read the validation report if invalid.** A `status: invalid_geometry` run
+   already carries `validation`: the failing layer, free edges by ID with
+   endpoints, or the located mesh defect, plus a `suggestion`. For an existing
+   file:
    ```bash
    agentcad inspect v1_label/output.step
    ```
+   Intentional surfaces or sheet bodies: pass `--validation-profile kernel`.
 
 6. **Measure feature sizes.** For dimensions beyond top-level metrics:
    ```bash
@@ -237,8 +244,12 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
 5. **Need a hole diameter or edge length?** Run `agentcad measure output.step`.
 6. **Need to verify explicit hole/bore counts?** Write `spec.json`, then run
    `agentcad check-spec output.step spec.json`.
-7. **is_valid: false?** Run `agentcad inspect` — check `free_edge_count` and shell status.
-8. **Hollow shape?** `free_edge_count > 0` means open shell.
+7. **is_valid: false?** Read `validation.first_failure` and its layer entry:
+   `shell_closure` lists the free edges with endpoints, `mesh_manifold` locates
+   the defect and names the faces, `brep_check` lists kernel error classes.
+8. **Open shell?** `validation.layers.shell_closure.free_edges` traces the gap;
+   close the profile or add the missing face. `metrics.reliable: false` means the
+   volume is not physical.
 9. **Complex profiles (gears, splines)?** Use subtractive construction — cut from
    a blank cylinder/box instead of building up. See `agentcad docs patterns`.
 10. **A run failed?** Trust `artifact_created: false` and `outputs.step: null`;
