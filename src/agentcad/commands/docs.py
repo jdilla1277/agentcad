@@ -3,6 +3,7 @@ import sys
 
 import click
 
+from agentcad.project import project_options
 from agentcad.runners import dispatch
 
 
@@ -14,6 +15,45 @@ from agentcad.runners import dispatch
 # CADQUERY_OVERLAY below. ``get_sections(runtime)`` merges that overlay
 # onto the base only for the cadquery runtime.
 SECTIONS = {
+    "artifacts": (
+        "Artifact directories and version labels:\n"
+        "  Default: agentcad.json, .agentcad state, and vN_LABEL versions live\n"
+        "  at the project root, just as in existing projects.\n\n"
+        "  Persistent setting: create agentcad.toml in the source project:\n"
+        '    build_dir = "./build"\n'
+        "  Then run agentcad init. This creates build/agentcad.json.\n"
+        "  Scripts, edit.py, and installed agent guidance stay in the source\n"
+        "  project. Generated geometry, metadata, viewers, logs, and feedback\n"
+        "  bundles live below the selected build directory.\n\n"
+        "  One-command override (does not edit agentcad.toml):\n"
+        "    agentcad init --build-dir /tmp/cad-build\n"
+        "    agentcad run model.py --label first --build-dir /tmp/cad-build\n"
+        "    agentcad context --build-dir /tmp/cad-build\n"
+        "    agentcad parts --build-dir /tmp/cad-build list current\n"
+        "    agentcad recover v1_first --build-dir /tmp/cad-build\n\n"
+        "  Precedence: --build-dir > agentcad.toml build_dir > project root.\n"
+        "  Relative build directories resolve from the nearest project root\n"
+        "  (agentcad.toml or legacy agentcad.json), even from a subdirectory.\n"
+        "  Without a marker, the invocation directory is the project root.\n"
+        "  An empty agentcad.toml can anchor projects using only overrides.\n"
+        "  Explicit input filenames still resolve from the invocation directory.\n"
+        "  Each build root has independent history; initialize it explicitly.\n"
+        "  Changing the setting never moves or merges old history.\n"
+        "  No environment-variable interpolation occurs inside TOML.\n\n"
+        "  JSON reports project_root, build_root, and build_root_source.\n"
+        "  Root source is command, project_config, default, or manifest when\n"
+        "  discovering a configured build from inside its generated tree.\n"
+        "  Configured artifacts are returned as absolute paths; default paths\n"
+        "  retain their existing project-relative strings when invoked at root.\n"
+        "  Always use returned outputs.step, viewer, and renders paths.\n"
+        "  On-disk manifest/meta paths remain relative to the build root.\n"
+        "  Standalone render/export/view of outside inputs writes under\n"
+        "  build_root/derived, with distinct directories for same-named inputs.\n"
+        "  --label names a version; deprecated --output never means a path.\n"
+        "  Configured live-viewer service state lives in build_root/.agentcad/viewer.\n"
+        "  Each build root has its own service and live URL; viewer open/status/stop\n"
+        "  accept --build-dir. Default projects retain the shared user service.\n"
+    ),
     "viewer": (
         "Live project viewer:\n"
         "  Normal run/import commands open a stable local project URL. Share\n"
@@ -43,6 +83,8 @@ SECTIONS = {
         "  through private project URLs. These links work only on this machine.\n"
         "  Moving the project changes its URL; renaming a build does not.\n"
         "  State: ~/.cache/agentcad/viewer (AGENTCAD_VIEWER_HOME overrides it).\n"
+        "  With a configured build root, state instead lives in its .agentcad/viewer\n"
+        "  directory; this takes precedence over AGENTCAD_VIEWER_HOME.\n"
         "  Preserve this directory to keep URLs stable. If the saved port is\n"
         "  occupied, free it and retry; AgentCAD never kills another listener.\n"
         "  For incompatible protocol versions, stop the service using the\n"
@@ -1727,15 +1769,19 @@ CADQUERY_OVERLAY = {
 
 def get_sections(runtime):
     """Return the sections dict for ``runtime`` (overlay applied, base unchanged)."""
+    merged = dict(SECTIONS)
     if runtime == "cadquery":
-        merged = dict(SECTIONS)
         merged.update(CADQUERY_OVERLAY)
         # These build123d topics have no CadQuery-flavored counterpart;
         # dropping them keeps compatibility mode free of build123d code.
         for name in ("build123d", "examples"):
             merged.pop(name, None)
-        return merged
-    return dict(SECTIONS)
+    for name in ("quickstart", "commands", "editing", "schema"):
+        merged[name] += (
+            "\nArtifact locations: use returned paths. To separate generated files\n"
+            "from source with agentcad.toml or --build-dir, see `agentcad docs artifacts`.\n"
+        )
+    return merged
 
 
 @click.command()
@@ -1749,11 +1795,10 @@ def get_sections(runtime):
         "from agentcad.json, fall back to the global default runtime."
     ),
 )
+@project_options
 def docs(section, runtime):
     """Show agentcad documentation."""
-    # Walk parents so `agentcad docs` honors the project manifest even when
-    # invoked from a subdir. Other commands (`run`, `inspect`) keep cwd-only
-    # semantics since they write artifacts relative to cwd.
+    # Follow the selected build manifest, including parent project discovery.
     project_rt = dispatch.project_runtime(search_parents=True)
     effective_runtime = runtime or project_rt or dispatch.DEFAULT_RUNTIME
     sections = get_sections(effective_runtime)

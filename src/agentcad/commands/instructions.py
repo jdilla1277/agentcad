@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad.guide import effective_runtime, guide_body, guide_fingerprint
 
@@ -111,6 +112,7 @@ def instructions_status(cwd: Path, runtime: str) -> dict:
 
 
 @click.group()
+@project_options
 def instructions():
     """Manage project instruction snippets for future agents."""
 
@@ -153,7 +155,7 @@ def show(runtime):
 )
 def install(target, runtime):
     """Install the agentcad guide into AGENTS.md and/or CLAUDE.md."""
-    result = install_instructions(Path.cwd(), target, effective_runtime(runtime))
+    result = install_instructions(get_project().project_root, target, effective_runtime(runtime))
     click.echo(json.dumps({
         "command": "instructions install",
         "status": "success",

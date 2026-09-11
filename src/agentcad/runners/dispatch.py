@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import json
 from pathlib import Path
 from typing import Literal
 
@@ -77,37 +76,30 @@ def project_runtime(
     *,
     search_parents: bool = False,
 ) -> RuntimeName | None:
-    """Read the ``runtime`` field from the nearest ``agentcad.json``.
+    """Read the runtime from the selected project's build manifest.
 
-    By default reads only ``start`` (or cwd) — matches the existing
-    ``manifest.load_manifest`` contract used by ``run``/``inspect``, which
-    expect the manifest in the current working directory.
-
-    Pass ``search_parents=True`` to walk up the directory tree until a
-    manifest is found, the filesystem root is reached, or none exists.
-    Used by ``docs`` so an agent invoking it from a subdir of the project
-    (a common pattern when driving via shell tools that don't preserve
-    cwd between calls) still gets runtime-aware documentation.
+    CLI invocations share the discovered project and any --build-dir override.
+    Outside Click, legacy projects retain cwd-only lookup unless callers pass
+    ``search_parents=True``. Configured projects always follow their build root.
 
     Returns ``None`` if no manifest is found or it doesn't pin a runtime;
     callers should fall back to ``DEFAULT_RUNTIME``.
     """
-    base = Path.cwd() if start is None else start
-    candidates: list[Path] = [base]
-    if search_parents:
-        candidates.extend(base.parents)
-    for directory in candidates:
-        manifest_path = directory / "agentcad.json"
-        if not manifest_path.exists():
-            continue
-        try:
-            data = json.loads(manifest_path.read_text())
-        except (OSError, json.JSONDecodeError):
+    from agentcad.project import ProjectError, get_project, resolve_project
+
+    try:
+        layout = get_project() if start is None else resolve_project(start=start)
+        import click
+        # Preserve the helper's opt-in parent search outside a CLI invocation.
+        if (not search_parents and click.get_current_context(silent=True) is None
+                and not layout.configured and layout.project_root != (start or Path.cwd()).resolve()):
             return None
-        rt = data.get("runtime")
-        if rt in _VALID_RUNTIMES:
-            return rt  # type: ignore[return-value]
+        data = layout.read_manifest()
+    except (ProjectError, OSError, ValueError):
         return None
+    rt = data.get("runtime")
+    if rt in _VALID_RUNTIMES:
+        return rt
     return None
 
 

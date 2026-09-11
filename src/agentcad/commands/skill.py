@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad.guide import effective_runtime, guide_body, guide_fingerprint
 
@@ -76,6 +77,7 @@ def skill_status(cwd: Path, runtime: str) -> dict:
 
 
 @click.group()
+@project_options
 def skill():
     """Manage the agentcad agent skill."""
 
@@ -108,7 +110,7 @@ def show(runtime):
 )
 def install(runtime):
     """Install the agent skill to .claude/skills/agentcad/SKILL.md."""
-    result = install_skill(Path.cwd(), effective_runtime(runtime))
+    result = install_skill(get_project().project_root, effective_runtime(runtime))
     click.echo(json.dumps({
         "command": "skill install",
         "status": "success",

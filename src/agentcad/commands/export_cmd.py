@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options, derived_dir
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -43,6 +44,7 @@ def _is_version_dir(directory):
 @click.argument("step_file")
 @click.option("--format", "formats", required=True, help="Comma-separated mesh formats: stl, glb, obj")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@project_options
 def export_cmd(step_file, formats, no_daemon):
     """Export a STEP file to mesh formats (STL, GLB, OBJ)."""
     # Try routing through daemon. Exits before returning if reachable.
@@ -92,13 +94,15 @@ def export_cmd(step_file, formats, no_daemon):
         }))
         sys.exit(1)
     # Determine output directory
-    parent_dir = step_path.parent
+    parent_dir = derived_dir("export", step_path)
     stem = step_path.stem  # e.g. "output"
 
     # Export each format
     outputs = {}
     for fmt in fmt_list:
         out_path = parent_dir / f"{stem}.{fmt}"
+        if get_project().configured:
+            out_path = get_project().artifact_path(out_path)
         if fmt == "stl":
             from agentcad.export import export_stl
             export_stl(topo_shape, str(out_path))

@@ -1,9 +1,9 @@
 import json
 import re
 import sys
-from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad.manifest import load_manifest
 
@@ -52,7 +52,7 @@ def _resolve_version(manifest, ref):
 
 
 def _load_version_meta(version_entry):
-    meta_path = Path.cwd() / version_entry["path"] / "meta.json"
+    meta_path = get_project().version_dir(version_entry) / "meta.json"
     if not meta_path.exists():
         _emit_error(
             f"meta.json not found for version '{version_entry.get('label')}'.",
@@ -170,6 +170,7 @@ def _dedupe_preserve_order(values):
 
 
 @click.group(name="parts")
+@project_options
 def parts_cmd():
     """List and inspect parts captured for version snapshots.
 
@@ -311,6 +312,7 @@ def view_parts(
     Human changes inside the browser are not persisted; agents can generate a
     new viewer whenever a different inspection setup is useful.
     """
+    get_project().preflight()
     manifest = load_manifest(command="parts")
     version_entry = _resolve_version(manifest, ref)
     if version_entry is None:
@@ -374,7 +376,7 @@ def view_parts(
             version=meta.get("version", version_entry.get("version")),
             label=meta.get("label", version_entry.get("label")),
         )
-    glb_path = Path.cwd() / viewer_glb
+    glb_path = get_project().artifact_path(viewer_glb)
     if not glb_path.exists():
         _emit_error(
             f"viewer_glb not found for version '{ref}'.",
@@ -405,7 +407,7 @@ def view_parts(
 
     from agentcad.commands.view import _open_browser, _render_unified
 
-    version_dir = Path.cwd() / version_entry["path"]
+    version_dir = get_project().version_dir(version_entry)
     name_parts = ["parts_review"]
     if review_label:
         name_parts.append(review_label)
@@ -443,7 +445,7 @@ def view_parts(
     if open_browser:
         _open_browser(url)
 
-    rel_html = html_path.relative_to(Path.cwd()).as_posix()
+    rel_html = get_project().response_path(html_path)
     handoff_label = review_label or "part review"
     handoff_message = (
         f"Open this temporary {handoff_label} viewer to inspect "

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import click
 
+from agentcad.project import ProjectError, format_response, get_project
+
 from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
 from agentcad.commands.context import context
@@ -84,6 +86,11 @@ EXAMPLE SESSION
    "preview": "v1_first/preview.png"}
 
 VERSION OUTPUTS
+  To separate generated files from source, set build_dir = "./build" in
+  agentcad.toml before init, or pass --build-dir PATH to a command. Relative
+  build paths resolve from the project root. --label names a version;
+  --output is only its deprecated alias. See `agentcad docs artifacts`.
+
   A successful first run creates:
     v1_first/
       output.step       STEP geometry
@@ -507,7 +514,7 @@ class _LoggingGroup(click.Group):
                 )
             if Path("edit.py").is_file():
                 run_action = "agentcad run edit.py --label recovered-edit"
-                if not Path("agentcad.json").is_file():
+                if not get_project().manifest_path.is_file():
                     run_action = (
                         "agentcad init --name recovered && " + run_action
                     )
@@ -578,6 +585,15 @@ class _LoggingGroup(click.Group):
         ctx.meta["viewer_started_ns"] = time.time_ns()
 
         def _capturing_echo(message=None, **kwargs):
+            if message is not None and not kwargs.get("err"):
+                layout = ctx.meta.get("project_layout")
+                if layout is not None:
+                    try:
+                        payload = json.loads(message)
+                        if isinstance(payload, dict) and "command" in payload:
+                            message = json.dumps(format_response(payload, layout))
+                    except (TypeError, json.JSONDecodeError):
+                        pass
             if message is not None:
                 captured.append(str(message))
             original_echo(message, **kwargs)
@@ -585,12 +601,25 @@ class _LoggingGroup(click.Group):
         click.echo = _capturing_echo
         try:
             return super().invoke(ctx)
+        except ProjectError as exc:
+            ctx.meta["project_error"] = True
+            payload = exc.payload(ctx.invoked_subcommand or "unknown")
+            if ctx.invoked_subcommand == "run":
+                payload.update(label=ctx.meta.get("run_label"), artifact_created=False,
+                               outputs={"step": None})
+            click.echo(json.dumps(payload))
+            sys.exit(1)
         finally:
             click.echo = original_echo
             self._log_session(ctx, captured)
             self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
 
     def _record_live_build(self, ctx, captured, root, exception=None):
+        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
+            return
+        layout = ctx.meta.get("project_layout")
+        if layout is not None:
+            root = layout.build_root
         if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
             return
         result = {}
@@ -618,7 +647,7 @@ class _LoggingGroup(click.Group):
                 pass  # Optional UI state must never replace the command result.
 
     def _log_session(self, ctx, captured):
-        if os.environ.get("AGENTCAD_NO_LOG"):
+        if os.environ.get("AGENTCAD_NO_LOG") or ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
@@ -632,10 +661,14 @@ class _LoggingGroup(click.Group):
                 break
             except (json.JSONDecodeError, TypeError):
                 continue
+        # Eager help/argument parsing can exit before --build-dir is applied.
+        # With no command result, do not create state in an unselected root.
+        if not result:
+            return
         # Collect the raw args from sys.argv
         args = sys.argv[2:] if len(sys.argv) > 2 else []
         try:
-            logger = SessionLogger(Path.cwd())
+            logger = SessionLogger(get_project().build_root)
             logger.log(cmd_name, {"argv": args}, result)
         except Exception:
             pass  # Never let logging break the CLI
