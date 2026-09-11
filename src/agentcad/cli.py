@@ -360,13 +360,15 @@ _BUILD123D_AUTHORING_GUIDE = """BUILD123D AUTHORING
     $ agentcad docs examples     # worked build123d examples
     $ agentcad docs patterns     # idioms + footguns
 
-  CadQuery compatibility remains available for existing projects and scripts.
-  See `agentcad docs runtimes` for the explicit compatibility workflow.
+  CadQuery compatibility remains available for existing projects and scripts
+  via the optional extra: pip install "agentcad[cadquery]". It is not part of
+  the default install. See `agentcad docs runtimes` for the workflow.
 """
 
 
 _CADQUERY_AUTHORING_GUIDE = """CADQUERY COMPATIBILITY AUTHORING
-  This project is pinned to the CadQuery compatibility runtime. Scripts call
+  This project is pinned to the CadQuery compatibility runtime, which needs
+  the optional extra: pip install "agentcad[cadquery]". Scripts call
   show_object() to surface geometry, and the CadQuery preamble is pre-injected:
 
     box = cq.Workplane('XY').box(10, 20, 5)

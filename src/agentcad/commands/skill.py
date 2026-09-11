@@ -37,7 +37,7 @@ description: >
   CAD tool for AI agents. Use when the user asks you to design, model, or build
   a 3D object in an existing CadQuery compatibility project. agentcad
   produces STEP files, PNG renders, mesh exports (STL/GLB/OBJ), and metrics.
-compatibility: Requires Python 3.10-3.12 and agentcad installed (pip install agentcad).
+compatibility: Requires Python 3.10-3.12 and the CadQuery extra installed (pip install "agentcad[cadquery]").
 allowed-tools: Bash(agentcad:*)
 ---
 

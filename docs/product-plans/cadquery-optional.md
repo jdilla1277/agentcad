@@ -1,6 +1,8 @@
 # Product plan: Make CadQuery an optional compatibility extra
 
-**Status:** Proposed
+**Status:** In progress. Package, runtime, CI, and CLI/README documentation
+changes shipped in agentcad 0.6.0 (this repo). The customer-facing website
+page is tracked in the internal repo alongside the site.
 
 **Scope:** Packaging and runtime separation
 
@@ -76,7 +78,8 @@ CadQuery when the extra is absent, AgentCAD must return its normal structured
 error response. The message should say:
 
 > CadQuery compatibility is not installed. Install it with
-> `pip install "agentcad[cadquery]"`, then restart the AgentCAD daemon.
+> `pip install "agentcad[cadquery]"` in the same environment as agentcad,
+> then run `agentcad daemon restart` if a daemon is running.
 
 No raw `ModuleNotFoundError` or partial command output should escape.
 
