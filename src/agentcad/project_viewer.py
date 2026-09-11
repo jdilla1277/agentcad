@@ -40,9 +40,8 @@ def locked(name="registry"):
         handle.seek(0)
         if os.name == "nt":
             import msvcrt
-            if handle.read(1) == b"":
-                handle.write(b"0")
-                handle.flush()
+            # Windows locks deny reads too. Lock beyond EOF directly instead
+            # of reading/initializing a byte another process may already own.
             def acquire():
                 handle.seek(0)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)

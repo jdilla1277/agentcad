@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import HTTPError
@@ -176,6 +177,25 @@ def test_concurrent_service_starts_share_one_instance(service, tmp_path):
         results = list(executor.map(lambda _: live.ensure_service(), range(4)))
     assert len({result["port"] for result in results}) == 1
     assert live.service_status()["running"] is True
+
+
+def test_lock_contender_waits_without_reading_owned_bytes(service):
+    # Exercise existing nonempty lock files as well as fresh empty files.
+    (live.runtime_dir() / "contention.lock").write_bytes(b"0")
+    attempted = Event()
+
+    def contender():
+        attempted.set()
+        with live.locked("contention"):
+            return True
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with live.locked("contention"):
+            future = executor.submit(contender)
+            assert attempted.wait(timeout=2)
+            time.sleep(.1)
+            assert not future.done()
+        assert future.result(timeout=2)
 
 
 def test_service_crash_releases_ownership_and_keeps_url(service, tmp_path):
