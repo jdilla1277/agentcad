@@ -21,6 +21,7 @@ Precedence (highest to lowest):
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 from pathlib import Path
 from typing import Literal
@@ -29,6 +30,46 @@ RuntimeName = Literal["cadquery", "build123d"]
 
 _VALID_RUNTIMES: tuple[RuntimeName, ...] = ("cadquery", "build123d")
 DEFAULT_RUNTIME: RuntimeName = "build123d"
+
+# The default `pip install agentcad` ships build123d only. CadQuery lives
+# behind the `cadquery` extra, so a project or script that selects it on a
+# default installation gets this one message everywhere (run, init, daemon,
+# helpers) instead of a ModuleNotFoundError from whichever import fires first.
+MISSING_CADQUERY_MESSAGE = (
+    "CadQuery compatibility is not installed. Install it with "
+    "`pip install \"agentcad[cadquery]\"` in the same environment as agentcad, "
+    "then run `agentcad daemon restart` if a daemon is running."
+)
+
+# Offered alongside the missing-extra error on `run`, where porting is a
+# real alternative to installing (it is not on `init`).
+PORT_TO_BUILD123D_HINT = (
+    "Without the extra, port the script to build123d: `agentcad docs runtimes` "
+    "shows the same shape written both ways."
+)
+
+
+def runtime_available(name: RuntimeName) -> bool:
+    """Report whether the package backing ``name`` is importable.
+
+    Uses ``importlib.util.find_spec`` so the check never imports the
+    engine: runtime detection, ``--help``, ``docs`` and daemon status must
+    stay cheap and must not pull CadQuery (and its CasADi stack) into a
+    process that only needs build123d.
+    """
+    if name == "cadquery":
+        return importlib.util.find_spec("cadquery") is not None
+    if name == "build123d":
+        return importlib.util.find_spec("build123d") is not None
+    return False
+
+
+def require_runtime_available(name: RuntimeName) -> None:
+    """Raise ``ValueError`` with the documented install hint if ``name``'s
+    engine is not installed. build123d is a hard dependency, so only the
+    optional CadQuery extra can actually be missing."""
+    if name == "cadquery" and not runtime_available("cadquery"):
+        raise ValueError(MISSING_CADQUERY_MESSAGE)
 
 
 def project_runtime(
@@ -147,6 +188,7 @@ def get_runner(name: RuntimeName):
     doesn't pull in both engines.
     """
     if name == "cadquery":
+        require_runtime_available("cadquery")
         from agentcad.runners import cadquery as runner
     elif name == "build123d":
         from agentcad.runners import build123d as runner
@@ -180,6 +222,16 @@ def resolve(
         declared = _declared_runtime(source)
         if project_default is not None:
             if declared is not None and declared != project_default:
+                if not runtime_available(declared):
+                    # Don't send the agent down a two-hop path ("pass
+                    # --runtime cadquery" → "not installed"); the real
+                    # blocker is the missing extra, say so now.
+                    raise ValueError(
+                        f"runtime mismatch: project uses {project_default}, but "
+                        f"the script uses {declared}. {MISSING_CADQUERY_MESSAGE} "
+                        f"Then pass --runtime {declared} for a one-off run, or "
+                        "update the runtime in agentcad.json."
+                    )
                 raise ValueError(
                     f"runtime mismatch: project uses {project_default}, but the "
                     f"script uses {declared}. Pass --runtime {declared} for a "

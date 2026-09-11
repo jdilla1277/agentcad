@@ -103,8 +103,6 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         argv.append("--no-fit")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
-    from cadquery import importers
-
     from agentcad.render import (
         RenderUnavailableError,
         parse_view_spec,

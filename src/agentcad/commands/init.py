@@ -95,6 +95,20 @@ def init(name, runtime, force, no_agent_setup):
         }))
         sys.exit(1)
 
+    # Fail before writing anything if the requested engine is not installed.
+    # A manifest pinned to an absent CadQuery would make every later `run`
+    # fail; better to say so now with the exact pip command.
+    if runtime:
+        try:
+            dispatch.require_runtime_available(runtime)
+        except ValueError as exc:
+            click.echo(json.dumps({
+                "command": "init",
+                "status": "error",
+                "message": str(exc),
+            }))
+            sys.exit(1)
+
     project_name = name if name else Path.cwd().name
     manifest = _build_manifest(project_name, runtime)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")

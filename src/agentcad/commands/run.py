@@ -974,6 +974,23 @@ def _run_impl(
 
     # Fallback: direct execution
     _t = _start_phase("validation")
+
+    # An explicit --runtime naming an engine that is not installed is the
+    # real blocker regardless of project state; report it before the
+    # manifest check so a fresh folder does not hide it behind "run init".
+    if runtime:
+        from agentcad.runners import dispatch as _dispatch
+        try:
+            _dispatch.require_runtime_available(runtime)
+        except ValueError as e:
+            _emit_run({
+                "command": "run",
+                "status": "error",
+                "message": str(e),
+                "suggestion": _dispatch.PORT_TO_BUILD123D_HINT,
+            })
+            sys.exit(1)
+
     manifest = load_manifest(command="run")
 
     # Python version check (before CadQuery imports)
@@ -1010,12 +1027,16 @@ def _run_impl(
             raw_source, override=runtime, project_default=project_default
         )
     except ValueError as e:
-        # Ambiguous/mismatched source or unknown --runtime — surface cleanly.
-        _emit_run({
+        # Ambiguous/mismatched source, unknown --runtime, or a runtime whose
+        # optional extra is not installed — surface cleanly.
+        payload = {
             "command": "run",
             "status": "error",
             "message": str(e),
-        })
+        }
+        if dispatch.MISSING_CADQUERY_MESSAGE in str(e):
+            payload["suggestion"] = dispatch.PORT_TO_BUILD123D_HINT
+        _emit_run(payload)
         sys.exit(1)
 
     # Pre-execution validation (before version allocation)

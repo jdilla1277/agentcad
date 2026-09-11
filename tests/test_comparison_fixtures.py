@@ -21,7 +21,10 @@ from agentcad.solid_compare import (
 )
 from agentcad.step_io import load_cad_shape
 from agentcad.render import render_comparison_source_views, render_diff_overlay
-from scripts.generate_comparison_fixtures import shared_location_pair
+# The fixture generator builds its geometry with CadQuery; skip cleanly on
+# the default (build123d-only) profile instead of failing at collection.
+pytest.importorskip("cadquery")
+from scripts.generate_comparison_fixtures import shared_location_pair  # noqa: E402
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "comparison"

@@ -8,7 +8,7 @@ on:
 jobs:
   collect:
     runs-on: ubuntu-22.04
-    name: pytest --collect-only
+    name: pytest --collect-only (full profile)
     steps:
       - uses: actions/checkout@v4
 
@@ -18,10 +18,12 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install agentcad + test dependencies
-        run: pip install -e .[mcp,dev]
+      - name: Install agentcad + test dependencies + CadQuery extra
+        # The full profile. The CadQuery compatibility suite in tests/ builds
+        # its fixtures with CadQuery, so it only collects here.
+        run: pip install -e .[mcp,dev,cadquery]
 
-      - name: Verify the geometry runtime imports on a clean install
+      - name: Verify both runtimes import on a clean install
         # Catches dependency-resolution breakage (e.g. a second OCP generation
         # pulled in by an unpinned transitive dep) that pip and `pip check`
         # both miss. Nothing else in this workflow imports build123d.
@@ -45,6 +47,47 @@ jobs:
             tests/test_render.py::test_render_shape_produces_png \
             tests/test_render_cmd.py::test_render_defaults_to_800_by_600 -q
 
+  build123d-only:
+    runs-on: ubuntu-22.04
+    name: Default profile (no CadQuery extra)
+    # The contract of `pip install agentcad`: build123d + OCP only. A full
+    # environment cannot catch a hidden `import cadquery` on a shared command
+    # path, so this profile exists to keep the default install honest. See
+    # docs/product-plans/cadquery-optional.md.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install agentcad + test dependencies (no cadquery extra)
+        run: pip install -e .[mcp,dev]
+
+      - name: Verify CadQuery and CasADi are absent
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          missing = [m for m in ("cadquery", "casadi") if importlib.util.find_spec(m) is None]
+          if missing != ["cadquery", "casadi"]:
+              sys.exit(f"default profile must not include cadquery/casadi; found: {set(['cadquery','casadi']) - set(missing)}")
+          print("cadquery and casadi absent")
+          PY
+          python -c "import build123d; print(build123d.__version__)"
+
+      - name: Collect tests on the default profile
+        # The repo conftest skips CadQuery-fixture modules here; collection
+        # must still succeed for everything else.
+        run: pytest --collect-only -q
+
+      - name: Run the optional-extra contract + build123d command suites
+        run: pytest tests/test_cadquery_optional.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py -q
+
+      - name: Run OCP-free interface guardrails
+        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
+
   windows-platform:
     runs-on: windows-latest
     name: Windows platform check
@@ -57,7 +100,7 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install agentcad + test dependencies
+      - name: Install agentcad + test dependencies (default profile)
         run: pip install -e .[mcp,dev]
 
       - name: Collect tests

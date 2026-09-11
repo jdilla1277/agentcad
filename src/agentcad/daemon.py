@@ -156,10 +156,17 @@ class DaemonServer:
         """
         req_type = request.get("type")
         if req_type == "ping":
+            from agentcad.runners.dispatch import runtime_available
+
             return {
                 "type": "pong",
                 "version": self._version,
                 "instance_id": self._instance_id,
+                # Whether this daemon process can serve CadQuery-runtime
+                # requests. False on the default build123d-only install;
+                # flips to True after `pip install "agentcad[cadquery]"`
+                # and a daemon restart.
+                "cadquery_available": runtime_available("cadquery"),
             }
         if req_type == "shutdown":
             expected_instance = request.get("instance_id")
@@ -909,6 +916,8 @@ def daemon_status(socket_path=None, pid_path=None):
         }
 
     result = {"running": True, "pid": pid}
+    if "cadquery_available" in resp:
+        result["cadquery_available"] = bool(resp["cadquery_available"])
     version = resp.get("version")
     if version is not None:
         result["version"] = version
@@ -1339,12 +1348,15 @@ def _main():
     args = parser.parse_args()
 
     # Eager imports — warm up all expensive modules in the parent so each
-    # forked child inherits OCP in memory via copy-on-write.
-    import cadquery  # noqa: F401
-    from cadquery import cqgi, exporters  # noqa: F401
+    # forked child inherits OCP in memory via copy-on-write. build123d is
+    # the default runtime; CadQuery is an optional extra, so its warm-up is
+    # best-effort and a missing extra must never keep the daemon from
+    # starting.
     from agentcad import helpers, metrics, render, export  # noqa: F401
+    import build123d  # noqa: F401
     try:
-        import build123d  # noqa: F401
+        import cadquery  # noqa: F401
+        from cadquery import cqgi, exporters  # noqa: F401
     except ImportError:
         pass
 
