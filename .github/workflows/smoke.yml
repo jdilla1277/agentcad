@@ -82,8 +82,18 @@ jobs:
         # must still succeed for everything else.
         run: pytest --collect-only -q
 
+      - name: Install Linux render smoke dependencies
+        # The contract test and tests_b3d/test_render_cmd.py render PNGs,
+        # which needs an X11/GLX display on Linux (see the full-profile job).
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri
+
       - name: Run the optional-extra contract + build123d command suites
-        run: pytest tests/test_cadquery_optional.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py -q
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
+            env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_cadquery_optional.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py -q
 
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
@@ -122,7 +132,9 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install agentcad + browser test dependencies
-        run: pip install -e .[mcp,dev]
+        # tests/test_viewer_browser.py builds its fixtures through a CadQuery
+        # project, so this job uses the full profile.
+        run: pip install -e .[mcp,dev,cadquery]
 
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
