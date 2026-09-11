@@ -157,6 +157,9 @@ def test_checked_in_fixtures_stay_small_enough_for_the_public_repo():
 
 
 def test_checked_in_steps_match_the_deterministic_generator(tmp_path):
+    # The generator script builds its geometry with CadQuery; skip on the
+    # default (build123d-only) profile where that extra is absent.
+    pytest.importorskip("cadquery")
     script = Path(__file__).parents[1] / "scripts" / "generate_validation_fixtures.py"
     completed = subprocess.run(
         [sys.executable, str(script), "--output-dir", str(tmp_path)],

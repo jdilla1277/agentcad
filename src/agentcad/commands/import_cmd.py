@@ -24,6 +24,7 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.commands.init import _bootstrap_manifest
+from agentcad.runners import dispatch
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import MANIFEST_FILE
 from agentcad.native_io import silence_native_stdout
@@ -141,6 +142,17 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # 2. Manifest handling.
     if not manifest_path.exists():
         if init_flag:
+            # Same guard as `agentcad init`: refuse to pin a runtime whose
+            # engine is not installed (the CadQuery extra is optional).
+            if runtime:
+                try:
+                    dispatch.require_runtime_available(runtime)
+                except ValueError as exc:
+                    _emit({
+                        "command": "import", "status": "error",
+                        "message": str(exc),
+                    }, exit_code=1)
+                    return
             _bootstrap_manifest(runtime=runtime)
         else:
             _emit({
@@ -618,7 +630,6 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     #     pinned runtime (b3d uses the M60 edit helpers, cq uses the
     #     kernel-neutral `importers.importStep` fallback documented in
     #     `agentcad docs editing`).
-    from agentcad.runners import dispatch
     project_rt = manifest.get("runtime") or dispatch.DEFAULT_RUNTIME
     scaffold_path = get_project().project_root / "edit.py"
     scaffold_written = False
@@ -806,11 +817,23 @@ def _find_prev_success(versions):
 
 
 def _export_step(topo_shape, output_path: Path) -> None:
-    """Re-export a TopoDS_Shape to STEP via cadquery's exporter."""
-    import cadquery as cq
-    from cadquery import exporters
-    wp = cq.Workplane().newObject([cq.Shape.cast(topo_shape)])
-    exporters.export(wp, str(output_path))
+    """Re-export a TopoDS_Shape to STEP via OCCT's writer.
+
+    The shape is wrapped in a one-child compound first. That matches what
+    the previous CadQuery-based exporter wrote (``exporters.export`` on a
+    Workplane always emits a compound), so the baseline STEP an ``import``
+    produces keeps the same top-level container across the loader switch.
+    """
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    from agentcad.step_io import write_step_shape
+
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    builder.Add(compound, topo_shape)
+    write_step_shape(compound, output_path)
 
 
 # --- non-Tier-0 polite-no responses ----------------------------------------

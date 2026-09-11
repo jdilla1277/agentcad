@@ -1,3 +1,4 @@
+# collect-on-default-profile
 import json
 
 from click.testing import CliRunner

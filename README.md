@@ -125,7 +125,21 @@ script API, built-in docs, and subsequent runs on one clear default.
 ## CadQuery compatibility
 
 CadQuery remains supported for existing scripts and projects, but it is not
-the default authoring path.
+the default authoring path and it is not installed by default. `pip install
+agentcad` ships build123d and the OpenCascade binding only. Enable the
+compatibility runtime with the optional extra:
+
+```bash
+pip install "agentcad[cadquery]"
+agentcad daemon restart   # if a daemon was already running
+```
+
+The extra pulls in CadQuery and its own dependency chain (CasADi and the
+COIN-OR solver libraries it bundles), which carries a larger third-party
+license surface than the default install. Selecting the CadQuery runtime
+without the extra returns a structured error naming this command. Adopting
+agentcad inside a product or hosted service? See
+[Incorporating agentcad into your project](https://agentcad.dev/incorporating-agentcad).
 
 For a CadQuery project:
 
@@ -153,6 +167,8 @@ For native tool integration with Claude Code, Cursor, or Windsurf:
 ```bash
 pip install agentcad[mcp]
 ```
+
+Extras combine: `pip install "agentcad[mcp,cadquery]"` installs both.
 
 Add to `.mcp.json`:
 

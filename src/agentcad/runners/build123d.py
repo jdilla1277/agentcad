@@ -670,18 +670,9 @@ def _make_topods_compound(shapes):
 
 def _export_topods_step(shape, path: str) -> None:
     """Write a raw TopoDS shape through OCCT's STEP writer."""
-    from OCP.IFSelect import IFSelect_RetDone
-    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
-    from agentcad.native_io import silence_native_stdout
+    from agentcad.step_io import write_step_shape
 
-    with silence_native_stdout():
-        writer = STEPControl_Writer()
-        status = writer.Transfer(shape, STEPControl_AsIs)
-        if status != IFSelect_RetDone:
-            raise RuntimeError(f"OCCT STEP transfer failed with status {status}")
-        status = writer.Write(path)
-        if status != IFSelect_RetDone:
-            raise RuntimeError(f"OCCT STEP write failed with status {status}")
+    write_step_shape(shape, path)
 
 
 def export_step(native_shape: Any, path: str) -> None:

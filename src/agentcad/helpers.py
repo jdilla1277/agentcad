@@ -682,13 +682,22 @@ def assemble(*shapes):
 
     Eliminates the cq.Shape.cast / makeCompound / newObject ceremony.
 
+    This is the CadQuery-runtime flavor: it returns a ``cq.Workplane`` and
+    needs the ``agentcad[cadquery]`` extra. build123d scripts get a
+    build123d-native ``assemble`` injected by their runner instead, so this
+    function is only reached from CadQuery-routed scripts.
+
     Args:
         shapes: One or more TopoDS_Shape objects.
 
     Returns:
         cq.Workplane containing the compound.
     """
-    import cadquery as cq
+    try:
+        import cadquery as cq
+    except ImportError as exc:
+        from agentcad.runners.dispatch import MISSING_CADQUERY_MESSAGE
+        raise RuntimeError(MISSING_CADQUERY_MESSAGE) from exc
 
     wrapped = [cq.Shape.cast(s) for s in shapes]
     compound = cq.Compound.makeCompound(wrapped)
@@ -748,15 +757,25 @@ def annular_boss(
         z = z_min
     cx, cy, cz = _coerce_annulus_center(center, z)
 
-    import cadquery as cq
+    # Outer cylinder minus a coaxial inner cylinder, built straight on OCP so
+    # the STEP-edit path works on the default build123d-only installation.
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
 
-    boss = (
-        cq.Workplane("XY", origin=(cx, cy, cz))
-        .circle(float(outer))
-        .circle(float(inner))
-        .extrude(float(height))
-    )
-    return boss.val().wrapped
+    axis = gp_Ax2(gp_Pnt(cx, cy, cz), gp_Dir(0, 0, 1))
+    outer_cyl = BRepPrimAPI_MakeCylinder(axis, float(outer), float(height)).Shape()
+    inner_cyl = BRepPrimAPI_MakeCylinder(axis, float(inner), float(height)).Shape()
+    cut = BRepAlgoAPI_Cut(outer_cyl, inner_cyl)
+    if not cut.IsDone():
+        raise RuntimeError("annular_boss: boolean cut of the bore failed")
+    result = cut.Shape()
+    # BRepAlgoAPI returns a compound around the single resulting solid;
+    # hand back the bare solid like the previous CadQuery-based extrude did.
+    if result.ShapeType() == TopAbs_COMPOUND:
+        explorer = TopExp_Explorer(result, TopAbs_SOLID)
+        if explorer.More():
+            return explorer.Current()
+    return result
 
 
 def raise_annulus(

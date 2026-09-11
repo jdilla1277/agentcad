@@ -9,9 +9,10 @@ without knowing which engine is in play:
     execute(src, params) -> ExecutionResult
 
 Adding a runner means adding a module here and wiring it into the
-dispatcher (Phase 2). Today: `cadquery` is the only runner the CLI
-actually calls; `build123d` lives alongside and is exercised by
-`tests_b3d/` only.
+dispatcher. `build123d` is the default runtime and a hard dependency;
+`cadquery` is the compatibility runtime behind the optional
+`agentcad[cadquery]` extra, so its module must only import CadQuery
+lazily inside ``execute``/``export_*`` — never at module scope.
 """
 
 from __future__ import annotations
