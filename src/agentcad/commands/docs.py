@@ -3,6 +3,7 @@ import sys
 
 import click
 
+from agentcad.project import project_options
 from agentcad.runners import dispatch
 
 
@@ -14,6 +15,83 @@ from agentcad.runners import dispatch
 # CADQUERY_OVERLAY below. ``get_sections(runtime)`` merges that overlay
 # onto the base only for the cadquery runtime.
 SECTIONS = {
+    "artifacts": (
+        "Artifact directories and version labels:\n"
+        "  Default: agentcad.json, .agentcad state, and vN_LABEL versions live\n"
+        "  at the project root, just as in existing projects.\n\n"
+        "  Persistent setting: create agentcad.toml in the source project:\n"
+        '    build_dir = "./build"\n'
+        "  Then run agentcad init. This creates build/agentcad.json.\n"
+        "  Scripts, edit.py, and installed agent guidance stay in the source\n"
+        "  project. Generated geometry, metadata, viewers, logs, and feedback\n"
+        "  bundles live below the selected build directory.\n\n"
+        "  One-command override (does not edit agentcad.toml):\n"
+        "    agentcad init --build-dir /tmp/cad-build\n"
+        "    agentcad run model.py --label first --build-dir /tmp/cad-build\n"
+        "    agentcad context --build-dir /tmp/cad-build\n"
+        "    agentcad parts --build-dir /tmp/cad-build list current\n"
+        "    agentcad recover v1_first --build-dir /tmp/cad-build\n\n"
+        "  Precedence: --build-dir > agentcad.toml build_dir > project root.\n"
+        "  Relative build directories resolve from the nearest project root\n"
+        "  (agentcad.toml or legacy agentcad.json), even from a subdirectory.\n"
+        "  Without a marker, the invocation directory is the project root.\n"
+        "  An empty agentcad.toml can anchor projects using only overrides.\n"
+        "  Explicit input filenames still resolve from the invocation directory.\n"
+        "  Each build root has independent history; initialize it explicitly.\n"
+        "  Changing the setting never moves or merges old history.\n"
+        "  No environment-variable interpolation occurs inside TOML.\n\n"
+        "  JSON reports project_root, build_root, and build_root_source.\n"
+        "  Root source is command, project_config, default, or manifest when\n"
+        "  discovering a configured build from inside its generated tree.\n"
+        "  Configured artifacts are returned as absolute paths; default paths\n"
+        "  retain their existing project-relative strings when invoked at root.\n"
+        "  Always use returned outputs.step, viewer, and renders paths.\n"
+        "  On-disk manifest/meta paths remain relative to the build root.\n"
+        "  Standalone render/export/view of outside inputs writes under\n"
+        "  build_root/derived, with distinct directories for same-named inputs.\n"
+        "  --label names a version; deprecated --output never means a path.\n"
+        "  Configured live-viewer service state lives in build_root/.agentcad/viewer.\n"
+        "  Each build root has its own service and live URL; viewer open/status/stop\n"
+        "  accept --build-dir. Default projects retain the shared user service.\n"
+    ),
+    "viewer": (
+        "Live project viewer:\n"
+        "  Normal run/import commands open a stable local project URL. Share\n"
+        "  project_viewer.url with the human and leave the tab open: completed\n"
+        "  builds refresh automatically, preserving camera and compatible review\n"
+        "  state. viewer remains the immutable per-version HTML snapshot.\n"
+        "  The live page keeps the last successful model after a failed build.\n"
+        "  New models load fully before replacing the displayed model.\n"
+        "\n"
+        "  agentcad viewer          # open or reuse the current project\n"
+        "  agentcad viewer status   # inspect the lightweight local service\n"
+        "  agentcad viewer stop     # stop it; retain the port and URLs\n"
+        "  agentcad viewer open     # restart if needed and open the project\n"
+        "\n"
+        "  --no-view never opens a browser or starts this service. When it still\n"
+        "  generates viewer assets, an existing page receives those builds. The\n"
+        "  core-only --no-preview --no-diff --no-view path generates no viewer;\n"
+        "  the page retains its prior model and reports preview unavailable.\n"
+        "\n"
+        "  Updates are polled once a second, less frequently in background tabs.\n"
+        "  Browser clients expire after 90 seconds without a heartbeat; a sleeping\n"
+        "  tab may be considered disconnected and a later run can open another.\n"
+        "  Closing/navigating away releases the lease when the browser delivers\n"
+        "  its pagehide event. After a forced close, use the saved URL directly\n"
+        "  or wait for the lease to expire before automatic reopening.\n"
+        "  The service binds only to 127.0.0.1 and serves registered snapshots\n"
+        "  through private project URLs. These links work only on this machine.\n"
+        "  Moving the project changes its URL; renaming a build does not.\n"
+        "  State: ~/.cache/agentcad/viewer (AGENTCAD_VIEWER_HOME overrides it).\n"
+        "  With a configured build root, state instead lives in its .agentcad/viewer\n"
+        "  directory; this takes precedence over AGENTCAD_VIEWER_HOME.\n"
+        "  Preserve this directory to keep URLs stable. If the saved port is\n"
+        "  occupied, free it and retry; AgentCAD never kills another listener.\n"
+        "  For incompatible protocol versions, stop the service using the\n"
+        "  installation that started it before opening with the new one.\n"
+        "  If service startup fails, the CAD build and version snapshot remain\n"
+        "  usable; project_viewer reports unavailable with a diagnostic message.\n"
+    ),
     "install": (
         "Installation:\n"
         "  Requires Python 3.10-3.12 (OpenCascade bindings do not support 3.13+).\n"
@@ -66,7 +144,7 @@ SECTIONS = {
         "            in outputs.step. --output is a deprecated alias for --label\n"
         "            and never denotes a destination path.\n"
         "            Normally produces: STEP, GLB, viewer.html, and (from v2) diff PNGs.\n"
-        "            Opens viewer.html after success; --no-view opts out. From v2,\n"
+        "            Opens or reuses project_viewer.url; --no-view opts out. From v2,\n"
         "            the viewer preloads A=previous and B=current for comparison.\n"
         "            Options: --render, --export, --no-preview (skips preview PNGs),\n"
         "                     --no-diff (skips automatic comparison; agentcad diff\n"
@@ -87,6 +165,8 @@ SECTIONS = {
         "  view    — Open one GLB/STEP model, or two models as synchronized A/B.\n"
         "            Pass --overlay to start a two-model review in tinted overlay mode.\n"
         "            Use --measure or --spec spec.json for read-only measurement review.\n"
+        "  viewer  — Open the stable live project (default), or inspect/stop its\n"
+        "            local service: agentcad viewer [open|status|stop].\n"
         "  context — Show project state and interrupted version recovery candidates.\n"
         "  recover — Validate and reconcile one interrupted version directory.\n"
         "  docs    — Show this documentation.\n"
@@ -233,7 +313,11 @@ SECTIONS = {
         "             was created), metrics,\n"
         "             params?, warnings?,\n"
         "             preview?, diff?, comparison_phases?, viewer?, viewer_glb?,\n"
-        "             viewer_opened?, renders?, timings\n"
+        "             viewer_opened?, project_viewer?, renders?, timings\n"
+        "             project_viewer: url, latest_version, opened, reused; or\n"
+        "               status=unavailable and message if the service failed.\n"
+        "               latest_version is published and ready, not confirmation\n"
+        "               that a browser has finished displaying it.\n"
         "    export   outputs                          (3D mesh formats only)\n"
         "    render   renders                          (PNG views only)\n"
         "    inspect  file, format_detected, extension, size_bytes,\n"
@@ -1729,15 +1813,19 @@ CADQUERY_OVERLAY = {
 
 def get_sections(runtime):
     """Return the sections dict for ``runtime`` (overlay applied, base unchanged)."""
+    merged = dict(SECTIONS)
     if runtime == "cadquery":
-        merged = dict(SECTIONS)
         merged.update(CADQUERY_OVERLAY)
         # These build123d topics have no CadQuery-flavored counterpart;
         # dropping them keeps compatibility mode free of build123d code.
         for name in ("build123d", "examples"):
             merged.pop(name, None)
-        return merged
-    return dict(SECTIONS)
+    for name in ("quickstart", "commands", "editing", "schema"):
+        merged[name] += (
+            "\nArtifact locations: use returned paths. To separate generated files\n"
+            "from source with agentcad.toml or --build-dir, see `agentcad docs artifacts`.\n"
+        )
+    return merged
 
 
 @click.command()
@@ -1751,11 +1839,10 @@ def get_sections(runtime):
         "from agentcad.json, fall back to the global default runtime."
     ),
 )
+@project_options
 def docs(section, runtime):
     """Show agentcad documentation."""
-    # Walk parents so `agentcad docs` honors the project manifest even when
-    # invoked from a subdir. Other commands (`run`, `inspect`) keep cwd-only
-    # semantics since they write artifacts relative to cwd.
+    # Follow the selected build manifest, including parent project discovery.
     project_rt = dispatch.project_runtime(search_parents=True)
     effective_runtime = runtime or project_rt or dispatch.DEFAULT_RUNTIME
     sections = get_sections(effective_runtime)

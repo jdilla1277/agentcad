@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from agentcad.project import ProjectError, get_project, project_options, validate_version_label
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -24,7 +25,7 @@ from agentcad.commands.export_cmd import (
     unsupported_export_formats,
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
-from agentcad.manifest import MANIFEST_FILE, load_manifest
+from agentcad.manifest import load_manifest
 
 
 _DEFAULT_RUN_TIMEOUT_S = 115.0
@@ -786,7 +787,7 @@ def _assign_part_identity(raw_parts):
         "`agentcad diff` remains available for later review."
     ),
 )
-@click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
+@click.option("--view/--no-view", "open_view", default=True, help="Open or reuse the live project viewer after success (default on). Its stable URL follows completed builds; version snapshots retain previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
 @click.option(
@@ -812,6 +813,7 @@ def _assign_part_identity(raw_parts):
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
+@project_options
 def run(
     ctx, script, label, legacy_output, render, export, preview, auto_diff,
     open_view, params, dry_run, runtime, validation_profile, no_daemon,
@@ -830,6 +832,7 @@ def run(
     ctx.meta["run_script"] = script
     ctx.meta["run_label"] = output
     ctx.meta["run_legacy_output"] = legacy_output is not None
+    ctx.meta["viewer_dry_run"] = dry_run
     if label is not None and legacy_output is not None:
         raise click.UsageError(
             "Use --label or the deprecated --output alias, not both.",
@@ -841,6 +844,7 @@ def run(
             param_hint="--label",
             param_type="option",
         )
+    validate_version_label(output)
 
     # Reject unsupported --export formats before anything else — before the
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
@@ -903,6 +907,8 @@ def run(
     except SystemExit:
         # Explicit sys.exit() calls inside _run_impl are intentional —
         # they already emitted the proper JSON. Pass through.
+        raise
+    except ProjectError:
         raise
     except _RunTimeout as e:
         recovered = _recover_committed_core(e, timeout_payload=e.payload)
@@ -1103,13 +1109,19 @@ def _run_impl(
     if result.status == "execution_error":
         from agentcad.versioning import reserve_version
 
-        reservation = reserve_version(Path.cwd(), label, suffix="_failed")
         error_msg = _enrich_error(result.exception)
         guidance = _execution_error_guidance(
             error_msg,
             runtime=runtime_name,
             source=raw_source,
         )
+        if dry_run:
+            _emit_run({
+                "command": "run", "status": "error", "runtime": runtime_name,
+                "message": error_msg, **guidance,
+            })
+            sys.exit(1)
+        reservation = reserve_version(get_project().build_root, label, suffix="_failed")
         _record_failure(
             script_path,
             label,
@@ -1258,7 +1270,7 @@ def _run_impl(
             sys.exit(1)
         from agentcad.versioning import reserve_version
 
-        reservation = reserve_version(Path.cwd(), label, suffix="_invalid")
+        reservation = reserve_version(get_project().build_root, label, suffix="_invalid")
         _record_invalid_geometry(
             script_path,
             label,
@@ -1300,7 +1312,7 @@ def _run_impl(
     # Atomically reserve a unique version directory before writing core files.
     from agentcad.versioning import reserve_version
 
-    reservation = reserve_version(Path.cwd(), label)
+    reservation = reserve_version(get_project().build_root, label)
     _phase_tracker.reservation = reservation
     version_num = reservation.number
     dir_name = reservation.dir_name
@@ -1326,7 +1338,7 @@ def _run_impl(
     previous = _find_prev_success(versions)
     has_previous_step = bool(
         previous
-        and (Path.cwd() / previous["path"] / "output.step").exists()
+        and (get_project().version_dir(previous) / "output.step").exists()
     )
     comparison_enabled = auto_diff and has_previous_step
     fast_path = not preview and not auto_diff and not open_view
@@ -1576,11 +1588,11 @@ def _run_impl(
             render_diff_side_by_side,
             render_diff_overlay,
         )
-        prev_step_path = Path.cwd() / prev["path"] / "output.step"
+        prev_step_path = get_project().version_dir(prev) / "output.step"
         _heartbeat("loading prior comparison source…")
         try:
             with comparison_recorder.observe("source_loading"):
-                previous_meta_path = Path.cwd() / prev["path"] / "meta.json"
+                previous_meta_path = get_project().version_dir(prev) / "meta.json"
                 try:
                     previous_parts = json.loads(
                         previous_meta_path.read_text()
@@ -1735,11 +1747,11 @@ def _run_impl(
     # we still want the 3D comparison to work in the viewer.
     prev_glb_path = None
     if auto_diff and prev is not None:
-        candidate = Path.cwd() / prev["path"] / "output.glb"
+        candidate = get_project().version_dir(prev) / "output.glb"
         if candidate.exists():
             prev_glb_path = candidate
         else:
-            prev_step_path = Path.cwd() / prev["path"] / "output.step"
+            prev_step_path = get_project().version_dir(prev) / "output.step"
             if prev_step_path.exists():
                 try:
                     from agentcad.step_io import load_cad_shape as _load
@@ -1797,16 +1809,21 @@ def _run_impl(
         lifecycle.meta["viewer_glb"] = viewer_glb_meta
         lifecycle.set_artifact("viewer", "success")
 
-    viewer_opened = False
+    project_viewer = None
+    if viewer_meta:
+        from agentcad.project_viewer import handoff
+        project_viewer = handoff(get_project().build_root, version_dir, open_view=open_view)
+
+    viewer_opened = bool(project_viewer and project_viewer.get("opened"))
     if open_view:
         try:
-            from agentcad.commands.view import _open_browser
-
-            viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+            reused = bool(project_viewer and project_viewer.get("reused"))
             lifecycle.set_artifact(
                 "browser",
-                "success" if viewer_opened else "unavailable",
-                message=None if viewer_opened else "Browser did not open.",
+                "success" if viewer_opened or reused else "unavailable",
+                message=None if viewer_opened or reused else (
+                    (project_viewer or {}).get("message", "Browser did not open.")
+                ),
             )
         except Exception as exc:
             warnings.append(f"Could not open the review viewer: {type(exc).__name__}: {exc}")
@@ -1889,7 +1906,11 @@ def _run_impl(
     if renders_meta:
         output_json["renders"] = renders_meta
     if hint:
+        if project_viewer and project_viewer.get("url"):
+            hint = f"Live project: {project_viewer['url']} — updates automatically. Version snapshot: {hint}"
         output_json["hint"] = hint
+    if project_viewer:
+        output_json["project_viewer"] = project_viewer
     _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
     output_json["timings"] = _timings
     output_json["completed_phases"] = list(_phase_tracker.completed)

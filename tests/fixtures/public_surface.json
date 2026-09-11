@@ -17,9 +17,11 @@
     "run",
     "skill",
     "subscribe",
-    "view"
+    "view",
+    "viewer"
   ],
   "docs_sections": [
+    "artifacts",
     "build123d",
     "cadquery",
     "check-spec",
@@ -45,6 +47,7 @@
     "runtimes",
     "schema",
     "validation",
+    "viewer",
     "workflow"
   ]
 }

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import project_options
 
 from agentcad import file_detect
 from agentcad.commands._daemon_routing import (
@@ -67,6 +68,7 @@ DEFAULT_FEATURE_LIMIT = 100
     default=False,
     help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.",
 )
+@project_options
 def measure(
     file,
     with_features,

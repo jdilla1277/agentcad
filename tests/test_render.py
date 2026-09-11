@@ -1,3 +1,5 @@
+import sys
+import types
 from pathlib import Path
 
 import agentcad.render as render_module
@@ -9,8 +11,10 @@ import pytest
 from agentcad.render import (
     _COMPOSITE_VIEWS,
     _comparison_frame_scales,
+    _create_render_window,
     _semantic_diff_panel,
     _setup_render,
+    RenderUnavailableError,
     render_diff_overlay,
     render_diff_side_by_side,
     render_shape,
@@ -26,6 +30,54 @@ def _make_box_shape():
     """Create a simple box TopoDS_Shape for testing."""
     result = cq.Workplane("XY").box(10, 10, 10)
     return result.val().wrapped
+
+
+def test_linux_render_window_uses_virtual_x11_drawable(monkeypatch):
+    calls = []
+
+    class FakeXwWindow:
+        def __init__(self, *args):
+            calls.append(("init", args))
+
+        def SetVirtual(self, value):
+            calls.append(("virtual", value))
+
+    fake_xw = types.ModuleType("OCP.Xw")
+    fake_xw.Xw_Window = FakeXwWindow
+    monkeypatch.setitem(sys.modules, "OCP.Xw", fake_xw)
+    monkeypatch.setattr(render_module.sys, "platform", "linux")
+
+    display_connection = object()
+    window = _create_render_window(display_connection, 320, 240)
+
+    assert isinstance(window, FakeXwWindow)
+    assert calls == [
+        (
+            "init",
+            (display_connection, "agentcad-render", 0, 0, 320, 240),
+        ),
+        ("virtual", True),
+    ]
+
+
+def test_linux_display_connection_failure_is_actionable(monkeypatch):
+    def fail_to_connect():
+        raise RuntimeError("display unavailable")
+
+    monkeypatch.setattr(render_module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        render_module,
+        "Aspect_DisplayConnection",
+        fail_to_connect,
+    )
+
+    with pytest.raises(RenderUnavailableError) as exc_info:
+        _setup_render(object(), width=320, height=240)
+
+    message = str(exc_info.value)
+    assert "X11/GLX" in message
+    assert "X11/XWayland" in message
+    assert "xvfb-run -a" in message
 
 
 def test_render_shape_produces_png(tmp_path):

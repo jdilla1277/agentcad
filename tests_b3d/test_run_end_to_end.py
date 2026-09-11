@@ -1624,7 +1624,10 @@ class TestViewerHints:
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.stdout)["viewer_opened"] is True
-        assert opened == [(isolated_dir / "v1" / "viewer.html").as_uri()]
+        payload = json.loads(result.stdout)
+        assert opened == [payload["project_viewer"]["url"]]
+        assert opened[0].startswith("http://127.0.0.1:")
+        assert payload["viewer"] == "v1/viewer.html"
 
     def test_no_view_suppresses_browser_launch(self, runner, isolated_dir, monkeypatch):
         opened = []

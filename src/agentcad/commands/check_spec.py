@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import project_options
 
 from agentcad import file_detect
 from agentcad.commands._daemon_routing import (
@@ -25,6 +26,7 @@ from agentcad.commands.measure import measure_tier0_payload, validity_from_metri
     default=False,
     help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.",
 )
+@project_options
 def check_spec(file, spec_file, no_daemon):
     """Check a STEP/BREP file against a JSON feature spec.
 

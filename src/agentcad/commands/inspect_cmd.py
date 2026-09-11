@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad import file_detect
 from agentcad.commands._daemon_routing import (
@@ -237,6 +238,7 @@ def _clear_validation_timeout(previous_state) -> None:
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@project_options
 def inspect_cmd(
     file,
     with_ids,
@@ -442,7 +444,7 @@ def _malformed_recovery_action() -> str:
                 f"agentcad run {shlex.quote(script_name)} "
                 "--label recovered"
             )
-            if not Path("agentcad.json").is_file():
+            if not get_project().manifest_path.is_file():
                 return "agentcad init --name recovered && " + run_action
             return run_action
     return "agentcad docs quickstart"
@@ -758,9 +760,8 @@ def _is_recorded_version_file(file_path: Path) -> bool:
     A missing or malformed manifest must not break ``inspect``'s never-throws
     contract, so uncertain cases remain eligible for import guidance.
     """
-    from agentcad.manifest import MANIFEST_FILE
 
-    manifest_path = Path.cwd() / MANIFEST_FILE
+    manifest_path = get_project().manifest_path
     if not manifest_path.is_file():
         return False
     try:
@@ -774,7 +775,7 @@ def _is_recorded_version_file(file_path: Path) -> bool:
             recorded_path = version.get("path")
             if not isinstance(recorded_path, str) or not recorded_path:
                 continue
-            version_dir = (Path.cwd() / recorded_path).resolve()
+            version_dir = get_project().artifact_path(recorded_path)
             if target == version_dir or version_dir in target.parents:
                 return True
     except (OSError, ValueError, TypeError, RuntimeError):

@@ -9,11 +9,13 @@ view, inspect) works unchanged on imported versions.
 import hashlib
 import json
 import shutil
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad import __version__
 from agentcad import file_detect
@@ -32,11 +34,11 @@ from agentcad.native_io import silence_native_stdout
 @click.option("--label", default=None, help="Label override (default: filename stem).")
 @click.option(
     "--init", "init_flag", is_flag=True,
-    help="Bootstrap a manifest if none exists in the current directory.",
+    help="Bootstrap a manifest if none exists in the selected build directory.",
 )
 @click.option(
     "--view/--no-view", "open_view", default=True,
-    help="Open the generated review viewer after a successful import (default on).",
+    help="Open or reuse the live project viewer after a successful import (default on). Its stable URL follows completed builds.",
 )
 @click.option(
     "--diff/--no-diff",
@@ -71,6 +73,7 @@ from agentcad.native_io import silence_native_stdout
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@project_options
 def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
@@ -83,7 +86,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # no-op in that case, so accepting the flag would silently ignore the
     # requested runtime and recreate the wrong-engine footgun this option
     # exists to remove.
-    manifest_path = Path.cwd() / MANIFEST_FILE
+    manifest_path = get_project().manifest_path
     if runtime and manifest_path.exists():
         _emit({
             "command": "import", "status": "error",
@@ -151,7 +154,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             }, exit_code=1)
             return
 
-    manifest = json.loads(manifest_path.read_text())
+    manifest = get_project().read_manifest()
     versions = manifest.get("versions", [])
 
     # 3. Resolve the label. Version numbers are reserved atomically only after
@@ -202,7 +205,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     if invalid_response is not None:
         from agentcad.versioning import commit_version, reserve_version
 
-        reservation = reserve_version(Path.cwd(), label, suffix="_invalid")
+        reservation = reserve_version(get_project().build_root, label, suffix="_invalid")
         version_num = reservation.number
         invalid_dir_name = reservation.dir_name
         invalid_dir = reservation.path
@@ -244,7 +247,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # validity. Parser errors do not consume a version.
     from agentcad.versioning import reserve_version
 
-    reservation = reserve_version(Path.cwd(), label)
+    reservation = reserve_version(get_project().build_root, label)
     version_num = reservation.number
     dir_name = reservation.dir_name
     version_dir = reservation.path
@@ -284,7 +287,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     prev = _find_prev_success(versions)
     has_previous_step = bool(
         prev
-        and (Path.cwd() / prev["path"].rstrip("/") / "output.step").exists()
+        and (get_project().version_dir(prev) / "output.step").exists()
     )
 
     def _artifact_state(enabled, skipped_message):
@@ -390,7 +393,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # 8. Auto-diff against most recent successful prior version.
     diff_meta = None
     if comparison_recorder is not None:
-        prev_step = Path.cwd() / prev["path"].rstrip("/") / "output.step"
+        prev_step = get_project().version_dir(prev) / "output.step"
         prev_shape = None
         try:
             with comparison_recorder.observe("source_loading"):
@@ -534,7 +537,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # 9. Unified viewer HTML.
     prev_glb = None
     if auto_diff and prev is not None:
-        cand = Path.cwd() / prev["path"].rstrip("/") / "output.glb"
+        cand = get_project().version_dir(prev) / "output.glb"
         if cand.exists():
             prev_glb = cand
     viewer_path = version_dir / "viewer.html"
@@ -584,16 +587,20 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             message="Viewer GLB was unavailable.",
         )
 
-    viewer_opened = False
+    project_viewer = None
+    if viewer_ok:
+        from agentcad.project_viewer import handoff
+        project_viewer = handoff(get_project().build_root, version_dir, open_view=open_view)
+    viewer_opened = bool(project_viewer and project_viewer.get("opened"))
     if open_view and viewer_ok:
         try:
-            from agentcad.commands.view import _open_browser
-
-            viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+            reused = bool(project_viewer and project_viewer.get("reused"))
             lifecycle.set_artifact(
                 "browser",
-                "success" if viewer_opened else "unavailable",
-                message=None if viewer_opened else "Browser did not open.",
+                "success" if viewer_opened or reused else "unavailable",
+                message=None if viewer_opened or reused else (
+                    (project_viewer or {}).get("message", "Browser did not open.")
+                ),
             )
         except Exception as exc:
             # Browser launch is best-effort and must not discard a valid import.
@@ -613,12 +620,15 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     #     `agentcad docs editing`).
     from agentcad.runners import dispatch
     project_rt = manifest.get("runtime") or dispatch.DEFAULT_RUNTIME
-    scaffold_path = Path.cwd() / "edit.py"
+    scaffold_path = get_project().project_root / "edit.py"
     scaffold_written = False
     if not scaffold_path.exists():
         def _write_scaffold():
             scaffold_path.write_text(
-                _edit_scaffold(dir_name, file_path.name, label, project_rt)
+                _edit_scaffold(
+                    get_project().response_path(version_dir), file_path.name, label, project_rt,
+                    build_dir=str(get_project().build_root) if get_project().configured else None,
+                )
             )
 
         scaffold_written, _ = _attempt_artifact(
@@ -637,15 +647,21 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # 11. Output JSON. Mirrors committed metadata plus next_actions per the
     #     `next_actions` design convention.
     response = lifecycle.response()
+    step_argument = shlex.quote(get_project().response_path(version_dir / "output.step"))
+    root_arg = " --build-dir " + shlex.quote(str(get_project().build_root)) if get_project().configured else ""
     response["viewer_opened"] = viewer_opened
+    if project_viewer:
+        response["project_viewer"] = project_viewer
+        if project_viewer.get("url"):
+            response["hint"] = f"Live project: {project_viewer['url']} — updates automatically. Version snapshot: {response['viewer']}."
     if scaffold_written:
         response["scaffold"] = "edit.py"
     response["next_actions"] = [
-        "agentcad docs editing — read the imported-Part contract, then modify and run edit.py",
-        f"agentcad measure {dir_name}/output.step — check dimensions before editing",
+        f"agentcad docs editing{root_arg} — read the imported-Part contract, then modify and run edit.py",
+        f"agentcad measure {step_argument}{root_arg} — check dimensions before editing",
     ] if scaffold_written else [
-        f"agentcad view {dir_name}/output.step — open in browser to inspect or share with humans",
-        f"agentcad measure {dir_name}/output.step — check dimensions before editing",
+        f"agentcad view {step_argument}{root_arg} — open in browser to inspect or share with humans",
+        f"agentcad measure {step_argument}{root_arg} — check dimensions before editing",
     ]
     response["more_at"] = "agentcad docs editing"
     click.echo(json.dumps(response))
@@ -666,6 +682,7 @@ def _edit_scaffold(
     original_filename: str,
     label: str,
     runtime: str,
+    build_dir: str | None = None,
 ) -> str:
     """Templated edit.py — gives the agent a working starting point.
 
@@ -675,8 +692,15 @@ def _edit_scaffold(
     since the M60 helpers fail-fast under cq.
     """
     if runtime == "cadquery":
-        return _edit_scaffold_cadquery(version_dir, original_filename, label)
-    return _edit_scaffold_build123d(version_dir, original_filename, label)
+        source = _edit_scaffold_cadquery(version_dir, original_filename, label)
+    else:
+        source = _edit_scaffold_build123d(version_dir, original_filename, label)
+    if build_dir is not None:
+        source = source.replace(
+            "agentcad run edit.py --label my_edit",
+            "agentcad run edit.py --label my_edit --build-dir " + shlex.quote(build_dir),
+        )
+    return source
 
 
 def _edit_scaffold_build123d(version_dir: str, original_filename: str, label: str) -> str:
@@ -698,7 +722,7 @@ from build123d import *
 # Part topology collections are methods: base.solids(), base.faces(), base.edges().
 # Use base.bounding_box() when the edit itself needs the bounds; for read-only
 # dimensions and feature discovery, prefer `agentcad measure` / `agentcad inspect`.
-base = load_step("{version_dir}/output.step")
+base = load_step({json.dumps(version_dir + '/output.step')})
 
 
 # --- Edit here ---------------------------------------------------------------
@@ -742,7 +766,7 @@ from cadquery import importers
 
 
 # Load the imported baseline as a cadquery Workplane.
-base = importers.importStep("{version_dir}/output.step")
+base = importers.importStep({json.dumps(version_dir + '/output.step')})
 
 
 # --- Edit here ---------------------------------------------------------------

@@ -3,11 +3,11 @@
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad.session_log import SessionLogger
 
@@ -77,6 +77,7 @@ def _send_remote(bundle: dict) -> dict:
     default=False,
     help="Save locally only, don't send to remote.",
 )
+@project_options
 def feedback(message, max_entries, local_only):
     """Submit feedback with session log context.
 
@@ -101,7 +102,7 @@ def feedback(message, max_entries, local_only):
     Set AGENTCAD_FEEDBACK_URL to point at a non-default endpoint (preview
     deploys, self-hosted instances). Defaults to the production endpoint.
     """
-    project_dir = Path.cwd()
+    project_dir = get_project().build_root
     logger = SessionLogger(project_dir)
 
     feedback_dir = project_dir / ".agentcad" / "feedback"

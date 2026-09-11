@@ -2427,7 +2427,9 @@ def test_run_opens_generated_viewer_by_default(runner, isolated_dir, monkeypatch
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
     assert parsed["viewer_opened"] is True
-    assert opened == [(isolated_dir / "v1" / "viewer.html").as_uri()]
+    assert opened == [parsed["project_viewer"]["url"]]
+    assert opened[0].startswith("http://127.0.0.1:")
+    assert parsed["viewer"] == "v1/viewer.html"
 
 
 def test_run_no_view_suppresses_browser_launch(runner, isolated_dir, monkeypatch):

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad.manifest import load_manifest
 from agentcad.native_io import silence_native_stdout
@@ -45,6 +46,7 @@ def _infer_source(version_dir: Path) -> str:
     is_flag=True,
     help="Explicitly make the recovered successful version current.",
 )
+@project_options
 def recover(version_dir: str, make_current: bool) -> None:
     """Validate and register an interrupted VERSION_DIR without deleting it."""
     manifest = load_manifest(command="recover")
@@ -62,7 +64,7 @@ def recover(version_dir: str, make_current: bool) -> None:
         }, exit_code=1)
         return
 
-    project_dir = Path.cwd()
+    project_dir = get_project().build_root
     path = project_dir / requested.name
     if not path.is_dir() or path.is_symlink():
         _emit({

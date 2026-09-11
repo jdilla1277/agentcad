@@ -5,6 +5,7 @@ import webbrowser
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options, derived_dir
 
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 
@@ -429,6 +430,7 @@ const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
 
 const hasB = MODEL_B_URL.length > 0;
+const liveProject = parent !== window && new URLSearchParams(location.search).get('live') === '1';
 const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0 || DIFF_VOLUME_PNG_URL.length > 0;
 const hasAgentState = Boolean(PART_REVIEW);
 const hasAgentView = hasAgentImgs || hasAgentState;
@@ -451,8 +453,77 @@ let partState = {
 };
 window.agentcadViewer = {
   debugState: viewerDebugState,
+  captureState: captureLiveState,
+  restoreState: restoreLiveState,
   lastState: null,
 };
+
+// The project shell swaps complete snapshots only after the next model has
+// loaded. Standalone file viewers keep working without a parent or server.
+function captureLiveState() {
+  return {
+    mode: currentMode, hasB,
+    position: camera.position.toArray(), target: controls.target.toArray(),
+    autoRotate: controls.autoRotate,
+    hidden: [...partState.hidden], isolated: [...partState.isolated],
+    selected: partState.selected, ghostRest: partState.ghostRest,
+    overlay: ['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].map(id => {
+      const el = document.getElementById(id);
+      return {id, value:el.value, checked:el.checked};
+    }),
+  };
+}
+function restoreLiveState(state) {
+  if (!state) return false;
+  let mode = state.mode;
+  // First-run A represents current. In a subsequent A/B snapshot current is B.
+  if (!state.hasB && hasB && mode === 'single-a') mode = 'single-b';
+  if (state.hasB && !hasB && mode === 'single-b') mode = 'single-a';
+  const button = [...document.querySelectorAll('#modes button')].find(b => b.dataset.mode === mode);
+  const fallback = !button || button.disabled;
+  setMode(fallback ? (hasB ? 'single-b' : 'single-a') : mode);
+  setAutoRotate(false);
+  const vector = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+  if (vector(state.position) && vector(state.target)) {
+    controls.enableDamping = false;
+    controls.update();
+    camera.position.fromArray(state.position);
+    controls.target.fromArray(state.target);
+    camera.lookAt(controls.target);
+    controls.update();
+    controls.enableDamping = true;
+  }
+  const ids = new Set(PARTS.map(p => p.id));
+  partState.hidden = new Set((state.hidden || []).filter(id => ids.has(id)));
+  partState.isolated = new Set((state.isolated || []).filter(id => ids.has(id)));
+  partState.selected = ids.has(state.selected) ? state.selected : null;
+  partState.ghostRest = Boolean(state.ghostRest);
+  applyPartState();
+  for (const item of state.overlay || []) {
+    if (!['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].includes(item.id)) continue;
+    const el = document.getElementById(item.id);
+    el.value = item.value; el.checked = item.checked;
+    el.dispatchEvent(new Event(item.id.startsWith('opacity') ? 'input' : 'change'));
+  }
+  setAutoRotate(Boolean(state.autoRotate));
+  publishViewerDebugState();
+  return fallback;
+}
+function tellProject(type, extra = {}) {
+  if (parent !== window && location.protocol !== 'file:') {
+    parent.postMessage({type, ...extra}, location.origin);
+  }
+}
+window.addEventListener('message', event => {
+  if (event.source !== parent || parent === window || event.origin !== location.origin || !viewerReady) return;
+  if (event.data?.type === 'agentcad:capture') {
+    tellProject('agentcad:state', {state:captureLiveState(), busy:exportBtn.disabled});
+  } else if (event.data?.type === 'agentcad:restore') {
+    const fallback = restoreLiveState(event.data.state);
+    renderFrame();
+    tellProject('agentcad:restored', {fallback});
+  }
+});
 
 // Disable buttons that lack data
 function setupModeButtons() {
@@ -1524,7 +1595,7 @@ const combinedBox = new THREE.Box3();
 const loader = new GLTFLoader();
 
 function attach(scene, url, { material, onMesh, alignToCenter=false }) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     if (!url) { resolve(null); return; }
     loader.load(url, gltf => {
       const model = gltf.scene;
@@ -1555,7 +1626,7 @@ function attach(scene, url, { material, onMesh, alignToCenter=false }) {
 
       if (onMesh) onMesh(model);
       resolve(model);
-    });
+    }, undefined, reject);
   });
 }
 
@@ -1575,7 +1646,10 @@ function fitCamera() {
 // Load all scenes in parallel, then fit camera
 Promise.all([
   attach(sceneA_single, MODEL_A_URL, {
-    alignToCenter: hasB,
+    // Use one frame of reference throughout a live session, including v1.
+    // Otherwise the first A/B update centers geometry underneath an unchanged
+    // camera and visibly moves the model. Standalone snapshots keep their pose.
+    alignToCenter: hasB || liveProject,
     onMesh: m => {
       reviewModelA = m;
       if (PARTS_MODEL === 'a') {
@@ -1607,6 +1681,9 @@ Promise.all([
   if (partState.focus) focusPart(partState.focus);
   viewerReady = true;
   publishViewerDebugState();
+  tellProject('agentcad:ready');
+}).catch(() => {
+  tellProject('agentcad:load-error');
 });
 
 // ---- Mode switching ----
@@ -1934,7 +2011,9 @@ def _resolve_to_glb_and_shape(file_str):
             # it as a clean error string so the command's JSON envelope picks
             # it up instead of a Python traceback escaping to stderr.
             return None, None, str(exc)
-        glb_path = file_path.with_suffix(".glb")
+        glb_path = derived_dir("view", file_path) / (file_path.stem + ".glb")
+        if get_project().configured:
+            glb_path = get_project().artifact_path(glb_path)
         export_glb(shape, str(glb_path))
         return glb_path, shape, None
 
@@ -2026,7 +2105,7 @@ def _render_unified(
 
 def _render_single(glb_path, *, review=None):
     """Write single-model viewer HTML. Returns (html_path, url)."""
-    html_path = glb_path.parent / f"{glb_path.stem}_viewer.html"
+    html_path = derived_dir("view", glb_path) / f"{glb_path.stem}_viewer.html"
     _render_unified(
         html_path,
         glb_a=glb_path,
@@ -2238,6 +2317,7 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
     "spec_file",
     help="Run check-spec with this JSON spec and open the viewer in Spec check mode.",
 )
+@project_options
 def view(file, file_b, overlay, with_measure, spec_file):
     """Open a GLB or STEP file in the browser.
 
@@ -2281,7 +2361,8 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if err:
         _error(err)
 
-    out_dir = glb_a.parent
+    out_dir = (derived_dir("view", Path(file), Path(file_b))
+               if get_project().configured else glb_a.parent)
     png_path = None
     overlay_png_path = None
     volume_glb_path = None
@@ -2355,6 +2436,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
             glb_b,
             overlay=overlay,
             review=review,
+            out_dir=out_dir,
             diff_side_png=png_path,
             diff_overlay_png=overlay_png_path,
             diff_volume_png=volume_png_path,

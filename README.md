@@ -37,10 +37,34 @@ at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
 to keep the phone from sliding. Show me a preview when you're done.
 ```
 
+### Keep generated files in a build directory
+
+Create `agentcad.toml` in your source project before initialization:
+
+```toml
+build_dir = "./build"
+```
+
+Then run `agentcad init`. Version directories, the generated manifest, viewers,
+exports, and logs go under `build/`; authored scripts and installed guidance
+stay in the source project. Add the build directory to your own `.gitignore`.
+
+For CI, initialize and select an independent root with
+`agentcad init --build-dir /tmp/cad-build` and
+`agentcad run model.py --label first --build-dir /tmp/cad-build`.
+Overrides do not edit project configuration. Relative build paths resolve from
+the project root, not the caller's working directory. Existing projects keep
+their current layout unless configured. `--output` remains a deprecated version
+label, never a destination. See `agentcad docs artifacts` for the full contract.
+
 ## What it does
 
 - **`agentcad run script.py --label label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
-- **Automatic review viewer** — successful runs open `viewer.html`; from v2,
+- **Live project viewer** — successful runs open one stable local project URL
+  and refresh it after subsequent completed builds. Leave the tab open while
+  iterating; camera and compatible review settings survive updates. Failed
+  builds leave the last successful model visible. Versioned `viewer.html`
+  snapshots remain available; from v2,
   A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
   Parts-tab change review (`--no-view` opts out)
 - **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
@@ -54,11 +78,37 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
 - **`agentcad diff 1 2`** — compare versions, including actual shared/reference-only/candidate-only source-frame volume for valid closed solids
 - **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
+- **`agentcad viewer [open|status|stop]`** — open the live project or manage its
+  lightweight local service; `open` is the default
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
 
 `--label` names the version; the JSON response returns the actual file under
 `outputs.step`. The older `--output LABEL` spelling remains a deprecated
 compatibility alias and never denotes a destination path.
+
+### Keep one preview open
+
+After a normal `run` or `import`, give the human `project_viewer.url` from the
+JSON response. That URL tracks the latest completed viewer; `viewer` still
+points to this version's snapshot. An active page prevents another browser tab
+opening. Updates are checked about once a second (less often in background
+tabs). A new model replaces the previous one only after it loads successfully.
+
+`--no-view` never launches a browser or starts the viewer service. If it still
+generates viewer artifacts, an already-open project page can receive them.
+The core-only `--no-preview --no-diff --no-view` combination generates no viewer;
+the page retains the older model and reports that the new preview is unavailable.
+
+The service binds to `127.0.0.1` and serves only registered viewer snapshots at
+private project URLs. These are local bookmarks, not public share links. URLs
+survive service restarts and builds, but moving the project folder changes its
+identity. Viewer state lives in `~/.cache/agentcad/viewer` (override with
+`AGENTCAD_VIEWER_HOME` for isolated automation). Keep that directory to preserve
+the saved port and private URLs. If the port is occupied, AgentCAD reports the
+problem without silently changing the URL. Use `agentcad viewer status` and
+`agentcad viewer stop` for diagnostics; `agentcad viewer open` restarts it.
+An incompatible service protocol requires stopping the service with the
+installation that started it before reopening with the new installation.
 
 ## No boilerplate
 
