@@ -128,7 +128,9 @@ def check_spec(file, spec_file, no_daemon):
         "format_detected": detection.get("format"),
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
-        "validity": validity_from_metrics(measurement["metrics"]),
+        "validity": validity_from_metrics(
+            measurement["metrics"], measurement.get("validation")
+        ),
         "metrics": measurement["metrics"],
         "next_actions": _next_actions(result["passed"], file_path, spec_path),
         "more_at": "agentcad docs check-spec",

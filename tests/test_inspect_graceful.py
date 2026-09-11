@@ -257,7 +257,7 @@ class TestTier0FullEdit:
         assert parsed["shells"] == [{"closed": False, "face_count": 1}]
         notes = " ".join(parsed.get("notes", [])).lower()
         assert "no solid body" in notes
-        assert "zero volume" in notes
+        assert "not physical quantities" in notes
         assert "loft" in notes
         next_actions = " ".join(parsed["next_actions"]).lower()
         assert "loft" in next_actions
