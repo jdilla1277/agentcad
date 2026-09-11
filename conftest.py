@@ -1,11 +1,15 @@
 """Repo-level pytest hooks.
 
-Skip CadQuery-dependent test modules when the optional ``cadquery`` extra is
-not installed. The default ``pip install agentcad`` ships build123d only
-(docs/product-plans/cadquery-optional.md); running ``pytest`` on that profile
-must prove the shared command paths have no hidden CadQuery import, and it
-can only do that if modules whose *fixtures* are built with CadQuery step
-aside instead of erroring at collection time.
+Two jobs live here:
+
+1. Keep viewer service state and subprocesses out of the developer's
+   account (session-scoped fixture at the bottom).
+2. Skip CadQuery-dependent test modules when the optional ``cadquery`` extra
+   is not installed. The default ``pip install agentcad`` ships build123d
+   only (docs/product-plans/cadquery-optional.md); running ``pytest`` on
+   that profile must prove the shared command paths have no hidden CadQuery
+   import, and it can only do that if modules whose *fixtures* are built
+   with CadQuery step aside instead of erroring at collection time.
 
 The detection is a source scan for the ways this suite reaches CadQuery:
 a ``cadquery`` import, the zero-import ``cq.Workplane`` preamble, or a
@@ -21,6 +25,8 @@ from __future__ import annotations
 import importlib.util
 import re
 from pathlib import Path
+
+import pytest
 
 CADQUERY_INSTALLED = importlib.util.find_spec("cadquery") is not None
 
@@ -66,3 +72,12 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         )
         for name in _ignored_modules:
             terminalreporter.write_line(f"  {name}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolated_viewer_service(tmp_path_factory):
+    from agentcad import project_viewer
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("AGENTCAD_VIEWER_HOME", str(tmp_path_factory.mktemp("viewer-runtime")))
+        yield
+        project_viewer.stop_service()

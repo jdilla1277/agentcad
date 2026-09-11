@@ -33,19 +33,22 @@ jobs:
         run: pytest --collect-only -q
 
       - name: Run OCP-free interface guardrails
-        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
+        run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
 
       - name: Install Linux render smoke dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri
 
-      - name: Run Linux render smoke under Xvfb
+      - name: Run Linux render guardrails under Xvfb
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_render.py::test_linux_render_window_uses_virtual_x11_drawable \
+            tests/test_render.py::test_linux_display_connection_failure_is_actionable \
             tests/test_render.py::test_render_shape_produces_png \
-            tests/test_render_cmd.py::test_render_defaults_to_800_by_600 -q
+            tests/test_render_cmd.py::test_render_defaults_to_800_by_600 \
+            tests/test_render_cmd.py::test_render_unavailable_returns_actionable_json -q
 
   build123d-only:
     runs-on: ubuntu-22.04
@@ -117,7 +120,7 @@ jobs:
         run: pytest --collect-only -q
 
       - name: Run Windows-relevant guardrails
-        run: pytest tests/test_daemon_platform.py tests/test_package_positioning.py -q
+        run: pytest tests/test_daemon_platform.py tests/test_package_positioning.py tests/test_project_viewer.py -q
 
   browser-smoke:
     runs-on: ubuntu-22.04
@@ -139,7 +142,14 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
+      - name: Install CAD render display dependencies
+        run: sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri
+
       - name: Run browser viewer smoke
         env:
           AGENTCAD_BROWSER_SMOKE: "1"
-        run: pytest tests/test_viewer_browser.py -q
+        # WebKit is also exercised locally on macOS; this job installs Chromium.
+        run: |
+          xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
+            env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_viewer_browser.py tests/test_live_viewer_browser.py -q -k 'not webkit'

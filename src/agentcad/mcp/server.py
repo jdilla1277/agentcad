@@ -87,7 +87,9 @@ def run(
         dry_run: Compute metrics without creating a version.
         diff: Compare automatically with the prior successful version. Pass
             False to skip it; explicit diff remains available.
-        view: Open the generated review viewer. Pass False with preview=False
+        view: Open or reuse the live project viewer. Share project_viewer.url
+            with the human for automatic updates; viewer is a fixed snapshot.
+            Pass False with preview=False
             and diff=False to also bypass viewer generation on the core-only
             fast path.
     """

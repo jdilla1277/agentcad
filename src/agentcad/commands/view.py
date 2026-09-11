@@ -429,6 +429,7 @@ const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
 
 const hasB = MODEL_B_URL.length > 0;
+const liveProject = parent !== window && new URLSearchParams(location.search).get('live') === '1';
 const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0 || DIFF_VOLUME_PNG_URL.length > 0;
 const hasAgentState = Boolean(PART_REVIEW);
 const hasAgentView = hasAgentImgs || hasAgentState;
@@ -451,8 +452,77 @@ let partState = {
 };
 window.agentcadViewer = {
   debugState: viewerDebugState,
+  captureState: captureLiveState,
+  restoreState: restoreLiveState,
   lastState: null,
 };
+
+// The project shell swaps complete snapshots only after the next model has
+// loaded. Standalone file viewers keep working without a parent or server.
+function captureLiveState() {
+  return {
+    mode: currentMode, hasB,
+    position: camera.position.toArray(), target: controls.target.toArray(),
+    autoRotate: controls.autoRotate,
+    hidden: [...partState.hidden], isolated: [...partState.isolated],
+    selected: partState.selected, ghostRest: partState.ghostRest,
+    overlay: ['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].map(id => {
+      const el = document.getElementById(id);
+      return {id, value:el.value, checked:el.checked};
+    }),
+  };
+}
+function restoreLiveState(state) {
+  if (!state) return false;
+  let mode = state.mode;
+  // First-run A represents current. In a subsequent A/B snapshot current is B.
+  if (!state.hasB && hasB && mode === 'single-a') mode = 'single-b';
+  if (state.hasB && !hasB && mode === 'single-b') mode = 'single-a';
+  const button = [...document.querySelectorAll('#modes button')].find(b => b.dataset.mode === mode);
+  const fallback = !button || button.disabled;
+  setMode(fallback ? (hasB ? 'single-b' : 'single-a') : mode);
+  setAutoRotate(false);
+  const vector = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+  if (vector(state.position) && vector(state.target)) {
+    controls.enableDamping = false;
+    controls.update();
+    camera.position.fromArray(state.position);
+    controls.target.fromArray(state.target);
+    camera.lookAt(controls.target);
+    controls.update();
+    controls.enableDamping = true;
+  }
+  const ids = new Set(PARTS.map(p => p.id));
+  partState.hidden = new Set((state.hidden || []).filter(id => ids.has(id)));
+  partState.isolated = new Set((state.isolated || []).filter(id => ids.has(id)));
+  partState.selected = ids.has(state.selected) ? state.selected : null;
+  partState.ghostRest = Boolean(state.ghostRest);
+  applyPartState();
+  for (const item of state.overlay || []) {
+    if (!['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].includes(item.id)) continue;
+    const el = document.getElementById(item.id);
+    el.value = item.value; el.checked = item.checked;
+    el.dispatchEvent(new Event(item.id.startsWith('opacity') ? 'input' : 'change'));
+  }
+  setAutoRotate(Boolean(state.autoRotate));
+  publishViewerDebugState();
+  return fallback;
+}
+function tellProject(type, extra = {}) {
+  if (parent !== window && location.protocol !== 'file:') {
+    parent.postMessage({type, ...extra}, location.origin);
+  }
+}
+window.addEventListener('message', event => {
+  if (event.source !== parent || parent === window || event.origin !== location.origin || !viewerReady) return;
+  if (event.data?.type === 'agentcad:capture') {
+    tellProject('agentcad:state', {state:captureLiveState(), busy:exportBtn.disabled});
+  } else if (event.data?.type === 'agentcad:restore') {
+    const fallback = restoreLiveState(event.data.state);
+    renderFrame();
+    tellProject('agentcad:restored', {fallback});
+  }
+});
 
 // Disable buttons that lack data
 function setupModeButtons() {
@@ -1524,7 +1594,7 @@ const combinedBox = new THREE.Box3();
 const loader = new GLTFLoader();
 
 function attach(scene, url, { material, onMesh, alignToCenter=false }) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     if (!url) { resolve(null); return; }
     loader.load(url, gltf => {
       const model = gltf.scene;
@@ -1555,7 +1625,7 @@ function attach(scene, url, { material, onMesh, alignToCenter=false }) {
 
       if (onMesh) onMesh(model);
       resolve(model);
-    });
+    }, undefined, reject);
   });
 }
 
@@ -1575,7 +1645,10 @@ function fitCamera() {
 // Load all scenes in parallel, then fit camera
 Promise.all([
   attach(sceneA_single, MODEL_A_URL, {
-    alignToCenter: hasB,
+    // Use one frame of reference throughout a live session, including v1.
+    // Otherwise the first A/B update centers geometry underneath an unchanged
+    // camera and visibly moves the model. Standalone snapshots keep their pose.
+    alignToCenter: hasB || liveProject,
     onMesh: m => {
       reviewModelA = m;
       if (PARTS_MODEL === 'a') {
@@ -1607,6 +1680,9 @@ Promise.all([
   if (partState.focus) focusPart(partState.focus);
   viewerReady = true;
   publishViewerDebugState();
+  tellProject('agentcad:ready');
+}).catch(() => {
+  tellProject('agentcad:load-error');
 });
 
 // ---- Mode switching ----

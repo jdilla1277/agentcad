@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -25,6 +26,7 @@ from agentcad.commands.run import _OUTPUT_DEPRECATION, run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
 from agentcad.commands.view import view
+from agentcad.commands.viewer import viewer
 
 
 _SCRIPT_EDIT_HELPERS = {
@@ -51,7 +53,7 @@ QUICK START WORKFLOW
   1. Write script.py using the authoring API above and surface geometry with
      show_object(). Check metrics without consuming a version:
        $ agentcad run script.py --label test --dry-run
-  2. Run for real. The interactive review viewer opens automatically:
+  2. Run for real. The live project viewer opens automatically:
        $ agentcad run script.py --label first --render iso
   3. Verify dimensions and feature sizes from the generated STEP:
        $ agentcad measure v1_first/output.step
@@ -75,6 +77,8 @@ EXAMPLE SESSION
    "artifact_created": true,
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
    "viewer": "v1_first/viewer.html", "viewer_glb": "v1_first/output.glb",
+   "project_viewer": {"url": "http://127.0.0.1:PORT/projects/TOKEN/",
+                      "latest_version": 1, "opened": true, "reused": false},
    "metrics": {"dimensions": {"x": 10.0, "y": 20.0, "z": 5.0},
                "volume": 1000.0, "is_valid": true, ...},
    "preview": "v1_first/preview.png"}
@@ -92,7 +96,7 @@ VERSION OUTPUTS
       diff_volume.png   source-frame shared/reference-only/candidate-only
                         3D volume vs. prior (from v2 onward, valid solids)
       diff_volume.glb   interactive colored geometry backing the 3D volume map
-      viewer.html       interactive review viewer (opens automatically;
+      viewer.html       immutable review snapshot (live project opens automatically;
                         from v2: A=previous, B=current)
       renders/          requested PNG views
 
@@ -101,6 +105,9 @@ VERSION OUTPUTS
   preview.png and per-part previews; viewer.html, its GLB, and diff PNGs still
   generate. `--no-view` prevents the automatic browser launch without removing
   viewer artifacts.
+  Share project_viewer.url for a stable local page that follows successful
+  builds, reuses an active tab, and preserves compatible camera/review state.
+  The viewer field remains the immutable snapshot for this particular version.
   `--no-diff` skips automatic comparison with the prior version; an explicit
   `agentcad diff` remains available. Combine
   `--no-preview --no-diff --no-view` for the core-only fast path: output.step,
@@ -125,7 +132,7 @@ COMMAND REFERENCE: CREATE AND IMPORT
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
-    --view / --no-view   Open the review viewer after success (default on).
+    --view / --no-view   Open or reuse the live project after success (default on).
                          From v2, previous/current comparison is preloaded.
     --diff / --no-diff   Generate or skip automatic comparison with the prior
                          successful version (default on).
@@ -142,6 +149,10 @@ COMMAND REFERENCE: CREATE AND IMPORT
     automatic prior-version comparison without disabling explicit diff commands.
 
 COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
+  agentcad viewer [open|status|stop]
+    Open the live project (default), inspect the local service, or stop it.
+    Its URL survives service restarts; the next viewed build starts it again.
+
   agentcad render STEP --view SPEC [OPTIONS]
     Render PNGs after a run. SPEC accepts named views, `all`, custom
     azimuth:elevation, or a mix. Camera options: --zoom N, --size WxH,
@@ -563,6 +574,8 @@ class _LoggingGroup(click.Group):
     def invoke(self, ctx):
         captured = []
         original_echo = click.echo
+        project_root = Path.cwd()
+        ctx.meta["viewer_started_ns"] = time.time_ns()
 
         def _capturing_echo(message=None, **kwargs):
             if message is not None:
@@ -575,6 +588,34 @@ class _LoggingGroup(click.Group):
         finally:
             click.echo = original_echo
             self._log_session(ctx, captured)
+            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
+
+    def _record_live_build(self, ctx, captured, root, exception=None):
+        if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
+            return
+        result = {}
+        for line in reversed(captured):
+            try:
+                candidate = json.loads(line)
+                if isinstance(candidate, dict):
+                    result = candidate
+                    break
+            except (ValueError, TypeError):
+                continue
+        if result.get("via") == "daemon":
+            return  # The child already recorded the attempt with its own start time.
+        failed = result.get("status") in {"error", "failed", "validation_error", "invalid_geometry", "timeout"}
+        if not result and exception is not None:
+            failed = not isinstance(exception, SystemExit) or exception.code not in (0, None)
+        unavailable = result.get("status") == "success" and result.get("version") and not result.get("viewer")
+        if failed or unavailable:
+            try:
+                from agentcad.project_viewer import record_failure
+                record_failure(root, result.get("label") or "unlabeled",
+                               "failed" if failed else "preview_unavailable",
+                               started_ns=ctx.meta["viewer_started_ns"])
+            except Exception:
+                pass  # Optional UI state must never replace the command result.
 
     def _log_session(self, ctx, captured):
         if os.environ.get("AGENTCAD_NO_LOG"):
@@ -628,6 +669,7 @@ cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)
 cli.add_command(view)
+cli.add_command(viewer)
 
 
 if __name__ == "__main__":
