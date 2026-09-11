@@ -1,4 +1,5 @@
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,6 +43,46 @@ VIEWS = {
 ALL_VIEWS = ["front", "right", "top", "iso"]
 
 NAMED_VIEWS = set(VIEWS.keys())
+
+
+class RenderUnavailableError(RuntimeError):
+    """Raised when the platform graphics backend cannot initialize."""
+
+
+def _linux_render_unavailable_error(exc):
+    return RenderUnavailableError(
+        "Linux PNG rendering requires an accessible X11/GLX display. "
+        "Run from an X11/XWayland session, or use "
+        "`xvfb-run -a agentcad ...` in a headless session. "
+        f"Graphics initialization failed: {type(exc).__name__}: {exc}"
+    )
+
+
+def _create_render_window(display_connection, width, height):
+    """Create the platform window backing an otherwise offscreen render.
+
+    The CadQuery OCP wheels use GLX on Linux.  GLX requires a real X11
+    drawable even when the final image is read from a framebuffer, so a
+    size-only ``Aspect_NeutralWindow`` leaves OCCT querying window handle 0.
+    Keep the X11 window virtual so it is never mapped on the user's desktop.
+    """
+    if sys.platform.startswith("linux"):
+        from OCP.Xw import Xw_Window
+
+        window = Xw_Window(
+            display_connection,
+            "agentcad-render",
+            0,
+            0,
+            width,
+            height,
+        )
+        window.SetVirtual(True)
+        return window
+
+    window = Aspect_NeutralWindow()
+    window.SetSize(width, height)
+    return window
 
 
 def parse_view_spec(spec):
@@ -106,8 +147,13 @@ def _setup_render(
     show_edges=False,
 ):
     """Set up offscreen rendering pipeline, returning (view, context)."""
-    display_connection = Aspect_DisplayConnection()
-    driver = OpenGl_GraphicDriver(display_connection)
+    try:
+        display_connection = Aspect_DisplayConnection()
+        driver = OpenGl_GraphicDriver(display_connection)
+    except Exception as exc:
+        if sys.platform.startswith("linux"):
+            raise _linux_render_unavailable_error(exc) from exc
+        raise
     driver.ChangeOptions().contextNoAccel = True
     driver.ChangeOptions().buffersNoSwap = True
 
@@ -140,9 +186,13 @@ def _setup_render(
         view.SetBackgroundColor(
             Quantity_Color(*background_color, Quantity_TOC_RGB)
         )
-    window = Aspect_NeutralWindow()
-    window.SetSize(width, height)
-    view.SetWindow(window)
+    try:
+        window = _create_render_window(display_connection, width, height)
+        view.SetWindow(window)
+    except Exception as exc:
+        if sys.platform.startswith("linux"):
+            raise _linux_render_unavailable_error(exc) from exc
+        raise
 
     context = AIS_InteractiveContext(viewer)
 

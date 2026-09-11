@@ -786,7 +786,7 @@ def _assign_part_identity(raw_parts):
         "`agentcad diff` remains available for later review."
     ),
 )
-@click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
+@click.option("--view/--no-view", "open_view", default=True, help="Open or reuse the live project viewer after success (default on). Its stable URL follows completed builds; version snapshots retain previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
 @click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
 @click.option(
@@ -820,6 +820,7 @@ def run(
     ctx.meta["run_script"] = script
     ctx.meta["run_label"] = output
     ctx.meta["run_legacy_output"] = legacy_output is not None
+    ctx.meta["viewer_dry_run"] = dry_run
     if label is not None and legacy_output is not None:
         raise click.UsageError(
             "Use --label or the deprecated --output alias, not both.",
@@ -1755,16 +1756,21 @@ def _run_impl(
         lifecycle.meta["viewer_glb"] = viewer_glb_meta
         lifecycle.set_artifact("viewer", "success")
 
-    viewer_opened = False
+    project_viewer = None
+    if viewer_meta:
+        from agentcad.project_viewer import handoff
+        project_viewer = handoff(get_project().build_root, version_dir, open_view=open_view)
+
+    viewer_opened = bool(project_viewer and project_viewer.get("opened"))
     if open_view:
         try:
-            from agentcad.commands.view import _open_browser
-
-            viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+            reused = bool(project_viewer and project_viewer.get("reused"))
             lifecycle.set_artifact(
                 "browser",
-                "success" if viewer_opened else "unavailable",
-                message=None if viewer_opened else "Browser did not open.",
+                "success" if viewer_opened or reused else "unavailable",
+                message=None if viewer_opened or reused else (
+                    (project_viewer or {}).get("message", "Browser did not open.")
+                ),
             )
         except Exception as exc:
             warnings.append(f"Could not open the review viewer: {type(exc).__name__}: {exc}")
@@ -1845,7 +1851,11 @@ def _run_impl(
     if renders_meta:
         output_json["renders"] = renders_meta
     if hint:
+        if project_viewer and project_viewer.get("url"):
+            hint = f"Live project: {project_viewer['url']} — updates automatically. Version snapshot: {hint}"
         output_json["hint"] = hint
+    if project_viewer:
+        output_json["project_viewer"] = project_viewer
     _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
     output_json["timings"] = _timings
     output_json["completed_phases"] = list(_phase_tracker.completed)

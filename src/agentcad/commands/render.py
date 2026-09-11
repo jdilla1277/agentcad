@@ -107,7 +107,12 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
 
     from cadquery import importers
 
-    from agentcad.render import parse_view_spec, render_shape, render_shape_custom
+    from agentcad.render import (
+        RenderUnavailableError,
+        parse_view_spec,
+        render_shape,
+        render_shape_custom,
+    )
 
     step_path = Path(step_file)
     if not step_path.exists():
@@ -189,35 +194,48 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
 
     # Render each view
     renders = {}
-    for spec_type, spec_value in view_specs:
-        if spec_type == "named":
-            if name:
-                filename = f"{name}.png"
-                key = name
-            else:
-                filename = f"{spec_value}.png"
-                key = spec_value
-            out_path = output_dir / filename
-            if get_project().configured:
-                out_path = get_project().artifact_path(out_path)
-            render_shape(shape, spec_value, out_path, width=width, height=height,
-                         zoom=zoom, focus=focus_point, fit=fit, msaa=msaa)
-            renders[key] = str(out_path)
-        elif spec_type == "custom":
-            azimuth, elevation = spec_value
-            if name:
-                filename = f"{name}.png"
-                key = name
-            else:
-                key = _format_custom_angle_name(azimuth, elevation)
-                filename = f"{key}.png"
-            out_path = output_dir / filename
-            if get_project().configured:
-                out_path = get_project().artifact_path(out_path)
-            render_shape_custom(shape, azimuth, elevation, out_path,
-                                width=width, height=height, zoom=zoom,
-                                focus=focus_point, fit=fit, msaa=msaa)
-            renders[key] = str(out_path)
+    try:
+        for spec_type, spec_value in view_specs:
+            if spec_type == "named":
+                if name:
+                    filename = f"{name}.png"
+                    key = name
+                else:
+                    filename = f"{spec_value}.png"
+                    key = spec_value
+                out_path = output_dir / filename
+                if get_project().configured:
+                    out_path = get_project().artifact_path(out_path)
+                render_shape(shape, spec_value, out_path, width=width, height=height,
+                             zoom=zoom, focus=focus_point, fit=fit, msaa=msaa)
+                renders[key] = str(out_path)
+            elif spec_type == "custom":
+                azimuth, elevation = spec_value
+                if name:
+                    filename = f"{name}.png"
+                    key = name
+                else:
+                    key = _format_custom_angle_name(azimuth, elevation)
+                    filename = f"{key}.png"
+                out_path = output_dir / filename
+                if get_project().configured:
+                    out_path = get_project().artifact_path(out_path)
+                render_shape_custom(shape, azimuth, elevation, out_path,
+                                    width=width, height=height, zoom=zoom,
+                                    focus=focus_point, fit=fit, msaa=msaa)
+                renders[key] = str(out_path)
+    except RenderUnavailableError as exc:
+        click.echo(json.dumps({
+            "command": "render",
+            "status": "error",
+            "error_kind": "render_unavailable",
+            "message": str(exc),
+            "suggestion": (
+                "Use an X11/XWayland desktop session, or prefix the command "
+                "with `xvfb-run -a` when running headlessly."
+            ),
+        }))
+        sys.exit(1)
 
     # Update meta.json if in a version directory
     if _is_version_dir(parent_dir):

@@ -38,7 +38,7 @@ from agentcad.native_io import silence_native_stdout
 )
 @click.option(
     "--view/--no-view", "open_view", default=True,
-    help="Open the generated review viewer after a successful import (default on).",
+    help="Open or reuse the live project viewer after a successful import (default on). Its stable URL follows completed builds.",
 )
 @click.option(
     "--diff/--no-diff",
@@ -568,16 +568,20 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
             message="Viewer GLB was unavailable.",
         )
 
-    viewer_opened = False
+    project_viewer = None
+    if viewer_ok:
+        from agentcad.project_viewer import handoff
+        project_viewer = handoff(get_project().build_root, version_dir, open_view=open_view)
+    viewer_opened = bool(project_viewer and project_viewer.get("opened"))
     if open_view and viewer_ok:
         try:
-            from agentcad.commands.view import _open_browser
-
-            viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+            reused = bool(project_viewer and project_viewer.get("reused"))
             lifecycle.set_artifact(
                 "browser",
-                "success" if viewer_opened else "unavailable",
-                message=None if viewer_opened else "Browser did not open.",
+                "success" if viewer_opened or reused else "unavailable",
+                message=None if viewer_opened or reused else (
+                    (project_viewer or {}).get("message", "Browser did not open.")
+                ),
             )
         except Exception as exc:
             # Browser launch is best-effort and must not discard a valid import.
@@ -627,6 +631,10 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
     step_argument = shlex.quote(get_project().response_path(version_dir / "output.step"))
     root_arg = " --build-dir " + shlex.quote(str(get_project().build_root)) if get_project().configured else ""
     response["viewer_opened"] = viewer_opened
+    if project_viewer:
+        response["project_viewer"] = project_viewer
+        if project_viewer.get("url"):
+            response["hint"] = f"Live project: {project_viewer['url']} — updates automatically. Version snapshot: {response['viewer']}."
     if scaffold_written:
         response["scaffold"] = "edit.py"
     response["next_actions"] = [

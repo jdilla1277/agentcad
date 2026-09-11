@@ -73,7 +73,10 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
      changes but does not prove physical correctness or shared 3D volume.
    - `viewer.html` — interactive 3D review viewer for the user unless viewer
      artifacts are disabled (humans only;
-     you can't render HTML). It opens automatically after a successful run.
+     you can't render HTML). It remains an immutable version snapshot.
+     `project_viewer.url` is the live project URL: share it with the human and
+     leave its tab open while iterating. Successful builds update that page
+     automatically, preserving the camera and compatible review settings.
      From v2, A=previous and B=current are already loaded with synchronized
      A/B, side-by-side, overlay, diff-image, and Parts-tab change review.
 
@@ -114,7 +117,10 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
    context`, existing outputs, and `agentcad daemon status` before retrying; the
    original command may already have completed.
 
-4. **Review with the user.** The generated viewer opens automatically. On v2+
+4. **Review with the user.** The live project viewer opens automatically and
+   reuses an active tab. Share `project_viewer.url` for ongoing iteration;
+   share `viewer` for a fixed version. Use `agentcad viewer open` to reopen the
+   project, and `agentcad viewer status` or `stop` for service diagnostics. On v2+
    start with its previous/current comparison, then use A/B, Overlay, and Parts
    without selecting files manually. Use `agentcad view old.step new.step` only
    for an explicit non-adjacent comparison.
