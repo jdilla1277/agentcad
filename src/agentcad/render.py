@@ -145,6 +145,7 @@ def _setup_render(
     msaa=0,
     background_color=None,
     show_edges=False,
+    validation_markers=None,
 ):
     """Set up offscreen rendering pipeline, returning (view, context)."""
     try:
@@ -228,6 +229,29 @@ def _setup_render(
         ais_shape.Attributes().SetFaceBoundaryDraw(show_edges)
         context.Display(ais_shape, 1, -1, True)
 
+    if validation_markers:
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+        from OCP.gp import gp_Pnt
+        from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
+        from agentcad.validation import deflection_for_shape
+        radius = max(deflection_for_shape(shape) * 3, 0.05)
+        for marker in validation_markers:
+            points = [gp_Pnt(p['x'], p['y'], p['z']) for p in marker['points']]
+            items = []
+            if len(points) == 1:
+                items.append(BRepPrimAPI_MakeSphere(points[0], radius).Shape())
+            else:
+                for a, b in zip(points, points[1:]):
+                    if a.Distance(b) > 1e-7:
+                        items.append(BRepBuilderAPI_MakeEdge(a, b).Shape())
+            for item in items:
+                overlay = AIS_Shape(item)
+                overlay.SetColor(Quantity_Color(1, 0.05, 0.03, Quantity_TOC_RGB))
+                overlay.SetWidth(4)
+                overlay.SetZLayer(Graphic3d_ZLayerId_Topmost)
+                context.Display(overlay, 1 if len(points) == 1 else 0, -1, False)
+        context.UpdateCurrentViewer()
     return view, context
 
 
@@ -262,10 +286,11 @@ def _apply_camera(view, zoom, focus, fit):
 
 
 def render_shape(shape, view_name, output_path, width=800, height=600,
-                 zoom=1.0, focus=None, fit=True, parts=None, msaa=0):
+                 zoom=1.0, focus=None, fit=True, parts=None, msaa=0, validation_markers=None):
     """Render a TopoDS_Shape to a PNG file from the given view."""
     orientation = VIEWS[view_name]
-    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
+    extra = {"validation_markers": validation_markers} if validation_markers is not None else {}
+    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa, **extra)
 
     view.SetProj(orientation)
     _apply_camera(view, zoom, focus, fit)
@@ -963,7 +988,7 @@ def render_diff_side_by_side(
 
 def render_shape_custom(shape, azimuth, elevation, output_path,
                         width=800, height=600, zoom=1.0, focus=None, fit=True,
-                        parts=None, msaa=0):
+                        parts=None, msaa=0, validation_markers=None):
     """Render a TopoDS_Shape to a PNG file from a custom azimuth/elevation angle."""
     az = math.radians(azimuth)
     el = math.radians(elevation)
@@ -972,7 +997,8 @@ def render_shape_custom(shape, azimuth, elevation, output_path,
     vy = math.cos(az) * math.cos(el)
     vz = -math.sin(el)
 
-    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
+    extra = {"validation_markers": validation_markers} if validation_markers is not None else {}
+    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa, **extra)
 
     view.SetProj(vx, vy, vz)
     view.SetUp(0, 0, 1)

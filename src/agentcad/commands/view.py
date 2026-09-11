@@ -366,7 +366,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   <div class="head">
     <div class="verdict">
       <span class="pill info" id="review-pill">review</span>
-      <h1>Spec check<small id="review-subtitle">measurement review</small></h1>
+      <h1><span id="review-heading">Spec check</span><small id="review-subtitle">measurement review</small></h1>
     </div>
     <div class="stats">
       <div class="stat"><span>Features</span><strong id="review-features">—</strong></div>
@@ -778,6 +778,16 @@ function makeStaticGroupRow(group) {
   return row;
 }
 
+function connectionSummary(part) {
+  const connection = part.connection;
+  if (!connection) return '';
+  if (connection.status === 'disconnected')
+    return `Warning: touches no other part; ${fmtNumber(connection.distance_mm)} mm from ${connection.nearest_part_id}`;
+  if (connection.status === 'floating') return 'Intentionally floating';
+  if (connection.status === 'unavailable') return 'Contact check unavailable';
+  return '';
+}
+
 function makeStaticPartRow(part) {
   const li = document.createElement('li');
   li.dataset.partId = part.id;
@@ -789,6 +799,13 @@ function makeStaticPartRow(part) {
     li.appendChild(swatch);
   }
   li.appendChild(document.createTextNode(partLabel(part)));
+  const connection = connectionSummary(part);
+  if (connection) {
+    const note = document.createElement('small');
+    note.textContent = ` · ${connection}`;
+    if (part.connection.status === 'disconnected') note.style.color = '#c2413f';
+    li.appendChild(note);
+  }
   if (part.part_of) {
     const tag = document.createElement('span');
     tag.className = 'part-group-tag';
@@ -828,7 +845,7 @@ function setupPartControls() {
     rows.appendChild(makeControlRow({
       id: p.id,
       label: partLabel(p),
-      sub: p.part_of ? `${p.id} · ${p.part_of}` : p.id,
+      sub: [p.part_of ? `${p.id} · ${p.part_of}` : p.id, connectionSummary(p)].filter(Boolean).join(' · '),
       color: p.color,
       isGroup: false,
     }));
@@ -992,6 +1009,7 @@ function meshIsGhosted(mesh) {
 function viewerDebugState() {
   return {
     ready: viewerReady,
+    validation_marker_count: viewerReady ? reviewMarkerGroup.children.length : 0,
     mode: currentMode,
     camera: viewerReady ? {
       position: camera.position.toArray(),
@@ -1249,7 +1267,7 @@ function setupReviewPanel() {
     ? `${matched.length} / ${matched.length + missing.length}`
     : `${(measure.cylindrical_features || []).length}`;
   document.getElementById("review-error").textContent = spec ? fmtNumber(spec.total_abs_count_error) : "—";
-  document.getElementById("review-validity").textContent = valid.is_valid === false ? "Invalid" : "Valid";
+  document.getElementById("review-validity").textContent = valid.is_valid === true ? "Valid" : valid.is_valid === false ? "Invalid" : "Undetermined";
 
   const dimGrid = document.getElementById("review-dimensions");
   for (const axis of ["x", "y", "z"]) {
@@ -1263,6 +1281,14 @@ function setupReviewPanel() {
   if (!spec) {
     document.getElementById("review-spec-section").style.display = "none";
   } else {
+    for (const check of spec.structure_checks || []) {
+      specRows.appendChild(makeReviewRow({
+        label: check.expectation,
+        status: check.passed === true ? 'pass' : check.passed === false ? 'fail' : 'info',
+        badge: check.passed === true ? 'pass' : check.passed === false ? 'fail' : 'undetermined',
+        summary: `expected ${check.expected}, got ${check.actual === null ? 'unknown' : check.actual}`,
+      }));
+    }
     for (const feature of matched) {
       const bucket = findMeasuredBucket(feature);
       specRows.appendChild(makeReviewRow({
@@ -1285,7 +1311,28 @@ function setupReviewPanel() {
   }
 
   const measureRows = document.getElementById("review-measure-rows");
-  for (const bucket of measure.cylindrical_features || []) {
+  if (REVIEW.validation) {
+    const report = REVIEW.validation;
+    document.getElementById('review-heading').textContent = 'Validation';
+    document.getElementById('btn-spec').textContent = 'Validation';
+    document.querySelector('#review-measure-section h2').textContent = 'Failures and repairs';
+    pill.textContent = report.is_valid === true ? 'pass' : report.is_valid === false ? 'fail' : 'undetermined';
+    pill.className = 'pill ' + (report.is_valid === true ? 'pass' : report.is_valid === false ? 'fail' : 'info');
+    document.getElementById('review-subtitle').textContent = report.message;
+    const row = makeReviewRow({label: report.first_failure || 'Validation',
+      status: report.is_valid === false ? 'fail' : 'info', badge: pill.textContent,
+      summary: 'Red markers locate the reported failures. IDs refer to this file only.'});
+    row._validationMarkers = REVIEW.validation_markers || [];
+    measureRows.appendChild(row);
+    for (const repair of report.repairs || []) {
+      const entry = makeReviewRow({label: repair.kind, status: 'info',
+        badge: repair.changes_intent ? 'changes design' : 'safe if condition holds',
+        summary: [repair.why, repair.precondition, repair.how].filter(Boolean).join(' ')});
+      entry._validationMarkers = REVIEW.validation_markers || [];
+      measureRows.appendChild(entry);
+    }
+  }
+  for (const bucket of (REVIEW.validation ? [] : measure.cylindrical_features || [])) {
     measureRows.appendChild(makeReviewRow({
       label: `Ø${fmtNumber(bucket.diameter_mm)} cylinders`,
       status: "pass",
@@ -1297,6 +1344,10 @@ function setupReviewPanel() {
 }
 
 function clearReviewMarkers() {
+  reviewMarkerGroup.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) child.material.dispose();
+  });
   reviewMarkerGroup.clear();
 }
 
@@ -1466,6 +1517,9 @@ function addRingMarker(center, diameter, axis, color, missing=false) {
 
 function reviewCentersForRow(row) {
   const points = [];
+  for (const marker of row._validationMarkers || []) {
+    for (const center of marker.points) points.push({center, diameter: 1});
+  }
   const bucket = row._reviewBucket;
   if (bucket && bucket.representative_centers) {
     for (const center of bucket.representative_centers) {
@@ -1507,6 +1561,22 @@ function focusReviewRow(row) {
 function selectReviewRow(row, options={}) {
   document.querySelectorAll("#spec-panel .review-row").forEach(r => r.classList.toggle("active", r === row));
   clearReviewMarkers();
+  for (const marker of row._validationMarkers || []) {
+    const points = marker.points.map(cadPointToViewer);
+    if (points.length === 1) {
+      const dims = reviewMetrics().dimensions || {};
+      const radius = Math.max(...Object.values(dims).filter(v => typeof v === 'number'), 1) * 0.006;
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8),
+        new THREE.MeshBasicMaterial({color: 0xff3020, depthTest: false, depthWrite: false}));
+      dot.position.copy(points[0]); dot.renderOrder = 1000;
+      reviewMarkerGroup.add(dot);
+    } else if (points.length > 1) {
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.LineBasicMaterial({color: 0xff3020, depthTest: false, depthWrite: false}));
+      line.renderOrder = 1000;
+      reviewMarkerGroup.add(line);
+    }
+  }
   const bucket = row._reviewBucket;
   if (bucket && bucket.representative_centers) {
     const color = row._reviewStatus === "fail" ? 0xc24a43 : 0x3f8b62;
@@ -1995,7 +2065,7 @@ def _resolve_to_glb(file_str):
 def _resolve_to_glb_and_shape(file_str):
     """Resolve a file path to (glb_path, topods_shape_or_none, error).
 
-    TopoDS_Shape is returned only for STEP inputs. GLB inputs get None for the
+    TopoDS_Shape is returned for STEP/BREP inputs. GLB inputs get None for the
     shape — callers that need a shape (e.g. for PNG rendering) handle that.
     """
     file_path = Path(file_str).resolve()
@@ -2003,10 +2073,10 @@ def _resolve_to_glb_and_shape(file_str):
         return None, None, f"File '{file_str}' not found"
 
     suffix = file_path.suffix.lower()
-    if suffix not in (".glb", ".step", ".stp"):
-        return None, None, f"Unsupported format '{suffix}'. Use .glb or .step"
+    if suffix not in (".glb", ".step", ".stp", ".brep"):
+        return None, None, f"Unsupported format '{suffix}'. Use .glb, .step, or .brep"
 
-    if suffix in (".step", ".stp"):
+    if suffix in (".step", ".stp", ".brep"):
         from agentcad.export import export_glb
         from agentcad.step_io import load_cad_shape
 
@@ -2079,7 +2149,7 @@ def _render_unified(
     mode toggle will grey out the buttons that depend on missing data.
     """
     parts_payload = [
-        {k: p[k] for k in ("id", "id_source", "name", "color", "part_of") if k in p}
+        {k: p[k] for k in ("id", "id_source", "name", "color", "part_of", "connection") if k in p}
         for p in (parts or [])
     ]
     groups_payload = [
@@ -2228,7 +2298,7 @@ def _render_solid_comparison_artifacts(
 
 def _review_error(message):
     return (
-        f"{message} Review mode requires a STEP/STP source model so "
+        f"{message} Review mode requires a STEP/STP source model (or BREP) so "
         "agentcad can measure B-rep geometry."
     )
 
@@ -2249,14 +2319,14 @@ def _load_spec_json(spec_file):
     return data, None
 
 
-def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
-    if not include_measure and spec_file is None:
+def _build_review_payload(file_str, *, include_measure=False, spec_file=None, include_validation=False):
+    if not include_measure and spec_file is None and not include_validation:
         return None, None
 
     file_path = Path(file_str).resolve()
     if not file_path.exists():
         return None, f"File '{file_str}' not found"
-    if file_path.suffix.lower() not in (".step", ".stp"):
+    if file_path.suffix.lower() not in (".step", ".stp", ".brep"):
         return None, _review_error(f"Unsupported review input '{file_path.suffix}'.")
 
     from agentcad import file_detect
@@ -2278,6 +2348,11 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
         return None, f"Could not measure '{file_str}' for viewer review: {exc}"
 
     review = {"measure": measurement}
+    if include_validation:
+        from agentcad.step_io import load_cad_shape
+        from agentcad.validation_guidance import validation_markers
+        review["validation"] = measurement["validation"]
+        review["validation_markers"] = validation_markers(load_cad_shape(file_path), measurement["validation"])
 
     if spec_file is not None:
         spec, err = _load_spec_json(spec_file)
@@ -2287,6 +2362,8 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
         from agentcad.commands.check_spec import check_measurement_against_spec
 
         check = check_measurement_against_spec(measurement, spec)
+        if include_validation:
+            review["validation"] = measurement["validation"]
         check.update({
             "command": "check-spec",
             "status": "success",
@@ -2311,6 +2388,8 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
 @click.argument("file")
 @click.argument("file_b", required=False)
 @click.option("--overlay", is_flag=True, default=False, help="Tinted overlay mode (single viewport, red/green).")
+@click.option("--validation", "with_validation", is_flag=True,
+              help="Show validation failures in red with repair guidance (one STEP/BREP file).")
 @click.option(
     "--measure",
     "with_measure",
@@ -2324,16 +2403,19 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
     help="Run check-spec with this JSON spec and open the viewer in Spec check mode.",
 )
 @project_options
-def view(file, file_b, overlay, with_measure, spec_file):
+def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
     """Open a GLB or STEP file in the browser.
 
     With one file: single-model viewer.
     With two files: diff view (side-by-side by default, or --overlay for tinted overlay).
     """
+    if with_validation and file_b is not None:
+        _error("--validation accepts one STEP/BREP file; omit the second file.")
     review, err = _build_review_payload(
         file,
         include_measure=with_measure,
         spec_file=spec_file,
+        include_validation=with_validation,
     )
     if err:
         _error(err)
@@ -2353,8 +2435,11 @@ def view(file, file_b, overlay, with_measure, spec_file):
             "model": str(glb_a),
         }
         if review:
-            response["mode"] = "spec"
+            response["mode"] = "validation" if with_validation else "spec"
             response["review"] = True
+            if with_validation:
+                response["validation"] = review["validation"]
+                response["is_valid"] = review["validation"]["is_valid"]
         click.echo(json.dumps(response))
         return
 

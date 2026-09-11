@@ -79,9 +79,10 @@ def _parse_size(_ctx, _param, value):
 @click.option("--name", default=None, help="Custom filename for the rendered PNG (single view only).")
 @click.option("--focus", default=None, help="Camera target point 'x,y,z'.")
 @click.option("--no-fit", is_flag=True, default=False, help="Skip FitAll (requires --focus).")
+@click.option("--highlight", type=click.Choice(["validation"]), help="Highlight validation failures in red.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @project_options
-def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
+def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon, highlight=None):
     """Render PNG views of an existing STEP file."""
     if msaa and size[0] * size[1] > MAX_ANTIALIASED_PIXELS:
         raise click.BadParameter(
@@ -91,6 +92,8 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
 
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["render", step_file, "--view", view]
+    if highlight:
+        argv.extend(["--highlight", highlight])
     if zoom != 1.0:
         argv.extend(["--zoom", str(zoom)])
     if size != (800, 600):
@@ -190,6 +193,17 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         }))
         sys.exit(1)
 
+    validation = None
+    render_options = {}
+    if highlight:
+        from agentcad.validation import validate_shape
+        from agentcad.validation_guidance import validation_markers
+        validation = validate_shape(shape)
+        render_options["validation_markers"] = validation_markers(shape, validation)
+        # Preserve ordinary renders when requesting an annotated variant.
+        output_dir = output_dir / "validation"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
     # Render each view
     renders = {}
     try:
@@ -205,7 +219,7 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
                 if get_project().configured:
                     out_path = get_project().artifact_path(out_path)
                 render_shape(shape, spec_value, out_path, width=width, height=height,
-                             zoom=zoom, focus=focus_point, fit=fit, msaa=msaa)
+                             zoom=zoom, focus=focus_point, fit=fit, msaa=msaa, **render_options)
                 renders[key] = str(out_path)
             elif spec_type == "custom":
                 azimuth, elevation = spec_value
@@ -220,7 +234,7 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
                     out_path = get_project().artifact_path(out_path)
                 render_shape_custom(shape, azimuth, elevation, out_path,
                                     width=width, height=height, zoom=zoom,
-                                    focus=focus_point, fit=fit, msaa=msaa)
+                                    focus=focus_point, fit=fit, msaa=msaa, **render_options)
                 renders[key] = str(out_path)
     except RenderUnavailableError as exc:
         click.echo(json.dumps({
@@ -236,7 +250,7 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         sys.exit(1)
 
     # Update meta.json if in a version directory
-    if _is_version_dir(parent_dir):
+    if _is_version_dir(parent_dir) and not highlight:
         meta_path = parent_dir / "meta.json"
         meta = json.loads(meta_path.read_text())
         existing_renders = meta.get("renders", {})
@@ -251,6 +265,9 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         "command": "render",
         "status": "success",
         "renders": renders,
+        **({"validation": validation, "is_valid": validation["is_valid"],
+            "highlight": "validation", "highlight_count": len(render_options["validation_markers"])}
+           if validation else {}),
     }))
 
     # Fork off the warm process as the daemon so subsequent commands route

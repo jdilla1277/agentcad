@@ -15,6 +15,7 @@ Public API:
     solid_entries(shape, limit=None) -> list[dict]   # id, volume, bbox
     face_entries(shape, limit=None)  -> list[dict]   # id, normal, area, centroid, bbox
     edge_entries(shape, limit=None)  -> list[dict]   # id, length, endpoints
+    vertex_entries(shape, limit=None) -> list[dict]  # id, location
     topology_counts(shape) -> dict                   # total solids/faces/edges
     pick_face_topods(shape, face_id) -> TopoDS_Face
     pick_edge_topods(shape, edge_id) -> TopoDS_Edge
@@ -281,6 +282,20 @@ def edge_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
             "length": _round(length),
             "endpoints": [_xyz(p_first), _xyz(p_last)],
         })
+    return entries
+
+
+def vertex_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
+    """Vertex IDs use the same indexed topology map as validation evidence."""
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_VERTEX
+    from OCP.TopoDS import TopoDS
+
+    entries = []
+    for i, raw in enumerate(_iter_indexed_map(topo_shape, TopAbs_VERTEX), start=1):
+        if _limit_reached(entries, limit):
+            break
+        entries.append({"id": i, "location": _xyz(BRep_Tool.Pnt_s(TopoDS.Vertex_s(raw)))})
     return entries
 
 

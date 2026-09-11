@@ -128,6 +128,7 @@ def render(
     focus: str | None = None,
     no_fit: bool = False,
     build_dir: str | None = None,
+    highlight: str | None = None,
 ) -> dict:
     """Render PNG views of an existing STEP file.
 
@@ -141,8 +142,11 @@ def render(
         name: Output name label.
         focus: Camera focus point as x,y,z.
         no_fit: Skip FitAll (requires focus).
+        highlight: Use "validation" to mark failing edges/vertices in red and return the report.
     """
     args = ["render", step_file, "--view", view]
+    if highlight is not None:
+        args.extend(["--highlight", highlight])
     if zoom is not None:
         args.extend(["--zoom", str(zoom)])
     if name:
@@ -334,13 +338,17 @@ def diff(ref1: str, ref2: str, cwd: str, build_dir: str | None = None) -> dict:
 
 
 @mcp.tool()
-def view(file: str, cwd: str, build_dir: str | None = None) -> dict:
+def view(file: str, cwd: str, build_dir: str | None = None, validation: bool = False) -> dict:
     """Open a GLB or STEP file in the browser via three.js.
 
     Args:
         file: Path to GLB or STEP file.
+        validation: Show failure markers and conditional repair guidance for a STEP file.
         cwd: Source project directory (or a subdirectory).
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    return _invoke(_build_args(["view", file], build_dir), cwd=cwd)
+    args = ["view", file]
+    if validation:
+        args.append("--validation")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)

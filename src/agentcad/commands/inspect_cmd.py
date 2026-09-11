@@ -653,12 +653,16 @@ def _inspect_tier0_impl(
                 payload["edges"] = topo_ids.edge_entries(
                     topo_shape, limit=id_limit
                 )
+                from OCP.TopAbs import TopAbs_VERTEX
+                counts["vertices"] = topo_ids._indexed_map(topo_shape, TopAbs_VERTEX).Extent()
+                payload["vertices"] = topo_ids.vertex_entries(topo_shape, limit=id_limit)
                 truncations.extend(_list_truncations(
                     counts,
                     {
                         "solids": len(payload["solids"]),
                         "faces": len(payload["faces"]),
                         "edges": len(payload["edges"]),
+                        "vertices": len(payload["vertices"]),
                     },
                     id_limit,
                 ))

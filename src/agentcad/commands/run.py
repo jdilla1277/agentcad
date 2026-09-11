@@ -1228,7 +1228,11 @@ def _run_impl(
         elif group_id is not None and group_color is not None:
             entry["color"] = group_color
         entry["metrics"] = compute_metrics(p["topo_shape"])
+        if p.get("validation_options"):
+            entry["validation_options"] = p["validation_options"]
         parts_output.append(entry)
+    from agentcad.validation_guidance import part_connections, structure_checks, with_structure_checks
+    warnings.extend(part_connections(raw_parts, parts_output))
     _finish_phase("metrics", _t, "metrics_ms")
     groups_output = list(groups_by_id.values())
 
@@ -1251,6 +1255,32 @@ def _run_impl(
     staged_step = staging_dir / "output.step"
     runner.export_step(shape, str(staged_step))
     validation = validate_delivered_step(staged_step, profile=validation_profile)
+    # Expectations belong to each show_object result. Count the independently
+    # exported/reloaded part, since STEP serialization can change containers.
+    checks = []
+    for index, (raw, public) in enumerate(zip(raw_parts, parts_output)):
+        options = raw.get("validation_options", {})
+        if not any(key in options for key in ("expect_solids", "expect_shells")):
+            continue
+        if len(raw_parts) == 1:
+            structure = validation["layers"]["structure"]
+        else:
+            from agentcad.step_io import write_step_shape as export_topo_step
+            from agentcad.step_io import load_cad_shape
+            from agentcad.validation import _layer_structure
+            part_step = staging_dir / f"part_{index}.step"
+            try:
+                export_topo_step(raw["topo_shape"], part_step)
+                structure = _layer_structure(load_cad_shape(part_step))
+            except Exception as exc:
+                structure = {"status": "error", "message": f"Part structure could not be read: {exc}"}
+        part_checks = structure_checks(structure, options, part_id=public["id"])
+        part_status = ("fail" if any(c["passed"] is False for c in part_checks)
+                       else "error" if any(c["passed"] is None for c in part_checks) else "pass")
+        public["structure"] = {**structure, "status": part_status,
+                               "gates": True, "expectations": part_checks}
+        checks.extend(part_checks)
+    validation = with_structure_checks(validation, checks)
     _finish_phase("export_step", _t, "export_step_ms")
     apply_validation(metrics, validation)
     undetermined = validation_warning(validation)

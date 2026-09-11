@@ -153,4 +153,5 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
-            tests/test_viewer_browser.py tests/test_live_viewer_browser.py -q -k 'not webkit'
+            tests/test_viewer_browser.py tests/test_live_viewer_browser.py \
+            tests/test_validation_guidance.py -q -k 'not webkit'
