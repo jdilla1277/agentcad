@@ -1,11 +1,19 @@
 """Artifact location is a project contract, independent of invocation cwd."""
 
+import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
 from agentcad.cli import cli
+
+# CadQuery is an optional extra; tests that build fixtures with it or pin a
+# project to it need the extra installed.
+requires_cadquery = pytest.mark.skipif(
+    importlib.util.find_spec("cadquery") is None,
+    reason="needs the optional cadquery extra",
+)
 
 
 def invoke(runner, *args):
@@ -126,7 +134,9 @@ SCRIPTS = {
 }
 
 
-@pytest.mark.parametrize("runtime", ["build123d", "cadquery"])
+@pytest.mark.parametrize(
+    "runtime", ["build123d", pytest.param("cadquery", marks=requires_cadquery)]
+)
 def test_real_build_and_readers_from_nested_directory(
     runner, isolated_dir, monkeypatch, runtime
 ):
@@ -347,6 +357,7 @@ def test_configured_full_review_workflow(runner, isolated_dir):
     assert not list(isolated_dir.glob("*.html"))
 
 
+@requires_cadquery
 def test_legacy_two_file_view_accepts_relative_paths(runner, isolated_dir):
     import cadquery as cq
 
@@ -420,6 +431,7 @@ def test_daemon_forwards_override(runner, isolated_dir, monkeypatch):
     assert seen[0][-2:] == ["--build-dir", str(build)]
 
 
+@requires_cadquery
 def test_derived_exports_and_view_do_not_write_beside_source(runner, isolated_dir):
     import cadquery as cq
 
@@ -436,6 +448,7 @@ def test_derived_exports_and_view_do_not_write_beside_source(runner, isolated_di
     assert not (isolated_dir / "source_viewer.html").exists()
 
 
+@requires_cadquery
 def test_mcp_build_dir_parameter(runner, isolated_dir):
     from agentcad.mcp import server
 

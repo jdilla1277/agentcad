@@ -334,7 +334,9 @@ def _cadquery_guide_body() -> str:
         "agentcad init --name <project_name>\n"
         "```",
         "## CadQuery compatibility setup\n\n"
+        "CadQuery is an optional extra, not part of the default install.\n\n"
         "```bash\n"
+        "pip install \"agentcad[cadquery]\"\n"
         "agentcad init --name <project_name> --runtime cadquery\n"
         "```",
     )

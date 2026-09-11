@@ -1,7 +1,17 @@
 """Tests for the agentcad --help how-to guide and command reference."""
+import importlib.util
 import json
 
+import pytest
+
 from agentcad.cli import cli
+
+# `agentcad init --runtime cadquery` refuses to pin an engine that is not
+# installed, so tests that start from a CadQuery project need the extra.
+requires_cadquery = pytest.mark.skipif(
+    importlib.util.find_spec("cadquery") is None,
+    reason="needs the optional cadquery extra",
+)
 
 
 def test_help_mentions_json_output(runner):
@@ -48,6 +58,7 @@ def test_default_help_teaches_one_build123d_authoring_api(runner, isolated_dir):
     assert "    $ agentcad docs quickstart" in output
 
 
+@requires_cadquery
 def test_cadquery_project_help_teaches_only_compatibility_api(
     runner, isolated_dir
 ):
@@ -384,6 +395,7 @@ def test_help_example_runtime_follows_build123d_project(runner, isolated_dir):
     assert '"runtime": "cadquery"' not in result.output
 
 
+@requires_cadquery
 def test_help_example_runtime_follows_cadquery_project(runner, isolated_dir):
     runner.invoke(cli, ["init", "--name", "cq_test", "--runtime", "cadquery"])
     result = runner.invoke(cli, ["--help"])
