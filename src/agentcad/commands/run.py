@@ -1382,7 +1382,10 @@ def _run_impl(
     _timings["export_write_ms"] = round((time.perf_counter() - _sub) * 1000)
     _heartbeat("validating the written STEP…")
     validation = validate_delivered_step(
-        staged_step, profile=validation_profile, timings=_timings
+        staged_step, profile=validation_profile, timings=_timings,
+        on_wait=lambda elapsed: _heartbeat(
+            f"validating the written STEP… worker still running ({elapsed:.0f}s)"
+        ),
     )
     step_round_trip = compare_step_reports(source_validation, validation)
     if single_part_is_whole and parts_output:
