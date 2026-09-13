@@ -131,7 +131,10 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
 
 5. **Read the validation report if invalid.** A `status: invalid_geometry` run
    already carries `validation`: the failing layer, free edges by ID with
-   endpoints, or the located mesh defect, plus a `suggestion`. For an existing
+   endpoints, or the located mesh defect, plus a `suggestion`. If the script
+   loaded a file, `validation.inherited_from_input` says whether that input
+   already failed the same layer (repair the input, not the edit) or is
+   `false` because the run introduced the failure. For an existing
    file:
    ```bash
    agentcad inspect v1_label/output.step
