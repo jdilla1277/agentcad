@@ -2,6 +2,7 @@
 
 from io import BytesIO
 import math
+from numbers import Real
 import warnings
 from pathlib import Path
 
@@ -33,7 +34,7 @@ from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.TopAbs import TopAbs_COMPOUND, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopTools import TopTools_ListOfShape
-from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Iterator
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Iterator, TopoDS_Shape
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pnt, gp_Trsf, gp_Vec
 
 
@@ -573,23 +574,85 @@ def safe_fuse(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
     return result
 
 
-def translate(shape, x, y, z):
+_TRANSFORM_MISSING = object()
+_TRANSLATE_USAGE = (
+    "Use translate(shape, x, y, z), translate(shape, (x, y, z)), "
+    "or translate(shape, Vector(x, y, z))."
+)
+_ROTATE_USAGE = (
+    "Use rotate(shape, axis, angle_deg), e.g. rotate(shape, 'Z', 90); "
+    "shape, axis, and angle_deg are required."
+)
+
+
+def _transform_shape(shape, usage):
+    topo = getattr(shape, "wrapped", shape)
+    if not isinstance(topo, TopoDS_Shape):
+        raise TypeError(
+            "The first argument must be a TopoDS_Shape or a build123d/CadQuery "
+            f"shape with wrapped topology. {usage}"
+        )
+    if topo.IsNull():
+        raise ValueError(f"Cannot transform a null shape. {usage}")
+    return topo
+
+
+def _transform_number(value, name, usage):
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be a finite number. {usage}")
+    try:
+        result = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(f"{name} must be a finite number. {usage}") from None
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite number. {usage}")
+    return result
+
+
+def translate(
+    shape=_TRANSFORM_MISSING, x=_TRANSFORM_MISSING,
+    y=_TRANSFORM_MISSING, z=_TRANSFORM_MISSING, *extra, **kwargs,
+):
     """Translate a shape by (x, y, z).
 
     Args:
-        shape: TopoDS_Shape to translate.
-        x, y, z: Translation distances.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape to translate.
+        x, y, z: Translation distances, or pass a single three-coordinate
+            tuple/list or Vector as x (omitting y and z).
 
     Returns:
-        TopoDS_Shape at the new position.
+        Independently copied TopoDS_Shape at the new position.
     """
-    independent = copy_shape(shape)
+    if extra or kwargs:
+        raise TypeError(f"Unexpected translation arguments. {_TRANSLATE_USAGE}")
+    topo = _transform_shape(shape, _TRANSLATE_USAGE)
+    vector = getattr(x, "wrapped", x)
+    if isinstance(x, (tuple, list)) or isinstance(vector, gp_Vec):
+        if y is not _TRANSFORM_MISSING or z is not _TRANSFORM_MISSING:
+            raise TypeError(
+                f"Pass either one vector or three coordinates. {_TRANSLATE_USAGE}"
+            )
+        coordinates = (
+            (vector.X(), vector.Y(), vector.Z())
+            if isinstance(vector, gp_Vec) else x
+        )
+        if len(coordinates) != 3:
+            raise ValueError(
+                f"Translation requires exactly three coordinates. {_TRANSLATE_USAGE}"
+            )
+    else:
+        coordinates = (x, y, z)
+    x, y, z = (
+        _transform_number(value, name, _TRANSLATE_USAGE)
+        for name, value in zip(("x", "y", "z"), coordinates)
+    )
+    independent = copy_shape(topo)
     trsf = gp_Trsf()
     trsf.SetTranslation(gp_Vec(x, y, z))
     return BRepBuilderAPI_Transform(independent, trsf, False).Shape()
 
 
-def rotate(shape, axis, angle_deg):
+def rotate(shape=None, axis=None, angle_deg=None, *extra, **kwargs):
     """Rotate a shape around a coordinate axis through the origin.
 
     Follows right-hand rule: positive angle = counterclockwise when
@@ -597,21 +660,27 @@ def rotate(shape, axis, angle_deg):
     E.g. positive Y rotation moves +Z toward +X.
 
     Args:
-        shape: TopoDS_Shape to rotate.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape to rotate.
         axis: "X", "Y", or "Z".
         angle_deg: Rotation angle in degrees.
 
     Returns:
-        TopoDS_Shape at the new orientation.
+        Independently copied TopoDS_Shape at the new orientation.
     """
+    if extra or kwargs:
+        raise TypeError(f"Unexpected rotation arguments. {_ROTATE_USAGE}")
+    topo = _transform_shape(shape, _ROTATE_USAGE)
+    if axis is None or angle_deg is None:
+        raise TypeError(f"Missing rotation arguments. {_ROTATE_USAGE}")
     axes = {
         "X": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)),
         "Y": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)),
         "Z": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
     }
-    if axis not in axes:
-        raise ValueError(f"axis must be 'X', 'Y', or 'Z', got '{axis}'")
-    independent = copy_shape(shape)
+    if not isinstance(axis, str) or axis not in axes:
+        raise ValueError(f"axis must be 'X', 'Y', or 'Z', got {axis!r}. {_ROTATE_USAGE}")
+    angle_deg = _transform_number(angle_deg, "angle_deg", _ROTATE_USAGE)
+    independent = copy_shape(topo)
     trsf = gp_Trsf()
     trsf.SetRotation(axes[axis], math.radians(angle_deg))
     return BRepBuilderAPI_Transform(independent, trsf, False).Shape()

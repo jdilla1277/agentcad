@@ -327,6 +327,14 @@ class TestCopyShape:
 
 
 class TestTranslate:
+    @pytest.mark.parametrize("offset", [(50, -40, 30), cq.Vector(50, -40, 30)])
+    def test_translate_accepts_cadquery_shape_and_vector(self, offset):
+        box = cq.Workplane("XY").box(10, 10, 10).val()
+        moved = translate(box, offset)
+        assert bbox_point(moved) == pytest.approx((50, -40, 30))
+        assert bbox_point(box.wrapped) == pytest.approx((0, 0, 0))
+        assert not box.wrapped.IsPartner(moved)
+
     def test_translate_moves_bounding_box(self):
         box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
         moved = translate(box, 50, 0, 0)
