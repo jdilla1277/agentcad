@@ -53,6 +53,10 @@ class ExecutionResult:
     # topo_shape (TopoDS_Shape). run.py resolves public IDs and enriches with
     # metrics + preview path.
     parts: list[dict[str, Any]] = field(default_factory=list)
+    # CAD files the script loaded through the injected loaders, as written in
+    # the script, in call order. run.py uses them to say whether an invalid
+    # result inherited its defect from an input or introduced it.
+    loaded_files: list[str] = field(default_factory=list)
 
     @property
     def success(self) -> bool:

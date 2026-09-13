@@ -89,15 +89,30 @@ def _run_contract_payload(payload: dict) -> dict:
                 f"{shlex.quote(str(label))}"
             )
             existing_message = payload.get("message")
-            no_artifact_message = (
-                f"No STEP was created. Fix {script} and rerun the command."
-            )
+            inherited = (payload.get("validation") or {}).get("inherited_from_input")
+            if isinstance(inherited, dict) and inherited.get("path"):
+                # The loaded input already fails; rerunning the script cannot
+                # help, so the recovery points at the input instead.
+                input_path = str(inherited["path"])
+                no_artifact_message = (
+                    f"No STEP was created. The loaded input {input_path} already fails "
+                    "validation; repair or replace it, then rerun the command."
+                )
+                actions = [
+                    f"agentcad inspect {shlex.quote(input_path)} --ids",
+                    recovery,
+                ]
+            else:
+                no_artifact_message = (
+                    f"No STEP was created. Fix {script} and rerun the command."
+                )
+                actions = [recovery]
             payload["message"] = (
                 f"{existing_message} {no_artifact_message}"
                 if existing_message
                 else no_artifact_message
             )
-            payload.setdefault("next_actions", [recovery])
+            payload.setdefault("next_actions", actions)
 
     if contract.get("run_legacy_output"):
         payload["deprecation"] = _OUTPUT_DEPRECATION
@@ -1354,6 +1369,18 @@ def _run_impl(
     validation["step_round_trip"] = step_round_trip
     if step_round_trip["matches"] is not True:
         warnings.append(step_round_trip["message"])
+    # When the delivered file fails, say whether a loaded input already failed
+    # the same layer (inherited) or this run broke it (introduced), so the
+    # agent repairs the right thing. Only runs on a definite failure.
+    if validation.get("is_valid") is False and getattr(result, "loaded_files", None):
+        from agentcad.core_build import annotate_input_provenance
+
+        _sub = time.perf_counter()
+        annotate_input_provenance(
+            validation, result.loaded_files, profile=validation_profile,
+            cwd=script_path.parent,
+        )
+        _timings["input_validation_ms"] = round((time.perf_counter() - _sub) * 1000)
     _finish_phase("export_step", _t, "export_step_ms")
     apply_validation(metrics, validation)
     undetermined = validation_warning(validation)

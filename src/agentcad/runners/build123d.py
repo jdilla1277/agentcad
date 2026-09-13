@@ -116,6 +116,15 @@ def execute(
     # in declaration order.
     captured: list[tuple] = []
     assembly_requested = False
+    loaded_files: list[str] = []
+
+    def _recording(loader):
+        def load(path, *args, **kwargs):
+            loaded_files.append(str(path))
+            return loader(path, *args, **kwargs)
+        load.__name__ = loader.__name__
+        load.__doc__ = loader.__doc__
+        return load
 
     def show_object(
         obj,
@@ -276,8 +285,8 @@ def execute(
     # `load_step` returns a build123d Part for the algebraic API; the
     # `_shape` variant returns the raw TopoDS_Shape for use with helpers
     # like mirror_fuse that operate on raw OCCT types.
-    script_globals["load_step"] = _load_step
-    script_globals["load_step_shape"] = _load_step_shape
+    script_globals["load_step"] = _recording(_load_step)
+    script_globals["load_step_shape"] = _recording(_load_step_shape)
 
     # M60 Phase 3: addressability — agents read inspect --ids output to
     # identify a face/edge by ID, then pick it here for use in edit ops.
@@ -384,6 +393,7 @@ def execute(
         warnings=warnings,
         output_type=output_type,
         parts=parts,
+        loaded_files=loaded_files,
     )
 
 
