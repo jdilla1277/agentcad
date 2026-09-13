@@ -1974,8 +1974,8 @@ def _fake_metrics_invalid(real_compute):
     The verdict now comes from the layered validator, so tests that need an
     invalid shape patch its kernel layer with ``_force_kernel_invalid``.
     """
-    def wrapper(topo_shape):
-        m = real_compute(topo_shape)
+    def wrapper(topo_shape, **kwargs):
+        m = real_compute(topo_shape, **kwargs)
         m["is_valid"] = False
         m["validity_errors"] = ["BRepCheck_InvalidToleranceValue"]
         return m
@@ -2029,7 +2029,7 @@ def test_run_emits_json_error_on_unexpected_exception_after_script_start(
     _init_project(runner)
     _write_script(isolated_dir)
 
-    def _raise_bnd_box_void(_):
+    def _raise_bnd_box_void(_, **_kwargs):
         raise RuntimeError("Bnd_Box is void")
 
     monkeypatch.setattr("agentcad.metrics.compute_metrics", _raise_bnd_box_void)
@@ -2115,8 +2115,8 @@ def test_run_negative_volume_warning_surfaces(runner, isolated_dir, monkeypatch)
     _write_script(isolated_dir)
     from agentcad import metrics
     real = metrics.compute_metrics
-    def fake(topo_shape):
-        m = real(topo_shape)
+    def fake(topo_shape, **kwargs):
+        m = real(topo_shape, **kwargs)
         m["volume"] = -1000.0
         m["warnings"] = ["Negative volume detected — check winding order."]
         return m

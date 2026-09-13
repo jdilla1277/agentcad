@@ -447,6 +447,29 @@ def _uncalled_part_topology_methods(source):
     })
 
 
+def _same_topo_shape(left, right) -> bool:
+    """True when two raw OCP shapes are the same TopoDS entity."""
+    if left is right:
+        return True
+    try:
+        return bool(left.IsSame(right))
+    except AttributeError:
+        return False
+
+
+def _apply_kernel_layer(part_metrics: dict, report: dict) -> dict:
+    """Fill a part's kernel-only verdict from a validation report's kernel layer."""
+    layer = (report.get("layers") or {}).get("brep_check") or {}
+    status = layer.get("status")
+    part_metrics["is_valid"] = True if status == "pass" else False if status == "fail" else None
+    errors = layer.get("errors") or []
+    if errors:
+        part_metrics["validity_errors"] = errors
+    else:
+        part_metrics.pop("validity_errors", None)
+    return part_metrics
+
+
 def _execution_error_guidance(msg, runtime, source):
     """Return focused recovery fields for known script API mistakes."""
     from agentcad.output_contract import step_export_guidance
@@ -1235,7 +1258,10 @@ def _run_impl(
     from agentcad.metrics import compute_metrics  # per-part metrics stay kernel-only
 
     topo_shape_for_metrics = result.topo_shape
-    metrics = compute_metrics(topo_shape_for_metrics)
+    # The kernel check runs once, on the reloaded STEP (below); apply_validation
+    # folds that verdict in. Running BRepCheck here as well doubled the most
+    # expensive step of a run on imported parts.
+    metrics = compute_metrics(topo_shape_for_metrics, check_validity=False)
 
     # Per-part breakdown (feedback #190): one entry per show_object() call.
     # Metrics computed now so --dry-run also surfaces them; per-part previews
@@ -1277,6 +1303,11 @@ def _run_impl(
                 f"({existing_color!r} and {group_color!r}); using {existing_color!r}."
             )
 
+    # A single show_object() result is the whole shape; its per-part kernel
+    # verdict is the delivered STEP's kernel layer, filled in after export.
+    single_part_is_whole = len(raw_parts) == 1 and _same_topo_shape(
+        raw_parts[0]["topo_shape"], topo_shape_for_metrics
+    )
     for p, (part_id, id_source), (group_id, _group_name) in zip(
         raw_parts, part_id_sources, part_groups,
     ):
@@ -1292,7 +1323,11 @@ def _run_impl(
             entry["color"] = p["color"]
         elif group_id is not None and group_color is not None:
             entry["color"] = group_color
-        entry["metrics"] = compute_metrics(p["topo_shape"])
+        if single_part_is_whole:
+            # Same shape as the whole: reuse the metrics computed above.
+            entry["metrics"] = dict(metrics)
+        else:
+            entry["metrics"] = compute_metrics(p["topo_shape"])
         if p.get("validation_options"):
             entry["validation_options"] = p["validation_options"]
         parts_output.append(entry)
@@ -1316,15 +1351,29 @@ def _run_impl(
     # file is moved into the version directory instead of exported again.
     _heartbeat("exporting and validating STEP…")
     _t = _start_phase("export_step")
-    from agentcad.validation import validate_shape
+    from agentcad.validation import (
+        ROUND_TRIP_SKIP_REASON,
+        round_trip_skip_layers,
+        validate_shape,
+    )
     from agentcad.export_validation import compare_step_reports
 
-    source_validation = validate_shape(topo_shape_for_metrics, profile=validation_profile)
+    # The in-memory source is validated only for the round-trip diagnostic.
+    # Above ROUND_TRIP_FULL_FACE_LIMIT faces the kernel check and the
+    # tessellation are left to the delivered STEP, which runs them anyway.
+    source_validation = validate_shape(
+        topo_shape_for_metrics,
+        profile=validation_profile,
+        skip_layers=round_trip_skip_layers(topo_shape_for_metrics),
+        skip_reason=ROUND_TRIP_SKIP_REASON,
+    )
     staging_dir = Path(tempfile.mkdtemp(prefix="agentcad-stage-"))
     staged_step = staging_dir / "output.step"
     runner.export_step(shape, str(staged_step))
     validation = validate_delivered_step(staged_step, profile=validation_profile)
     step_round_trip = compare_step_reports(source_validation, validation)
+    if single_part_is_whole and parts_output:
+        _apply_kernel_layer(parts_output[0]["metrics"], validation)
     # Expectations belong to each show_object result. Count the independently
     # exported/reloaded part, since STEP serialization can change containers.
     checks = []
