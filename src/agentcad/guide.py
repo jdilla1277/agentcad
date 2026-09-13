@@ -149,7 +149,8 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
    handing off that file. Export success means it was written, not that it
    passed. A mesh timeout/error is unknown; the CAD verdict does not certify
    the mesh. `validation.step_round_trip` compares source/STEP layer outcomes
-   and solid counts, not shape fidelity or printability.
+   and solid counts, not shape fidelity or printability; on large parts
+   `skipped_layers` names checks run only on the reloaded STEP.
 
 6. **Measure feature sizes.** For dimensions beyond top-level metrics:
    ```bash

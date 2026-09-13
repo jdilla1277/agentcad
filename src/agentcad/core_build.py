@@ -90,7 +90,8 @@ def validated_metrics(topo_shape, *, profile: str = "deliverable") -> tuple[dict
     from agentcad.metrics import compute_metrics
     from agentcad.validation import validate_shape
 
-    metrics = compute_metrics(topo_shape)
+    # The report's kernel layer runs on this same shape; do not run it twice.
+    metrics = compute_metrics(topo_shape, check_validity=False)
     report = validate_shape(topo_shape, profile=profile)
     return apply_validation(metrics, report), report
 

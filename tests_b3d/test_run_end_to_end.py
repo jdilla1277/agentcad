@@ -1510,8 +1510,8 @@ class TestWarnings:
         from agentcad import metrics
         real = metrics.compute_metrics
 
-        def fake(topo_shape):
-            m = real(topo_shape)
+        def fake(topo_shape, **kwargs):
+            m = real(topo_shape, **kwargs)
             m["volume"] = -1000.0
             m["warnings"] = ["Negative volume detected — check winding order."]
             return m
