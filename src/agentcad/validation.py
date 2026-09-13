@@ -38,6 +38,15 @@ from pathlib import Path
 MESH_TIMEOUT_ENV = "AGENTCAD_MESH_VALIDATION_TIMEOUT_S"
 DEFAULT_MESH_TIMEOUT_S = 60.0
 
+# Whole-report budget for validating a written file (run's delivered STEP,
+# import's source). Files at or above VALIDATION_WORKER_MIN_BYTES validate in
+# a fresh worker process so a stalled native check returns within budget as
+# ``is_valid: null`` with every completed layer retained; smaller files
+# validate in-process, where the whole report takes milliseconds. 0 disables.
+VALIDATION_TIMEOUT_ENV = "AGENTCAD_VALIDATION_TIMEOUT_S"
+DEFAULT_VALIDATION_TIMEOUT_S = 120.0
+VALIDATION_WORKER_MIN_BYTES = 1_000_000
+
 # Daemon requests run in forked children. A parallel OCCT algorithm in one of
 # those children can deadlock if the daemon parent had already initialized
 # TBB: fork preserves the pool state but not its worker threads. The daemon
@@ -127,8 +136,12 @@ def validate_shape(
     evidence_limit: int = _EVIDENCE_LIMIT,
     skip_layers: tuple[str, ...] = (),
     skip_reason: str | None = None,
+    on_layer=None,
 ) -> dict:
     """Run every layer of ``profile`` on a loaded shape and return the report.
+
+    ``on_layer(name, entry)`` is called as each layer entry is recorded, so a
+    worker can persist partial evidence before a later layer stalls.
 
     ``skip_layers`` names layers to leave unrun (status ``skipped``, with
     ``skip_reason`` as their message). A skipped gating layer leaves
@@ -178,6 +191,8 @@ def validate_shape(
             entry = {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
         entry.setdefault("duration_ms", int(round((time.perf_counter() - started) * 1000)))
         layers[layer.name] = entry
+        if on_layer is not None:
+            on_layer(layer.name, entry)
         if layer.gates:
             if entry["status"] == "fail" and verdict_blocked_by is None:
                 verdict_blocked_by = layer.name
@@ -836,6 +851,215 @@ def _find_pinch_vertex(global_tris, dropped, edge_uses):
     return None
 
 
+def _validation_timeout_seconds(explicit: float | None) -> float | None:
+    if explicit is not None:
+        return None if explicit <= 0 else float(explicit)
+    raw = os.environ.get(VALIDATION_TIMEOUT_ENV)
+    if raw is None:
+        return DEFAULT_VALIDATION_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_VALIDATION_TIMEOUT_S
+    if not math.isfinite(value) or value < 0:
+        return DEFAULT_VALIDATION_TIMEOUT_S
+    return None if value == 0 else value
+
+
+def validate_file(path, *, profile: str = "deliverable", evidence_limit: int = _EVIDENCE_LIMIT) -> dict:
+    """Load a CAD file and validate it in this process; parse failures become a report."""
+    from agentcad.native_io import suppress_native_output
+    from agentcad.step_io import load_cad_shape
+
+    started = time.perf_counter()
+    try:
+        with suppress_native_output():
+            shape = load_cad_shape(path)
+    except Exception as exc:
+        report = load_failure_report("file_parse", f"{type(exc).__name__}: {exc}", profile=profile)
+        report["timings"] = {"reload_ms": int(round((time.perf_counter() - started) * 1000))}
+        return report
+    reload_ms = int(round((time.perf_counter() - started) * 1000))
+    started = time.perf_counter()
+    report = validate_shape(shape, profile=profile, evidence_limit=evidence_limit)
+    report["timings"] = {
+        "reload_ms": reload_ms,
+        "delivered_validation_ms": int(round((time.perf_counter() - started) * 1000)),
+    }
+    return report
+
+
+WORKER_WAIT_HEARTBEAT_S = 5.0
+
+
+def _run_worker(argv, budget_s, on_wait=None):
+    """Run a worker under a budget; return (returncode, stderr_tail, timed_out).
+
+    ``on_wait(elapsed_s)`` is called every ``WORKER_WAIT_HEARTBEAT_S`` while
+    the worker is still running so the caller can show progress instead of
+    silence.
+    """
+    started = time.perf_counter()
+    process = subprocess.Popen(
+        argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        text=True, env=_worker_env(),
+    )
+    next_beat = WORKER_WAIT_HEARTBEAT_S
+    try:
+        while True:
+            remaining = budget_s - (time.perf_counter() - started)
+            if remaining <= 0:
+                process.kill()
+                _, stderr = process.communicate()
+                return process.returncode, (stderr or "").strip()[-400:], True
+            try:
+                _, stderr = process.communicate(timeout=min(0.25, max(remaining, 0.01)))
+                return process.returncode, (stderr or "").strip()[-400:], False
+            except subprocess.TimeoutExpired:
+                elapsed = time.perf_counter() - started
+                if on_wait is not None and elapsed >= next_beat:
+                    on_wait(elapsed)
+                    next_beat += WORKER_WAIT_HEARTBEAT_S
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+
+
+def bounded_validate_file(
+    path,
+    *,
+    profile: str = "deliverable",
+    timeout_s: float | None = None,
+    evidence_limit: int = _EVIDENCE_LIMIT,
+    on_wait=None,
+) -> dict:
+    """Validate a written CAD file within a wall-clock budget.
+
+    ``on_wait(elapsed_s)`` is called periodically while the worker runs.
+
+    Small files (below ``VALIDATION_WORKER_MIN_BYTES``) and a disabled budget
+    run in-process. Otherwise a worker process validates the file and streams
+    each finished layer back; when the budget expires the worker is killed and
+    the report keeps every finished layer, marks the running layer
+    ``timeout``, and leaves the rest ``skipped``. A gating failure proven
+    before the timeout still yields ``is_valid: false``; otherwise the verdict
+    is null with ``undetermined_layer`` naming the stalled layer.
+    """
+    path = Path(path)
+    budget = _validation_timeout_seconds(timeout_s)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    if budget is None or size < VALIDATION_WORKER_MIN_BYTES:
+        report = validate_file(path, profile=profile, evidence_limit=evidence_limit)
+        report["worker"] = "in_process"
+        return report
+
+    with tempfile.TemporaryDirectory(prefix="agentcad-validate-") as temp:
+        result = Path(temp) / "layers.jsonl"
+        argv = [
+            sys.executable, "-m", "agentcad.validation_worker",
+            str(path), str(result), profile, str(evidence_limit),
+        ]
+        started = time.perf_counter()
+        try:
+            returncode, stderr_tail, timed_out = _run_worker(argv, budget, on_wait)
+        except Exception as exc:
+            return _worker_failure_report(profile, f"Could not start the validation worker: {exc}")
+        elapsed_ms = int(round((time.perf_counter() - started) * 1000))
+        lines = []
+        if result.exists():
+            for raw in result.read_text().splitlines():
+                try:
+                    lines.append(json.loads(raw))
+                except json.JSONDecodeError:
+                    continue
+    final = next((line["report"] for line in lines if "report" in line), None)
+    if final is not None and not timed_out:
+        final["worker"] = "subprocess"
+        final["budget_s"] = budget
+        return final
+    partial = {line["layer"]: line["entry"] for line in lines if "layer" in line}
+    if timed_out:
+        return _assemble_partial(
+            profile, partial, budget_s=budget, elapsed_ms=elapsed_ms,
+            reason="timeout", detail=None,
+        )
+    detail = stderr_tail or f"exit status {returncode}"
+    return _assemble_partial(
+        profile, partial, budget_s=budget, elapsed_ms=elapsed_ms,
+        reason="error", detail=f"Validation worker failed: {detail}",
+    )
+
+
+def _worker_failure_report(profile: str, message: str) -> dict:
+    layers = {name: {"status": "error", "message": message} if name == "kernel_load"
+              else {"status": "skipped", "message": "Not run after the validation worker failed."}
+              for name in _LAYERS_BY_NAME}
+    layers["file_parse"] = {"status": "pass", "duration_ms": 0}
+    report = _assemble(profile, layers, first_failure=None, undetermined="kernel_load")
+    report["worker"] = "subprocess"
+    return report
+
+
+def _assemble_partial(profile, partial, *, budget_s, elapsed_ms, reason, detail):
+    """Build a report from the layers a worker finished before it stopped."""
+    layers: dict[str, dict] = {}
+    stalled = None
+    first_failure = None
+    for layer in LAYERS:
+        if layer.name in partial:
+            layers[layer.name] = partial[layer.name]
+            if layer.gates and first_failure is None and partial[layer.name].get("status") == "fail":
+                first_failure = layer.name
+            continue
+        if profile == "kernel" and layer.name in _KERNEL_PROFILE_SKIPS:
+            layers[layer.name] = {"status": "skipped", "message": "Not run under the kernel profile."}
+            continue
+        if first_failure is not None and layer.gates:
+            layers[layer.name] = {"status": "skipped", "message": f"Not run after {first_failure} did not pass."}
+            continue
+        if stalled is None:
+            stalled = layer.name
+            if reason == "timeout":
+                layers[layer.name] = {
+                    "status": "timeout", "budget_s": budget_s, "duration_ms": elapsed_ms,
+                    "message": f"Validation exceeded its {budget_s:g}s budget during {layer.name}.",
+                }
+            else:
+                layers[layer.name] = {"status": "error", "message": detail}
+        else:
+            layers[layer.name] = {"status": "skipped", "message": f"Not reached after {stalled} did not complete."}
+    report = _assemble(
+        profile, layers, first_failure=first_failure,
+        undetermined=None if first_failure is not None else stalled,
+    )
+    report["worker"] = "subprocess"
+    report["budget_s"] = budget_s
+    if reason == "timeout":
+        report["timed_out_layer"] = stalled
+    return report
+
+
+def _worker_env() -> dict:
+    """Environment for worker processes: make this agentcad importable.
+
+    The parent may run from a source checkout with a relative PYTHONPATH or
+    from a directory the child will not share; the child must import the
+    same package regardless of its working directory.
+    """
+    import agentcad
+
+    package_root = str(Path(agentcad.__file__).resolve().parent.parent)
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    parts = [package_root] + [p for p in existing.split(os.pathsep) if p and p != package_root]
+    env["PYTHONPATH"] = os.pathsep.join(parts)
+    return env
+
+
 def _mesh_timeout_seconds(explicit: float | None) -> float | None:
     if explicit is not None:
         return None if explicit <= 0 else float(explicit)
@@ -873,7 +1097,7 @@ def bounded_mesh_manifold(shape, deflection_mm: float, *, timeout_s=None, eviden
         try:
             completed = subprocess.run(
                 argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                text=True, timeout=budget, check=False,
+                text=True, timeout=budget, check=False, env=_worker_env(),
             )
         except subprocess.TimeoutExpired:
             return {

@@ -58,7 +58,8 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
    Check `volume`, `dimensions`, `is_valid` in the response. `is_valid` is the
    deliverable verdict: the kernel check, every shell closed, and a manifold
    mesh. Do not hand a part off until it is `true`; `false` names the failing
-   layer in `validation.first_failure`, `null` means a check timed out.
+   layer in `validation.first_failure`, `null` means a check timed out
+   (`validation.timed_out_layer`; raise `AGENTCAD_VALIDATION_TIMEOUT_S`).
 
 3. **Run for real.** Visual feedback is on by default:
    ```bash
