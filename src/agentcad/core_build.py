@@ -96,24 +96,41 @@ def validated_metrics(topo_shape, *, profile: str = "deliverable") -> tuple[dict
     return apply_validation(metrics, report), report
 
 
-def validate_delivered_step(step_path, *, profile: str = "deliverable") -> dict:
+def validate_delivered_step(
+    step_path, *, profile: str = "deliverable", timings: dict | None = None
+) -> dict:
     """Validate a STEP file the way every downstream consumer will see it.
 
     STEP export changes topology: two bodies fused along a shared edge are
     one non-manifold edge in memory but two clean bodies in the file. The
     verdict must describe the artifact that ships, so ``run`` writes the STEP
     first and validates the reloaded shape.
+
+    When ``timings`` is given, ``reload_ms`` and ``delivered_validation_ms``
+    are recorded in it so a slow phase can be attributed to the file read
+    or to the checks.
     """
+    import time
+
     from agentcad.native_io import suppress_native_output
     from agentcad.step_io import load_cad_shape
     from agentcad.validation import load_failure_report, validate_shape
 
+    started = time.perf_counter()
     try:
         with suppress_native_output():
             shape = load_cad_shape(step_path)
     except Exception as exc:
+        if timings is not None:
+            timings["reload_ms"] = round((time.perf_counter() - started) * 1000)
         return load_failure_report("file_parse", f"{type(exc).__name__}: {exc}", profile=profile)
-    return validate_shape(shape, profile=profile)
+    if timings is not None:
+        timings["reload_ms"] = round((time.perf_counter() - started) * 1000)
+        started = time.perf_counter()
+    report = validate_shape(shape, profile=profile)
+    if timings is not None:
+        timings["delivered_validation_ms"] = round((time.perf_counter() - started) * 1000)
+    return report
 
 
 def reliability_warning(metrics: dict) -> str | None:

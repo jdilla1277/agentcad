@@ -1010,8 +1010,10 @@ def _run_impl(
         # Stderr progress line so callers can distinguish "still working"
         # from "wedged" during long phases (preview render, GIF encode).
         # One line per phase, always-on, lightweight. Stays on stderr so
-        # the JSON on stdout remains parseable. Issue #164.
-        click.echo(f"[agentcad] {message}", err=True)
+        # the JSON on stdout remains parseable. Issue #164. The elapsed
+        # suffix lets a watcher tell a slow phase from a stalled one.
+        elapsed = time.perf_counter() - _t_total_start
+        click.echo(f"[agentcad] {message} (+{elapsed:.1f}s)", err=True)
 
 
     # Try routing through daemon. If reachable, this exits before returning.
@@ -1361,16 +1363,27 @@ def _run_impl(
     # The in-memory source is validated only for the round-trip diagnostic.
     # Above ROUND_TRIP_FULL_FACE_LIMIT faces the kernel check and the
     # tessellation are left to the delivered STEP, which runs them anyway.
+    # export_step_ms stays the umbrella for this phase; the sub-timings
+    # below separate what the umbrella used to hide (source validation,
+    # the STEP write, the reload, and the delivered validation).
+    _sub = time.perf_counter()
     source_validation = validate_shape(
         topo_shape_for_metrics,
         profile=validation_profile,
         skip_layers=round_trip_skip_layers(topo_shape_for_metrics),
         skip_reason=ROUND_TRIP_SKIP_REASON,
     )
+    _timings["source_validation_ms"] = round((time.perf_counter() - _sub) * 1000)
     staging_dir = Path(tempfile.mkdtemp(prefix="agentcad-stage-"))
     staged_step = staging_dir / "output.step"
+    _heartbeat("writing STEP…")
+    _sub = time.perf_counter()
     runner.export_step(shape, str(staged_step))
-    validation = validate_delivered_step(staged_step, profile=validation_profile)
+    _timings["export_write_ms"] = round((time.perf_counter() - _sub) * 1000)
+    _heartbeat("validating the written STEP…")
+    validation = validate_delivered_step(
+        staged_step, profile=validation_profile, timings=_timings
+    )
     step_round_trip = compare_step_reports(source_validation, validation)
     if single_part_is_whole and parts_output:
         _apply_kernel_layer(parts_output[0]["metrics"], validation)
@@ -1443,6 +1456,12 @@ def _run_impl(
             sys.exit(1)
         from agentcad.versioning import reserve_version
 
+        # The invalid response is the run's final word; carry the timings so
+        # a slow failure can still be attributed to a phase.
+        _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
+        invalid_response["timings"] = dict(_timings)
+        invalid_response["completed_phases"] = list(_phase_tracker.completed)
+        invalid_response["phase_timings"] = dict(_timings)
         reservation = reserve_version(get_project().build_root, label, suffix="_invalid")
         _record_invalid_geometry(
             script_path,
