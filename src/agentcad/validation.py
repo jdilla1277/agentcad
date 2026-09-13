@@ -137,11 +137,16 @@ def validate_shape(
     skip_layers: tuple[str, ...] = (),
     skip_reason: str | None = None,
     on_layer=None,
+    shape_metrics: dict | None = None,
 ) -> dict:
     """Run every layer of ``profile`` on a loaded shape and return the report.
 
     ``on_layer(name, entry)`` is called as each layer entry is recorded, so a
     worker can persist partial evidence before a later layer stalls.
+    ``shape_metrics`` is the caller's ``compute_metrics`` result for this
+    same shape; the structure layer reuses its bounding box and volume for a
+    single-solid shape instead of recomputing the tight box, which costs
+    seconds on real imported parts.
 
     ``skip_layers`` names layers to leave unrun (status ``skipped``, with
     ``skip_reason`` as their message). A skipped gating layer leaves
@@ -186,6 +191,7 @@ def validate_shape(
                 mesh_parallel=mesh_parallel,
                 mesh_timeout_s=mesh_timeout_s,
                 evidence_limit=evidence_limit,
+                shape_metrics=shape_metrics,
             )
         except Exception as exc:  # a layer must never take the report down
             entry = {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
@@ -414,7 +420,7 @@ def _face_count(shape) -> int:
     return faces.Extent()
 
 
-def _layer_structure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
+def _layer_structure(shape, *, evidence_limit=_EVIDENCE_LIMIT, shape_metrics=None, **_) -> dict:
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
     from OCP.TopExp import TopExp
     from OCP.TopTools import TopTools_IndexedMapOfShape
@@ -438,6 +444,16 @@ def _layer_structure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
             if not faces_in_solids.Contains(all_faces.FindKey(i))
         )
     from agentcad.topo_ids import solid_entries
+    if (
+        solid_count == 1 and loose == 0 and shape_metrics
+        and "bounding_box" in shape_metrics and "volume" in shape_metrics
+    ):
+        # One solid and nothing outside it: the solid's tight bounding box and
+        # volume are the whole shape's, which the caller already computed.
+        solids = [{"id": 1, "volume": shape_metrics["volume"],
+                   "bbox": shape_metrics["bounding_box"]}]
+    else:
+        solids = solid_entries(shape, limit=evidence_limit)
     return {
         "status": "pass",
         "solid_count": solid_count,
@@ -445,7 +461,7 @@ def _layer_structure(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
         "face_count": face_count,
         "edge_count": edge_count,
         "faces_outside_solids": loose,
-        "solids": solid_entries(shape, limit=evidence_limit),
+        "solids": solids,
         "evidence_truncated": solid_count > evidence_limit,
     }
 
