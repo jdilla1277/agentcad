@@ -210,7 +210,9 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     )
 
     with silence_native_stdout():
-        metrics, validation = validated_metrics(topo_shape, profile=validation_profile)
+        metrics, validation = validated_metrics(
+            topo_shape, profile=validation_profile, source_path=file_path
+        )
     undetermined = validation_warning(validation) or reliability_warning(metrics)
 
     invalid_response = invalid_geometry_payload("import", metrics, validation)
