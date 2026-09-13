@@ -100,7 +100,7 @@ def validated_metrics(
         report = bounded_validate_file(source_path, profile=profile)
         report.pop("timings", None)
     else:
-        report = validate_shape(topo_shape, profile=profile)
+        report = validate_shape(topo_shape, profile=profile, shape_metrics=metrics)
     return apply_validation(metrics, report), report
 
 
