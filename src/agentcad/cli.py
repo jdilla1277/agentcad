@@ -130,6 +130,7 @@ COMMAND REFERENCE: CREATE AND IMPORT
     Execute a script and produce a versioned STEP, metrics, viewer, and preview.
     Passing a STEP/STP/BREP path dispatches to `agentcad import` automatically.
     --label LABEL        Name this version; outputs.step is the artifact path.
+                         Required unless --dry-run.
     --output LABEL       Deprecated compatibility alias for --label. It never
                          denotes an output path.
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
@@ -147,7 +148,7 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          booleans, or strings.
     __RUN_RUNTIME_HELP__
     --dry-run            Return validation and metrics without consuming a
-                         version or writing artifacts.
+                         version or writing artifacts. --label is optional.
 
   agentcad import FILE [--label LABEL] [--init] [--no-diff]
     Adopt STEP/STP/BREP as a versioned baseline with provenance. --init creates

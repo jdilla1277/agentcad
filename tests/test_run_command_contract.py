@@ -243,3 +243,72 @@ def test_commands_docs_explain_output_alias(runner):
     assert "Use --label to name the version" in content
     assert "--output is a deprecated alias" in content
     assert "outputs.step" in content
+
+
+# --- --label is optional for --dry-run -----------------------------------------
+# A dry run never allocates a version, so there is nothing for a label to name.
+# Requiring one only cost agents a retry (surfaced by the #207 friction check).
+
+
+def test_run_dry_run_without_label_succeeds(runner, isolated_dir):
+    _init(runner)
+    _write_script(isolated_dir)
+
+    result = runner.invoke(cli, ["run", "script.py", "--dry-run", "--no-daemon"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "success"
+    assert payload["metrics"]["volume"] > 0
+    _assert_no_step(payload, None)
+    assert not [p for p in isolated_dir.iterdir() if p.name.startswith("v1")]
+
+
+def test_run_without_label_is_still_required_for_real_runs(runner, isolated_dir):
+    _init(runner)
+    _write_script(isolated_dir)
+
+    result = runner.invoke(cli, ["run", "script.py", "--no-daemon"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    _assert_usage_error(payload, kind="missing_parameter", command="run")
+    assert "--label" in payload["message"]
+    _assert_no_step(payload, None)
+    assert not [p for p in isolated_dir.iterdir() if p.name.startswith("v1")]
+
+
+def test_run_dry_run_failure_without_label_uses_placeholder_hint(runner, isolated_dir):
+    _init(runner)
+    _write_script(isolated_dir, "this is not valid python(")
+
+    result = runner.invoke(cli, ["run", "script.py", "--dry-run", "--no-daemon"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "validation_error"
+    _assert_no_step(payload, None)
+    assert "agentcad run script.py --label LABEL" in payload["next_actions"]
+    assert "None" not in " ".join(payload["next_actions"])
+
+
+def test_run_dry_run_without_label_omits_label_from_daemon_argv(
+    runner, isolated_dir, monkeypatch
+):
+    _init(runner)
+    _write_script(isolated_dir)
+    routed = []
+
+    def fake_route(argv, no_daemon=False):
+        routed.append(list(argv))
+        raise SystemExit(0)
+
+    monkeypatch.setattr("agentcad.commands.run.maybe_route_through_daemon", fake_route)
+
+    result = runner.invoke(cli, ["run", "script.py", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert routed, "expected the run to be offered to the daemon"
+    assert "--label" not in routed[0]
+    assert "--output" not in routed[0]
+    assert "--dry-run" in routed[0]

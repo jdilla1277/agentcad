@@ -65,8 +65,8 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
 @mcp.tool()
 def run(
     script: str,
-    output: str,
     cwd: str,
+    output: str | None = None,
     render: str | None = None,
     export: str | None = None,
     preview: bool = True,
@@ -83,8 +83,8 @@ def run(
 
     Args:
         script: Path to the Python CAD script.
-        output: Label for this version.
         cwd: Source project directory (or a subdirectory).
+        output: Label for this version. Required unless dry_run is True.
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Initialize this root first.
         render: Comma-separated views to render (front,right,top,iso,all).
@@ -100,7 +100,9 @@ def run(
             and diff=False to also bypass viewer generation on the core-only
             fast path.
     """
-    args = ["run", script, "--label", output]
+    args = ["run", script]
+    if output is not None:
+        args.extend(["--label", output])
     if render:
         args.extend(["--render", render])
     if export:

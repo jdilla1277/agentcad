@@ -86,7 +86,7 @@ def _run_contract_payload(payload: dict) -> dict:
         if script:
             recovery = (
                 f"agentcad run {shlex.quote(script)} --label "
-                f"{shlex.quote(str(label))}"
+                f"{shlex.quote(str(label)) if label is not None else 'LABEL'}"
             )
             existing_message = payload.get("message")
             no_artifact_message = (
@@ -755,7 +755,10 @@ def _assign_part_identity(raw_parts):
 @click.option(
     "--label",
     default=None,
-    help="Label for this version. The STEP path is returned in outputs.step.",
+    help=(
+        "Label for this version. The STEP path is returned in outputs.step. "
+        "Required unless --dry-run."
+    ),
 )
 @click.option(
     "--output",
@@ -794,7 +797,7 @@ def _assign_part_identity(raw_parts):
 )
 @click.option("--view/--no-view", "open_view", default=True, help="Open or reuse the live project viewer after success (default on). Its stable URL follows completed builds; version snapshots retain previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
-@click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
+@click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts. --label is optional.")
 @click.option(
     "--runtime",
     default=None,
@@ -843,13 +846,16 @@ def run(
             "Use --label or the deprecated --output alias, not both.",
             ctx=ctx,
         )
-    if output is None:
+    # A dry run never allocates a version, so a label has nothing to name.
+    # Requiring one there only cost agents a retry (friction check on #207).
+    if output is None and not dry_run:
         raise click.MissingParameter(
             ctx=ctx,
             param_hint="--label",
             param_type="option",
         )
-    validate_version_label(output)
+    if output is not None:
+        validate_version_label(output)
 
     # Reject unsupported --export formats before anything else — before the
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
@@ -977,7 +983,9 @@ def _run_impl(
 
     # Try routing through daemon. If reachable, this exits before returning.
     label_option = "--output" if ctx.meta.get("run_legacy_output") else "--label"
-    argv = ["run", script, label_option, output]
+    argv = ["run", script]
+    if output is not None:
+        argv.extend([label_option, output])
     if render:
         argv.extend(["--render", render])
     if export:
