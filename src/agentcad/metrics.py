@@ -14,25 +14,39 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 
 def extract_validity_errors(analyzer, topo_shape):
     """Return a sorted list of distinct BRepCheck error class names for an
-    invalid shape (e.g. 'BRepCheck_SelfIntersectingWire'). Empty if none."""
+    invalid shape (e.g. 'BRepCheck_SelfIntersectingWire'). Empty if none.
+
+    ``analyzer.IsValid(sub)`` is a map lookup; ``Result(sub).Status()`` costs
+    milliseconds per entity through the bindings. On a 2,000-face imported
+    part the unfiltered walk took two minutes for one bad face, so only
+    entities the analyzer already reports invalid have their statuses read.
+    """
     errors = set()
     for shape_type in (TopAbs_FACE, TopAbs_EDGE, TopAbs_WIRE, TopAbs_SHELL):
         exp = TopExp_Exp(topo_shape, shape_type)
         while exp.More():
-            check_result = analyzer.Result(exp.Current())
-            if check_result:
-                for status in check_result.Status():
-                    if status.value != 0:  # BRepCheck_NoError = 0
-                        errors.add(status.name)
+            sub = exp.Current()
+            if not analyzer.IsValid(sub):
+                check_result = analyzer.Result(sub)
+                if check_result:
+                    for status in check_result.Status():
+                        if status.value != 0:  # BRepCheck_NoError = 0
+                            errors.add(status.name)
             exp.Next()
     return sorted(errors)
 
 
-def compute_metrics(topo_shape):
+def compute_metrics(topo_shape, *, check_validity=True):
     """Compute geometric metrics from a TopoDS_Shape.
 
     Returns a JSON-serializable dict with bounding_box, dimensions, volume,
     surface_area, center_of_mass, face_count, edge_count, and is_valid.
+
+    ``check_validity=False`` skips the kernel check (``BRepCheck_Analyzer``)
+    and omits ``is_valid``. Callers that fold a layered validation report
+    into the metrics with ``core_build.apply_validation`` use this: the
+    report's kernel layer already ran on the same shape, and on real
+    imported parts that check is the single most expensive step of a run.
     """
     # Bounding box.
     #
@@ -95,10 +109,6 @@ def compute_metrics(topo_shape):
     TopExp.MapShapes_s(topo_shape, TopAbs_EDGE, edge_map)
     edge_count = edge_map.Extent()
 
-    # Validity
-    analyzer = BRepCheck_Analyzer(topo_shape)
-    is_valid = analyzer.IsValid()
-
     result = {
         "bounding_box": bb,
         "dimensions": dims,
@@ -107,14 +117,18 @@ def compute_metrics(topo_shape):
         "center_of_mass": center_of_mass,
         "face_count": face_count,
         "edge_count": edge_count,
-        "is_valid": is_valid,
     }
 
-    # Validity diagnostics — when invalid, extract BRepCheck error descriptions
-    if not is_valid:
-        errors = extract_validity_errors(analyzer, topo_shape)
-        if errors:
-            result["validity_errors"] = errors
+    # Validity
+    if check_validity:
+        analyzer = BRepCheck_Analyzer(topo_shape)
+        is_valid = analyzer.IsValid()
+        result["is_valid"] = is_valid
+        # Validity diagnostics — when invalid, extract BRepCheck error descriptions
+        if not is_valid:
+            errors = extract_validity_errors(analyzer, topo_shape)
+            if errors:
+                result["validity_errors"] = errors
 
     # Negative volume warning
     warnings = []
