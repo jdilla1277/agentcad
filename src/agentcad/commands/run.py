@@ -438,7 +438,12 @@ def _uncalled_part_topology_methods(source):
 
 
 def _execution_error_guidance(msg, runtime, source):
-    """Return focused recovery fields for known build123d Part mistakes."""
+    """Return focused recovery fields for known script API mistakes."""
+    from agentcad.output_contract import step_export_guidance
+
+    export_guidance = step_export_guidance(msg, source)
+    if export_guidance:
+        return export_guidance
     if runtime != "build123d":
         return {}
 

@@ -47,6 +47,12 @@ paths resolve from the project root, including from nested directories.
 `--label` names a version and deprecated `--output` is only a label alias.
 See `agentcad docs artifacts` for initialization, overrides, and recovery.
 
+Scripts should not export STEP themselves. Expose the intended geometry with
+`show_object(result)`; AgentCAD writes the canonical STEP file. Read its path
+from `outputs.step` in the run JSON (typically `vN_label/output.step`). A dry run
+does not write STEP and returns `outputs.step: null`. Do not call `save_step`,
+`write_step`, `export_step`, or guessed writer methods in generated scripts.
+
 1. **Write a script.** No imports needed — build123d primitives,
    `show_object`, and agentcad edit helpers are pre-injected by default.
    `show_object(result)` is required.
@@ -178,6 +184,8 @@ See `agentcad docs artifacts` for initialization, overrides, and recovery.
 ## Script writing rules
 
 - `show_object(result)` is required — at least one call.
+- The same `show_object(result)` call accepts a build123d `Part`, `Compound`,
+  or raw OCP `TopoDS_Shape`; no manual conversion or STEP writer is needed.
 - These are pre-injected by default (no import needed):
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,

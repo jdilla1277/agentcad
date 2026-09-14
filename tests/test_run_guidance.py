@@ -1,6 +1,27 @@
 """Focused tests for build123d execution-error recovery guidance."""
 
+import pytest
+
 from agentcad.commands.run import _execution_error_guidance
+
+
+@pytest.mark.parametrize("runtime", ["build123d", "cadquery"])
+def test_step_writer_guidance_applies_to_both_runtimes(runtime):
+    guidance = _execution_error_guidance(
+        "Script execution failed: name 'save_step' is not defined",
+        runtime, "save_step(result, 'manual.step')\nshow_object(result)",
+    )
+    assert "show_object(result)" in guidance["suggestion"]
+    assert "outputs.step" in guidance["suggestion"]
+
+
+@pytest.mark.parametrize("message", [
+    "Script execution failed: AttributeError: 'Report' object has no attribute 'write'",
+    "Script execution failed: ValueError: invalid shape",
+    "Script execution failed: FileNotFoundError: No such file or directory: 'input.step'",
+])
+def test_unrelated_errors_do_not_get_step_writer_guidance(message):
+    assert _execution_error_guidance(message, "build123d", "show_object(result)") == {}
 
 
 def test_method_iterability_guidance_requires_an_uncalled_part_method():
