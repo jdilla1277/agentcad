@@ -569,7 +569,7 @@ class _LoggingGroup(click.Group):
         )
 
         message = payload["message"].rstrip()
-        if not message.endswith("."):
+        if not message.endswith((".", "?", "!")):
             message += "."
         candidates = candidate_scripts() if script is None else []
         if script is None and len(candidates) == 1:
@@ -620,9 +620,12 @@ class _LoggingGroup(click.Group):
 
         The script is the first positional, or the value of ``--script X`` /
         ``--script=X`` when an agent mistakes the positional for an option.
-        ``kept_options`` are the recognised options in their original order
-        minus the label options (re-emitted by the caller), the option Click
-        rejected, unknown options, and extra positionals.
+        Click cannot say whether an unknown option such as ``--wat`` consumed
+        the token after it, so a positional in that spot only counts as the
+        script when it exists on disk; a later unambiguous positional wins
+        over it. ``kept_options`` are the recognised options in their
+        original order minus the label options (re-emitted by the caller),
+        the option Click rejected, unknown options, and extra positionals.
         """
         tokens = []
         for token in run_args:
@@ -633,14 +636,18 @@ class _LoggingGroup(click.Group):
                 tokens.append(token)
 
         script, kept = None, []
+        after_unknown_option = False
         index = 0
         while index < len(tokens):
             token = tokens[index]
             if not token.startswith("-"):
-                if script is None:
+                ambiguous = after_unknown_option
+                after_unknown_option = False
+                if script is None and (not ambiguous or Path(token).is_file()):
                     script = token
                 index += 1
                 continue
+            after_unknown_option = False
             takes_value = token in value_options or token in cls._RUN_SCRIPT_OPTION_SPELLINGS
             value = (
                 tokens[index + 1]
@@ -651,11 +658,13 @@ class _LoggingGroup(click.Group):
             if token in cls._RUN_SCRIPT_OPTION_SPELLINGS:
                 if script is None and value:
                     script = value
+            elif token not in value_options and token not in flag_options and token != "--help":
+                after_unknown_option = True
             elif (
                 token != invalid_option
                 and token not in cls._RUN_LABEL_OPTIONS
                 and token != "--help"
-                and (token in flag_options or (token in value_options and value is not None))
+                and (token in flag_options or value is not None)
             ):
                 kept.append(token)
                 if value is not None:

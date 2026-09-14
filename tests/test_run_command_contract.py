@@ -1,6 +1,8 @@
 """M69 Slice 2 contracts for literal labels, artifacts, and usage errors."""
 
 import json
+import shlex
+from pathlib import Path
 
 import pytest
 
@@ -307,6 +309,53 @@ def test_run_extra_argument_message_is_punctuated(runner, isolated_dir):
     assert "(./build.sh). `run` takes exactly one script path." in payload["message"]
 
 
+@pytest.mark.parametrize(
+    "argv, corrected",
+    [
+        # An unknown option may or may not have consumed the next token, so a
+        # later unambiguous positional wins over its possible value.
+        (
+            ["run", "--wat", "garbage", "build.py", "--label", "v1"],
+            "agentcad run build.py --label v1",
+        ),
+        (
+            ["run", "--lable", "v1", "build.py"],
+            "agentcad run build.py --label LABEL",
+        ),
+        # Only an ambiguous candidate: fall back to the placeholder.
+        (
+            ["run", "--wat", "garbage", "--label", "v1"],
+            "agentcad run SCRIPT --label v1",
+        ),
+    ],
+)
+def test_unknown_option_value_is_not_mistaken_for_the_script(
+    runner, isolated_dir, argv, corrected
+):
+    payload = json.loads(runner.invoke(cli, argv).stdout)
+
+    _assert_usage_error(payload, kind="unknown_option", command="run")
+    assert payload["next_actions"][0] == corrected
+
+
+def test_click_suggestion_is_not_double_punctuated(runner, isolated_dir):
+    payload = json.loads(runner.invoke(cli, ["run", "--lable", "v1", "build.py"]).stdout)
+
+    assert "Did you mean '--label'? --label names" in payload["message"]
+    assert "?." not in payload["message"]
+
+
+def test_positional_after_unknown_option_counts_when_it_exists(runner, isolated_dir):
+    (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
+    (isolated_dir / "other.py").write_text(SIMPLE_SCRIPT)
+
+    payload = json.loads(
+        runner.invoke(cli, ["run", "--wat", "model.py", "--label", "v1"]).stdout
+    )
+
+    assert payload["next_actions"][0] == "agentcad run model.py --label v1"
+
+
 def test_missing_script_is_filled_from_the_only_script_in_cwd(runner, isolated_dir):
     (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
 
@@ -368,6 +417,32 @@ def test_script_not_found_keeps_flags(runner, isolated_dir):
         "agentcad run a.py --label t --render iso --no-view --no-daemon",
         "agentcad run b.py --label t --render iso --no-view --no-daemon",
     ]
+
+
+def test_script_not_found_hint_keeps_build_dir_and_runs(runner, isolated_dir):
+    runner.invoke(
+        cli,
+        ["init", "--name", "contracts", "--runtime", "cadquery",
+         "--build-dir", "artifacts", "--no-agent-setup"],
+    )
+    (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
+    result = runner.invoke(
+        cli,
+        ["run", "missing.py", "--label", "v1", "--build-dir", "artifacts", "--no-daemon", "--no-view"],
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["error_kind"] == "script_not_found"
+    suggested = payload["next_actions"][0]
+    assert "--build-dir" in suggested
+    assert not (isolated_dir / "agentcad.json").exists()
+
+    rerun = runner.invoke(cli, shlex.split(suggested)[1:] + ["--no-preview", "--no-diff"])
+
+    assert rerun.exit_code == 0, rerun.output
+    outcome = json.loads(rerun.stdout)
+    assert outcome["status"] == "success"
+    assert Path(outcome["outputs"]["step"]).is_relative_to(isolated_dir / "artifacts")
 
 
 def test_script_not_found_dry_run_needs_no_label(runner, isolated_dir):

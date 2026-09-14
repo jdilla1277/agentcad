@@ -1063,6 +1063,9 @@ def _run_impl(
                 suggested += ["--label", "LABEL"]
             if no_daemon:
                 suggested.append("--no-daemon")
+            layout = get_project()
+            if layout.configured:
+                suggested += ["--build-dir", str(layout.build_root)]
             message += f" Python scripts here: {', '.join(candidates)}."
             next_actions = [
                 shlex.join([*suggested[:2], name, *suggested[2:]])
