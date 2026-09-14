@@ -605,7 +605,9 @@ class _LoggingGroup(click.Group):
             message += " `run` takes exactly one script path."
 
         argv = ["agentcad", "run", script if script is not None else "SCRIPT"]
-        if label is not None:
+        if label is not None and str(label).startswith("-"):
+            argv.append(f"--label={label}")
+        elif label is not None:
             argv += ["--label", str(label)]
         elif "--dry-run" not in kept:
             argv += ["--label", "LABEL"]
@@ -627,13 +629,18 @@ class _LoggingGroup(click.Group):
         original order minus the label options (re-emitted by the caller),
         the option Click rejected, unknown options, and extra positionals.
         """
-        tokens = []
+        # Split ``--opt=value`` but remember the value was attached: attached
+        # values may start with a dash (``--render=-45:30``), so they must not
+        # be mistaken for the next option.
+        tokens, attached = [], []
         for token in run_args:
             name, sep, value = token.partition("=")
             if sep and name.startswith("--"):
                 tokens.extend([name, value])
+                attached.extend([False, True])
             else:
                 tokens.append(token)
+                attached.append(False)
 
         script, kept = None, []
         script_ambiguous = False
@@ -641,7 +648,7 @@ class _LoggingGroup(click.Group):
         index = 0
         while index < len(tokens):
             token = tokens[index]
-            if not token.startswith("-"):
+            if attached[index] or not token.startswith("-"):
                 ambiguous = after_unknown_option
                 after_unknown_option = False
                 if not ambiguous and (script is None or script_ambiguous):
@@ -655,7 +662,7 @@ class _LoggingGroup(click.Group):
             value = (
                 tokens[index + 1]
                 if takes_value and index + 1 < len(tokens)
-                and not tokens[index + 1].startswith("-")
+                and (attached[index + 1] or not tokens[index + 1].startswith("-"))
                 else None
             )
             if token in cls._RUN_SCRIPT_OPTION_SPELLINGS:
@@ -669,9 +676,13 @@ class _LoggingGroup(click.Group):
                 and token != "--help"
                 and (token in flag_options or value is not None)
             ):
-                kept.append(token)
-                if value is not None:
-                    kept.append(value)
+                # A dash-prefixed value must stay attached to survive a re-parse.
+                if value is not None and value.startswith("-"):
+                    kept.append(f"{token}={value}")
+                else:
+                    kept.append(token)
+                    if value is not None:
+                        kept.append(value)
             index += 2 if value is not None else 1
         return script, kept
 

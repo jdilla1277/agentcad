@@ -263,6 +263,20 @@ def _assert_run_recovery(payload, corrected):
             ["run", "my model.py", "--label", "v 1", "--wat"],
             "agentcad run 'my model.py' --label 'v 1'",
         ),
+        # Attached values may start with a dash (custom camera angle) and must
+        # survive recovery in attached form.
+        (
+            ["run", "build.py", "--label", "v1", "--render=-45:30", "--wat"],
+            "agentcad run build.py --label v1 --render=-45:30",
+        ),
+        (
+            ["run", "build.py", "--label=-v1", "--render=front,-45:30", "--wat"],
+            "agentcad run build.py --label=-v1 --render front,-45:30",
+        ),
+        (
+            ["run", "--label", "v1", "--render=-45:30", "build.py", "--wat"],
+            "agentcad run build.py --label v1 --render=-45:30",
+        ),
     ],
 )
 def test_run_usage_errors_lead_with_corrected_command(
@@ -275,6 +289,24 @@ def test_run_usage_errors_lead_with_corrected_command(
     assert payload["command"] == "run"
     assert payload["status"] == "error"
     _assert_run_recovery(payload, corrected)
+
+
+def test_corrected_command_with_attached_dash_value_reparses(runner, isolated_dir):
+    _init(runner)
+    (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
+    first = runner.invoke(
+        cli, ["run", "model.py", "--label", "v1", "--render=-45:30", "--wat", "--no-daemon"]
+    )
+    suggested = json.loads(first.stdout)["next_actions"][0]
+
+    rerun = runner.invoke(
+        cli, shlex.split(suggested)[1:] + ["--no-view", "--no-preview", "--no-diff"]
+    )
+
+    assert rerun.exit_code == 0, rerun.output
+    outcome = json.loads(rerun.stdout)
+    assert outcome["status"] == "success"
+    assert outcome["renders"]
 
 
 def test_run_invalid_runtime_explains_library_not_language(runner, isolated_dir):
