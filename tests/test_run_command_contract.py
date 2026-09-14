@@ -313,7 +313,7 @@ def test_missing_script_is_filled_from_the_only_script_in_cwd(runner, isolated_d
     payload = json.loads(runner.invoke(cli, ["run", "--label", "v1"]).stdout)
 
     assert payload["next_actions"][0] == "agentcad run model.py --label v1"
-    assert "SCRIPT" not in payload["next_actions"][0]
+    assert "Using the only Python script here: model.py." in payload["message"]
 
 
 def test_missing_script_lists_candidates_when_ambiguous(runner, isolated_dir):
@@ -330,7 +330,10 @@ def test_missing_script_lists_candidates_when_ambiguous(runner, isolated_dir):
 def test_missing_label_explains_what_a_label_is(runner, isolated_dir):
     payload = json.loads(runner.invoke(cli, ["run", "build.py"]).stdout)
 
-    assert "--label names this version; any short name works" in payload["message"]
+    assert (
+        "--label names this version; replace LABEL with any short name, for "
+        "example v1." in payload["message"]
+    )
 
 
 def test_script_not_found_points_at_existing_scripts(runner, isolated_dir):
@@ -345,8 +348,35 @@ def test_script_not_found_points_at_existing_scripts(runner, isolated_dir):
     assert payload["status"] == "error"
     assert payload["error_kind"] == "script_not_found"
     assert "Script file 'SCRIPT' not found. Python scripts here: model.py." in payload["message"]
-    assert payload["next_actions"] == ["agentcad run model.py --label v1"]
+    assert payload["next_actions"] == [
+        "agentcad run model.py --label v1 --no-view --no-daemon"
+    ]
     _assert_no_step(payload, "v1")
+
+
+def test_script_not_found_keeps_flags(runner, isolated_dir):
+    _init(runner)
+    for name in ("a.py", "b.py"):
+        (isolated_dir / name).write_text(SIMPLE_SCRIPT)
+    result = runner.invoke(
+        cli, ["run", "nope.py", "--label", "t", "--render", "iso", "--no-daemon", "--no-view"]
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["error_kind"] == "script_not_found"
+    assert payload["next_actions"] == [
+        "agentcad run a.py --label t --render iso --no-view --no-daemon",
+        "agentcad run b.py --label t --render iso --no-view --no-daemon",
+    ]
+
+
+def test_script_not_found_dry_run_needs_no_label(runner, isolated_dir):
+    _init(runner)
+    (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
+    result = runner.invoke(cli, ["run", "nope.py", "--dry-run", "--no-daemon"])
+
+    payload = json.loads(result.stdout)
+    assert payload["next_actions"] == ["agentcad run model.py --dry-run --no-daemon"]
 
 
 def test_script_not_found_without_scripts_sends_to_quickstart(runner, isolated_dir):

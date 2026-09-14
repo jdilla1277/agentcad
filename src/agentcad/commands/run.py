@@ -1053,12 +1053,19 @@ def _run_impl(
         # Agents land here after copying a placeholder or guessing a name, so
         # point at the scripts that do exist instead of ending the trail.
         candidates = candidate_scripts()
-        label_text = shlex.quote(str(output)) if output is not None else "LABEL"
         message = f"Script file '{script}' not found."
         if candidates:
+            # Keep every flag the caller passed (argv mirrors them for daemon
+            # routing) so a literal copy of the hint behaves the same way.
+            suggested = ["agentcad", *argv[:1]]
+            suggested += argv[2:]
+            if output is None and not dry_run:
+                suggested += ["--label", "LABEL"]
+            if no_daemon:
+                suggested.append("--no-daemon")
             message += f" Python scripts here: {', '.join(candidates)}."
             next_actions = [
-                f"agentcad run {shlex.quote(name)} --label {label_text}"
+                shlex.join([*suggested[:2], name, *suggested[2:]])
                 for name in candidates[:3]
             ]
         else:

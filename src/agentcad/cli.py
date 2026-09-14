@@ -574,14 +574,15 @@ class _LoggingGroup(click.Group):
         candidates = candidate_scripts() if script is None else []
         if script is None and len(candidates) == 1:
             script = candidates[0]
-        if script is None:
+            message += f" Using the only Python script here: {script}."
+        elif script is None:
             message += " Replace SCRIPT with the path to your Python CAD script."
             if candidates:
                 message += f" Python scripts here: {', '.join(candidates)}."
         if label is None and "--dry-run" not in kept:
             message += (
-                " --label names this version; any short name works, for "
-                "example --label v1."
+                " --label names this version; replace LABEL with any short "
+                "name, for example v1."
             )
 
         invalid_option = payload["invalid_option"]
