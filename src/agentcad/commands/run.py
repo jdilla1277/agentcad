@@ -991,9 +991,7 @@ def _run_impl(
         argv.extend(["--runtime", runtime])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
-    maybe_route_through_daemon(argv, no_daemon=no_daemon)
-
-    # Fallback: direct execution
+    # Check syntax/capture locally before contacting a daemon or importing CAD.
     _t = _start_phase("validation")
 
     # An explicit --runtime naming an engine that is not installed is the
@@ -1060,7 +1058,25 @@ def _run_impl(
         _emit_run(payload)
         sys.exit(1)
 
-    # Pre-execution validation (before version allocation)
+    from agentcad.validate import validate_script
+
+    output_calls = (
+        ("show_object", "show_compound", "show_assembly")
+        if runtime_name == "build123d" else ("show_object",)
+    )
+    static_errors = validate_script(raw_source, output_calls, check_imports=False)
+    if static_errors:
+        _emit_run({
+            "command": "run",
+            "status": "validation_error",
+            "runtime": runtime_name,
+            "checks": static_errors,
+        })
+        sys.exit(1)
+
+    maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    # Pre-execution import/helper validation (before version allocation)
     validation_errors = runner.validate(raw_source)
     if validation_errors:
         _emit_run({

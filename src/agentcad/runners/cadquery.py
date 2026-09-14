@@ -175,11 +175,18 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
         )
 
     if not build_result.results:
+        from agentcad.output_contract import missing_output_message
+        from OCP.TopoDS import TopoDS_Shape
+
+        candidates = [
+            name for name, value in build_result.env.items()
+            if isinstance(value, (cq.Workplane, cq.Shape, TopoDS_Shape))
+        ]
         return ExecutionResult(
             status="execution_error",
             discovered_parameters=discovered,
             parameters=params or {},
-            exception="Script produced no results. Did you call show_object()?",
+            exception=missing_output_message(user_source, candidates),
         )
 
     warnings: list[str] = [
