@@ -108,6 +108,16 @@ def _emit_run(payload: dict) -> None:
     click.echo(json.dumps(_run_contract_payload(payload)))
 
 
+def candidate_scripts(directory=None, limit=5):
+    """Python files in ``directory`` (default cwd) an agent probably meant to run."""
+    root = Path(directory) if directory is not None else Path.cwd()
+    try:
+        names = sorted(entry.name for entry in root.glob("*.py") if entry.is_file())
+    except OSError:
+        return []
+    return names[:limit]
+
+
 class _RunTimeout(BaseException):
     """Raised by the SIGALRM watchdog so broad script catches don't swallow it."""
 
@@ -1040,10 +1050,26 @@ def _run_impl(
 
     script_path = Path(script)
     if not script_path.exists():
+        # Agents land here after copying a placeholder or guessing a name, so
+        # point at the scripts that do exist instead of ending the trail.
+        candidates = candidate_scripts()
+        label_text = shlex.quote(str(output)) if output is not None else "LABEL"
+        message = f"Script file '{script}' not found."
+        if candidates:
+            message += f" Python scripts here: {', '.join(candidates)}."
+            next_actions = [
+                f"agentcad run {shlex.quote(name)} --label {label_text}"
+                for name in candidates[:3]
+            ]
+        else:
+            message += " No Python scripts in this directory; write one first."
+            next_actions = ["agentcad docs quickstart"]
         _emit_run({
             "command": "run",
             "status": "error",
-            "message": f"Script file '{script}' not found",
+            "error_kind": "script_not_found",
+            "message": message,
+            "next_actions": next_actions,
         })
         sys.exit(1)
 

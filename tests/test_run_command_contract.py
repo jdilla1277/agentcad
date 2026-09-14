@@ -242,7 +242,16 @@ def _assert_run_recovery(payload, corrected):
         ),
         (
             ["run", "--render", "iso", "build.py", "--label", "test", "--wat"],
-            "agentcad run build.py --label test",
+            "agentcad run build.py --label test --render iso",
+        ),
+        (
+            ["run", "build.py", "--label=test", "--runtime", "python",
+             "--export", "stl", "--no-preview"],
+            "agentcad run build.py --label test --export stl --no-preview",
+        ),
+        (
+            ["run", "build.py", "--dry-run", "--wat"],
+            "agentcad run build.py --dry-run",
         ),
         (
             ["run", "build.py", "--label", "new", "--output", "old"],
@@ -296,6 +305,60 @@ def test_run_extra_argument_message_is_punctuated(runner, isolated_dir):
     payload = json.loads(result.stdout)
     _assert_usage_error(payload, kind="usage_error", command="run")
     assert "(./build.sh). `run` takes exactly one script path." in payload["message"]
+
+
+def test_missing_script_is_filled_from_the_only_script_in_cwd(runner, isolated_dir):
+    (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
+
+    payload = json.loads(runner.invoke(cli, ["run", "--label", "v1"]).stdout)
+
+    assert payload["next_actions"][0] == "agentcad run model.py --label v1"
+    assert "SCRIPT" not in payload["next_actions"][0]
+
+
+def test_missing_script_lists_candidates_when_ambiguous(runner, isolated_dir):
+    for name in ("a.py", "b.py"):
+        (isolated_dir / name).write_text(SIMPLE_SCRIPT)
+
+    payload = json.loads(runner.invoke(cli, ["run", "--label", "v1"]).stdout)
+
+    assert payload["next_actions"][0] == "agentcad run SCRIPT --label v1"
+    assert "Replace SCRIPT with the path to your Python CAD script." in payload["message"]
+    assert "Python scripts here: a.py, b.py." in payload["message"]
+
+
+def test_missing_label_explains_what_a_label_is(runner, isolated_dir):
+    payload = json.loads(runner.invoke(cli, ["run", "build.py"]).stdout)
+
+    assert "--label names this version; any short name works" in payload["message"]
+
+
+def test_script_not_found_points_at_existing_scripts(runner, isolated_dir):
+    _init(runner)
+    (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
+    result = runner.invoke(
+        cli, ["run", "SCRIPT", "--label", "v1", "--no-daemon", "--no-view"]
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert payload["error_kind"] == "script_not_found"
+    assert "Script file 'SCRIPT' not found. Python scripts here: model.py." in payload["message"]
+    assert payload["next_actions"] == ["agentcad run model.py --label v1"]
+    _assert_no_step(payload, "v1")
+
+
+def test_script_not_found_without_scripts_sends_to_quickstart(runner, isolated_dir):
+    _init(runner)
+    result = runner.invoke(
+        cli, ["run", "missing.py", "--label", "v1", "--no-daemon", "--no-view"]
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["error_kind"] == "script_not_found"
+    assert "No Python scripts in this directory" in payload["message"]
+    assert payload["next_actions"] == ["agentcad docs quickstart"]
 
 
 def test_non_run_usage_errors_have_no_run_recovery(runner, isolated_dir):

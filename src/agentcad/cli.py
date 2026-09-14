@@ -25,7 +25,7 @@ from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.recover import recover
-from agentcad.commands.run import _OUTPUT_DEPRECATION, run
+from agentcad.commands.run import _OUTPUT_DEPRECATION, candidate_scripts, run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
 from agentcad.commands.view import view
@@ -549,27 +549,41 @@ class _LoggingGroup(click.Group):
 
     # Tool bridges that forward argv verbatim (jdilla1277/agentcad#193) hand
     # agents the raw Click message, so every `run` usage error carries a
-    # copyable canonical command with whatever script/label survived parsing.
+    # copyable corrected command: the script and label that parsed, every
+    # other valid option kept, and only the offending token removed.
     _RUN_CANONICAL = "agentcad run SCRIPT --label LABEL"
     # Spellings agents use when they mistake the script positional for an option.
     _RUN_SCRIPT_OPTION_SPELLINGS = ("--script", "--file", "--path")
+    _RUN_LABEL_OPTIONS = ("--label", "--output")
 
     def _add_run_recovery(self, payload, raw_args, label):
         run_command = self.commands["run"]
-        value_options = {
-            opt
-            for param in run_command.params
-            if isinstance(param, click.Option) and not param.is_flag
-            for opt in (*param.opts, *param.secondary_opts)
-        }
-        script = self._run_script_from_args(raw_args[1:], value_options)
-        script_text = shlex.quote(script) if script else "SCRIPT"
-        label_text = shlex.quote(str(label)) if label else "LABEL"
-        corrected = f"agentcad run {script_text} --label {label_text}"
+        value_options, flag_options = set(), set()
+        for param in run_command.params:
+            if not isinstance(param, click.Option):
+                continue
+            spellings = (*param.opts, *param.secondary_opts)
+            (flag_options if param.is_flag else value_options).update(spellings)
+        script, kept = self._recover_run_argv(
+            raw_args[1:], value_options, flag_options, payload["invalid_option"],
+        )
 
         message = payload["message"].rstrip()
         if not message.endswith("."):
             message += "."
+        candidates = candidate_scripts() if script is None else []
+        if script is None and len(candidates) == 1:
+            script = candidates[0]
+        if script is None:
+            message += " Replace SCRIPT with the path to your Python CAD script."
+            if candidates:
+                message += f" Python scripts here: {', '.join(candidates)}."
+        if label is None and "--dry-run" not in kept:
+            message += (
+                " --label names this version; any short name works, for "
+                "example --label v1."
+            )
+
         invalid_option = payload["invalid_option"]
         if invalid_option == "--runtime" and payload["error_kind"] == "invalid_value":
             message += (
@@ -588,33 +602,65 @@ class _LoggingGroup(click.Group):
             "Got unexpected extra argument"
         ):
             message += " `run` takes exactly one script path."
+
+        argv = ["agentcad", "run", script if script is not None else "SCRIPT"]
+        if label is not None:
+            argv += ["--label", str(label)]
+        elif "--dry-run" not in kept:
+            argv += ["--label", "LABEL"]
+        argv += kept
         payload["message"] = f"{message} Canonical form: {self._RUN_CANONICAL}."
         payload["canonical_command"] = self._RUN_CANONICAL
-        payload["next_actions"] = [corrected, *payload["next_actions"]]
+        payload["next_actions"] = [shlex.join(argv), *payload["next_actions"]]
 
     @classmethod
-    def _run_script_from_args(cls, run_args, value_options):
-        """Return the script positional from `run` argv, or None.
+    def _recover_run_argv(cls, run_args, value_options, flag_options, invalid_option):
+        """Return ``(script, kept_options)`` from `run` argv.
 
-        Skips option values so `--label test` never reads as a script, and
-        accepts `--script X` / `--script=X` when an agent mistakes the
-        positional for an option.
+        The script is the first positional, or the value of ``--script X`` /
+        ``--script=X`` when an agent mistakes the positional for an option.
+        ``kept_options`` are the recognised options in their original order
+        minus the label options (re-emitted by the caller), the option Click
+        rejected, unknown options, and extra positionals.
         """
+        tokens = []
+        for token in run_args:
+            name, sep, value = token.partition("=")
+            if sep and name.startswith("--"):
+                tokens.extend([name, value])
+            else:
+                tokens.append(token)
+
+        script, kept = None, []
         index = 0
-        while index < len(run_args):
-            token = run_args[index]
-            name, sep, inline_value = token.partition("=")
-            if name in cls._RUN_SCRIPT_OPTION_SPELLINGS:
-                if sep:
-                    return inline_value or None
-                following = run_args[index + 1] if index + 1 < len(run_args) else ""
-                return following if following and not following.startswith("-") else None
+        while index < len(tokens):
+            token = tokens[index]
             if not token.startswith("-"):
-                return token
-            if token in value_options:
+                if script is None:
+                    script = token
                 index += 1
-            index += 1
-        return None
+                continue
+            takes_value = token in value_options or token in cls._RUN_SCRIPT_OPTION_SPELLINGS
+            value = (
+                tokens[index + 1]
+                if takes_value and index + 1 < len(tokens)
+                and not tokens[index + 1].startswith("-")
+                else None
+            )
+            if token in cls._RUN_SCRIPT_OPTION_SPELLINGS:
+                if script is None and value:
+                    script = value
+            elif (
+                token != invalid_option
+                and token not in cls._RUN_LABEL_OPTIONS
+                and token != "--help"
+                and (token in flag_options or (token in value_options and value is not None))
+            ):
+                kept.append(token)
+                if value is not None:
+                    kept.append(value)
+            index += 2 if value is not None else 1
+        return script, kept
 
     @staticmethod
     def _run_label_from_args(raw_args):
