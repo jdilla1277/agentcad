@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from agentcad.cli import cli
 
 
@@ -205,6 +207,104 @@ def test_label_and_output_together_return_usage_json(runner, isolated_dir):
     assert "not both" in payload["message"]
     assert payload["label"] == "new"
     assert "--label" in payload["deprecation"]
+
+
+# Public issue #193: tool bridges forward argv verbatim, so every `run`
+# usage error must hand the agent a copyable corrected command built from the
+# pieces that survived parsing, plus the canonical form.
+_CANONICAL = "agentcad run SCRIPT --label LABEL"
+
+
+def _assert_run_recovery(payload, corrected):
+    assert payload["canonical_command"] == _CANONICAL
+    assert payload["next_actions"][0] == corrected
+    assert "agentcad run --help" in payload["next_actions"]
+    assert payload["message"].endswith(f"Canonical form: {_CANONICAL}.")
+
+
+@pytest.mark.parametrize(
+    "argv, corrected",
+    [
+        (["run"], "agentcad run SCRIPT --label LABEL"),
+        (["run", "--label", "test"], "agentcad run SCRIPT --label test"),
+        (["run", "build.py"], "agentcad run build.py --label LABEL"),
+        (
+            ["run", "build.py", "--label", "test", "./build.sh"],
+            "agentcad run build.py --label test",
+        ),
+        (
+            ["run", "--script", "build.py", "--label", "test"],
+            "agentcad run build.py --label test",
+        ),
+        (
+            ["run", "--script=build.py", "--label=test"],
+            "agentcad run build.py --label test",
+        ),
+        (
+            ["run", "--render", "iso", "build.py", "--label", "test", "--wat"],
+            "agentcad run build.py --label test",
+        ),
+        (
+            ["run", "build.py", "--label", "new", "--output", "old"],
+            "agentcad run build.py --label new",
+        ),
+        (
+            ["run", "my model.py", "--label", "v 1", "--wat"],
+            "agentcad run 'my model.py' --label 'v 1'",
+        ),
+    ],
+)
+def test_run_usage_errors_lead_with_corrected_command(
+    runner, isolated_dir, argv, corrected
+):
+    result = runner.invoke(cli, argv)
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "run"
+    assert payload["status"] == "error"
+    _assert_run_recovery(payload, corrected)
+
+
+def test_run_invalid_runtime_explains_library_not_language(runner, isolated_dir):
+    result = runner.invoke(
+        cli, ["run", "build.py", "--label", "test", "--runtime", "python"]
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_usage_error(payload, kind="invalid_value", command="run")
+    assert "names the CAD library, not the language" in payload["message"]
+    assert "'cadquery', 'build123d'" in payload["message"]
+    _assert_run_recovery(payload, "agentcad run build.py --label test")
+
+
+def test_run_script_as_option_is_explained(runner, isolated_dir):
+    result = runner.invoke(cli, ["run", "--script", "build.py", "--label", "t"])
+
+    payload = json.loads(result.stdout)
+    _assert_usage_error(payload, kind="unknown_option", command="run")
+    assert payload["invalid_option"] == "--script"
+    assert "positional argument after `run`, not an option" in payload["message"]
+
+
+def test_run_extra_argument_message_is_punctuated(runner, isolated_dir):
+    result = runner.invoke(
+        cli, ["run", "build.py", "--label", "t", "./build.sh"]
+    )
+
+    payload = json.loads(result.stdout)
+    _assert_usage_error(payload, kind="usage_error", command="run")
+    assert "(./build.sh). `run` takes exactly one script path." in payload["message"]
+
+
+def test_non_run_usage_errors_have_no_run_recovery(runner, isolated_dir):
+    result = runner.invoke(cli, ["render", "--wat"])
+
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "render"
+    assert "canonical_command" not in payload
+    assert payload["next_actions"] == ["agentcad render --help"]
 
 
 def test_unknown_top_level_command_is_json_on_stdout(runner, isolated_dir):

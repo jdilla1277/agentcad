@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -543,7 +544,77 @@ class _LoggingGroup(click.Group):
             })
             if used_output:
                 payload["deprecation"] = _OUTPUT_DEPRECATION
+            self._add_run_recovery(payload, raw_args, label)
         return payload
+
+    # Tool bridges that forward argv verbatim (jdilla1277/agentcad#193) hand
+    # agents the raw Click message, so every `run` usage error carries a
+    # copyable canonical command with whatever script/label survived parsing.
+    _RUN_CANONICAL = "agentcad run SCRIPT --label LABEL"
+    # Spellings agents use when they mistake the script positional for an option.
+    _RUN_SCRIPT_OPTION_SPELLINGS = ("--script", "--file", "--path")
+
+    def _add_run_recovery(self, payload, raw_args, label):
+        run_command = self.commands["run"]
+        value_options = {
+            opt
+            for param in run_command.params
+            if isinstance(param, click.Option) and not param.is_flag
+            for opt in (*param.opts, *param.secondary_opts)
+        }
+        script = self._run_script_from_args(raw_args[1:], value_options)
+        script_text = shlex.quote(script) if script else "SCRIPT"
+        label_text = shlex.quote(str(label)) if label else "LABEL"
+        corrected = f"agentcad run {script_text} --label {label_text}"
+
+        message = payload["message"].rstrip()
+        if not message.endswith("."):
+            message += "."
+        invalid_option = payload["invalid_option"]
+        if invalid_option == "--runtime" and payload["error_kind"] == "invalid_value":
+            message += (
+                " --runtime names the CAD library, not the language; scripts "
+                "are always Python. Omit it to use the project runtime."
+            )
+        elif (
+            payload["error_kind"] == "unknown_option"
+            and invalid_option in self._RUN_SCRIPT_OPTION_SPELLINGS
+        ):
+            message += (
+                " The script path is the positional argument after `run`, "
+                "not an option."
+            )
+        elif payload["error_kind"] == "usage_error" and message.startswith(
+            "Got unexpected extra argument"
+        ):
+            message += " `run` takes exactly one script path."
+        payload["message"] = f"{message} Canonical form: {self._RUN_CANONICAL}."
+        payload["canonical_command"] = self._RUN_CANONICAL
+        payload["next_actions"] = [corrected, *payload["next_actions"]]
+
+    @classmethod
+    def _run_script_from_args(cls, run_args, value_options):
+        """Return the script positional from `run` argv, or None.
+
+        Skips option values so `--label test` never reads as a script, and
+        accepts `--script X` / `--script=X` when an agent mistakes the
+        positional for an option.
+        """
+        index = 0
+        while index < len(run_args):
+            token = run_args[index]
+            name, sep, inline_value = token.partition("=")
+            if name in cls._RUN_SCRIPT_OPTION_SPELLINGS:
+                if sep:
+                    return inline_value or None
+                following = run_args[index + 1] if index + 1 < len(run_args) else ""
+                return following if following and not following.startswith("-") else None
+            if not token.startswith("-"):
+                return token
+            if token in value_options:
+                index += 1
+            index += 1
+        return None
 
     @staticmethod
     def _run_label_from_args(raw_args):
