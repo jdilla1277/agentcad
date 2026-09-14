@@ -345,15 +345,31 @@ def test_click_suggestion_is_not_double_punctuated(runner, isolated_dir):
     assert "?." not in payload["message"]
 
 
-def test_positional_after_unknown_option_counts_when_it_exists(runner, isolated_dir):
-    (isolated_dir / "model.py").write_text(SIMPLE_SCRIPT)
-    (isolated_dir / "other.py").write_text(SIMPLE_SCRIPT)
+@pytest.mark.parametrize(
+    "argv, corrected",
+    [
+        # Ambiguous token that exists on disk counts when nothing better follows.
+        (["run", "--wat", "model.py", "--label", "v1"], "agentcad run model.py --label v1"),
+        # ...but a later unambiguous positional replaces it.
+        (
+            ["run", "--wat", "config.py", "model.py", "--label", "v1"],
+            "agentcad run model.py --label v1",
+        ),
+        (
+            ["run", "--wat", "config.py", "--script", "model.py", "--label", "v1"],
+            "agentcad run model.py --label v1",
+        ),
+    ],
+)
+def test_positional_after_unknown_option_yields_to_unambiguous_script(
+    runner, isolated_dir, argv, corrected
+):
+    for name in ("model.py", "config.py"):
+        (isolated_dir / name).write_text(SIMPLE_SCRIPT)
 
-    payload = json.loads(
-        runner.invoke(cli, ["run", "--wat", "model.py", "--label", "v1"]).stdout
-    )
+    payload = json.loads(runner.invoke(cli, argv).stdout)
 
-    assert payload["next_actions"][0] == "agentcad run model.py --label v1"
+    assert payload["next_actions"][0] == corrected
 
 
 def test_missing_script_is_filled_from_the_only_script_in_cwd(runner, isolated_dir):

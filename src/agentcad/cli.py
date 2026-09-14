@@ -636,6 +636,7 @@ class _LoggingGroup(click.Group):
                 tokens.append(token)
 
         script, kept = None, []
+        script_ambiguous = False
         after_unknown_option = False
         index = 0
         while index < len(tokens):
@@ -643,8 +644,10 @@ class _LoggingGroup(click.Group):
             if not token.startswith("-"):
                 ambiguous = after_unknown_option
                 after_unknown_option = False
-                if script is None and (not ambiguous or Path(token).is_file()):
-                    script = token
+                if not ambiguous and (script is None or script_ambiguous):
+                    script, script_ambiguous = token, False
+                elif ambiguous and script is None and Path(token).is_file():
+                    script, script_ambiguous = token, True
                 index += 1
                 continue
             after_unknown_option = False
@@ -656,8 +659,8 @@ class _LoggingGroup(click.Group):
                 else None
             )
             if token in cls._RUN_SCRIPT_OPTION_SPELLINGS:
-                if script is None and value:
-                    script = value
+                if value and (script is None or script_ambiguous):
+                    script, script_ambiguous = value, False
             elif token not in value_options and token not in flag_options and token != "--help":
                 after_unknown_option = True
             elif (
