@@ -52,6 +52,10 @@ Scripts should not export STEP themselves. Expose the intended geometry with
 from `outputs.step` in the run JSON (typically `vN_label/output.step`). A dry run
 does not write STEP and returns `outputs.step: null`. Do not call `save_step`,
 `write_step`, `export_step`, or guessed writer methods in generated scripts.
+Validation rejects recognizable manual STEP writer calls before script execution,
+including imported aliases and generic exporters with an explicit STEP destination.
+Remove those calls even if they work in standalone Python; only `outputs.step`
+identifies the tracked deliverable.
 
 1. **Write a script.** No imports needed — build123d primitives,
    `show_object`, and agentcad edit helpers are pre-injected by default.

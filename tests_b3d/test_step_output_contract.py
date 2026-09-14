@@ -6,6 +6,7 @@ import pytest
 
 from agentcad.cli import cli
 from agentcad.guide import guide_body
+from agentcad.validate import validate_script
 
 
 @pytest.mark.parametrize(("construction", "solids", "volume"), [
@@ -87,12 +88,76 @@ def test_manual_writer_without_capture_gets_output_contract(runner, b3d_project)
     assert not list(b3d_project.rglob("*.step"))
 
 
+@pytest.mark.parametrize("writer", [
+    "export_step(result, 'manual.step')",
+    "import build123d as b3d\nb3d.export_step(result, 'manual.step')",
+    "from build123d import export_step as save\nsave(result, 'manual.step')",
+    "result.exportStep('manual.step')",
+    "from OCP.STEPControl import STEPControl_Writer as Writer\nwriter = Writer()",
+])
+@pytest.mark.parametrize("no_daemon", [False, True])
+def test_manual_step_rejected_before_execution(runner, b3d_project, monkeypatch, writer, no_daemon):
+    from agentcad.commands import run as run_mod
+    from agentcad.runners import build123d
+
+    script = b3d_project / "model.py"
+    script.write_text("result = Box(2, 3, 4)\n" + writer + "\nshow_object(result)\n")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Manual STEP validation must precede execution, imports, and daemon routing")
+
+    monkeypatch.setattr(run_mod, "maybe_route_through_daemon", forbidden)
+    monkeypatch.setattr(build123d, "execute", forbidden)
+    monkeypatch.setattr("agentcad.validate._can_import", forbidden)
+    response = runner.invoke(cli, ["run", str(script), "--label", "manual"] + (
+        ["--no-daemon"] if no_daemon else []
+    ))
+    assert response.exit_code == 1, response.output
+    payload = json.loads(response.stdout)
+    assert payload["status"] == "validation_error"
+    assert payload["artifact_created"] is False
+    assert payload["outputs"]["step"] is None
+    check, = payload["checks"]
+    assert check["check"] == "manual_step_export"
+    assert "outputs.step" in check["suggestion"]
+    assert not list(b3d_project.rglob("*.step"))
+    assert not list(b3d_project.glob("v*"))
+
+
+@pytest.mark.parametrize("call", [
+    "write(report)",
+    "export(report, 'report.txt')",
+    "report.write('report.txt')",
+    "exporters.export(result, 'mesh.stl')",
+    "export_stl(result, 'mesh.stl')",
+])
+def test_non_step_writers_pass_validation(call):
+    assert validate_script(call + "\nshow_object(result)", check_imports=False) == []
+
+
+@pytest.mark.parametrize("check_imports", [False, True])
+def test_cadquery_manual_step_rejected_without_imports(monkeypatch, check_imports):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Manual STEP validation must precede import resolution")
+
+    monkeypatch.setattr("agentcad.validate._can_import", forbidden)
+    checks = validate_script(
+        "from cadquery import exporters\n"
+        "result = cq.Workplane('XY').box(2, 3, 4)\n"
+        "exporters.export(result, 'manual.step')\nshow_object(result)",
+        check_imports=check_imports,
+    )
+    check, = checks
+    assert check["check"] == "manual_step_export"
+
+
 def test_guides_and_preamble_explain_step_ownership(runner):
     for runtime in ("build123d", "cadquery"):
         guide = guide_body(runtime)
         assert "Scripts should not export STEP themselves" in guide
         assert "outputs.step" in guide
         assert "dry run" in guide
+        assert "Validation rejects recognizable manual STEP" in guide
     result = runner.invoke(cli, ["docs", "preamble"])
     assert result.exit_code == 0, result.output
     assert "Scripts should not export STEP themselves" in result.output

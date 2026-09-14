@@ -3,7 +3,7 @@
 import ast
 import importlib
 
-from agentcad.output_contract import missing_output_guidance, step_export_guidance
+from agentcad.output_contract import manual_step_export_checks, missing_output_guidance, step_export_guidance
 
 
 def validate_script(source, output_calls=None, *, check_imports=True):
@@ -53,7 +53,8 @@ def validate_script(source, output_calls=None, *, check_imports=True):
         })
         return errors  # Missing capture must fail before importing the CAD stack.
 
-    if not check_imports:
+    errors.extend(manual_step_export_checks(tree))
+    if errors or not check_imports:
         return errors
 
     # 3. Check imports resolve

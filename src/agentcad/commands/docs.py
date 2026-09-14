@@ -577,6 +577,8 @@ SECTIONS = {
         "  AgentCAD writes the canonical STEP and returns its path in outputs.step\n"
         "  in the run JSON (typically vN_label/output.step). Dry runs write no STEP.\n"
         "  Remove manual save_step/write_step/export_step calls and writer imports.\n"
+        "  Validation rejects recognizable manual STEP calls before execution,\n"
+        "  even working calls. Only outputs.step identifies the tracked deliverable.\n"
         "\n"
         "  show_object   Capture a build123d Part, Compound, or raw TopoDS_Shape.\n"
         "                Each call becomes a part in the `parts` array; STEP\n"
