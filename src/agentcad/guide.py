@@ -237,7 +237,7 @@ identifies the tracked deliverable.
 |---------|---------|
 | `agentcad init --name NAME` | Initialize project |
 | `agentcad run SCRIPT --label LABEL` | Execute script, produce STEP + metrics |
-| `agentcad run ... --dry-run` | Metrics only, no version consumed |
+| `agentcad run ... --dry-run` | Metrics only, no version consumed; `--label` optional |
 | `agentcad run ... --no-preview` | Suppress preview (on by default) |
 | `agentcad run ... --no-diff` | Suppress automatic prior-version comparison |
 | `agentcad run ... --no-view` | Suppress automatic browser review |
