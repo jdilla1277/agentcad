@@ -277,6 +277,12 @@ def _assert_run_recovery(payload, corrected):
             ["run", "--label", "v1", "--render=-45:30", "build.py", "--wat"],
             "agentcad run build.py --label v1 --render=-45:30",
         ),
+        # A value incorrectly attached to a flag is rejected as a unit; its
+        # value must not be reinterpreted as the script positional.
+        (
+            ["run", "--dry-run=true", "build.py"],
+            "agentcad run build.py --label LABEL",
+        ),
     ],
 )
 def test_run_usage_errors_lead_with_corrected_command(

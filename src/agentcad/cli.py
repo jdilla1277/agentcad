@@ -659,6 +659,7 @@ class _LoggingGroup(click.Group):
                 continue
             after_unknown_option = False
             takes_value = token in value_options or token in cls._RUN_SCRIPT_OPTION_SPELLINGS
+            has_attached_value = index + 1 < len(tokens) and attached[index + 1]
             value = (
                 tokens[index + 1]
                 if takes_value and index + 1 < len(tokens)
@@ -683,7 +684,10 @@ class _LoggingGroup(click.Group):
                     kept.append(token)
                     if value is not None:
                         kept.append(value)
-            index += 2 if value is not None else 1
+            # An attached fragment belongs to this option even when the option
+            # is a flag and Click rejects the value (for example
+            # ``--dry-run=true``). Never reinterpret that fragment as SCRIPT.
+            index += 2 if value is not None or has_attached_value else 1
         return script, kept
 
     @staticmethod
