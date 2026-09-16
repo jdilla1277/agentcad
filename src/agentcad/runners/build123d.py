@@ -332,14 +332,22 @@ def execute(
         )
 
     if not captured:
+        from agentcad.output_contract import missing_output_message
+        from build123d import BuildLine, BuildPart, BuildSketch
+
+        candidates = [
+            name for name, value in script_globals.items()
+            if isinstance(value, Shape) or _is_topods_shape(value)
+        ]
+        for name, value in script_globals.items():
+            for builder, attr in ((BuildPart, "part"), (BuildSketch, "sketch"), (BuildLine, "line")):
+                if isinstance(value, builder) and isinstance(getattr(value, attr), Shape):
+                    candidates.append(f"{name}.{attr}")
         return ExecutionResult(
             status="execution_error",
             discovered_parameters=discovered,
             parameters=effective_params,
-            exception=(
-                "Script produced no results. Did you call show_object() "
-                "or show_assembly()?"
-            ),
+            exception=missing_output_message(user_source, candidates),
         )
 
     warnings: list[str] = [
