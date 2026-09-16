@@ -86,7 +86,7 @@ def _run_contract_payload(payload: dict) -> dict:
         if script:
             recovery = (
                 f"agentcad run {shlex.quote(script)} --label "
-                f"{shlex.quote(str(label))}"
+                f"{shlex.quote(str(label)) if label is not None else 'LABEL'}"
             )
             existing_message = payload.get("message")
             no_artifact_message = (
@@ -106,6 +106,16 @@ def _run_contract_payload(payload: dict) -> dict:
 
 def _emit_run(payload: dict) -> None:
     click.echo(json.dumps(_run_contract_payload(payload)))
+
+
+def candidate_scripts(directory=None, limit=5):
+    """Python files in ``directory`` (default cwd) an agent probably meant to run."""
+    root = Path(directory) if directory is not None else Path.cwd()
+    try:
+        names = sorted(entry.name for entry in root.glob("*.py") if entry.is_file())
+    except OSError:
+        return []
+    return names[:limit]
 
 
 class _RunTimeout(BaseException):
@@ -438,7 +448,12 @@ def _uncalled_part_topology_methods(source):
 
 
 def _execution_error_guidance(msg, runtime, source):
-    """Return focused recovery fields for known build123d Part mistakes."""
+    """Return focused recovery fields for known script API mistakes."""
+    from agentcad.output_contract import step_export_guidance
+
+    export_guidance = step_export_guidance(msg, source)
+    if export_guidance:
+        return export_guidance
     if runtime != "build123d":
         return {}
 
@@ -750,7 +765,10 @@ def _assign_part_identity(raw_parts):
 @click.option(
     "--label",
     default=None,
-    help="Label for this version. The STEP path is returned in outputs.step.",
+    help=(
+        "Label for this version. The STEP path is returned in outputs.step. "
+        "Required unless --dry-run."
+    ),
 )
 @click.option(
     "--output",
@@ -789,7 +807,7 @@ def _assign_part_identity(raw_parts):
 )
 @click.option("--view/--no-view", "open_view", default=True, help="Open or reuse the live project viewer after success (default on). Its stable URL follows completed builds; version snapshots retain previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
-@click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
+@click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts. --label is optional.")
 @click.option(
     "--runtime",
     default=None,
@@ -838,13 +856,16 @@ def run(
             "Use --label or the deprecated --output alias, not both.",
             ctx=ctx,
         )
-    if output is None:
+    # A dry run never allocates a version, so a label has nothing to name.
+    # Requiring one there only cost agents a retry (friction check on #207).
+    if output is None and not dry_run:
         raise click.MissingParameter(
             ctx=ctx,
             param_hint="--label",
             param_type="option",
         )
-    validate_version_label(output)
+    if output is not None:
+        validate_version_label(output)
 
     # Reject unsupported --export formats before anything else — before the
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
@@ -972,7 +993,9 @@ def _run_impl(
 
     # Try routing through daemon. If reachable, this exits before returning.
     label_option = "--output" if ctx.meta.get("run_legacy_output") else "--label"
-    argv = ["run", script, label_option, output]
+    argv = ["run", script]
+    if output is not None:
+        argv.extend([label_option, output])
     if render:
         argv.extend(["--render", render])
     if export:
@@ -1027,10 +1050,36 @@ def _run_impl(
 
     script_path = Path(script)
     if not script_path.exists():
+        # Agents land here after copying a placeholder or guessing a name, so
+        # point at the scripts that do exist instead of ending the trail.
+        candidates = candidate_scripts()
+        message = f"Script file '{script}' not found."
+        if candidates:
+            # Keep every flag the caller passed (argv mirrors them for daemon
+            # routing) so a literal copy of the hint behaves the same way.
+            suggested = ["agentcad", *argv[:1]]
+            suggested += argv[2:]
+            if output is None and not dry_run:
+                suggested += ["--label", "LABEL"]
+            if no_daemon:
+                suggested.append("--no-daemon")
+            layout = get_project()
+            if layout.configured:
+                suggested += ["--build-dir", str(layout.build_root)]
+            message += f" Python scripts here: {', '.join(candidates)}."
+            next_actions = [
+                shlex.join([*suggested[:2], name, *suggested[2:]])
+                for name in candidates[:3]
+            ]
+        else:
+            message += " No Python scripts in this directory; write one first."
+            next_actions = ["agentcad docs quickstart"]
         _emit_run({
             "command": "run",
             "status": "error",
-            "message": f"Script file '{script}' not found",
+            "error_kind": "script_not_found",
+            "message": message,
+            "next_actions": next_actions,
         })
         sys.exit(1)
 

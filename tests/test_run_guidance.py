@@ -1,6 +1,57 @@
 """Focused tests for build123d execution-error recovery guidance."""
 
+import pytest
+
 from agentcad.commands.run import _execution_error_guidance
+
+
+@pytest.mark.parametrize("runtime", ["build123d", "cadquery"])
+def test_step_writer_guidance_applies_to_both_runtimes(runtime):
+    guidance = _execution_error_guidance(
+        "Script execution failed: name 'save_step' is not defined",
+        runtime, "save_step(result, 'manual.step')\nshow_object(result)",
+    )
+    assert "show_object(result)" in guidance["suggestion"]
+    assert "outputs.step" in guidance["suggestion"]
+
+
+@pytest.mark.parametrize("message", [
+    "Script execution failed: AttributeError: 'Report' object has no attribute 'write'",
+    "Script execution failed: ValueError: invalid shape",
+    "Script execution failed: FileNotFoundError: No such file or directory: 'input.step'",
+])
+def test_unrelated_errors_do_not_get_step_writer_guidance(message):
+    assert _execution_error_guidance(message, "build123d", "show_object(result)") == {}
+
+
+@pytest.mark.parametrize("runtime", ["build123d", "cadquery"])
+@pytest.mark.parametrize("name", ["write", "export"])
+@pytest.mark.parametrize("source", [
+    "{name}(report)\nshow_object(result)",
+    "{name}(report, 'report.txt')\nshow_object(result)",
+    "{name}(report)\nother_writer(result, 'manual.step')\nshow_object(result)",
+    "{name}(report)\nshow_object(result)\nresult.{name}('manual.step')",
+    "",
+    "syntax error!",
+])
+def test_generic_writer_name_error_requires_step_evidence(runtime, name, source):
+    message = f"Script execution failed: NameError: name '{name}' is not defined"
+    assert _execution_error_guidance(message, runtime, source.format(name=name)) == {}
+
+
+@pytest.mark.parametrize("name", ["write", "export"])
+@pytest.mark.parametrize("call", [
+    "{name}(result)",
+    "{name}(shape=result)",
+    "{name}(report, 'manual.step')",
+    "{name}(report, filename='manual.STP')",
+])
+def test_generic_writer_name_error_with_step_evidence(name, call):
+    guidance = _execution_error_guidance(
+        f"NameError: name '{name}' is not defined", "build123d",
+        call.format(name=name) + "\nshow_object(result)",
+    )
+    assert "outputs.step" in guidance["suggestion"]
 
 
 def test_method_iterability_guidance_requires_an_uncalled_part_method():

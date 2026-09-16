@@ -240,6 +240,15 @@ def execute(
         if not attr.startswith("_"):
             script_globals[attr] = getattr(_b3d, attr)
 
+    # Issue #192: generated scripts call Cylinder(diameter=10, h=20) and
+    # Box(..., center=(x, y, z)). Swap in subclasses that normalize the
+    # dimension aliases and reject placement keywords with a copyable fix.
+    # Installed on the build123d package too, so an explicit
+    # `from build123d import *` in the script picks up the same classes.
+    from agentcad.runners.build123d_compat import install_compat_primitives
+
+    script_globals.update(install_compat_primitives(_b3d))
+
     try:
         from agentcad import helpers as _helpers
     except ImportError:

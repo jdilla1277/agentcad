@@ -113,6 +113,16 @@ paths resolve from the project root, including from nested directories.
 `--label` names a version and deprecated `--output` is only a label alias.
 See `agentcad docs artifacts` for initialization, overrides, and recovery.
 
+Scripts should not export STEP themselves. Expose the intended geometry with
+`show_object(result)`; AgentCAD writes the canonical STEP file. Read its path
+from `outputs.step` in the run JSON (typically `vN_label/output.step`). A dry run
+does not write STEP and returns `outputs.step: null`. Do not call `save_step`,
+`write_step`, `export_step`, or guessed writer methods in generated scripts.
+Validation rejects recognizable manual STEP writer calls before script execution,
+including imported aliases and generic exporters with an explicit STEP destination.
+Remove those calls even if they work in standalone Python; only `outputs.step`
+identifies the tracked deliverable.
+
 **Write a script.** No imports needed — build123d primitives,
    `show_object`, and agentcad edit helpers are pre-injected by default.
    `show_object(result)` is required.
@@ -278,6 +288,8 @@ STL, GLB, or OBJ bytes.
 ## Script writing rules
 
 - `show_object(result)` is required — at least one call.
+- The same `show_object(result)` call accepts a build123d `Part`, `Compound`,
+  or raw OCP `TopoDS_Shape`; no manual conversion or STEP writer is needed.
 - These are pre-injected by default (no import needed):
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
@@ -354,7 +366,7 @@ Write the specification before building; run `check-spec` during Validate.
 | Command | Purpose |
 |---------|---------|
 | `agentcad run SCRIPT --label LABEL` | Execute script, produce STEP + metrics |
-| `agentcad run ... --dry-run` | Metrics only, no version consumed |
+| `agentcad run ... --dry-run` | Metrics only, no version consumed; `--label` optional |
 | `agentcad run ... --no-preview` | Suppress preview (on by default) |
 | `agentcad run ... --no-diff` | Suppress automatic prior-version comparison |
 | `agentcad run ... --no-view` | Suppress automatic browser review |

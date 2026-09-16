@@ -113,7 +113,7 @@ def test_run_mcp_passes_core_only_fast_path(monkeypatch):
 
     monkeypatch.setattr(server, "_invoke", fake_invoke)
     result = server.run(
-        "part.py", "fast", "/tmp/project",
+        "part.py", cwd="/tmp/project", output="fast",
         preview=False, diff=False, view=False,
     )
 
@@ -250,3 +250,26 @@ def test_docs_mcp_section():
     assert ".mcp.json" in result["content"]
     assert "agentcad.mcp" in result["content"]
     assert "measure" in result["content"]
+
+
+def test_run_mcp_dry_run_without_output_omits_label(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, cwd=None):
+        calls.append((args, cwd))
+        return {"status": "success"}
+
+    monkeypatch.setattr(server, "_invoke", fake_invoke)
+    result = server.run(
+        "part.py", cwd="/tmp/project", dry_run=True,
+        preview=False, diff=False, view=False,
+    )
+
+    assert result["status"] == "success"
+    assert calls == [(
+        [
+            "run", "part.py",
+            "--no-preview", "--no-diff", "--no-view", "--dry-run",
+        ],
+        "/tmp/project",
+    )]

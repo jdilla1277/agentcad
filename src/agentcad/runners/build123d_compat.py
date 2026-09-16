@@ -1,0 +1,334 @@
+"""Compatibility constructors for build123d primitives.
+
+Generated scripts routinely call ``Cylinder(diameter=10, height=20)``,
+``Cylinder(d=10, h=20)`` or ``Box(10, 20, 5, center=(0, 0, 10))``. Native
+build123d rejects every one of those with a bare
+``unexpected keyword argument`` TypeError, and the agent has to guess
+the fix. Issue #192 counted 35 such failures in a single benchmark run.
+
+This module wraps the primitives in thin subclasses that:
+
+* normalize high-confidence dimension aliases (``diameter``/``d`` ->
+  ``radius``, ``h`` -> ``height``, ...) before delegating to the native
+  ``__init__``;
+* fail clearly when an alias and its canonical name are both supplied;
+* reject placement keywords (``center=``, ``at=``, ``centered=``,
+  ``axis=``) with a copyable ``.translate(...)`` / ``align=`` /
+  ``rotation=`` example instead of a generic TypeError.
+
+Positional arguments are passed through untouched — native build123d
+semantics are preserved and never guessed at. The wrappers subclass the
+native classes, so ``isinstance`` checks, builder-context integration
+(``with BuildPart(): Cylinder(...)``) and every native keyword keep
+working exactly as before.
+"""
+
+from __future__ import annotations
+
+import inspect
+import math
+import numbers
+from typing import Any
+
+
+# Canonical parameter -> accepted aliases, per primitive.
+_DIMENSION_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "Cylinder": {
+        "radius": ("r", "diameter", "dia", "d"),
+        "height": ("h", "length"),
+    },
+    "Box": {
+        "length": ("l",),
+        "width": ("w",),
+        "height": ("h",),
+    },
+    "Circle": {
+        "radius": ("r", "diameter", "dia", "d"),
+    },
+    "Sphere": {
+        "radius": ("r", "diameter", "dia", "d"),
+    },
+    "Cone": {
+        "height": ("h",),
+    },
+}
+
+# Aliases whose value is a diameter and must be halved to get a radius.
+_DIAMETER_ALIASES = frozenset({"diameter", "dia", "d"})
+
+# Placement keywords that build123d primitives do not accept. Each maps to
+# the kind of guidance the agent needs.
+_PLACEMENT_KEYWORDS: dict[str, str] = {
+    "center": "position",
+    "centre": "position",
+    "at": "position",
+    "position": "position",
+    "pos": "position",
+    "location": "position",
+    "loc": "position",
+    "origin": "position",
+    "offset": "position",
+    "centered": "centered",
+    "centred": "centered",
+    "axis": "orientation",
+    "direction": "orientation",
+    "dir": "orientation",
+    "normal": "orientation",
+}
+
+_SKETCH_PRIMITIVES = frozenset({"Circle"})
+
+_COMPAT_MARKER = "__agentcad_compat__"
+
+
+class PrimitiveArgumentError(TypeError):
+    """Raised for alias conflicts, invalid alias values and placement keywords."""
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, numbers.Real) and not isinstance(value, bool)
+
+
+def _fmt(value: Any) -> str:
+    """Compact literal for building copyable examples."""
+    if _is_number(value):
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return repr(value)
+    return repr(value)
+
+
+def _positional_names(native_cls: type) -> list[str]:
+    params = list(inspect.signature(native_cls.__init__).parameters.values())
+    return [p.name for p in params[1:] if p.kind in (
+        p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD,
+    )]
+
+
+def _dimension_kwargs(class_name: str, kwargs: dict[str, Any]) -> str:
+    """Render the dimension keywords as they would appear in a call."""
+    alias_map = _DIMENSION_ALIASES.get(class_name, {})
+    parts = [
+        f"{name}={_fmt(value)}"
+        for name, value in kwargs.items()
+        if name in alias_map
+    ]
+    return ", ".join(parts)
+
+
+def _resolved_dimensions(
+    class_name: str, kwargs: dict[str, Any], skip: str,
+) -> dict[str, Any]:
+    """Best-effort canonical view of ``kwargs`` for a conflict message.
+
+    Skips the offending alias, halves diameters, and keeps the canonical
+    value when both were given, so the example reads as what the agent
+    most likely meant.
+    """
+    alias_map = _DIMENSION_ALIASES.get(class_name, {})
+    alias_to_canonical = {
+        alias: canonical
+        for canonical, aliases in alias_map.items()
+        for alias in aliases
+    }
+    resolved: dict[str, Any] = {}
+    for name, value in kwargs.items():
+        if name == skip:
+            continue
+        if name in alias_map:
+            resolved[name] = value
+        elif name in alias_to_canonical:
+            canonical = alias_to_canonical[name]
+            if canonical in resolved:
+                continue
+            if name in _DIAMETER_ALIASES and _is_number(value):
+                value = value / 2
+            resolved[canonical] = value
+    return resolved
+
+
+def _example_call(class_name: str, args: tuple, kwargs: dict[str, Any]) -> str:
+    """A copyable native call built from what the agent actually passed."""
+    rendered = [_fmt(a) for a in args]
+    dims = _dimension_kwargs(class_name, kwargs)
+    if dims:
+        rendered.append(dims)
+    if not rendered:
+        rendered.append("...")
+    return f"{class_name}({', '.join(rendered)})"
+
+
+def _vector_literal(value: Any, size: int) -> str | None:
+    if isinstance(value, (tuple, list)) and len(value) == size and all(
+        _is_number(v) for v in value
+    ):
+        return "(" + ", ".join(_fmt(v) for v in value) + ")"
+    return None
+
+
+def _placement_message(
+    class_name: str, keyword: str, value: Any, args: tuple, kwargs: dict[str, Any],
+) -> str:
+    kind = _PLACEMENT_KEYWORDS[keyword]
+    call = _example_call(class_name, args, kwargs)
+    is_sketch = class_name in _SKETCH_PRIMITIVES
+    head = f"{class_name}() does not accept '{keyword}='."
+
+    if kind == "centered" or isinstance(value, bool):
+        if value is True:
+            return (
+                f"{head} build123d already centers {class_name} on the origin, "
+                f"so drop the keyword: {call}"
+            )
+        if is_sketch:
+            return (
+                f"{head} Use align= to choose which corner sits at the origin: "
+                f"{call.rstrip(')')}, align=(Align.MIN, Align.MIN))"
+            )
+        return (
+            f"{head} Use align= to choose which corner sits at the origin: "
+            f"{call.rstrip(')')}, align=(Align.MIN, Align.MIN, Align.MIN)) "
+            f"puts the minimum corner at the origin and the shape extends "
+            f"in +X, +Y, +Z. build123d centers shapes by default."
+        )
+
+    if kind == "orientation":
+        return (
+            f"{head} Build along Z and rotate: "
+            f"{call.rstrip(')')}, rotation=(0, 90, 0)) points along X, "
+            f"rotation=(90, 0, 0) points along Y. Move it afterwards with "
+            f".translate((x, y, z))."
+        )
+
+    # Position-style placement.
+    if is_sketch:
+        vec = _vector_literal(value, 2) or "(x, y)"
+        return (
+            f"{head} Build at the origin, then move it: "
+            f"Pos{vec} * {call}. Inside a BuildSketch, use "
+            f"with Locations({vec}): {call}"
+        )
+    vec = _vector_literal(value, 3) or "(x, y, z)"
+    return (
+        f"{head} Build at the origin, then move it: "
+        f"{call}.translate({vec}) or Pos{vec} * {call}. Inside a BuildPart, "
+        f"use with Locations({vec}): {call}"
+    )
+
+
+def normalize_primitive_kwargs(
+    class_name: str, native_cls: type, args: tuple, kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Return ``kwargs`` with aliases normalized to native names.
+
+    Raises :class:`PrimitiveArgumentError` for alias conflicts, invalid
+    alias values, and placement keywords the native constructor does not
+    accept. Keywords that are neither aliases nor placement are passed
+    through untouched so native build123d errors still apply.
+    """
+    alias_map = _DIMENSION_ALIASES.get(class_name, {})
+    alias_to_canonical = {
+        alias: canonical
+        for canonical, aliases in alias_map.items()
+        for alias in aliases
+    }
+    positional = _positional_names(native_cls)
+    supplied_positionally = set(positional[: len(args)])
+
+    normalized = dict(kwargs)
+    for alias, canonical in alias_to_canonical.items():
+        if alias not in kwargs:
+            continue
+        value = normalized.pop(alias)
+        example = _example_call(
+            class_name, args, _resolved_dimensions(class_name, kwargs, skip=alias),
+        )
+        if canonical in kwargs:
+            raise PrimitiveArgumentError(
+                f"{class_name}() got both '{alias}=' and '{canonical}='. "
+                f"Pass only one of them, e.g. {example}"
+            )
+        if canonical in supplied_positionally:
+            index = positional.index(canonical)
+            raise PrimitiveArgumentError(
+                f"{class_name}() got '{alias}=' but {canonical} was already "
+                f"passed positionally (argument {index + 1} = {_fmt(args[index])}). "
+                f"Pass only one of them, e.g. {example}"
+            )
+        if canonical in normalized:
+            other = next(
+                a for a in alias_map[canonical] if a != alias and a in kwargs
+            )
+            raise PrimitiveArgumentError(
+                f"{class_name}() got both '{alias}=' and '{other}=' — they both "
+                f"set {canonical}. Pass only one, e.g. {example}"
+            )
+        if not _is_number(value) or not math.isfinite(value) or value <= 0:
+            raise PrimitiveArgumentError(
+                f"{class_name}({alias}=...) must be a positive number, got "
+                f"{value!r}."
+            )
+        if alias in _DIAMETER_ALIASES:
+            value = value / 2
+        normalized[canonical] = value
+
+    for keyword in _PLACEMENT_KEYWORDS:
+        if keyword in normalized:
+            value = normalized.pop(keyword)
+            raise PrimitiveArgumentError(
+                _placement_message(class_name, keyword, value, args, normalized)
+            )
+
+    return normalized
+
+
+def make_compat_primitive(native_cls: type) -> type:
+    """Subclass ``native_cls`` so its constructor accepts the aliases above."""
+    class_name = native_cls.__name__
+
+    def __init__(self, *args, **kwargs):
+        kwargs = normalize_primitive_kwargs(class_name, native_cls, args, kwargs)
+        native_cls.__init__(self, *args, **kwargs)
+
+    __init__.__wrapped__ = native_cls.__init__  # inspect.signature parity
+    __init__.__doc__ = native_cls.__init__.__doc__
+
+    return type(class_name, (native_cls,), {
+        "__init__": __init__,
+        "__doc__": native_cls.__doc__,
+        "__module__": __name__,
+        "__qualname__": class_name,
+        _COMPAT_MARKER: native_cls,
+    })
+
+
+def compat_primitives(b3d_module) -> dict[str, type]:
+    """Build (or reuse) the compatibility classes for ``b3d_module``."""
+    result: dict[str, type] = {}
+    for class_name in _DIMENSION_ALIASES:
+        current = getattr(b3d_module, class_name, None)
+        if current is None:
+            continue
+        if getattr(current, _COMPAT_MARKER, None) is not None:
+            result[class_name] = current  # already installed
+        else:
+            result[class_name] = make_compat_primitive(current)
+    return result
+
+
+def install_compat_primitives(b3d_module) -> dict[str, type]:
+    """Replace the primitives on the ``build123d`` package with the wrappers.
+
+    Scripts commonly start with ``from build123d import *`` even though
+    the runner pre-injects the API. Patching the package namespace means
+    that import — and ``import build123d as bd; bd.Cylinder(...)`` — picks
+    up the same forgiving constructors as the injected names. Idempotent:
+    a second call is a no-op. Only the package-level names are touched;
+    build123d's internal modules keep their native classes, which the
+    wrappers subclass, so ``isinstance`` checks inside build123d hold.
+    """
+    classes = compat_primitives(b3d_module)
+    for class_name, compat_cls in classes.items():
+        if getattr(b3d_module, class_name) is not compat_cls:
+            setattr(b3d_module, class_name, compat_cls)
+    return classes
