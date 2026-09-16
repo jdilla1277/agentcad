@@ -52,6 +52,19 @@ _DAEMON_CHILD_ENV = "_AGENTCAD_DAEMON_CHILD"
 # a pathological part becomes a timeout instead of a hang.
 MESH_INPROCESS_FACE_LIMIT = 500
 
+# ``run`` judges the reloaded STEP; the in-memory source is validated only to
+# feed the ``step_round_trip`` diagnostic. Above this many faces the kernel
+# check and the tessellation are not repeated on the source: on a 2,000-face
+# imported part each of them costs a minute or more, and the delivered STEP
+# runs both anyway. The cheap layers (shell closure, structure, advisory)
+# still run so the round trip can flag a lost body or an opened shell.
+ROUND_TRIP_FULL_FACE_LIMIT = 500
+_ROUND_TRIP_EXPENSIVE_LAYERS = ("brep_check", "mesh_manifold")
+ROUND_TRIP_SKIP_REASON = (
+    f"Not run on the in-memory source above {ROUND_TRIP_FULL_FACE_LIMIT} faces; "
+    "the reloaded STEP runs this layer and its verdict gates."
+)
+
 # Tessellation deflection relative to part size, clamped. Matches the policy
 # of the downstream gate this layer is measured against, so the parity corpus
 # exercises the same regime.
@@ -112,10 +125,21 @@ def validate_shape(
     mesh_parallel: bool | None = None,
     mesh_timeout_s: float | None = None,
     evidence_limit: int = _EVIDENCE_LIMIT,
+    skip_layers: tuple[str, ...] = (),
+    skip_reason: str | None = None,
 ) -> dict:
-    """Run every layer of ``profile`` on a loaded shape and return the report."""
+    """Run every layer of ``profile`` on a loaded shape and return the report.
+
+    ``skip_layers`` names layers to leave unrun (status ``skipped``, with
+    ``skip_reason`` as their message). A skipped gating layer leaves
+    ``is_valid`` null: the report says nothing about that layer instead of
+    implying it passed.
+    """
     if profile not in PROFILES:
         raise ValueError(f"Unknown validation profile: {profile}")
+    unknown_layers = set(skip_layers) - set(_LAYERS_BY_NAME)
+    if unknown_layers:
+        raise ValueError(f"Unknown validation layers: {sorted(unknown_layers)}")
 
     if mesh_parallel is None:
         mesh_parallel = os.environ.get(_DAEMON_CHILD_ENV) != "1"
@@ -123,12 +147,19 @@ def validate_shape(
     layers: dict[str, dict] = {name: {"status": "pass", "duration_ms": 0} for name in _LOADER_LAYERS}
     verdict_blocked_by: str | None = None
     undetermined: str | None = None
+    skipped_gating: str | None = None
 
     for layer in LAYERS:
         if layer.name in _LOADER_LAYERS:
             continue
         if profile == "kernel" and layer.name in _KERNEL_PROFILE_SKIPS:
             layers[layer.name] = {"status": "skipped", "message": "Not run under the kernel profile."}
+            continue
+        if layer.name in skip_layers:
+            layers[layer.name] = {"status": "skipped",
+                                  "message": skip_reason or "Not run on this shape at the caller's request."}
+            if layer.gates and skipped_gating is None:
+                skipped_gating = layer.name
             continue
         if layer.gates and (verdict_blocked_by or undetermined):
             reason = verdict_blocked_by or undetermined
@@ -153,7 +184,20 @@ def validate_shape(
             elif entry["status"] in ("timeout", "error") and undetermined is None:
                 undetermined = layer.name
 
+    if verdict_blocked_by is None and undetermined is None:
+        undetermined = skipped_gating
     return _assemble(profile, layers, first_failure=verdict_blocked_by, undetermined=undetermined)
+
+
+def round_trip_skip_layers(topo_shape) -> tuple[str, ...]:
+    """Layers ``run`` leaves out when validating the in-memory source.
+
+    Returns ``()`` for shapes at or below ``ROUND_TRIP_FULL_FACE_LIMIT`` faces,
+    where every layer is cheap, and the expensive layers above it.
+    """
+    if _face_count(topo_shape) <= ROUND_TRIP_FULL_FACE_LIMIT:
+        return ()
+    return _ROUND_TRIP_EXPENSIVE_LAYERS
 
 
 def load_failure_report(layer_name: str, message: str, *, profile: str = "deliverable") -> dict:
@@ -219,6 +263,11 @@ def _layer_brep_check(shape, *, evidence_limit=_EVIDENCE_LIMIT, **_) -> dict:
             from agentcad.topo_ids import _indexed_map
 
             def statuses(entity):
+                # IsValid(entity) is a cheap lookup; reading Status() through
+                # the bindings costs milliseconds per entity, which on large
+                # parts turned this evidence walk into minutes for one defect.
+                if analyzer.IsValid(entity):
+                    return set()
                 result = analyzer.Result(entity)
                 return {s.name for s in result.Status() if s.value != 0} if result else set()
 
