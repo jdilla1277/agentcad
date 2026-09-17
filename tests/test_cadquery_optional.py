@@ -123,6 +123,8 @@ class TestMissingExtra:
         assert data["status"] == "error"
         assert data["message"] == dispatch.MISSING_CADQUERY_MESSAGE
         assert data["suggestion"] == dispatch.PORT_TO_BUILD123D_HINT
+        assert data["runtime"] == CQ
+        assert data["runtime_source"] == "command"
         assert "Traceback" not in result.output
         # No version consumed, no directory created.
         assert not list(isolated_dir.glob("v1_*"))
@@ -146,6 +148,8 @@ class TestMissingExtra:
         data = json.loads(result.output)
         assert data["status"] == "error"
         assert data["message"] == dispatch.MISSING_CADQUERY_MESSAGE
+        assert data["runtime"] == CQ
+        assert data["runtime_source"] == "project"
 
     def test_mismatch_in_build123d_project_names_the_real_blocker(
         self, no_cadquery, runner, isolated_dir
