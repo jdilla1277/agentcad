@@ -196,8 +196,14 @@ identifies the tracked deliverable.
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
-  `replace_face`, `copy_shape`, `safe_cut`, `safe_intersection`, `safe_fuse`,
+  `copy_shape`, `safe_cut`, `safe_intersection`, `safe_fuse`,
   `translate`, `rotate`, `annular_boss`, and `raise_annulus`.
+- For explicit imports and editor completion, import those same AgentCAD
+  callables from the stable namespace:
+  ```python
+  from agentcad.api import load_step, safe_cut, translate, show_object
+  ```
+  Import primitives and types such as `Box` and `Vector` from `build123d`.
 - For imported STEP/BREP edits, `load_step(path)` returns a build123d `Part`:
   ```python
   base = load_step("v1_vendor/output.step")
@@ -314,6 +320,10 @@ _CADQUERY_SCRIPT_RULES = """## Script writing rules
   part = cq.Workplane('XY').box(10, 20, 5)
   show_object(part)
   ```
+- Geometry helpers such as `safe_cut` and `translate` may also be imported
+  explicitly from `agentcad.api`. The CadQuery-owned `cq`, `show_object`, and
+  `assemble` bindings are intentionally pre-injected runtime adapters; keep
+  using them without an `agentcad.api` import in compatibility scripts.
 - Helpers that operate on `TopoDS_Shape` use `.val().wrapped` as the bridge:
   ```python
   part = cq.Workplane('XY').box(10, 20, 5).val().wrapped

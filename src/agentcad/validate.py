@@ -3,7 +3,28 @@
 import ast
 import importlib
 
-from agentcad.output_contract import manual_step_export_checks, missing_output_guidance, step_export_guidance
+from agentcad.output_contract import (
+    STEP_OUTPUT_GUIDANCE,
+    manual_step_export_checks,
+    missing_output_guidance,
+    step_export_guidance,
+)
+
+
+# Kept lightweight and local: validation runs before the CAD stack is imported
+# or daemon routing begins. ``agentcad.api.__all__`` is covered against this
+# list in tests so the targeted guidance cannot silently drift.
+_AGENTCAD_API_NAMES = frozenset({
+    "show_object", "show_assembly", "show_compound",
+    "load_step", "load_step_shape", "pick_face", "pick_edge",
+    "fillet_edges", "chamfer_edges", "shell_faces", "split_by_plane",
+    "cut_pocket", "boss", "loft_sections", "tapered_sweep", "naca_wire",
+    "mirror_fuse", "copy_shape", "safe_cut", "safe_intersection", "safe_fuse",
+    "translate", "rotate", "bbox_point", "place_at", "assemble",
+    "annular_boss", "raise_annulus", "ellipse_wire", "spline_wire",
+    "polygon_wire", "rounded_rect_wire", "elliptical_sweep",
+    "involute_gear_profile",
+})
 
 
 def validate_script(source, output_calls=None, *, check_imports=True):
@@ -69,13 +90,15 @@ def validate_script(source, output_calls=None, *, check_imports=True):
                         **step_export_guidance(f"module '{alias.name}'"),
                     })
         elif isinstance(node, ast.ImportFrom):
-            if node.module and not _can_import(node.module):
-                errors.append({
-                    "check": "import_error",
-                    "severity": "error",
-                    "message": f"Import error: module '{node.module}' not found",
-                    **step_export_guidance(f"module '{node.module}'"),
-                })
+            if not node.module:
+                continue
+            module_exists = _can_import(node.module)
+            for alias in node.names:
+                if alias.name == "*" and module_exists:
+                    continue
+                error = _from_import_error(node.module, alias.name, module_exists)
+                if error:
+                    errors.append(error)
 
     return errors
 
@@ -124,7 +147,11 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
         visited.add(id(node))
         if isinstance(node, ast.Call):
             func = node.func
-            if isinstance(func, ast.Name) and func.id in output_calls:
+            if (
+                isinstance(func, ast.Name) and func.id in output_calls
+            ) or (
+                isinstance(func, ast.Attribute) and func.attr in output_calls
+            ):
                 return True
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             for function in functions.get(node.id, []):
@@ -156,3 +183,86 @@ def _can_import(module_name):
         return True
     except (ImportError, ModuleNotFoundError):
         return False
+
+
+def _from_import_error(module_name, name, module_exists):
+    """Return targeted guidance for an invalid ``from ... import ...``."""
+    if module_exists:
+        try:
+            module = importlib.import_module(module_name)
+            getattr(module, name)
+            return None
+        except (AttributeError, ImportError, ModuleNotFoundError):
+            try:
+                importlib.import_module(f"{module_name}.{name}")
+                return None
+            except (ImportError, ModuleNotFoundError):
+                pass
+
+    if module_name != "agentcad.api" and name in _AGENTCAD_API_NAMES:
+        if (
+            not module_exists
+            or module_name == "agentcad"
+            or module_name == "agentcad.helpers"
+            or module_name == "build123d"
+            or module_name.startswith("build123d.")
+        ):
+            return {
+                "check": "import_error",
+                "severity": "error",
+                "message": (
+                    f"Import error: '{name}' is an AgentCAD authoring helper, "
+                    f"not exported by '{module_name}'. Use "
+                    f"`from agentcad.api import {name}`, or remove the import "
+                    "because AgentCAD pre-injects it into run scripts."
+                ),
+                "suggestion": f"from agentcad.api import {name}",
+                "more_at": "agentcad docs preamble",
+            }
+
+    if module_name == "build123d" and name == "Vec":
+        return {
+            "check": "import_error",
+            "severity": "error",
+            "message": (
+                "Import error: build123d has no 'Vec' type. Use "
+                "`from build123d import Vector`."
+            ),
+            "suggestion": "from build123d import Vector",
+            "more_at": "agentcad docs preamble",
+        }
+
+    step_writers = {
+        "save_step", "write_step", "write_to_step", "export_step",
+        "exportStep", "write_step_shape", "STEPControl_Writer",
+        "STEPCAFControl_Writer",
+    }
+    if (
+        name in step_writers
+        or module_name in {"build123d.io", "build123d.export"}
+        or (module_name == "build123d" and name in {"io", "export"})
+    ):
+        return {
+            "check": "import_error",
+            "severity": "error",
+            "message": (
+                f"Import error: STEP writer '{name}' from '{module_name}' is "
+                "not part of the AgentCAD authoring workflow."
+            ),
+            "suggestion": STEP_OUTPUT_GUIDANCE,
+            "more_at": "agentcad docs preamble",
+        }
+
+    if not module_exists:
+        return {
+            "check": "import_error",
+            "severity": "error",
+            "message": f"Import error: module '{module_name}' not found",
+            **step_export_guidance(f"module '{module_name}'"),
+        }
+
+    return {
+        "check": "import_error",
+        "severity": "error",
+        "message": f"Import error: '{name}' is not exported by '{module_name}'",
+    }
