@@ -1167,7 +1167,7 @@ def _run_impl(
     from agentcad.runners import dispatch
 
     try:
-        raw_source = script_path.read_text()
+        raw_source = script_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         _emit_run({
             "command": "run", "status": "error", "error_kind": "script_unreadable",
