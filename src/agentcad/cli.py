@@ -138,6 +138,7 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
                          outputs.glb; viewer_glb normally generates separately.
+                         STEP is always produced; read outputs.step.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
@@ -587,10 +588,32 @@ class _LoggingGroup(click.Group):
 
         invalid_option = payload["invalid_option"]
         if invalid_option == "--runtime" and payload["error_kind"] == "invalid_value":
+            from agentcad.project import resolve_project
+            from agentcad.runners.dispatch import DEFAULT_RUNTIME
+
+            # Click rejects the choice before project_options runs. Honor the
+            # recovered --build-dir instead of inspecting an unrelated history.
+            build_dir = None
+            for index, token in enumerate(kept):
+                if token == "--build-dir" and index + 1 < len(kept):
+                    build_dir = kept[index + 1]
+                elif token.startswith("--build-dir="):
+                    build_dir = token.partition("=")[2]
+            try:
+                configured = resolve_project(build_dir).read_manifest().get("runtime")
+            except ProjectError:
+                configured = None
             message += (
                 " --runtime names the CAD library, not the language; scripts "
                 "are always Python. Omit it to use the project runtime."
             )
+            if configured in {"build123d", "cadquery"}:
+                message += f" This project uses {configured} (--runtime {configured})."
+            else:
+                message += (
+                    f" Unpinned projects detect source syntax, then default to "
+                    f"{DEFAULT_RUNTIME}; supported runtimes are build123d and cadquery."
+                )
         elif (
             payload["error_kind"] == "unknown_option"
             and invalid_option in self._RUN_SCRIPT_OPTION_SPELLINGS

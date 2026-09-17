@@ -47,18 +47,16 @@ def _is_version_dir(directory):
 @project_options
 def export_cmd(step_file, formats, no_daemon):
     """Export a STEP file to mesh formats (STL, GLB, OBJ)."""
-    # Try routing through daemon. Exits before returning if reachable.
-    maybe_route_through_daemon(
-        ["export", step_file, "--format", formats],
-        no_daemon=no_daemon,
-    )
-
     step_path = Path(step_file)
-    if not step_path.exists():
+    if not step_path.is_file():
         click.echo(json.dumps({
             "command": "export",
             "status": "error",
-            "message": f"STEP file '{step_file}' not found",
+            "message": (
+                f"STEP file '{step_file}' not found or is not a file. "
+                "Use outputs.step from a successful run; agentcad context lists versions."
+            ),
+            "next_actions": ["agentcad context"],
         }))
         sys.exit(1)
 
@@ -69,6 +67,7 @@ def export_cmd(step_file, formats, no_daemon):
             "command": "export",
             "status": "error",
             "message": NO_FORMATS_MESSAGE,
+            "next_actions": ["agentcad export --help"],
         }))
         sys.exit(1)
     invalid = unsupported_export_formats(formats)
@@ -76,9 +75,20 @@ def export_cmd(step_file, formats, no_daemon):
         click.echo(json.dumps({
             "command": "export",
             "status": "error",
-            "message": f"Unsupported format(s): {', '.join(invalid)}. Supported: stl, glb, obj",
+            "message": (
+                f"Unsupported format(s): {', '.join(invalid)}. Supported: stl, glb, obj. "
+                "The input is already STEP; a successful run returns it in outputs.step. "
+                "Export is only for mesh formats."
+            ),
+            "next_actions": ["agentcad export --help"],
         }))
         sys.exit(1)
+
+    # Try routing through daemon. Exits before returning if reachable.
+    maybe_route_through_daemon(
+        ["export", step_file, "--format", formats],
+        no_daemon=no_daemon,
+    )
 
     # Import STEP (silencer + clean errors via shared helper)
     from agentcad.step_io import load_cad_shape

@@ -90,6 +90,19 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon, hi
             param_hint="--size",
         )
 
+    step_path = Path(step_file)
+    if not step_path.is_file():
+        click.echo(json.dumps({
+            "command": "render",
+            "status": "error",
+            "message": (
+                f"STEP file '{step_file}' not found or is not a file. "
+                "Use outputs.step from a successful run; agentcad context lists versions."
+            ),
+            "next_actions": ["agentcad context"],
+        }))
+        sys.exit(1)
+
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["render", step_file, "--view", view]
     if highlight:
@@ -114,15 +127,6 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon, hi
         render_shape,
         render_shape_custom,
     )
-
-    step_path = Path(step_file)
-    if not step_path.exists():
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": f"STEP file '{step_file}' not found",
-        }))
-        sys.exit(1)
 
     # Validate --no-fit requires --focus
     if no_fit and not focus:

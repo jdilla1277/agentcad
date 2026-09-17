@@ -21,10 +21,14 @@ except ModuleNotFoundError:  # Python 3.10
 
 
 class ProjectError(Exception):
-    def __init__(self, reason: str, message: str, suggestion: str):
+    def __init__(
+        self, reason: str, message: str, suggestion: str,
+        *, next_actions: list[str] | None = None,
+    ):
         super().__init__(message)
         self.reason = reason
         self.suggestion = suggestion
+        self.next_actions = next_actions if next_actions is not None else [suggestion]
 
     def payload(self, command: str) -> dict:
         return {
@@ -33,6 +37,7 @@ class ProjectError(Exception):
             "reason": self.reason,
             "message": str(self),
             "suggestion": self.suggestion,
+            "next_actions": self.next_actions,
         }
 
 
@@ -88,6 +93,7 @@ class ProjectLayout:
             "build_root_not_initialized",
             f"No AgentCAD manifest at {self.manifest_path}; existing histories were left unchanged.",
             f"Run `agentcad init --build-dir {shlex.quote(str(self.build_root))}` from {self.project_root} to initialize a fresh history.",
+            next_actions=[shlex.join(["agentcad", "init", "--build-dir", str(self.build_root)])],
         )
 
     def read_manifest(self) -> dict:
@@ -197,13 +203,15 @@ def resolve_project(
         if value is not None and not value.strip():
             raise ValueError("build directory must not be empty")
         build_root = (root / (value if value is not None else ".")).resolve()
-        if build_root.exists() and not build_root.is_dir():
-            raise ValueError("path is an existing file, not a directory")
+        for ancestor in (build_root, *build_root.parents):
+            if ancestor.exists() and not ancestor.is_dir():
+                raise ValueError(f"{ancestor} is an existing file, not a directory")
     except (OSError, ValueError, RuntimeError) as exc:
         raise ProjectError(
             "invalid_build_root",
             f"Invalid build directory {value!r}: {exc}",
-            "Choose a directory with --build-dir.",
+            "Choose a directory with --build-dir, for example --build-dir ./build; "
+            "initialize it with agentcad init --build-dir ./build before running.",
         ) from exc
     return ProjectLayout(root, build_root, source)
 
@@ -223,7 +231,8 @@ def validate_version_label(label: str) -> None:
         raise ProjectError(
             "invalid_version_label",
             "Version labels cannot contain path separators.",
-            "Use --label for a simple name and --build-dir for the destination.",
+            "Use --label for a simple name (for example --label first) and "
+            "--build-dir for the destination. Read outputs.step for the generated STEP path.",
         )
 
 
