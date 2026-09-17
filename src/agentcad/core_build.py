@@ -80,24 +80,32 @@ def apply_validation(metrics: dict, report: dict) -> dict:
     return metrics
 
 
-def validated_metrics(topo_shape, *, profile: str = "deliverable") -> tuple[dict, dict]:
+def validated_metrics(
+    topo_shape, *, profile: str = "deliverable", source_path=None
+) -> tuple[dict, dict]:
     """Metrics plus the layered validation report for an in-memory shape.
 
     Commands that operate on a file (import, measure, inspect, recover) use
     this directly: the loaded shape is the artifact. ``run`` validates the
     STEP it is about to deliver instead; see ``validate_delivered_step``.
+    When ``source_path`` is given the validation runs through
+    ``bounded_validate_file`` so a large file gets the worker budget.
     """
     from agentcad.metrics import compute_metrics
-    from agentcad.validation import validate_shape
+    from agentcad.validation import bounded_validate_file, validate_shape
 
     # The report's kernel layer runs on this same shape; do not run it twice.
     metrics = compute_metrics(topo_shape, check_validity=False)
-    report = validate_shape(topo_shape, profile=profile)
+    if source_path is not None:
+        report = bounded_validate_file(source_path, profile=profile)
+        report.pop("timings", None)
+    else:
+        report = validate_shape(topo_shape, profile=profile)
     return apply_validation(metrics, report), report
 
 
 def validate_delivered_step(
-    step_path, *, profile: str = "deliverable", timings: dict | None = None
+    step_path, *, profile: str = "deliverable", timings: dict | None = None, on_wait=None
 ) -> dict:
     """Validate a STEP file the way every downstream consumer will see it.
 
@@ -112,24 +120,21 @@ def validate_delivered_step(
     """
     import time
 
-    from agentcad.native_io import suppress_native_output
-    from agentcad.step_io import load_cad_shape
-    from agentcad.validation import load_failure_report, validate_shape
+    from agentcad.validation import bounded_validate_file
 
     started = time.perf_counter()
-    try:
-        with suppress_native_output():
-            shape = load_cad_shape(step_path)
-    except Exception as exc:
-        if timings is not None:
-            timings["reload_ms"] = round((time.perf_counter() - started) * 1000)
-        return load_failure_report("file_parse", f"{type(exc).__name__}: {exc}", profile=profile)
+    report = bounded_validate_file(step_path, profile=profile, on_wait=on_wait)
+    total_ms = round((time.perf_counter() - started) * 1000)
+    worker_timings = report.pop("timings", None) or {}
     if timings is not None:
-        timings["reload_ms"] = round((time.perf_counter() - started) * 1000)
-        started = time.perf_counter()
-    report = validate_shape(shape, profile=profile)
-    if timings is not None:
-        timings["delivered_validation_ms"] = round((time.perf_counter() - started) * 1000)
+        if "reload_ms" in worker_timings:
+            timings["reload_ms"] = worker_timings["reload_ms"]
+        if "delivered_validation_ms" in worker_timings:
+            timings["delivered_validation_ms"] = worker_timings["delivered_validation_ms"]
+        elif "reload_ms" in worker_timings and report.get("first_failure") not in ("file_parse", "kernel_load"):
+            timings["delivered_validation_ms"] = max(total_ms - worker_timings["reload_ms"], 0)
+        elif report.get("worker") == "subprocess":
+            timings["delivered_validation_ms"] = total_ms
     return report
 
 
@@ -147,10 +152,13 @@ def validation_warning(report: dict) -> str | None:
     if report.get("is_valid") is not None:
         return None
     layer = report.get("undetermined_layer") or "a validation layer"
+    budget = report.get("budget_s")
+    budget_text = f" within its {budget:g}s budget" if budget else ""
     return (
-        f"Validation could not finish: {layer.replace('_', ' ')} did not complete, so "
+        f"Validation could not finish: {layer.replace('_', ' ')} did not complete{budget_text}, so "
         "is_valid is null. The version was saved; rerun with a larger "
-        "AGENTCAD_MESH_VALIDATION_TIMEOUT_S or inspect the file to get a verdict."
+        "AGENTCAD_VALIDATION_TIMEOUT_S (or AGENTCAD_MESH_VALIDATION_TIMEOUT_S for "
+        "the mesh layer alone) or inspect the file to get a verdict."
     )
 
 
