@@ -583,6 +583,13 @@ _ROTATE_USAGE = (
     "Use rotate(shape, axis, angle_deg), e.g. rotate(shape, 'Z', 90); "
     "shape, axis, and angle_deg are required."
 )
+_BBOX_POINT_USAGE = (
+    "Use bbox_point(shape, x='center', y='center', z='center'); each axis "
+    "must be 'min', 'center', or 'max'."
+)
+_PLACE_AT_USAGE = (
+    "Use place_at(shape, from_pt=(x, y, z), to_pt=(x, y, z))."
+)
 
 
 def _transform_shape(shape, usage):
@@ -692,17 +699,18 @@ def bbox_point(shape, x="center", y="center", z="center"):
     Each axis takes "min", "center", or "max".
 
     Args:
-        shape: TopoDS_Shape.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape.
         x, y, z: One of "min", "center", "max".
 
     Returns:
         Tuple (x, y, z) of floats.
     """
+    topo = _transform_shape(shape, _BBOX_POINT_USAGE)
     valid = ("min", "center", "max")
     for name, val in [("x", x), ("y", y), ("z", z)]:
         if val not in valid:
             raise ValueError(
-                f"Invalid value '{val}' for {name}. Must be one of: {', '.join(valid)}"
+                f"Invalid value {val!r} for {name}. {_BBOX_POINT_USAGE}"
             )
 
     # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
@@ -712,9 +720,9 @@ def bbox_point(shape, x="center", y="center", z="center"):
     # place_at / assemble would mis-seat NURBS parts. AddOptimal_s gives a
     # tight box on the same basis as `agentcad measure`. Clean_s first to
     # drop cached triangulation (matches metrics.compute_metrics).
-    BRepTools.Clean_s(shape)
+    BRepTools.Clean_s(topo)
     box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(shape, box)
+    BRepBndLib.AddOptimal_s(topo, box)
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
 
     def _pick(lo, hi, spec):
@@ -731,19 +739,31 @@ def place_at(shape, from_pt, to_pt):
     """Translate shape so from_pt moves to to_pt.
 
     Args:
-        shape: TopoDS_Shape.
-        from_pt: (x, y, z) source point.
-        to_pt: (x, y, z) target point.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape.
+        from_pt: (x, y, z) source point or three-coordinate Vector.
+        to_pt: (x, y, z) target point or three-coordinate Vector.
 
     Returns:
         TopoDS_Shape at the new position.
     """
-    return translate(
-        shape,
-        to_pt[0] - from_pt[0],
-        to_pt[1] - from_pt[1],
-        to_pt[2] - from_pt[2],
-    )
+    topo = _transform_shape(shape, _PLACE_AT_USAGE)
+
+    def _point(value, name):
+        vector = getattr(value, "wrapped", value)
+        if isinstance(vector, gp_Vec):
+            coordinates = (vector.X(), vector.Y(), vector.Z())
+        elif isinstance(value, (tuple, list)) and len(value) == 3:
+            coordinates = value
+        else:
+            raise TypeError(f"{name} must contain three coordinates. {_PLACE_AT_USAGE}")
+        return tuple(
+            _transform_number(coordinate, f"{name}[{index}]", _PLACE_AT_USAGE)
+            for index, coordinate in enumerate(coordinates)
+        )
+
+    source = _point(from_pt, "from_pt")
+    target = _point(to_pt, "to_pt")
+    return translate(topo, *(end - start for start, end in zip(source, target)))
 
 
 def assemble(*shapes):
