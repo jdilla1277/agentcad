@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from build123d import Box, Compound, Vector
+from build123d.topology import Shape as B3dShape
 from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS_Shape
@@ -20,9 +21,19 @@ def shape(request):
     return box if request.param == "wrapped" else box.wrapped
 
 
+def _topo(shape):
+    return getattr(shape, "wrapped", shape)
+
+
 def _assert_independent(source, result):
-    raw = getattr(source, "wrapped", source)
-    assert isinstance(result, TopoDS_Shape)
+    raw = _topo(source)
+    # Issue #194: the result stays at the caller's abstraction level.
+    if isinstance(source, TopoDS_Shape):
+        assert isinstance(result, TopoDS_Shape)
+    else:
+        assert isinstance(result, B3dShape)
+        assert isinstance(result.wrapped, TopoDS_Shape)
+    result = _topo(result)
     assert not raw.IsPartner(result)
     original_face = TopExp_Explorer(raw, TopAbs_FACE).Current()
     result_face = TopExp_Explorer(result, TopAbs_FACE).Current()
@@ -36,8 +47,8 @@ def _assert_independent(source, result):
 def test_translation_forms_move_without_mutating_source(shape, offset):
     result = translate(shape, *offset)
     assert bbox_point(result) == pytest.approx((50, -40, 30))
-    assert bbox_point(getattr(shape, "wrapped", shape)) == pytest.approx((0, 0, 0))
-    assert compute_metrics(result)["volume"] == pytest.approx(6000)
+    assert bbox_point(shape) == pytest.approx((0, 0, 0))
+    assert compute_metrics(_topo(result))["volume"] == pytest.approx(6000)
     _assert_independent(shape, result)
 
 
@@ -58,9 +69,9 @@ def test_zero_translation_copies_topology(shape, offset):
 ])
 def test_rotation_preserves_source_and_volume(shape, axis, expected_size):
     result = rotate(shape=shape, axis=axis, angle_deg=90)
-    assert tuple(Compound(result).bounding_box().size) == pytest.approx(expected_size)
-    assert tuple(Compound(getattr(shape, "wrapped", shape)).bounding_box().size) == pytest.approx((10, 20, 30))
-    assert compute_metrics(result)["volume"] == pytest.approx(6000)
+    assert tuple(Compound(_topo(result)).bounding_box().size) == pytest.approx(expected_size)
+    assert tuple(Compound(_topo(shape)).bounding_box().size) == pytest.approx((10, 20, 30))
+    assert compute_metrics(_topo(result))["volume"] == pytest.approx(6000)
     _assert_independent(shape, result)
 
 

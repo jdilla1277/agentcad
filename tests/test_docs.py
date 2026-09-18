@@ -772,8 +772,10 @@ def test_docs_build123d_mentions_annular_edit_helpers(runner):
     assert "annular_boss" in content
     assert "raise_annulus" in content
     assert "load_step_shape" in content
-    assert "Compound(result)" in content
-    assert "fragile boolean fuse" in content
+    # Issue #194: the Compound(raw) idiom is gone; helpers keep the input kind.
+    assert "Compound(result)" not in content
+    assert "same kind" in content
+    assert "fragile boolean" in content
     assert "loft_sections([lower, upper])" in content
     assert "copy_shape" in content
     assert "independent geometry copy" in content

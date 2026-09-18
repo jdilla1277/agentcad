@@ -156,6 +156,21 @@ def execute(
                 "edits, use `load_step_shape(path)`, build a raw TopoDS "
                 "feature/compound, and pass that to `show_object()`."
             )
+        if _wraps_bare_solid(obj):
+            # Issue #194: `Compound(raw_solid)` / `Part(raw_solid)` builds a
+            # wrapper whose own .volume is 0 and whose iteration yields
+            # shells, while the run JSON (computed on .wrapped) reports the
+            # real volume. Flag the mismatch instead of letting the script's
+            # own checks disagree with the output.
+            _warnings.warn(
+                f"show_object() received a {type(obj).__name__} wrapping a "
+                "bare solid rather than a compound; its .volume reads 0 and "
+                "iterating it yields shells. Pass the raw shape to "
+                "show_object() directly, wrap it with Solid(raw), or use the "
+                "pre-injected helpers, which return build123d shapes for "
+                "build123d input.",
+                UserWarning,
+            )
         color = None
         if isinstance(options, dict):
             if id is None:
@@ -187,26 +202,31 @@ def execute(
         """
         nonlocal assembly_requested
 
-        if isinstance(shapes, Shape):
+        if isinstance(shapes, Shape) or _is_topods_shape(shapes):
             children = [shapes]
         else:
             try:
                 children = list(shapes)
             except TypeError as exc:
                 raise TypeError(
-                    "show_assembly() expects a build123d Shape or an iterable "
-                    f"of Shapes, got {type(shapes).__name__}"
+                    "show_assembly() expects a build123d Shape, a raw OCP "
+                    "TopoDS_Shape, or an iterable of them, got "
+                    f"{type(shapes).__name__}"
                 ) from exc
 
         if not children:
             raise TypeError("show_assembly() received no shapes.")
 
-        bad = [type(s).__name__ for s in children if not isinstance(s, Shape)]
+        bad = [
+            type(s).__name__ for s in children
+            if not isinstance(s, Shape) and not _is_topods_shape(s)
+        ]
         if bad:
             raise TypeError(
-                "show_assembly() expects only build123d Shape objects; "
-                f"got {', '.join(bad)}"
+                "show_assembly() expects build123d Shape objects or raw OCP "
+                f"TopoDS_Shape values; got {', '.join(bad)}"
             )
+        children = [_as_build123d(s) for s in children]
 
         color = None
         if isinstance(options, dict):
@@ -269,15 +289,12 @@ def execute(
     # scripts. Substitute a build123d-native version that accepts either
     # build123d Shapes or raw OCP TopoDS_* and returns a Compound.
     def _b3d_assemble(*shapes):
-        from build123d import Compound, Shape
+        from build123d import Compound
 
-        wrapped = []
-        for s in shapes:
-            if isinstance(s, Shape):
-                wrapped.append(s)
-            else:
-                wrapped.append(Compound(s))
-        return Compound(children=wrapped)
+        # Raw shapes are wrapped by topology type. `Compound(raw_solid)` is
+        # NOT the right idiom: it yields a wrapper with zero volume whose
+        # iteration walks shells (issue #194).
+        return Compound(children=[_as_build123d(s) for s in shapes])
 
     script_globals["assemble"] = _b3d_assemble
 
@@ -474,6 +491,7 @@ def _fillet_edges(shape, ids, r: float):
     `ids` may be a single int or a list of ints. `r` is the fillet radius.
     Returns a build123d Part. Out-of-range IDs raise ValueError.
     """
+    shape = _as_build123d(shape)
     edges = [_pick_edge(shape, i) for i in _coerce_id_list(ids)]
     return shape.fillet(radius=r, edge_list=edges)
 
@@ -484,6 +502,7 @@ def _chamfer_edges(shape, ids, d: float):
     `ids` may be a single int or a list of ints. `d` is the chamfer distance.
     Returns a build123d Part. Out-of-range IDs raise ValueError.
     """
+    shape = _as_build123d(shape)
     edges = [_pick_edge(shape, i) for i in _coerce_id_list(ids)]
     return shape.chamfer(length=d, length2=None, edge_list=edges)
 
@@ -553,6 +572,7 @@ def _split_by_plane(shape, plane):
     """
     from build123d import Keep, split
 
+    shape = _as_build123d(shape)
     plane_obj = _resolve_plane(plane)
     above = split(shape, bisect_by=plane_obj, keep=Keep.TOP)
     below = split(shape, bisect_by=plane_obj, keep=Keep.BOTTOM)
@@ -576,6 +596,7 @@ def _cut_pocket(shape, face_id: int, profile, depth: float):
         raise ValueError(f"depth must be positive, got {depth}")
     from build123d import Plane, extrude
 
+    shape = _as_build123d(shape)
     face = _pick_face(shape, face_id)
     face_plane = Plane(face)
     positioned = face_plane * profile
@@ -595,6 +616,7 @@ def _boss(shape, face_id: int, profile, height: float):
         raise ValueError(f"height must be positive, got {height}")
     from build123d import Plane, extrude
 
+    shape = _as_build123d(shape)
     face = _pick_face(shape, face_id)
     face_plane = Plane(face)
     positioned = face_plane * profile
@@ -660,6 +682,45 @@ def _is_topods_shape(obj) -> bool:
     except ImportError:
         return False
     return isinstance(obj, TopoDS_Shape)
+
+
+def _wraps_bare_solid(obj) -> bool:
+    """True when a build123d Compound/Part wraps a non-compound TopoDS shape.
+
+    That happens when a script writes ``Compound(raw)`` or ``Part(raw)``
+    around a raw solid returned by a helper or ``load_step_shape``.
+    """
+    from build123d import Compound
+    from OCP.TopAbs import TopAbs_COMPOUND
+
+    if not isinstance(obj, Compound):
+        return False
+    wrapped = getattr(obj, "wrapped", None)
+    return (
+        _is_topods_shape(wrapped)
+        and not wrapped.IsNull()
+        and wrapped.ShapeType() != TopAbs_COMPOUND
+    )
+
+
+def _as_build123d(obj):
+    """Return ``obj`` as a build123d Shape, wrapping raw TopoDS values by type.
+
+    build123d Shapes pass through untouched. Raw ``TopoDS_Shape`` values are
+    wrapped in the class matching their topology (Solid, Part, Wire, ...)
+    so the edit helpers and assembly capture accept both representations.
+    """
+    from build123d import Shape
+
+    if isinstance(obj, Shape):
+        return obj
+    if _is_topods_shape(obj):
+        from agentcad.helpers import _wrap_build123d
+
+        return _wrap_build123d(obj)
+    raise TypeError(
+        f"Expected build123d Shape or TopoDS_Shape, got {type(obj).__name__}"
+    )
 
 
 def _topods_shape(obj):

@@ -82,7 +82,8 @@ def test_skill_show_content_mentions_commands(runner):
     assert "cylindrical_features[].axis" in content
     assert "show_object" in content
     assert "raise_annulus" in content
-    assert "Compound(result)" in content
+    assert "Compound(result)" not in content
+    assert "return the same kind of shape they were given" in content
     assert "`load_step(path)` returns a build123d `Part`" in content
     assert "base.solids()" in content
     assert "base.faces()" in content
