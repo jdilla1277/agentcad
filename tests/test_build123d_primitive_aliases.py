@@ -302,8 +302,60 @@ def test_invalid_align_has_supported_values(prims, value):
     assert "Invalid align=" in msg
     assert "Align.MIN" in msg and "Align.CENTER" in msg and "Align.MAX" in msg
     if value == "X":
-        assert "not an orientation axis" in msg
-        assert "rotate(shape, 'Y', 90)" in msg
+        assert "not an alignment value" in msg
+        assert "rotation=(0, 90, 0)" in msg
+
+
+@pytest.mark.parametrize("axis,correction,expected_size", [
+    ("X", "Cylinder(5, 20, rotation=(0, 90, 0))", (20, 10, 10)),
+    ("Y", "Cylinder(5, 20, rotation=(-90, 0, 0))", (10, 20, 10)),
+    ("Z", "Cylinder(5, 20)", (10, 10, 20)),
+])
+def test_axis_like_align_has_literal_executable_correction(
+    prims, axis, correction, expected_size,
+):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](5, 20, align=axis)
+    msg = str(exc.value)
+    assert correction in msg
+    if axis == "Z":
+        assert "already points along +Z" in msg
+    else:
+        assert f"along +{axis}" in msg
+
+    result = b3d_runner.execute(f"show_object({correction})")
+    assert result.success, result.exception
+    bounds = build123d.Compound(result.topo_shape).bounding_box()
+    assert tuple(bounds.size) == pytest.approx(expected_size)
+
+
+def test_numeric_align_repair_preserves_and_executes_native_arguments(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](
+            radius=2,
+            height=12,
+            rotation=(0, 90, 0),
+            mode=Mode.SUBTRACT,
+            align=(20, 0, 0),
+        )
+    repair = (
+        "with Locations((20, 0, 0)): "
+        "Cylinder(radius=2, height=12, rotation=(0, 90, 0), "
+        "mode=Mode.SUBTRACT)"
+    )
+    assert f"Inside a builder, use exactly: {repair}" in str(exc.value)
+
+    result = b3d_runner.execute(
+        "with BuildPart() as part:\n"
+        "    Box(60, 20, 20)\n"
+        f"    {repair}\n"
+        "show_object(part.part)"
+    )
+    assert result.success, result.exception
+    expected_volume = 60 * 20 * 20 - math.pi * 2**2 * 12
+    assert compute_metrics(result.topo_shape)["volume"] == pytest.approx(
+        expected_volume
+    )
 
 
 @pytest.mark.parametrize("builder_name", ["BuildPart", "BuildSketch", "BuildLine"])

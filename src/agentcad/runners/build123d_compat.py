@@ -33,6 +33,7 @@ from __future__ import annotations
 import inspect
 import math
 import numbers
+from enum import Enum
 from typing import Any
 
 
@@ -106,6 +107,11 @@ _SKETCH_PRIMITIVES = frozenset(
 
 _BUILDER_NAMES = ("BuildPart", "BuildSketch", "BuildLine")
 _PLANE_NAMES = ("XY", "XZ", "YZ", "YX", "ZX", "ZY")
+_AXIS_ROTATIONS = {
+    "X": (0, 90, 0),
+    "Y": (-90, 0, 0),
+    "Z": None,
+}
 
 _COMPAT_MARKER = "__agentcad_compat__"
 
@@ -124,6 +130,15 @@ def _fmt(value: Any) -> str:
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return repr(value)
+    if isinstance(value, Enum):
+        return f"{type(value).__name__}.{value.name}"
+    if isinstance(value, tuple):
+        values = ", ".join(_fmt(item) for item in value)
+        if len(value) == 1:
+            values += ","
+        return f"({values})"
+    if isinstance(value, list):
+        return "[" + ", ".join(_fmt(item) for item in value) + "]"
     return repr(value)
 
 
@@ -132,17 +147,6 @@ def _positional_names(native_cls: type) -> list[str]:
     return [p.name for p in params[1:] if p.kind in (
         p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD,
     )]
-
-
-def _dimension_kwargs(class_name: str, kwargs: dict[str, Any]) -> str:
-    """Render the dimension keywords as they would appear in a call."""
-    alias_map = _DIMENSION_ALIASES.get(class_name, {})
-    parts = [
-        f"{name}={_fmt(value)}"
-        for name, value in kwargs.items()
-        if name in alias_map
-    ]
-    return ", ".join(parts)
 
 
 def _resolved_dimensions(
@@ -176,12 +180,27 @@ def _resolved_dimensions(
     return resolved
 
 
-def _example_call(class_name: str, args: tuple, kwargs: dict[str, Any]) -> str:
-    """A copyable native call built from what the agent actually passed."""
+def _example_call(
+    class_name: str,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    exclude: frozenset[str] = frozenset(),
+    overrides: dict[str, Any] | None = None,
+) -> str:
+    """Render a copyable call while preserving every non-offending argument."""
+    overrides = overrides or {}
     rendered = [_fmt(a) for a in args]
-    dims = _dimension_kwargs(class_name, kwargs)
-    if dims:
-        rendered.append(dims)
+    rendered.extend(
+        f"{name}={_fmt(overrides.get(name, value))}"
+        for name, value in kwargs.items()
+        if name not in exclude
+    )
+    rendered.extend(
+        f"{name}={_fmt(value)}"
+        for name, value in overrides.items()
+        if name not in kwargs and name not in exclude
+    )
     if not rendered:
         rendered.append("...")
     return f"{class_name}({', '.join(rendered)})"
@@ -193,6 +212,37 @@ def _vector_literal(value: Any, size: int) -> str | None:
     ):
         return "(" + ", ".join(_fmt(v) for v in value) + ")"
     return None
+
+
+def _orientation_correction(
+    class_name: str,
+    value: Any,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> tuple[str, str] | None:
+    """Return ``(axis, call)`` for an unambiguous X/Y/Z orientation guess."""
+    if not isinstance(value, str):
+        return None
+    axis = value.strip().upper()
+    if axis not in _AXIS_ROTATIONS:
+        return None
+
+    call = _example_call(class_name, args, kwargs, exclude=exclude)
+    rotation = _AXIS_ROTATIONS[axis]
+    if rotation is None:
+        return axis, call
+    if "rotation" in kwargs and "rotation" not in exclude:
+        rotate_axis, angle = ("Y", 90) if axis == "X" else ("X", -90)
+        return axis, f"rotate({call}, '{rotate_axis}', {angle})"
+    return axis, _example_call(
+        class_name,
+        args,
+        kwargs,
+        exclude=exclude,
+        overrides={"rotation": rotation},
+    )
 
 
 def _placement_message(
@@ -228,14 +278,36 @@ def _placement_message(
                 f"with BuildSketch(Plane.XZ): {call}. The rotation= keyword on "
                 "a sketch primitive is only an in-plane angle in degrees."
             )
+        correction = _orientation_correction(
+            class_name, value, args, kwargs
+        )
+        if correction is not None:
+            axis, oriented_call = correction
+            if axis == "Z":
+                return (
+                    f"{head} {class_name} already points along +Z; drop the "
+                    f"keyword: {oriented_call}"
+                )
+            return (
+                f"{head} Build along Z and orient it explicitly: "
+                f"{oriented_call} points along +{axis}."
+            )
         return (
-            f"{head} Build along Z and rotate: "
+            f"{head} axis must be 'X', 'Y', or 'Z'. Build along Z and rotate: "
             f"{call.rstrip(')')}, rotation=(0, 90, 0)) points along X, "
-            f"rotation=(90, 0, 0) points along Y. Move it afterwards with "
+            f"rotation=(-90, 0, 0) points along Y. Move it afterwards with "
             f".translate((x, y, z))."
         )
 
     # Position-style placement.
+    if "mode" in kwargs:
+        vec = _vector_literal(value, 2 if is_sketch else 3) or (
+            "(x, y)" if is_sketch else "(x, y, z)"
+        )
+        return (
+            f"{head} The mode= argument means this runs inside a builder. "
+            f"Position it with a location context: with Locations({vec}): {call}"
+        )
     if is_sketch:
         vec = _vector_literal(value, 2) or "(x, y)"
         return (
@@ -256,7 +328,7 @@ def _alignment_message(
 ) -> str:
     """Return targeted guidance for an invalid or positional ``align=`` value."""
     dimensions = _ALIGN_DIMENSIONS[class_name]
-    call = _example_call(class_name, args, kwargs)
+    call = _example_call(class_name, args, kwargs, exclude=frozenset({"align"}))
     tuple_example = ", ".join(
         ("Align.MIN", "Align.CENTER", "Align.MAX")[:dimensions]
     )
@@ -269,21 +341,40 @@ def _alignment_message(
 
     if _vector_literal(value, dimensions) is not None:
         vector = _vector_literal(value, dimensions)
-        if dimensions == 2:
+        if "mode" in kwargs:
+            correction = f"with Locations({vector}): {call}"
+            instruction = f"Inside a builder, use exactly: {correction}"
+        elif dimensions == 2:
             correction = f"Pos{vector} * {call}"
+            instruction = f"Move the shape instead: {correction}"
         else:
             correction = f"{call}.translate({vector})"
+            instruction = f"Move the shape instead: {correction}"
         return (
             f"{class_name}() align= controls which bounding-box side is anchored "
             f"at the origin; it does not accept position coordinates {vector}. "
-            f"Move the shape instead: {correction}. {supported}"
+            f"{instruction}. {supported}"
         )
 
-    axis_hint = ""
-    if isinstance(value, str) and value.strip().upper() in {"X", "Y", "Z"}:
+    orientation = _orientation_correction(
+        class_name,
+        value,
+        args,
+        kwargs,
+        exclude=frozenset({"align"}),
+    )
+    if orientation is None:
+        return f"Invalid align={value!r} for {class_name}(). {supported}"
+    axis, correction = orientation
+    if axis == "Z":
         axis_hint = (
-            f" align={value!r} is not an orientation axis; use rotation=(0, 90, 0) "
-            "to point a Z-axis primitive along X, or rotate(shape, 'Y', 90)."
+            f" align={value!r} is not an alignment value; {class_name} already "
+            f"points along +Z. Drop align= and use: {correction}."
+        )
+    else:
+        axis_hint = (
+            f" align={value!r} is not an alignment value. To point the primitive "
+            f"along +{axis}, use: {correction}."
         )
     return f"Invalid align={value!r} for {class_name}(). {supported}{axis_hint}"
 
