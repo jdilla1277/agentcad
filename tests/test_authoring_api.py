@@ -34,6 +34,37 @@ def test_module_qualified_show_object_is_recognized_and_captures():
     assert build123d.execute(source).success
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import agentcad.api\nagentcad.api.show_object(Box(1, 2, 3))\n",
+        "from agentcad import api\napi.show_object(Box(1, 2, 3))\n",
+        (
+            "from agentcad.api import show_object as emit\n"
+            "emit(Box(1, 2, 3))\n"
+        ),
+    ],
+)
+def test_supported_api_import_forms_are_recognized(source):
+    assert build123d.validate(source) == []
+    assert build123d.execute(source).success
+
+
+def test_unrelated_show_object_method_does_not_satisfy_capture_check():
+    source = (
+        "class Reporter:\n"
+        "    def show_object(self, value):\n"
+        "        return value\n"
+        "reporter = Reporter()\n"
+        "reporter.show_object(Box(1, 2, 3))\n"
+    )
+
+    errors = build123d.validate(source)
+
+    assert len(errors) == 1
+    assert errors[0]["check"] == "show_object_missing"
+
+
 def test_injected_and_imported_names_are_the_same_callables():
     result = build123d.execute(
         "import agentcad.api as ac\n"

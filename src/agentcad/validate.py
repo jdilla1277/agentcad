@@ -127,6 +127,9 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
     Dynamic conditionals still pass; the runners diagnose empty results later.
     """
     output_calls = set(output_calls or ("show_object",))
+    direct_output_names, api_module_names = _output_import_bindings(
+        tree, output_calls
+    )
     functions = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -148,9 +151,11 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
         if isinstance(node, ast.Call):
             func = node.func
             if (
-                isinstance(func, ast.Name) and func.id in output_calls
+                isinstance(func, ast.Name) and func.id in direct_output_names
             ) or (
-                isinstance(func, ast.Attribute) and func.attr in output_calls
+                isinstance(func, ast.Attribute)
+                and func.attr in output_calls
+                and _dotted_name(func.value) in api_module_names
             ):
                 return True
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
@@ -174,6 +179,45 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
             continue
         pending.extend(ast.iter_child_nodes(node))
     return False
+
+
+def _output_import_bindings(tree, output_calls):
+    """Return names that are provably bound to AgentCAD output capture.
+
+    Bare pre-injected names always count. Attribute calls count only when the
+    receiver is an imported ``agentcad.api`` module alias; an unrelated
+    ``reporter.show_object(...)`` must not bypass the early capture check.
+    """
+    direct_names = set(output_calls)
+    module_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "agentcad.api":
+                    module_names.add(alias.asname or "agentcad.api")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "agentcad":
+                for alias in node.names:
+                    if alias.name == "api":
+                        module_names.add(alias.asname or alias.name)
+            elif node.module == "agentcad.api":
+                for alias in node.names:
+                    if alias.name in output_calls:
+                        direct_names.add(alias.asname or alias.name)
+    return direct_names, module_names
+
+
+def _dotted_name(node):
+    """Return a dotted name for a simple Name/Attribute chain."""
+    parts = []
+    current = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.append(current.id)
+    return ".".join(reversed(parts))
 
 
 def _can_import(module_name):
