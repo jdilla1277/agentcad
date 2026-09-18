@@ -28,17 +28,19 @@ class ProjectError(Exception):
         super().__init__(message)
         self.reason = reason
         self.suggestion = suggestion
-        self.next_actions = next_actions if next_actions is not None else [suggestion]
+        self.next_actions = next_actions
 
     def payload(self, command: str) -> dict:
-        return {
+        payload = {
             "command": command,
             "status": "error",
             "reason": self.reason,
             "message": str(self),
             "suggestion": self.suggestion,
-            "next_actions": self.next_actions,
         }
+        if self.next_actions is not None:
+            payload["next_actions"] = self.next_actions
+        return payload
 
 
 @dataclass(frozen=True)

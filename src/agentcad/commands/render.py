@@ -10,6 +10,7 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
+from agentcad.commands._input_recovery import missing_step_payload
 
 MAX_RENDER_DIMENSION = 8192
 MAX_RENDER_PIXELS = 32_000_000
@@ -92,15 +93,11 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon, hi
 
     step_path = Path(step_file)
     if not step_path.is_file():
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": (
-                f"STEP file '{step_file}' not found or is not a file. "
-                "Use outputs.step from a successful run; agentcad context lists versions."
-            ),
-            "next_actions": ["agentcad context"],
-        }))
+        click.echo(json.dumps(missing_step_payload("render", step_file, {
+            "--view": view, "--zoom": zoom, "--size": f"{size[0]}x{size[1]}",
+            "--msaa": msaa, "--name": name, "--focus": focus,
+            "--no-fit": no_fit, "--highlight": highlight, "--no-daemon": no_daemon,
+        })))
         sys.exit(1)
 
     # Try routing through daemon. Exits before returning if reachable.

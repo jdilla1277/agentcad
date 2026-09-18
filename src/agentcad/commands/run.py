@@ -1172,10 +1172,8 @@ def _run_impl(
         _emit_run({
             "command": "run", "status": "error", "error_kind": "script_unreadable",
             "message": f"Cannot read Python script '{script}': {exc}",
-            "next_actions": [
-                f"Save {script} as a readable UTF-8 Python file, then rerun:",
-                _run_retry_command(ctx),
-            ],
+            "suggestion": f"Save {script} as a readable UTF-8 Python file, then rerun.",
+            "next_actions": [_run_retry_command(ctx)],
         })
         sys.exit(1)
     project_default = dispatch.project_runtime()

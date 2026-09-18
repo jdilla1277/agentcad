@@ -10,6 +10,7 @@ from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
+from agentcad.commands._input_recovery import missing_step_payload
 
 VALID_FORMATS = {"stl", "glb", "obj"}
 
@@ -49,15 +50,9 @@ def export_cmd(step_file, formats, no_daemon):
     """Export a STEP file to mesh formats (STL, GLB, OBJ)."""
     step_path = Path(step_file)
     if not step_path.is_file():
-        click.echo(json.dumps({
-            "command": "export",
-            "status": "error",
-            "message": (
-                f"STEP file '{step_file}' not found or is not a file. "
-                "Use outputs.step from a successful run; agentcad context lists versions."
-            ),
-            "next_actions": ["agentcad context"],
-        }))
+        click.echo(json.dumps(missing_step_payload("export", step_file, {
+            "--format": formats, "--no-daemon": no_daemon,
+        })))
         sys.exit(1)
 
     # Parse and validate formats
