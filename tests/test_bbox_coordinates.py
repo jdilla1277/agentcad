@@ -3,8 +3,10 @@
 import json
 
 import pytest
-from build123d import Axis, Box, Compound, Part, Vector, export_step
-from OCP.BRep import BRep_Builder
+from build123d import Axis, Box, Compound, Part, Sphere, Vector, export_step
+from OCP.BRep import BRep_Builder, BRep_Tool
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS_Compound, TopoDS_Shape
 
 from agentcad.api import bbox_point, bbox_size
@@ -41,6 +43,28 @@ def test_disconnected_compound_includes_gap_in_size():
         assert bbox_point(shape, "max", "max", "max") == pytest.approx((11, 22, 33))
         assert bbox_point(shape) == pytest.approx((5, 10, 15))
         assert bbox_size(shape) == pytest.approx((12, 24, 36))
+
+
+@pytest.mark.parametrize("helper", [bbox_point, bbox_size])
+@pytest.mark.parametrize("kind", ["box", "sphere"])
+@pytest.mark.parametrize("raw", [False, True])
+def test_queries_preserve_cached_triangulation(helper, kind, raw):
+    shape = Box(10, 20, 30) if kind == "box" else Sphere(10)
+    shape = shape.translate((-25, 40, -50))
+    target = shape.wrapped if raw else shape
+    expected = helper(target)
+    BRepMesh_IncrementalMesh(shape.wrapped, 0.5, False, 0.5, False).Perform()
+    faces = shape.faces()
+
+    def mesh_sizes():
+        meshes = [BRep_Tool.Triangulation_s(face.wrapped, TopLoc_Location()) for face in faces]
+        assert all(mesh is not None for mesh in meshes)
+        return [(mesh.NbNodes(), mesh.NbTriangles()) for mesh in meshes]
+
+    before = mesh_sizes()
+    assert all(nodes > 0 and triangles > 0 for nodes, triangles in before)
+    assert helper(target) == pytest.approx(expected)
+    assert mesh_sizes() == before
 
 
 @pytest.mark.parametrize("helper", [bbox_point, bbox_size])
@@ -119,6 +143,15 @@ def test_unrelated_attribute_errors_get_no_coordinate_guidance(message):
 
 def test_coordinate_guidance_is_runtime_scoped():
     assert _execution_error_guidance("'Vector' object has no attribute 'x'", "cadquery", "") == {}
+
+
+@pytest.mark.parametrize("name,attribute", [("Vector", "x"), ("BoundBox", "xmin"), ("BoundBox", "y")])
+def test_shadowed_class_names_receive_only_conditional_advice(name, attribute):
+    source = f"class {name}:\n    pass\nvalue = {name}().{attribute}\nshow_object(Box(1, 1, 1))\n"
+    result = b3d_runner.execute(source)
+    assert result.status == "execution_error"
+    guidance = _execution_error_guidance(result.exception, "build123d", source)
+    assert guidance["suggestion"].startswith(f"If the receiver is a build123d {name}")
 
 
 @pytest.mark.parametrize("expression,correction", [

@@ -21,7 +21,7 @@ PREAMBLE = (
     "from agentcad.helpers import ("
     "loft_sections, tapered_sweep, naca_wire, mirror_fuse, copy_shape, "
     "safe_cut, safe_intersection, safe_fuse, translate, rotate, "
-    "bbox_point, bbox_size, place_at, assemble, annular_boss, raise_annulus, "
+    "bbox_point, place_at, assemble, annular_boss, raise_annulus, "
     "ellipse_wire, spline_wire, polygon_wire, rounded_rect_wire, "
     "elliptical_sweep, involute_gear_profile"
     ")\n"

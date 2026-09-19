@@ -19,7 +19,6 @@ from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepTools import BRepTools
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeEdge,
@@ -742,11 +741,11 @@ def _bbox_extents(topo):
     # placement helper that's a real footgun: bbox_point(shape, x="max")
     # would return a point floating in space beyond the actual body, so
     # place_at / assemble would mis-seat NURBS parts. AddOptimal_s gives a
-    # tight box on the same basis as `agentcad measure`. Clean_s first to
-    # drop cached triangulation (matches metrics.compute_metrics).
-    BRepTools.Clean_s(topo)
+    # tight box from the underlying geometry. Ignore cached triangulation
+    # without removing it: a bounds query must not force later exports or
+    # previews to remesh the caller's shape.
     box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(topo, box)
+    BRepBndLib.AddOptimal_s(topo, box, False)
     if box.IsVoid():
         raise ValueError("Cannot query the bounding box of an empty shape.")
     return box.Get()

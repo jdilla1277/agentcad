@@ -556,7 +556,7 @@ def _apply_kernel_layer(part_metrics: dict, report: dict) -> dict:
 
 
 def _coordinate_error_suggestion(msg):
-    """Correct known build123d coordinate guesses without guessing intent."""
+    """Offer conditional advice: error text alone cannot establish the type."""
     match = re.search(r"'(BoundBox|Vector)' object has no attribute '([^']+)'", msg)
     if match is None:
         return None
@@ -564,7 +564,8 @@ def _coordinate_error_suggestion(msg):
     if kind == "Vector":
         if attr in {"x", "y", "z"}:
             return (
-                f"build123d Vector coordinates are uppercase: use `vector.{attr.upper()}` "
+                "If the receiver is a build123d Vector, coordinates are uppercase: "
+                f"use `vector.{attr.upper()}` "
                 f"instead of `vector.{attr}` (also for bbox.min, bbox.max, and bbox.size)."
             )
         return None
@@ -580,13 +581,15 @@ def _coordinate_error_suggestion(msg):
         }
         if attr in equivalents:
             return (
-                f"For `bbox = shape.bounding_box()`, replace `bbox.{attr}` with "
+                "If the receiver is a build123d BoundBox from "
+                f"`bbox = shape.bounding_box()`, replace `bbox.{attr}` with "
                 f"`{equivalents[attr]}`. For a Part or raw TopoDS shape, use "
                 "`bbox_point(shape, x='min', y='center', z='max')` for coordinates "
                 "or `bbox_size(shape)` for (xlen, ylen, zlen)."
             )
         if attr == axis:
             return (
+                "If the receiver is a build123d BoundBox, "
                 f"`bbox.{axis}` is ambiguous. For `bbox = shape.bounding_box()`, "
                 f"choose `bbox.min.{axis.upper()}`, `bbox.center().{axis.upper()}`, "
                 f"`bbox.max.{axis.upper()}`, or `bbox.size.{axis.upper()}` "
