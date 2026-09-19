@@ -34,7 +34,7 @@ import inspect
 import math
 import numbers
 from enum import Enum
-from typing import Any
+from typing import Any, NamedTuple
 
 
 # Canonical parameter -> accepted aliases, per primitive.
@@ -107,19 +107,26 @@ _SKETCH_PRIMITIVES = frozenset(
 
 _BUILDER_NAMES = ("BuildPart", "BuildSketch", "BuildLine")
 _PLANE_NAMES = ("XY", "XZ", "YZ", "YX", "ZX", "ZY")
+# Signed axis -> rotation= that points a Z-built solid along it. A bare
+# "X" means +X. Verified against Cone apexes.
 _AXIS_ROTATIONS = {
-    "X": (0, 90, 0),
-    "Y": (-90, 0, 0),
-    "Z": None,
+    "+X": (0, 90, 0),
+    "-X": (0, -90, 0),
+    "+Y": (-90, 0, 0),
+    "-Y": (90, 0, 0),
+    "+Z": None,
+    "-Z": (180, 0, 0),
 }
 # Sketch primitives are flat faces: their orientation is the plane they are
-# drawn on, not a rotation tuple. Map each axis to the familiar named plane
-# whose normal lies along it, plus the signed normal build123d actually uses
-# (``Plane.XZ`` faces -Y, so ``extrude`` from it grows toward -Y).
+# drawn on, not a rotation tuple. Each named plane's normal is signed;
+# swapping the letters flips it (``Plane.XZ`` faces -Y, ``Plane.ZX`` +Y).
 _AXIS_SKETCH_PLANES = {
-    "X": ("Plane.YZ", "+X"),
-    "Y": ("Plane.XZ", "-Y"),
-    "Z": ("Plane.XY", "+Z"),
+    "+X": "Plane.YZ",
+    "-X": "Plane.ZY",
+    "+Y": "Plane.ZX",
+    "-Y": "Plane.XZ",
+    "+Z": "Plane.XY",
+    "-Z": "Plane.YX",
 }
 
 _COMPAT_MARKER = "__agentcad_compat__"
@@ -223,18 +230,82 @@ def _vector_literal(value: Any, size: int) -> str | None:
     return None
 
 
+class _BuilderInfo(NamedTuple):
+    """The builder context a primitive was constructed in."""
+
+    kind: str          # "BuildSketch", "BuildPart", "BuildLine"
+    plane: str | None  # "Plane.XY" when the builder sits on one named plane
+
+
+def _current_builder() -> _BuilderInfo | None:
+    """Describe the innermost active build123d builder, if any."""
+    try:
+        from build123d import Plane
+        from build123d.build_common import Builder
+    except ImportError:  # pragma: no cover - build123d missing entirely
+        return None
+    context = Builder._get_context(log=False)
+    if context is None:
+        return None
+    plane = None
+    workplanes = getattr(context, "workplanes", None) or []
+    if len(workplanes) == 1:
+        for name in _PLANE_NAMES:
+            if workplanes[0] == getattr(Plane, name):
+                plane = f"Plane.{name}"
+                break
+    return _BuilderInfo(type(context).__name__, plane)
+
+
 def _axis_from_value(value: Any) -> str | None:
-    """Return ``"X"``/``"Y"``/``"Z"`` for an axis name or a unit axis vector."""
+    """Return a signed axis (``"+X"`` ... ``"-Z"``) for an axis name or vector.
+
+    Accepts ``"X"`` (meaning +X), ``"-y"``, and unit vectors such as
+    ``(0, 0, -1)``. Anything else is unreadable and returns ``None``.
+    """
+    if hasattr(value, "to_tuple"):
+        value = value.to_tuple()
     if isinstance(value, str):
-        axis = value.strip().upper()
-        return axis if axis in _AXIS_ROTATIONS else None
+        text = value.strip().upper()
+        if len(text) == 1 and text in "XYZ":
+            return "+" + text
+        if len(text) == 2 and text[0] in "+-" and text[1] in "XYZ":
+            return text
+        return None
     if isinstance(value, (tuple, list)) and len(value) == 3 and all(
         _is_number(v) for v in value
     ):
-        for axis, unit in (("X", (1, 0, 0)), ("Y", (0, 1, 0)), ("Z", (0, 0, 1))):
-            if tuple(value) == unit:
-                return axis
+        nonzero = [(i, v) for i, v in enumerate(value) if v != 0]
+        if len(nonzero) == 1 and abs(nonzero[0][1]) == 1:
+            index, component = nonzero[0]
+            return ("+" if component > 0 else "-") + "XYZ"[index]
     return None
+
+
+_AXIS_FORMS = "'X', '-Y', or a unit vector such as (0, 0, 1)"
+
+
+def _sketch_rotation_note(
+    class_name: str, native_cls: type | None, value: Any,
+) -> tuple[bool, str]:
+    """Return ``(keep, note)`` for a ``rotation=`` given to a sketch primitive.
+
+    Only a finite scalar on a primitive whose native signature has
+    ``rotation`` survives into the literal repair: ``Circle`` has no such
+    keyword and the others take one in-plane angle, never a tuple.
+    """
+    accepts = native_cls is not None and "rotation" in inspect.signature(
+        native_cls.__init__
+    ).parameters
+    if not accepts:
+        return False, f" {class_name} has no rotation= keyword, so it was dropped."
+    if _is_number(value) and math.isfinite(value):
+        return True, " rotation= stays an in-plane angle on that plane."
+    return False, (
+        f" rotation= on {class_name} is a single in-plane angle in degrees, "
+        f"not {_fmt(value)}, so it was dropped; add rotation=<degrees> if the "
+        f"face should turn within its plane."
+    )
 
 
 def _sketch_orientation_hint(
@@ -243,49 +314,85 @@ def _sketch_orientation_hint(
     axis: str,
     args: tuple,
     kwargs: dict[str, Any],
+    *,
+    native_cls: type | None = None,
+    builder: _BuilderInfo | None = None,
 ) -> str:
     """Plane-based repair for an axis-like request on a sketch primitive.
 
-    Sketch primitives have no 3D ``rotation=`` tuple: ``Circle`` rejects the
-    keyword, ``RegularPolygon`` expects a scalar, and ``Rectangle`` silently
-    stays on XY. The orientation comes from the builder plane instead, and
-    any scalar ``rotation=`` the caller supplied is an in-plane angle that
-    composes with the plane, so it is preserved rather than reported as a
-    conflict.
+    Sketch primitives have no 3D ``rotation=`` tuple; orientation comes from
+    the sketch plane. The repair depends on where the call sits: inside an
+    existing BuildSketch the *enclosing* plane must change (a nested sketch
+    is flattened onto the outer plane), directly inside a BuildPart the
+    primitive needs its own BuildSketch, and outside any builder the face
+    is relocated with ``Plane.YZ * Circle(5)``.
     """
-    call = _example_call(class_name, args, kwargs, exclude=frozenset({keyword}))
-    plane, normal = _AXIS_SKETCH_PLANES[axis]
-    if axis == "Z":
-        hint = (
-            f"Plane.XY, the default sketch plane, already has its normal along "
-            f"+Z, so drop {keyword}=: with BuildSketch(Plane.XY): {call}."
-        )
-        if "mode" not in kwargs:
-            hint += f" Outside a builder: {call}."
-        return hint
-    hint = (
-        f"Choose the sketch plane instead: with BuildSketch({plane}): {call} "
-        f"lies on {plane}, whose normal points along {normal}, so "
-        f"extrude(amount=N) grows toward {normal}."
-    )
-    if axis == "Y":
-        hint += " Use Plane.ZX for a +Y normal."
-    if "mode" not in kwargs:
-        hint += f" Outside a builder: {plane} * {call}."
+    plane = _AXIS_SKETCH_PLANES[axis]
+    exclude = {keyword}
+    rotation_note = ""
     if "rotation" in kwargs:
-        hint += " rotation= stays an in-plane angle on that plane."
-    return hint
+        keep, rotation_note = _sketch_rotation_note(
+            class_name, native_cls, kwargs["rotation"],
+        )
+        if not keep:
+            exclude.add("rotation")
+    call = _example_call(class_name, args, kwargs, exclude=frozenset(exclude))
+    label = f"{plane} (the default)" if plane == "Plane.XY" else plane
+    where = (
+        f"{label}, whose normal points along {axis}, so extrude(amount=N) "
+        f"grows toward {axis}"
+    )
+    kind = builder.kind if builder is not None else None
+
+    if kind == "BuildSketch":
+        if builder.plane == plane:
+            hint = (
+                f"The enclosing sketch is already on {plane}; drop {keyword}= "
+                f"and keep: {call}."
+            )
+        else:
+            current = f" (currently {builder.plane})" if builder.plane else ""
+            hint = (
+                f"Change the enclosing sketch's plane{current} and drop "
+                f"{keyword}=: replace its header with "
+                f"`with BuildSketch({plane}):` and this call with {call}. Do "
+                f"not nest a second BuildSketch here; a nested sketch is "
+                f"flattened onto the outer plane. The sketch then lies on "
+                f"{where}."
+            )
+        mode = kwargs.get("mode")
+        if mode is not None and getattr(mode, "name", "ADD") != "ADD":
+            hint += (
+                f" Leave it in the same sketch as the additive geometry it "
+                f"modifies; a separate sketch holding only mode={_fmt(mode)} "
+                f"has nothing to operate on."
+            )
+    elif kind == "BuildPart":
+        hint = (
+            f"Sketch primitives need a BuildSketch inside the BuildPart; drop "
+            f"{keyword}= and use: with BuildSketch({plane}): {call}. The "
+            f"sketch lies on {where}."
+        )
+    else:
+        standalone = call if plane == "Plane.XY" else f"{plane} * {call}"
+        hint = (
+            f"Choose the sketch plane instead; drop {keyword}= and use: "
+            f"{standalone}. The face lies on {where}. Inside a BuildPart, "
+            f"use with BuildSketch({plane}): {call}."
+        )
+    return hint + rotation_note
 
 
 def _sketch_plane_menu(class_name: str, keyword: str, call: str) -> str:
     """Diagnostic for an orientation request whose axis cannot be read."""
     return (
-        f"Could not read an axis from {keyword}=. {class_name} takes its "
-        f"orientation from the sketch plane, not a keyword: "
-        f"with BuildSketch(Plane.YZ): {call} faces +X, Plane.XZ faces -Y, "
-        f"and Plane.XY (the default) faces +Z; extrude(amount=N) grows along "
-        f"that normal. The rotation= keyword on a sketch primitive is only "
-        f"an in-plane angle in degrees."
+        f"Could not tell which axis {keyword}= means (expected {_AXIS_FORMS}). "
+        f"{class_name} takes its orientation from the sketch plane, not a "
+        f"keyword: Plane.YZ faces +X (Plane.ZY -X), Plane.ZX faces +Y "
+        f"(Plane.XZ -Y), Plane.XY faces +Z (Plane.YX -Z), and "
+        f"extrude(amount=N) grows along that normal, e.g. "
+        f"with BuildSketch(Plane.YZ): {call}. The rotation= keyword on a "
+        f"sketch primitive is only an in-plane angle in degrees."
     )
 
 
@@ -330,7 +437,14 @@ def _orientation_correction(
 
 
 def _placement_message(
-    class_name: str, keyword: str, value: Any, args: tuple, kwargs: dict[str, Any],
+    class_name: str,
+    keyword: str,
+    value: Any,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    native_cls: type | None = None,
+    builder: _BuilderInfo | None = None,
 ) -> str:
     kind = _PLACEMENT_KEYWORDS[keyword]
     call = _example_call(class_name, args, kwargs)
@@ -362,6 +476,7 @@ def _placement_message(
                 return f"{head} {_sketch_plane_menu(class_name, keyword, call)}"
             return f"{head} " + _sketch_orientation_hint(
                 class_name, keyword, axis, args, kwargs,
+                native_cls=native_cls, builder=builder,
             )
         correction = _orientation_correction(
             class_name, value, args, kwargs
@@ -373,20 +488,21 @@ def _placement_message(
                     f"{head} rotation= and {keyword}={value!r} request two "
                     f"orientations and cannot both be preserved. To keep the "
                     f"existing rotation, drop {keyword}=: {existing_call}. To "
-                    f"point along +{axis} instead, replace rotation=: "
+                    f"point along {axis} instead, replace rotation=: "
                     f"{oriented_call}."
                 )
-            if axis == "Z":
+            if axis == "+Z":
                 return (
                     f"{head} {class_name} already points along +Z; drop the "
                     f"keyword: {oriented_call}"
                 )
             return (
                 f"{head} Build along Z and orient it explicitly: "
-                f"{oriented_call} points along +{axis}."
+                f"{oriented_call} points along {axis}."
             )
         return (
-            f"{head} axis must be 'X', 'Y', or 'Z'. Build along Z and rotate: "
+            f"{head} Could not tell which axis {keyword}= means (expected "
+            f"{_AXIS_FORMS}). Build along Z and rotate: "
             f"{call.rstrip(')')}, rotation=(0, 90, 0)) points along X, "
             f"rotation=(-90, 0, 0) points along Y. Move it afterwards with "
             f".translate((x, y, z))."
@@ -417,7 +533,13 @@ def _placement_message(
 
 
 def _alignment_message(
-    class_name: str, value: Any, args: tuple, kwargs: dict[str, Any],
+    class_name: str,
+    value: Any,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    native_cls: type | None = None,
+    builder: _BuilderInfo | None = None,
 ) -> str:
     """Return targeted guidance for an invalid or positional ``align=`` value."""
     dimensions = _ALIGN_DIMENSIONS[class_name]
@@ -453,7 +575,10 @@ def _alignment_message(
         axis = _axis_from_value(value)
         if axis is None:
             return f"Invalid align={value!r} for {class_name}(). {supported}"
-        hint = _sketch_orientation_hint(class_name, "align", axis, args, kwargs)
+        hint = _sketch_orientation_hint(
+            class_name, "align", axis, args, kwargs,
+            native_cls=native_cls, builder=builder,
+        )
         return (
             f"Invalid align={value!r} for {class_name}(): it names an axis, "
             f"not an alignment. {hint} {supported}"
@@ -473,11 +598,11 @@ def _alignment_message(
         axis_hint = (
             f" align={value!r} and rotation= request two orientations "
             f"that cannot both be preserved. To keep the existing rotation, drop "
-            f"align=: {existing_call}. To point along +{axis} instead, replace "
+            f"align=: {existing_call}. To point along {axis} instead, replace "
             f"rotation=: {correction}."
         )
         return f"Invalid align={value!r} for {class_name}(). {supported}{axis_hint}"
-    if axis == "Z":
+    if axis == "+Z":
         axis_hint = (
             f" align={value!r} is not an alignment value; {class_name} already "
             f"points along +Z. Drop align= and use: {correction}."
@@ -485,17 +610,28 @@ def _alignment_message(
     else:
         axis_hint = (
             f" align={value!r} is not an alignment value. To point the primitive "
-            f"along +{axis}, use: {correction}."
+            f"along {axis}, use: {correction}."
         )
     return f"Invalid align={value!r} for {class_name}(). {supported}{axis_hint}"
 
 
 def _normalize_alignment(
-    class_name: str, args: tuple, kwargs: dict[str, Any],
+    class_name: str,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    native_cls: type | None = None,
+    builder: _BuilderInfo | None = None,
 ) -> dict[str, Any]:
     """Normalize semantic alignment strings without guessing coordinates."""
     if "align" not in kwargs:
         return kwargs
+
+    def invalid() -> PrimitiveArgumentError:
+        return PrimitiveArgumentError(_alignment_message(
+            class_name, value, args, kwargs,
+            native_cls=native_cls, builder=builder,
+        ))
 
     from build123d import Align
 
@@ -508,9 +644,7 @@ def _normalize_alignment(
     if isinstance(value, str):
         member = names.get(value.strip().lower())
         if member is None:
-            raise PrimitiveArgumentError(
-                _alignment_message(class_name, value, args, kwargs)
-            )
+            raise invalid()
         normalized = dict(kwargs)
         normalized["align"] = member
         return normalized
@@ -525,21 +659,22 @@ def _normalize_alignment(
                     continue
                 member = names.get(item.strip().lower())
                 if member is None:
-                    raise PrimitiveArgumentError(
-                        _alignment_message(class_name, value, args, kwargs)
-                    )
+                    raise invalid()
                 members.append(member)
             normalized = dict(kwargs)
             normalized["align"] = tuple(members)
             return normalized
 
-    raise PrimitiveArgumentError(
-        _alignment_message(class_name, value, args, kwargs)
-    )
+    raise invalid()
 
 
 def normalize_primitive_kwargs(
-    class_name: str, native_cls: type, args: tuple, kwargs: dict[str, Any],
+    class_name: str,
+    native_cls: type,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    builder: _BuilderInfo | None = None,
 ) -> dict[str, Any]:
     """Return ``kwargs`` with aliases normalized to native names.
 
@@ -597,11 +732,14 @@ def normalize_primitive_kwargs(
     for keyword in _PLACEMENT_KEYWORDS:
         if keyword in normalized:
             value = normalized.pop(keyword)
-            raise PrimitiveArgumentError(
-                _placement_message(class_name, keyword, value, args, normalized)
-            )
+            raise PrimitiveArgumentError(_placement_message(
+                class_name, keyword, value, args, normalized,
+                native_cls=native_cls, builder=builder,
+            ))
 
-    return _normalize_alignment(class_name, args, normalized)
+    return _normalize_alignment(
+        class_name, args, normalized, native_cls=native_cls, builder=builder,
+    )
 
 
 def make_compat_primitive(native_cls: type) -> type:
@@ -609,7 +747,9 @@ def make_compat_primitive(native_cls: type) -> type:
     class_name = native_cls.__name__
 
     def __init__(self, *args, **kwargs):
-        kwargs = normalize_primitive_kwargs(class_name, native_cls, args, kwargs)
+        kwargs = normalize_primitive_kwargs(
+            class_name, native_cls, args, kwargs, builder=_current_builder(),
+        )
         native_cls.__init__(self, *args, **kwargs)
 
     __init__.__wrapped__ = native_cls.__init__  # inspect.signature parity
