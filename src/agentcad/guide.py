@@ -141,7 +141,10 @@ identifies the tracked deliverable.
 
 5. **Read the validation report if invalid.** A `status: invalid_geometry` run
    already carries `validation`: the failing layer, free edges by ID with
-   endpoints, or the located mesh defect, plus a `suggestion`. For an existing
+   endpoints, or the located mesh defect, plus a `suggestion`. If the script
+   loaded a file, `validation.inherited_from_input` says whether that input
+   already failed the same layer (repair the input, not the edit) or is
+   `false` because the run introduced the failure. For an existing
    file:
    ```bash
    agentcad inspect v1_label/output.step
@@ -196,8 +199,38 @@ identifies the tracked deliverable.
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
-  `replace_face`, `copy_shape`, `safe_cut`, `safe_intersection`, `safe_fuse`,
-  `translate`, `rotate`, `annular_boss`, and `raise_annulus`.
+  `copy_shape`, `safe_cut`, `safe_intersection`, `safe_fuse`,
+  `translate`, `rotate`, `bbox_point`, `place_at`, `annular_boss`, and
+  `raise_annulus`.
+- For explicit imports and editor completion, import those same AgentCAD
+  callables from the stable namespace:
+  ```python
+  from agentcad.api import load_step, safe_cut, translate, show_object
+  ```
+  Import primitives and types such as `Box` and `Vector` from `build123d`.
+- Primitive `align=` anchors bounding-box sides at the origin; it is not a
+  position. Use `Align.MIN`, `Align.CENTER`, `Align.MAX`, or `Align.NONE`
+  (preserve native coordinates), either once or per axis. Equivalent
+  case-insensitive strings are accepted:
+  ```python
+  centered = Box(10, 20, 5, align=Align.CENTER)
+  corner = Box(10, 20, 5, align=(Align.MIN, Align.MIN, Align.MIN))
+  mixed = Box(10, 20, 5, align=("min", "center", "max"))
+  with BuildPart("XY") as part:
+      Box(10, 20, 5)
+  ```
+  A numeric tuple is a position, so move after construction instead:
+  `Box(10, 20, 5).translate((10, 0, 5))`. Builder contexts accept `Plane.XY`
+  or plane-name shortcuts such as `"XY"`.
+- The runtime-neutral placement helpers accept either new build123d shapes or
+  raw imported topology and return an independent raw shape:
+  ```python
+  moved = translate(shape, 10, 0, 5)
+  turned = rotate(shape, "Y", 90)
+  seated = place_at(shape,
+      from_pt=bbox_point(shape, "center", "center", "min"),
+      to_pt=(10, 0, 5))
+  ```
 - For imported STEP/BREP edits, `load_step(path)` returns a build123d `Part`:
   ```python
   base = load_step("v1_vendor/output.step")
@@ -314,6 +347,10 @@ _CADQUERY_SCRIPT_RULES = """## Script writing rules
   part = cq.Workplane('XY').box(10, 20, 5)
   show_object(part)
   ```
+- Geometry helpers such as `safe_cut` and `translate` may also be imported
+  explicitly from `agentcad.api`. The CadQuery-owned `cq`, `show_object`, and
+  `assemble` bindings are intentionally pre-injected runtime adapters; keep
+  using them without an `agentcad.api` import in compatibility scripts.
 - Helpers that operate on `TopoDS_Shape` use `.val().wrapped` as the bridge:
   ```python
   part = cq.Workplane('XY').box(10, 20, 5).val().wrapped

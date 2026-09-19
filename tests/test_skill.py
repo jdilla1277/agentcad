@@ -82,6 +82,9 @@ def test_skill_show_content_mentions_commands(runner):
     assert "cylindrical_features[].axis" in content
     assert "show_object" in content
     assert "raise_annulus" in content
+    assert 'align=("min", "center", "max")' in content
+    assert "numeric tuple is a position" in content
+    assert "place_at(shape" in content
     assert "Compound(result)" in content
     assert "`load_step(path)` returns a build123d `Part`" in content
     assert "base.solids()" in content

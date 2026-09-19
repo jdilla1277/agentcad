@@ -8,7 +8,7 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS_Shape
 
-from agentcad.helpers import bbox_point, rotate, translate
+from agentcad.helpers import bbox_point, place_at, rotate, translate
 from agentcad.metrics import compute_metrics
 from agentcad.runners import build123d as b3d_runner
 from agentcad.step_io import load_cad_shape
@@ -66,6 +66,30 @@ def test_rotation_preserves_source_and_volume(shape, axis, expected_size):
 
 def test_zero_rotation_copies_topology(shape):
     _assert_independent(shape, rotate(shape, "Z", 0))
+
+
+def test_bbox_point_and_place_at_accept_raw_or_wrapped_shapes(shape):
+    source_min = bbox_point(shape, "min", "min", "min")
+    result = place_at(shape, from_pt=source_min, to_pt=(0, 0, 0))
+    assert bbox_point(result, "min", "min", "min") == pytest.approx((0, 0, 0))
+    assert bbox_point(shape) == pytest.approx((0, 0, 0))
+    assert compute_metrics(result)["volume"] == pytest.approx(6000)
+    _assert_independent(shape, result)
+
+
+def test_place_at_accepts_vector_points(shape):
+    result = place_at(shape, Vector(0, 0, 0), Vector(10, 20, 30))
+    assert bbox_point(result) == pytest.approx((10, 20, 30))
+
+
+@pytest.mark.parametrize("from_pt,to_pt", [
+    ((0, 0), (1, 2, 3)),
+    ((0, 0, 0), "origin"),
+    ((0, 0, 0), (1, 2, float("inf"))),
+])
+def test_invalid_place_at_points_have_exact_signature(shape, from_pt, to_pt):
+    with pytest.raises((TypeError, ValueError), match=r"Use place_at\(shape, from_pt="):
+        place_at(shape, from_pt=from_pt, to_pt=to_pt)
 
 
 @pytest.mark.parametrize("args", [
@@ -128,8 +152,9 @@ def test_imported_compound_repeated_transforms_are_independent():
     first = translate(source, (100, 0, 0))
     second = translate(source, Vector(100, 0, 0))
     rotated = rotate(first, "Z", 90)
+    placed = place_at(source, from_pt=original_center, to_pt=(0, 0, 0))
 
-    for result in (first, second, rotated):
+    for result in (first, second, rotated, placed):
         _assert_independent(source, result)
         metrics = compute_metrics(result)
         assert metrics["volume"] == pytest.approx(original_metrics["volume"])
@@ -140,3 +165,4 @@ def test_imported_compound_repeated_transforms_are_independent():
     assert bbox_point(source) == pytest.approx(original_center)
     assert bbox_point(first) == pytest.approx((original_center[0] + 100, *original_center[1:]))
     assert bbox_point(second) == pytest.approx(bbox_point(first))
+    assert bbox_point(placed) == pytest.approx((0, 0, 0))
