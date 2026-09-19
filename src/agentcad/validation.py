@@ -421,7 +421,13 @@ def _face_count(shape) -> int:
 
 
 def _layer_structure(shape, *, evidence_limit=_EVIDENCE_LIMIT, shape_metrics=None, **_) -> dict:
-    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
+    from OCP.TopAbs import (
+        TopAbs_EDGE,
+        TopAbs_FACE,
+        TopAbs_SHELL,
+        TopAbs_SOLID,
+        TopAbs_VERTEX,
+    )
     from OCP.TopExp import TopExp
     from OCP.TopTools import TopTools_IndexedMapOfShape
     from agentcad.native_io import suppress_native_output
@@ -443,13 +449,23 @@ def _layer_structure(shape, *, evidence_limit=_EVIDENCE_LIMIT, shape_metrics=Non
             1 for i in range(1, face_count + 1)
             if not faces_in_solids.Contains(all_faces.FindKey(i))
         )
+        single_solid_covers_shape = False
+        if solid_count == 1 and loose == 0:
+            solid = solids.FindKey(1)
+            _, solid_edge_count = count(TopAbs_EDGE, solid)
+            _, vertex_count = count(TopAbs_VERTEX)
+            _, solid_vertex_count = count(TopAbs_VERTEX, solid)
+            single_solid_covers_shape = (
+                edge_count == solid_edge_count
+                and vertex_count == solid_vertex_count
+            )
     from agentcad.topo_ids import solid_entries
     if (
-        solid_count == 1 and loose == 0 and shape_metrics
+        single_solid_covers_shape and shape_metrics
         and "bounding_box" in shape_metrics and "volume" in shape_metrics
     ):
-        # One solid and nothing outside it: the solid's tight bounding box and
-        # volume are the whole shape's, which the caller already computed.
+        # The only faces, edges, and vertices are in this solid, so its tight
+        # bounding box and volume are the whole shape's cached values.
         solids = [{"id": 1, "volume": shape_metrics["volume"],
                    "bbox": shape_metrics["bounding_box"]}]
     else:

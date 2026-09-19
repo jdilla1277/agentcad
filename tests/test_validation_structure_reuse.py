@@ -7,6 +7,8 @@ compute_metrics and again as the single solid's evidence.
 
 from pathlib import Path
 
+from build123d import Box, Compound, Edge
+
 from agentcad import topo_ids
 from agentcad.core_build import validated_metrics
 from agentcad.metrics import compute_metrics
@@ -54,6 +56,20 @@ def test_loose_faces_disable_the_shortcut(monkeypatch):
     structure = validate_shape(shape, shape_metrics=metrics)["layers"]["structure"]
     assert structure["faces_outside_solids"] >= 1
     assert len(calls) == structure["solid_count"]
+
+
+def test_loose_edges_disable_the_shortcut(monkeypatch):
+    shape = Compound(children=[
+        Box(1, 1, 1),
+        Edge.make_line((10, 0, 0), (11, 0, 0)),
+    ]).wrapped
+    metrics = compute_metrics(shape, check_validity=False)
+    calls = _count_bboxes(monkeypatch)
+    structure = validate_shape(shape, shape_metrics=metrics)["layers"]["structure"]
+    assert structure["solid_count"] == 1
+    assert structure["faces_outside_solids"] == 0
+    assert len(calls) == 1
+    assert structure["solids"][0]["bbox"] != metrics["bounding_box"]
 
 
 def test_validated_metrics_passes_its_metrics_through(monkeypatch):
