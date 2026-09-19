@@ -329,6 +329,37 @@ def test_axis_like_align_has_literal_executable_correction(
     assert tuple(bounds.size) == pytest.approx(expected_size)
 
 
+@pytest.mark.parametrize("keyword", ["align", "axis"])
+def test_existing_rotation_and_axis_guess_report_executable_choices(prims, keyword):
+    kwargs = {
+        "rotation": (15, 0, 0),
+        "mode": Mode.SUBTRACT,
+        keyword: "X",
+    }
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](2, 20, **kwargs)
+
+    keep_rotation = (
+        "Cylinder(2, 20, rotation=(15, 0, 0), mode=Mode.SUBTRACT)"
+    )
+    point_along_x = (
+        "Cylinder(2, 20, rotation=(0, 90, 0), mode=Mode.SUBTRACT)"
+    )
+    msg = str(exc.value)
+    assert "request two orientations" in msg
+    assert "cannot both be preserved" in msg
+    assert f"drop {keyword}=: {keep_rotation}" in msg
+    assert f"point along +X instead, replace rotation=: {point_along_x}" in msg
+    assert "rotate(" not in msg
+
+    namespace = vars(build123d)
+    with prims["BuildPart"]() as part:
+        prims["Box"](60, 10, 10)
+        tool = eval(point_along_x, namespace)
+    assert tuple(tool.bounding_box().size) == pytest.approx((20, 4, 4))
+    assert _volume(part.part) == pytest.approx(60 * 10 * 10 - math.pi * 2**2 * 20)
+
+
 def test_numeric_align_repair_preserves_and_executes_native_arguments(prims):
     with pytest.raises(PrimitiveArgumentError) as exc:
         prims["Cylinder"](

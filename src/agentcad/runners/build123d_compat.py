@@ -221,8 +221,13 @@ def _orientation_correction(
     kwargs: dict[str, Any],
     *,
     exclude: frozenset[str] = frozenset(),
-) -> tuple[str, str] | None:
-    """Return ``(axis, call)`` for an unambiguous X/Y/Z orientation guess."""
+) -> tuple[str, str, str | None] | None:
+    """Return ``(axis, target_call, existing_call)`` for an axis guess.
+
+    ``existing_call`` is present when the caller also supplied ``rotation=``.
+    That is a semantic conflict, not a rotation-composition request: the
+    diagnostic presents the two calls separately so neither intent is hidden.
+    """
     if not isinstance(value, str):
         return None
     axis = value.strip().upper()
@@ -231,18 +236,24 @@ def _orientation_correction(
 
     call = _example_call(class_name, args, kwargs, exclude=exclude)
     rotation = _AXIS_ROTATIONS[axis]
-    if rotation is None:
-        return axis, call
     if "rotation" in kwargs and "rotation" not in exclude:
-        rotate_axis, angle = ("Y", 90) if axis == "X" else ("X", -90)
-        return axis, f"rotate({call}, '{rotate_axis}', {angle})"
+        target_rotation = (0, 0, 0) if rotation is None else rotation
+        return axis, _example_call(
+            class_name,
+            args,
+            kwargs,
+            exclude=exclude,
+            overrides={"rotation": target_rotation},
+        ), call
+    if rotation is None:
+        return axis, call, None
     return axis, _example_call(
         class_name,
         args,
         kwargs,
         exclude=exclude,
         overrides={"rotation": rotation},
-    )
+    ), None
 
 
 def _placement_message(
@@ -282,7 +293,15 @@ def _placement_message(
             class_name, value, args, kwargs
         )
         if correction is not None:
-            axis, oriented_call = correction
+            axis, oriented_call, existing_call = correction
+            if existing_call is not None:
+                return (
+                    f"{head} rotation= and {keyword}={value!r} request two "
+                    f"orientations and cannot both be preserved. To keep the "
+                    f"existing rotation, drop {keyword}=: {existing_call}. To "
+                    f"point along +{axis} instead, replace rotation=: "
+                    f"{oriented_call}."
+                )
             if axis == "Z":
                 return (
                     f"{head} {class_name} already points along +Z; drop the "
@@ -365,7 +384,15 @@ def _alignment_message(
     )
     if orientation is None:
         return f"Invalid align={value!r} for {class_name}(). {supported}"
-    axis, correction = orientation
+    axis, correction, existing_call = orientation
+    if existing_call is not None:
+        axis_hint = (
+            f" align={value!r} and rotation= request two orientations "
+            f"that cannot both be preserved. To keep the existing rotation, drop "
+            f"align=: {existing_call}. To point along +{axis} instead, replace "
+            f"rotation=: {correction}."
+        )
+        return f"Invalid align={value!r} for {class_name}(). {supported}{axis_hint}"
     if axis == "Z":
         axis_hint = (
             f" align={value!r} is not an alignment value; {class_name} already "
