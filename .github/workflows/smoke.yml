@@ -97,6 +97,7 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_build123d_primitive_aliases.py \
             tests/test_cadquery_optional.py tests/test_written_mesh_validation.py tests/test_run_guidance.py tests_b3d/test_step_output_contract.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py -q
 
       - name: Run OCP-free interface guardrails
