@@ -61,6 +61,30 @@ def test_pass_through_of_an_invalid_input_is_reported_as_inherited(runner, isola
     assert v["repairs"][0]["applicability"] == "diagnosed"
 
 
+def test_nested_script_checks_input_from_invocation_directory(runner, isolated_dir):
+    shutil.copyfile(FIXTURES / "open_shell.step", isolated_dir / "vendor input.step")
+    scripts = isolated_dir / "scripts"
+    scripts.mkdir()
+    assert runner.invoke(cli, ["init", "--runtime", "build123d"]).exit_code == 0
+    (scripts / "part.py").write_text(
+        'show_object(load_step_shape("vendor input.step"))\n'
+    )
+
+    result = runner.invoke(cli, [
+        "run", "scripts/part.py", "--label", "nested", "--no-preview",
+        "--no-view", "--no-diff", "--no-daemon",
+    ])
+
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.stdout)
+    validation = data["validation"]
+    assert validation["inherited_from_input"]["path"] == "vendor input.step"
+    inspect_command = "agentcad inspect 'vendor input.step' --ids"
+    assert data["next_actions"][0] == inspect_command
+    assert f"`{inspect_command}`" in validation["suggestion"]
+    assert f"`{inspect_command}`" in validation["repairs"][0]["how"]
+
+
 def test_breaking_a_valid_input_is_reported_as_introduced(runner, isolated_dir):
     shutil.copyfile(FIXTURES / "closed_box.step", isolated_dir / "box.step")
     result = _run(runner, isolated_dir,

@@ -5,6 +5,7 @@ metrics where applicable, final geometry validation, and STEP export. Visual
 artifacts and browser work happen only after this boundary.
 """
 
+import shlex
 from copy import deepcopy
 from pathlib import Path
 
@@ -180,6 +181,7 @@ def annotate_input_provenance(
     layer_text = (failing or "validation").replace("_", " ")
     validation["inputs_checked"] = checked
     if inherited is not None:
+        input_arg = shlex.quote(str(inherited["path"]))
         validation["inherited_from_input"] = inherited
         validation["message"] = (
             f"{validation.get('message', '')} The loaded input {inherited['path']} already "
@@ -187,7 +189,7 @@ def annotate_input_provenance(
         ).strip()
         validation["suggestion"] = (
             f"Repair or replace the input file rather than the edit: run `agentcad inspect "
-            f"{inherited['path']}` to see its defect. The deliverable gate will keep failing "
+            f"{input_arg} --ids` to see its defect. The deliverable gate will keep failing "
             "until the input itself passes."
         )
         # The generic repair possibilities describe fixing an operation in the
@@ -200,7 +202,7 @@ def annotate_input_provenance(
                 "so no change to the script's operations can make the result pass."
             ),
             "how": (
-                f"Inspect the input (`agentcad inspect {inherited['path']} --ids`), repair it "
+                f"Inspect the input (`agentcad inspect {input_arg} --ids`), repair it "
                 "in its source tool or request a corrected export, then rerun the script "
                 "against the repaired file."
             ),

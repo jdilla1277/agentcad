@@ -1458,7 +1458,9 @@ def _run_impl(
         _sub = time.perf_counter()
         annotate_input_provenance(
             validation, result.loaded_files, profile=validation_profile,
-            cwd=script_path.parent,
+            # The injected loaders resolve relative paths from the process
+            # working directory, even when the script itself is elsewhere.
+            cwd=Path.cwd(),
         )
         _timings["input_validation_ms"] = round((time.perf_counter() - _sub) * 1000)
     _finish_phase("export_step", _t, "export_step_ms")
