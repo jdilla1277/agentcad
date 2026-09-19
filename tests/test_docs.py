@@ -1,5 +1,7 @@
 # collect-on-default-profile
 import json
+
+import pytest
 import shlex
 
 from click.testing import CliRunner
@@ -805,8 +807,10 @@ def test_docs_build123d_mentions_annular_edit_helpers(runner):
     assert "annular_boss" in content
     assert "raise_annulus" in content
     assert "load_step_shape" in content
-    assert "Compound(result)" in content
-    assert "fragile boolean fuse" in content
+    # Issue #194: the Compound(raw) idiom is gone; helpers keep the input kind.
+    assert "Compound(result)" not in content
+    assert "same kind" in content
+    assert "fragile boolean" in content
     assert "loft_sections([lower, upper])" in content
     assert "copy_shape" in content
     assert "independent geometry copy" in content
@@ -884,3 +888,48 @@ def test_docs_patterns_mixed_edge_wire(runner):
     content = json.loads(result.stdout)["content"]
     assert "BRepBuilderAPI_MakeWire" in content
     assert "BRepBuilderAPI_MakeEdge" in content
+
+
+def test_cadquery_editing_docs_teach_wrapper_preserving_helpers(runner):
+    """Issue #194 review: the CadQuery overlay must not send agents back to
+    the raw .val().wrapped bridge, which drops every object but the first on
+    a multi-object Workplane."""
+    result = runner.invoke(cli, ["docs", "editing", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "operate on raw shapes" not in content
+    assert "Workplane in, Workplane out" in content
+    assert "every\n  stack object preserved" in content or "stack object preserved" in content
+    assert "show_object(assemble(result))" not in content
+    assert "importers.importStep" in content
+
+
+@pytest.mark.parametrize("section", ["helpers", "patterns", "editing", "preamble"])
+def test_cadquery_overlays_do_not_teach_val_wrapped_bridge(runner, section):
+    """Issue #194 review: every CadQuery overlay must show Workplane-in /
+    Workplane-out helper use; `.val().wrapped` drops all but the first
+    object of a multi-object Workplane."""
+    result = runner.invoke(cli, ["docs", section, "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "= cq.Workplane('XY').box(10, 20, 5).val().wrapped" not in content
+    assert ".extrude(120).val().wrapped" not in content
+    assert ".box(5, 5, 80).val().wrapped" not in content
+
+
+def test_cadquery_helpers_docs_state_same_kind_contract(runner):
+    result = runner.invoke(cli, ["docs", "helpers", "--runtime", "cadquery"])
+    content = json.loads(result.stdout)["content"]
+    assert "cq.Workplane in, cq.Workplane out" in content
+    assert "every stack object preserved" in content
+    assert "combine=False" in content
+    assert "Combine cq.Workplane, cq.Shape, or raw TopoDS_Shape" in content
+    assert "STEP path, raw shape, cq.Shape, or" in content
+
+
+def test_cadquery_patterns_docs_use_workplanes_with_helpers(runner):
+    result = runner.invoke(cli, ["docs", "patterns", "--runtime", "cadquery"])
+    content = json.loads(result.stdout)["content"]
+    assert "placed = translate(part, 50, 0, 0)     # still a cq.Workplane" in content
+    assert "do\n    not pass .val().wrapped" in content
+    assert "base = cq.Workplane('XY').box(100, 100, 10)\n" in content

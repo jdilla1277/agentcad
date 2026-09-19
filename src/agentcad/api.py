@@ -98,14 +98,16 @@ def _record_loaded_file(path) -> None:
 
 
 def assemble(*shapes):
-    """Return a build123d ``Compound`` from build123d or raw OCP shapes."""
-    from build123d import Compound, Shape
+    """Return a build123d ``Compound`` from build123d or raw OCP shapes.
 
-    wrapped = [
-        shape if isinstance(shape, Shape) else Compound(shape)
-        for shape in shapes
-    ]
-    return Compound(children=wrapped)
+    Raw shapes are wrapped by topology type. ``Compound(raw_solid)`` is not
+    the right idiom: it yields a wrapper with zero volume whose iteration
+    walks shells (issue #194).
+    """
+    from build123d import Compound
+    from agentcad.runners.build123d import _as_build123d
+
+    return Compound(children=[_as_build123d(shape) for shape in shapes])
 
 
 # The edit implementations still live beside the build123d runner for now.

@@ -85,7 +85,8 @@ def test_skill_show_content_mentions_commands(runner):
     assert 'align=("min", "center", "max")' in content
     assert "numeric tuple is a position" in content
     assert "place_at(shape" in content
-    assert "Compound(result)" in content
+    assert "Compound(result)" not in content
+    assert "return the same kind of shape they were given" in content
     assert "`load_step(path)` returns a build123d `Part`" in content
     assert "base.solids()" in content
     assert "base.faces()" in content

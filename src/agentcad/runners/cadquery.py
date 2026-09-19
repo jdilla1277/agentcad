@@ -85,6 +85,23 @@ def _check_b3d_only_helpers(source: str) -> list:
     }]
 
 
+def _workplane_shape(workplane):
+    """Return one cq.Shape covering every object on a Workplane stack.
+
+    ``.val()`` keeps only the first object, so a Workplane built with
+    ``pushPoints(...).box(..., combine=False)`` or returned by a helper on
+    such a stack would lose solids at the show_object boundary.
+    """
+    import cadquery as cq
+
+    shapes = [value for value in workplane.vals() if isinstance(value, cq.Shape)]
+    if len(shapes) == 1:
+        return shapes[0]
+    if shapes:
+        return cq.Compound.makeCompound(shapes)
+    return workplane.val()
+
+
 def execute(user_source: str, params: dict[str, Any] | None = None) -> ExecutionResult:
     """Parse, validate params, execute via CQGI, extract the result shape.
 
@@ -206,7 +223,7 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
             if isinstance(s, cq.Shape):
                 wp = s
             elif hasattr(s, "val"):
-                wp = s.val()
+                wp = _workplane_shape(s)
             else:
                 wp = cq.Shape.cast(s)
             per_part_shapes.append(wp)
@@ -229,6 +246,10 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
                 shape = original_shape
             else:
                 shape = cq.Workplane("XY").newObject([per_part_shapes[0]])
+            # Issue #194: read the compound of every stack object, not
+            # `.val()`, so a multi-object Workplane keeps all its solids in
+            # the metrics and the tracked STEP.
+            topo_shape = per_part_shapes[0].wrapped
         else:
             shape = cq.Workplane("XY").newObject(
                 [cq.Compound.makeCompound(per_part_shapes)]
@@ -237,8 +258,7 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
             # per-part breakdown, so the old "consider makeCompound()" tip
             # would be actively misleading — following it would collapse the
             # breakdown into a single result.
-
-        topo_shape = shape.val().wrapped
+            topo_shape = shape.val().wrapped
     except AttributeError as e:
         # Typically: non-CadQuery shape passed to show_object (e.g. forcing
         # --runtime=cadquery on a build123d script). Surface as an execution

@@ -242,25 +242,42 @@ identifies the tracked deliverable.
   Use `agentcad measure` and `agentcad inspect` for read-only discovery; use
   the loaded `Part` in a script when changing geometry. See
   `agentcad docs editing` for the complete edit workflow.
+- The edit helpers keep your object model. `translate`, `rotate`, `place_at`,
+  `copy_shape`, `mirror_fuse`, `safe_cut`, `safe_intersection`, `safe_fuse`,
+  and `raise_annulus` return the same kind of shape they were given: a
+  build123d `Part` in gives a build123d `Part` out, so `.faces()`, `+`, `-`,
+  `.fillet()`, and `show_object()` keep working afterwards. A raw
+  `TopoDS_Shape` in gives a raw shape out (no `.wrapped`, not iterable);
+  `load_step_shape(path)` is the explicit raw escape hatch. Do not wrap a raw
+  solid in `Compound(raw)` or `Part(raw)` — that wrapper reports zero volume
+  and iterates over shells. `show_object()`, `show_assembly()`, and
+  `assemble()` accept raw and wrapped shapes directly; the ID-based
+  `fillet_edges` / `cut_pocket` family accepts both and returns build123d
+  shapes.
 - When repeating an imported feature, use the pre-injected `rotate()` or
-  `translate()` helper on its raw shape. These helpers make an independent
-  geometry copy before moving it, preventing shared topology from corrupting
-  later Boolean results:
+  `translate()` helper. These helpers make an independent geometry copy
+  before moving it, preventing shared topology from corrupting later Boolean
+  results:
   ```python
-  blade = load_step_shape("blade.step")
-  blade_72 = rotate(blade, "Z", 72)
+  blade = load_step("blade.step")       # build123d Part
+  blade_72 = rotate(blade, "Z", 72)     # still a Part
   ```
   Use `copy_shape(blade)` when an independent, untransformed copy is needed.
 - For imported geometry Booleans, use `safe_cut(source, *tools)`,
   `safe_intersection(left, right)`, and `safe_fuse(source, *tools)`. They copy
   every input, run all tools together, validate the output, and reject
-  physically impossible volume changes instead of returning them silently.
+  physically impossible volume changes instead of returning them silently:
+  ```python
+  base = load_step("v1_vendor/output.step")
+  trimmed = safe_cut(base, Cylinder(radius=5, height=40))   # Part in, Part out
+  show_object(trimmed)
+  ```
 - For imported STEP annular edits, use the non-fuse workflow:
   ```python
-  raw = load_step_shape("v1_vendor/output.step")
-  result = raise_annulus(raw, center=(0, 0), inner_diameter=40,
+  base = load_step("v1_vendor/output.step")
+  result = raise_annulus(base, center=(0, 0), inner_diameter=40,
                          outer_diameter=80, height=7, z=5)
-  show_object(Compound(result))
+  show_object(result)   # Part holding two solids: base + land, not fused
   ```
 - For OCP internals (`gp_Pnt`, `BRepPrimAPI`, etc.), import manually.
 - CadQuery compatibility remains available for existing projects. See
@@ -325,7 +342,7 @@ identifies the tracked deliverable.
 
 - **Build at origin, then position:** Create geometry at origin, use `translate()`
   and `rotate()` to place it. These helpers copy imported topology before
-  transforming it.
+  transforming it and hand back the same kind of shape they were given.
 - **Compound vs fuse:** `Compound([...])` keeps assembly parts separate. Use
   `safe_fuse(source, *tools)` when imported solids must become one union; use
   build123d's `+` operator for ordinary newly constructed geometry.
@@ -351,17 +368,31 @@ _CADQUERY_SCRIPT_RULES = """## Script writing rules
   explicitly from `agentcad.api`. The CadQuery-owned `cq`, `show_object`, and
   `assemble` bindings are intentionally pre-injected runtime adapters; keep
   using them without an `agentcad.api` import in compatibility scripts.
-- Helpers that operate on `TopoDS_Shape` use `.val().wrapped` as the bridge:
+- The edit helpers (`translate`, `rotate`, `place_at`, `copy_shape`,
+  `mirror_fuse`, `safe_cut`, `safe_intersection`, `safe_fuse`,
+  `raise_annulus`) take CadQuery objects directly and return the same kind
+  they were given: a `cq.Workplane` in gives a `cq.Workplane` out (same plane,
+  chained from the original), a `cq.Shape` gives a `cq.Shape`, and a raw
+  `TopoDS_Shape` stays raw.
   ```python
-  part = cq.Workplane('XY').box(10, 20, 5).val().wrapped
-  moved = translate(part, 50, 0, 0)
+  base = cq.importers.importStep('v1_vendor/output.step')   # cq.Workplane
+  moved = translate(base, 50, 0, 0)                          # cq.Workplane
+  trimmed = safe_cut(moved, cq.Workplane('XY').cylinder(40, 3).translate((50, 0, 0)))
+  show_object(trimmed.faces('>Z').fillet(0.5))              # still CadQuery
   ```
+  Every object on a multi-object Workplane (for example
+  `pushPoints([...]).box(..., combine=False)`) is transformed or used in the
+  Boolean, and the result keeps one object per resulting piece. Do not bridge
+  through `.val().wrapped`: `.val()` keeps only the first object, and the raw
+  result would have to be re-wrapped by hand.
 - Imported-geometry Booleans should use `safe_cut`, `safe_intersection`, or
   `safe_fuse`; these independently copy inputs and reject invalid or
   physically impossible output.
-- To show raw helper output:
+- Only the constructors return raw shapes (`annular_boss`, the wire and sweep
+  helpers, or `raise_annulus` given a STEP path). `show_object` accepts a raw
+  `TopoDS_Shape` directly; to keep editing it in CadQuery, wrap it once:
   ```python
-  show_object(cq.Workplane('XY').newObject([cq.Shape.cast(topo_shape)]))
+  show_object(assemble(raw_shape))   # or cq.Workplane('XY').newObject([cq.Shape.cast(raw_shape)])
   ```
 - For OCP internals (`gp_Pnt`, `BRepPrimAPI`, etc.), import manually.
 
