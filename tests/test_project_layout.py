@@ -416,6 +416,7 @@ def test_daemon_forwards_override(runner, isolated_dir, monkeypatch):
 
     build = isolated_dir / "output"
     invoke(runner, "init", "--build-dir", str(build), "--no-agent-setup")
+    (isolated_dir / "model.py").write_text("show_object(Box(1, 2, 3))\n")
     seen = []
     monkeypatch.delenv("AGENTCAD_DAEMON")
     monkeypatch.setattr(routing._daemon, "daemon_supported", lambda: True)

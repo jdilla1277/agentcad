@@ -12,7 +12,6 @@ from agentcad.commands._daemon_routing import (
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import load_manifest
-from agentcad.metrics import compute_metrics
 from agentcad.step_io import load_cad_shape
 
 _CAD_FILE_SUFFIXES = {".step", ".stp", ".brep"}
@@ -109,6 +108,10 @@ def _resolve_file_ref(ref):
 
 
 def _load_file_shape_and_metrics(path):
+    # CLI registration imports this module even for invalid `run` arguments.
+    # Load OpenCascade only when a file comparison actually needs metrics.
+    from agentcad.metrics import compute_metrics
+
     shape = load_cad_shape(path)
     return shape, compute_metrics(shape)
 

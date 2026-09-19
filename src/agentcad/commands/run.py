@@ -136,6 +136,73 @@ def candidate_scripts(directory=None, limit=5):
     return names[:limit]
 
 
+def _run_retry_command(ctx, *, script=None, omit=(), **overrides):
+    """Copy the invocation with only the rejected input removed/replaced."""
+    values = {**ctx.params, **overrides}
+    script = script if script is not None else values["script"]
+    if script.startswith("-"):
+        script = "./" + script
+    argv = ["agentcad", "run", script]
+    label = values.get("label") or values.get("legacy_output")
+    options = [
+        ("--label", label), ("--render", values.get("render")),
+        ("--export", values.get("export")),
+        ("--no-preview", values.get("preview") is False),
+        ("--no-diff", values.get("auto_diff") is False),
+        ("--no-view", values.get("open_view") is False),
+        ("--params", values.get("params")),
+        ("--dry-run", values.get("dry_run", False)),
+        ("--runtime", values.get("runtime")),
+        ("--validation-profile", values.get("validation_profile")
+         if values.get("validation_profile") != "deliverable" else None),
+        ("--no-daemon", values.get("no_daemon", False)),
+    ]
+    layout = get_project()
+    if layout.configured:
+        options.append(("--build-dir", str(layout.build_root)))
+    for option, value in options:
+        if option in omit or value is None or value is False:
+            continue
+        if value is True:
+            argv.append(option)
+        elif str(value).startswith("-"):
+            argv.append(f"{option}={value}")
+        else:
+            argv.extend([option, str(value)])
+    return shlex.join(argv)
+
+
+def _validate_run_input(ctx, script, *, cad_file):
+    """Reject missing/non-Python inputs without importing CAD or routing."""
+    path = Path(script)
+    if path.is_file() and (cad_file or path.suffix.lower() == ".py"):
+        return
+    if not path.exists():
+        kind, message = "script_not_found", f"Script file '{script}' not found."
+    elif not path.is_file():
+        kind, message = "invalid_script_path", f"Script path '{script}' is not a file."
+    else:
+        kind, message = "invalid_script_type", (
+            f"Expected a Python CAD script (.py), got '{script}'. "
+            "Shell scripts cannot be executed by agentcad run."
+        )
+    candidates = candidate_scripts() if not cad_file else []
+    if cad_file:
+        message += " Supply an existing CAD file to agentcad import."
+        actions = ["agentcad import --help"]
+    elif candidates:
+        message += f" Python scripts here: {', '.join(candidates)}."
+        actions = [_run_retry_command(ctx, script=name) for name in candidates[:3]]
+    else:
+        message += " No Python scripts in this directory; write one first."
+        actions = ["agentcad docs quickstart"]
+    _emit_run({
+        "command": "run", "status": "error", "error_kind": kind,
+        "message": message, "next_actions": actions,
+    })
+    sys.exit(1)
+
+
 class _RunTimeout(BaseException):
     """Raised by the SIGALRM watchdog so broad script catches don't swallow it."""
 
@@ -828,7 +895,7 @@ def _assign_part_identity(raw_parts):
         "azimuth:elevation angles, or a mix such as front,45:30."
     ),
 )
-@click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb, obj).")
+@click.option("--export", default=None, help="Comma-separated mesh formats (stl, glb, obj). STEP is always produced; read outputs.step.")
 @click.option(
     "--preview/--no-preview",
     default=True,
@@ -909,7 +976,11 @@ def run(
             param_type="option",
         )
     if output is not None:
-        validate_version_label(output)
+        try:
+            validate_version_label(output)
+        except ProjectError as exc:
+            exc.next_actions = [_run_retry_command(ctx, label="first")]
+            raise
 
     # Reject unsupported --export formats before anything else — before the
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
@@ -924,6 +995,7 @@ def run(
                 "command": "run",
                 "status": "error",
                 "message": NO_FORMATS_MESSAGE,
+                "next_actions": [_run_retry_command(ctx, omit=("--export",))],
             })
             sys.exit(1)
         invalid = unsupported_export_formats(export)
@@ -933,8 +1005,14 @@ def run(
                 "status": "error",
                 "message": (
                     f"Unsupported format(s): {', '.join(invalid)}. "
-                    f"Supported: stl, glb, obj"
+                    "Supported: stl, glb, obj. STEP is always produced by a successful "
+                    "run; read outputs.step. --export is only for mesh formats."
                 ),
+                "next_actions": [_run_retry_command(
+                    ctx, export=",".join(
+                        fmt for fmt in parse_export_formats(export) if fmt not in invalid
+                    ) or None,
+                )],
             })
             sys.exit(1)
 
@@ -944,7 +1022,9 @@ def run(
     # files actually import; Tier 1+ files surface the polite-no responses
     # via the same dispatch (better than a Python parse error).
     from agentcad import file_detect as _fd
-    if _fd.is_recognized_cad_extension(script):
+    cad_file = _fd.is_recognized_cad_extension(script)
+    _validate_run_input(ctx, script, cad_file=cad_file)
+    if cad_file:
         from agentcad.commands.import_cmd import import_cmd
         ctx.invoke(
             import_cmd,
@@ -1097,45 +1177,20 @@ def _run_impl(
         sys.exit(1)
 
     script_path = Path(script)
-    if not script_path.exists():
-        # Agents land here after copying a placeholder or guessing a name, so
-        # point at the scripts that do exist instead of ending the trail.
-        candidates = candidate_scripts()
-        message = f"Script file '{script}' not found."
-        if candidates:
-            # Keep every flag the caller passed (argv mirrors them for daemon
-            # routing) so a literal copy of the hint behaves the same way.
-            suggested = ["agentcad", *argv[:1]]
-            suggested += argv[2:]
-            if output is None and not dry_run:
-                suggested += ["--label", "LABEL"]
-            if no_daemon:
-                suggested.append("--no-daemon")
-            layout = get_project()
-            if layout.configured:
-                suggested += ["--build-dir", str(layout.build_root)]
-            message += f" Python scripts here: {', '.join(candidates)}."
-            next_actions = [
-                shlex.join([*suggested[:2], name, *suggested[2:]])
-                for name in candidates[:3]
-            ]
-        else:
-            message += " No Python scripts in this directory; write one first."
-            next_actions = ["agentcad docs quickstart"]
-        _emit_run({
-            "command": "run",
-            "status": "error",
-            "error_kind": "script_not_found",
-            "message": message,
-            "next_actions": next_actions,
-        })
-        sys.exit(1)
-
     # Dispatch to the right runner. Precedence:
     #   --runtime flag > project mode > legacy source detection > default
     from agentcad.runners import dispatch
 
-    raw_source = script_path.read_text()
+    try:
+        raw_source = script_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        _emit_run({
+            "command": "run", "status": "error", "error_kind": "script_unreadable",
+            "message": f"Cannot read Python script '{script}': {exc}",
+            "suggestion": f"Save {script} as a readable UTF-8 Python file, then rerun.",
+            "next_actions": [_run_retry_command(ctx)],
+        })
+        sys.exit(1)
     project_default = dispatch.project_runtime()
 
     try:
@@ -1205,7 +1260,7 @@ def _run_impl(
 
     # Validate --render spec before version allocation (errors should be cheap)
     if render:
-        from agentcad.render import parse_view_spec as _parse_view_spec
+        from agentcad.view_spec import parse_view_spec as _parse_view_spec
         try:
             _parse_view_spec(render)
         except ValueError as e:
