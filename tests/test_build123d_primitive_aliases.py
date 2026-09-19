@@ -10,7 +10,9 @@ coordinate tuples and invalid axis-like align strings receive targeted,
 copyable placement guidance.
 """
 
+import json
 import math
+import re
 
 import pytest
 from click.testing import CliRunner
@@ -276,12 +278,306 @@ def test_alignment_shortcuts_cover_other_native_primitives(prims):
     assert tuple(torus_bounds.max) == pytest.approx((24, 12, 0))
 
 
-def test_sketch_axis_guidance_uses_a_plane_not_3d_rotation(prims):
+# ---------------------------------------------------------------------------
+# Issue #218: sketch orientation guidance uses builder planes, not 3D
+# rotation tuples. Every literal repair is executed in the builder context
+# that produced the error, and the resulting plane and signed extrusion
+# direction are checked, not just the message text.
+# ---------------------------------------------------------------------------
+
+# signed axis -> named plane whose normal points that way
+_SKETCH_PLANES = {
+    "+X": "Plane.YZ", "-X": "Plane.ZY",
+    "+Y": "Plane.ZX", "-Y": "Plane.XZ",
+    "+Z": "Plane.XY", "-Z": "Plane.YX",
+}
+_AXIS_VALUES = [
+    ("X", "+X"), ("-x", "-X"), ((0, 1, 0), "+Y"),
+    ((0, -1, 0), "-Y"), ("Z", "+Z"), ([0, 0, -1], "-Z"),
+]
+_SKETCH_PRIMS = [
+    ("Circle", (5,), "Circle(5)"),
+    ("RegularPolygon", (5, 6), "RegularPolygon(5, 6)"),
+    ("Rectangle", (10, 20), "Rectangle(10, 20)"),
+]
+_EXTRUDE = 3
+
+
+def _axis_index(vector):
+    components = [abs(vector.X), abs(vector.Y), abs(vector.Z)]
+    index = components.index(max(components))
+    sign = 1 if (vector.X, vector.Y, vector.Z)[index] > 0 else -1
+    return index, sign
+
+
+def _expected_extents(plane_name, class_name, args):
+    """Global (lo, hi) per axis for the primitive drawn on ``plane_name``."""
+    plane = getattr(Plane, plane_name.split(".")[1])
+    local = getattr(build123d, class_name)(*args).bounding_box()
+    expected = [None, None, None]
+    for direction, lo, hi in (
+        (plane.x_dir, local.min.X, local.max.X),
+        (plane.y_dir, local.min.Y, local.max.Y),
+    ):
+        index, sign = _axis_index(direction)
+        expected[index] = (lo, hi) if sign > 0 else (-hi, -lo)
+    normal_index, _ = _axis_index(plane.z_dir)
+    return expected, normal_index
+
+
+def _assert_on_plane(topo_shape, axis, class_name, args, *, extruded):
+    plane_name = _SKETCH_PLANES[axis]
+    expected, normal_index = _expected_extents(plane_name, class_name, args)
+    if extruded:
+        expected[normal_index] = (
+            (0, _EXTRUDE) if axis.startswith("+") else (-_EXTRUDE, 0)
+        )
+    else:
+        expected[normal_index] = (0, 0)
+    bb = build123d.Compound(topo_shape).bounding_box()
+    lo, hi = tuple(bb.min), tuple(bb.max)
+    for index in range(3):
+        assert (lo[index], hi[index]) == pytest.approx(expected[index]), (
+            f"axis {index} for {axis}: {(lo[index], hi[index])} != {expected[index]}"
+        )
+
+
+def _sketch_lines(msg):
+    """The literal fragments an agent copies from an in-sketch repair."""
+    header = re.search(r"`(with BuildSketch\(Plane\.\w+\):)`", msg)
+    call = re.search(r"this call with ([A-Za-z]+\(.*?\))\. ", msg)
+    assert header and call, msg
+    return header.group(1), call.group(1)
+
+
+def _run_in_sketch(header, *body):
+    lines = "\n".join(f"        {line}" for line in body)
+    return b3d_runner.execute(
+        "with BuildPart() as part:\n"
+        f"    {header}\n"
+        f"{lines}\n"
+        f"    extrude(amount={_EXTRUDE})\n"
+        "show_object(part.part)"
+    )
+
+
+@pytest.mark.parametrize("class_name,args,call", _SKETCH_PRIMS)
+@pytest.mark.parametrize("value,axis", _AXIS_VALUES)
+def test_repair_inside_existing_sketch_changes_the_enclosing_plane(
+    prims, class_name, args, call, value, axis,
+):
+    plane = _SKETCH_PLANES[axis]
+    current = Plane.XZ if plane == "Plane.XY" else Plane.XY
     with pytest.raises(PrimitiveArgumentError) as exc:
-        prims["Rectangle"](10, 20, axis="X")
+        with prims["BuildPart"]():
+            with prims["BuildSketch"](current):
+                prims[class_name](*args, align=value)
     msg = str(exc.value)
-    assert "with BuildSketch(Plane.XZ)" in msg
+    assert "names an axis, not an alignment" in msg
+    assert msg.index("enclosing sketch") < msg.index("Align.MIN")
+    assert "(currently Plane.XZ)" in msg if plane == "Plane.XY" else "(currently Plane.XY)" in msg
+    assert "Do not nest" in msg
+    assert f"with BuildSketch({plane}): {call}" not in msg, "must not nest"
+    assert f"grows toward {axis}" in msg
+    assert "rotation=(" not in msg
+
+    header, literal = _sketch_lines(msg)
+    assert header == f"with BuildSketch({plane}):"
+    assert literal == call
+    result = _run_in_sketch(header, literal)
+    assert result.success, result.exception
+    _assert_on_plane(result.topo_shape, axis, class_name, args, extruded=True)
+
+
+@pytest.mark.parametrize("keyword", ["axis", "direction", "dir", "normal"])
+@pytest.mark.parametrize("value,axis", [("Y", "+Y"), ((-1, 0, 0), "-X")])
+def test_orientation_keywords_share_the_sketch_path(prims, keyword, value, axis):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        with prims["BuildPart"]():
+            with prims["BuildSketch"]():
+                prims["Rectangle"](10, 20, **{keyword: value})
+    msg = str(exc.value)
+    assert f"Rectangle() does not accept '{keyword}='." in msg
+    header, literal = _sketch_lines(msg)
+    assert header == f"with BuildSketch({_SKETCH_PLANES[axis]}):"
+    assert literal == "Rectangle(10, 20)"
+    result = _run_in_sketch(header, literal)
+    assert result.success, result.exception
+    _assert_on_plane(result.topo_shape, axis, "Rectangle", (10, 20), extruded=True)
+
+
+def test_repair_when_sketch_is_already_on_the_requested_plane(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        with prims["BuildSketch"](Plane.YZ):
+            prims["Circle"](5, axis="X")
+    msg = str(exc.value)
+    assert "already on Plane.YZ; drop axis= and keep: Circle(5)." in msg
+    assert "BuildSketch(Plane" not in msg.split("keep:")[1]
+
+
+@pytest.mark.parametrize("class_name,args,call", _SKETCH_PRIMS)
+@pytest.mark.parametrize("value,axis", _AXIS_VALUES)
+def test_repair_directly_inside_buildpart_adds_a_sketch(
+    prims, class_name, args, call, value, axis,
+):
+    plane = _SKETCH_PLANES[axis]
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        with prims["BuildPart"]():
+            prims[class_name](*args, direction=value)
+    msg = str(exc.value)
+    literal = f"with BuildSketch({plane}): {call}"
+    assert "need a BuildSketch inside the BuildPart" in msg
+    assert f"drop direction= and use: {literal}." in msg
+    result = b3d_runner.execute(
+        "with BuildPart() as part:\n"
+        f"    {literal}\n"
+        f"    extrude(amount={_EXTRUDE})\n"
+        "show_object(part.part)"
+    )
+    assert result.success, result.exception
+    _assert_on_plane(result.topo_shape, axis, class_name, args, extruded=True)
+
+
+@pytest.mark.parametrize("class_name,args,call", _SKETCH_PRIMS)
+@pytest.mark.parametrize("value,axis", _AXIS_VALUES)
+def test_repair_outside_any_builder_relocates_the_face(
+    prims, class_name, args, call, value, axis,
+):
+    plane = _SKETCH_PLANES[axis]
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims[class_name](*args, align=value)
+    msg = str(exc.value)
+    literal = call if plane == "Plane.XY" else f"{plane} * {call}"
+    assert f"drop align= and use: {literal}." in msg
+    assert f"Inside a BuildPart, use with BuildSketch({plane}): {call}." in msg
+    result = b3d_runner.execute(f"show_object({literal})")
+    assert result.success, result.exception
+    _assert_on_plane(result.topo_shape, axis, class_name, args, extruded=False)
+
+
+def test_subtractive_repair_executes_beside_its_additive_geometry(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        with prims["BuildPart"]():
+            with prims["BuildSketch"](Plane.XY):
+                prims["Rectangle"](10, 10)
+                prims["Circle"](2, direction=(1, 0, 0), mode=Mode.SUBTRACT)
+    msg = str(exc.value)
+    assert "Change the enclosing sketch's plane (currently Plane.XY)" in msg
+    assert "same sketch as the additive geometry" in msg
+    assert "Plane.YZ * Circle" not in msg
+    header, literal = _sketch_lines(msg)
+    assert header == "with BuildSketch(Plane.YZ):"
+    assert literal == "Circle(2, mode=Mode.SUBTRACT)"
+
+    result = _run_in_sketch(header, "Rectangle(10, 10)", literal)
+    assert result.success, result.exception
+    bounds = build123d.Compound(result.topo_shape).bounding_box()
+    assert tuple(bounds.min) == pytest.approx((0, -5, -5))
+    assert tuple(bounds.max) == pytest.approx((_EXTRUDE, 5, 5))
+    assert _volume(build123d.Compound(result.topo_shape)) == pytest.approx(
+        (100 - math.pi * 4) * _EXTRUDE
+    )
+
+
+def test_scalar_rotation_is_preserved_on_primitives_that_accept_it(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Rectangle"](10, 20, align="X", rotation=30)
+    msg = str(exc.value)
+    assert "cannot both be preserved" not in msg
+    literal = "Plane.YZ * Rectangle(10, 20, rotation=30)"
+    assert f"use: {literal}." in msg
+    assert "stays an in-plane angle" in msg
+    result = b3d_runner.execute(f"show_object({literal})")
+    assert result.success, result.exception
+    bounds = build123d.Compound(result.topo_shape).bounding_box()
+    rotated = build123d.Rectangle(10, 20, rotation=30).bounding_box()
+    assert tuple(bounds.size) == pytest.approx(
+        (0, rotated.size.X, rotated.size.Y)
+    )
+
+
+@pytest.mark.parametrize("class_name,args,call,rotation,reason", [
+    ("Circle", (5,), "Circle(5)", (0, 90, 0), "has no rotation= keyword"),
+    ("Circle", (5,), "Circle(5)", 30, "has no rotation= keyword"),
+    ("Rectangle", (10, 20), "Rectangle(10, 20)", (0, 90, 0),
+     "single in-plane angle in degrees, not (0, 90, 0)"),
+    ("RegularPolygon", (5, 6), "RegularPolygon(5, 6)", (0, 90, 0),
+     "single in-plane angle in degrees, not (0, 90, 0)"),
+])
+def test_unusable_rotation_is_dropped_from_the_repair(
+    prims, class_name, args, call, rotation, reason,
+):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        with prims["BuildPart"]():
+            prims[class_name](*args, axis="X", rotation=rotation)
+    msg = str(exc.value)
+    literal = f"with BuildSketch(Plane.YZ): {call}"
+    assert f"use: {literal}." in msg
+    assert reason in msg
+    assert "rotation=" not in msg.split("use: ")[1].split(".")[0]
+    result = b3d_runner.execute(
+        "with BuildPart() as part:\n"
+        f"    {literal}\n"
+        f"    extrude(amount={_EXTRUDE})\n"
+        "show_object(part.part)"
+    )
+    assert result.success, result.exception
+    _assert_on_plane(result.topo_shape, "+X", class_name, args, extruded=True)
+
+
+@pytest.mark.parametrize("value,axis,rotation", [
+    ((0, -1, 0), "-Y", "rotation=(90, 0, 0)"),
+    ((-1, 0, 0), "-X", "rotation=(0, -90, 0)"),
+    ("-z", "-Z", "rotation=(180, 0, 0)"),
+    ((0, 1, 0), "+Y", "rotation=(-90, 0, 0)"),
+])
+def test_signed_axes_orient_solids_too(prims, value, axis, rotation):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cone"](5, 0, 10, axis=value)
+    msg = str(exc.value)
+    literal = f"Cone(5, 0, 10, {rotation})"
+    assert literal in msg
+    assert f"points along {axis}" in msg
+    result = b3d_runner.execute(f"show_object({literal})")
+    assert result.success, result.exception
+    com = build123d.Compound(result.topo_shape).center(build123d.CenterOf.MASS)
+    index = "XYZ".index(axis[1])
+    # A cone's mass centre sits a quarter height from the base, i.e. on the
+    # opposite side of the origin from the apex.
+    expected = [0.0, 0.0, 0.0]
+    expected[index] = 2.5 if axis.startswith("+") else -2.5
+    assert (com.X, com.Y, com.Z) == pytest.approx(
+        [-v for v in expected], abs=1e-6
+    )
+
+
+def test_positive_z_vector_means_no_rotation(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](5, 20, axis=(0, 0, 1))
+    assert "already points along +Z" in str(exc.value)
+
+
+@pytest.mark.parametrize("value", [(1, 1, 0), "up", (0, 2, 0), (0, 0, 0)])
+def test_unreadable_orientation_lists_every_plane(prims, value):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Rectangle"](10, 20, axis=value)
+    msg = str(exc.value)
+    assert "Rectangle() does not accept 'axis='." in msg
+    assert "must be" not in msg
+    assert "Could not tell which axis axis= means" in msg
+    assert "Plane.YZ faces +X (Plane.ZY -X)" in msg
+    assert "Plane.ZX faces +Y (Plane.XZ -Y)" in msg
+    assert "Plane.XY faces +Z (Plane.YX -Z)" in msg
     assert "in-plane angle" in msg
+    assert "rotation=(" not in msg
+
+
+def test_sketch_non_axis_align_has_no_orientation_hint(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Circle"](5, align="middle")
+    msg = str(exc.value)
+    assert "Invalid align='middle'" in msg
+    assert "BuildSketch" not in msg and "rotation" not in msg
 
 
 @pytest.mark.parametrize("value", [(1, 2, 3), [1, 2, 3]])
@@ -468,6 +764,42 @@ def test_builder_plane_strings_are_normalized(prims, builder_name):
     assert builder.workplanes[0] == Plane.XY
 
 
+def test_wrapped_builders_still_nest(prims):
+    """The wrapper must not break parent/child linking between builders.
+
+    build123d links nested builders by comparing the Python frame that
+    created each one; the wrapper's extra __init__ frame used to hide the
+    parent, so BuildSketch-in-BuildPart never transferred its faces.
+    """
+    with prims["BuildPart"]() as part:
+        with prims["BuildSketch"]("XZ"):
+            prims["Rectangle"](10, 20)
+        build123d.extrude(amount=3)
+    bounds = part.part.bounding_box()
+    assert tuple(bounds.min) == pytest.approx((-5, -3, -10))
+    assert tuple(bounds.max) == pytest.approx((5, 0, 10))
+
+    with prims["BuildSketch"]() as sketch:
+        with prims["BuildLine"]():
+            build123d.Polyline((0, 0), (10, 0), (10, 5), close=True)
+        build123d.make_face()
+    assert sketch.sketch.area == pytest.approx(25)
+
+
+def test_runner_nested_builders_extrude():
+    result = b3d_runner.execute(
+        "with BuildPart() as part:\n"
+        "    with BuildSketch(Plane.YZ):\n"
+        "        Circle(5)\n"
+        "    extrude(amount=3)\n"
+        "show_object(part.part)"
+    )
+    assert result.success, result.exception
+    bounds = build123d.Compound(result.topo_shape).bounding_box()
+    assert tuple(bounds.min) == pytest.approx((0, -5, -5))
+    assert tuple(bounds.max) == pytest.approx((3, 5, 5))
+
+
 def test_invalid_builder_plane_string_has_copyable_guidance(prims):
     with pytest.raises(PrimitiveArgumentError) as exc:
         prims["BuildPart"]("horizontal")
@@ -515,6 +847,13 @@ def test_runner_normalizes_alignment_and_builder_plane_strings():
     assert tuple(bounds.max) == pytest.approx((10, 10, 0))
 
 
+def test_runner_surfaces_sketch_plane_guidance():
+    result = b3d_runner.execute('show_object(Circle(5, align="X"))')
+    assert not result.success
+    assert "with BuildSketch(Plane.YZ): Circle(5)" in result.exception
+    assert "rotation=(" not in result.exception
+
+
 def test_runner_surfaces_numeric_align_correction():
     result = b3d_runner.execute("show_object(Box(10, 20, 5, align=(1, 2, 3)))")
     assert not result.success
@@ -532,6 +871,15 @@ def test_preamble_docs_mention_aliases():
     result = CliRunner().invoke(cli, ["docs", "preamble", "--runtime", "build123d"])
     assert result.exit_code == 0, result.output
     assert "Cylinder(diameter=10, height=20)" in result.output
+
+
+def test_preamble_docs_state_real_extrude_normals():
+    """Plane.XZ faces -Y in build123d; the docs must not promise +Y."""
+    result = CliRunner().invoke(cli, ["docs", "preamble", "--runtime", "build123d"])
+    assert result.exit_code == 0, result.output
+    content = json.loads(result.output)["content"]
+    assert "Plane.XZ sketch → extrude towards -Y" in content
+    assert "Plane.XZ sketch → extrude towards +Y" not in content
     assert ".translate((x, y, z))" in result.output
     assert "align=('min', 'center', 'max')" in result.output
     assert "align=(10, 0, 5) is" in result.output
