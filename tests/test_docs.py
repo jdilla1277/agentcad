@@ -851,6 +851,12 @@ def test_docs_build123d_editing_starts_with_imported_part_contract(runner):
     assert "base.faces()" in content
     assert "base.edges()" in content
     assert "base.bounding_box()" in content
+    assert "xmin, ymin, zmin = bbox_point(base, 'min', 'min', 'min')" in content
+    assert "xc, yc, zc = bbox_point(base)" in content
+    assert "xmax, ymax, zmax = bbox_point(base, 'max', 'max', 'max')" in content
+    assert "xlen, ylen, zlen = bbox_size(base)" in content
+    assert "from agentcad.api import bbox_point, bbox_size" in content
+    assert "bounds.center().X" in content
     assert content.index("Imported-part contract") < content.index("1. Import the file")
     assert "CadQuery" not in content
 

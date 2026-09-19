@@ -19,6 +19,7 @@ from typing import Callable, Iterator
 from agentcad.helpers import (
     annular_boss,
     bbox_point,
+    bbox_size,
     copy_shape,
     ellipse_wire,
     elliptical_sweep,
@@ -209,6 +210,7 @@ __all__ = [
     "translate",
     "rotate",
     "bbox_point",
+    "bbox_size",
     "place_at",
     "assemble",
     "annular_boss",

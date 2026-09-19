@@ -19,7 +19,6 @@ from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepTools import BRepTools
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeEdge,
@@ -713,17 +712,7 @@ def bbox_point(shape, x="center", y="center", z="center"):
                 f"Invalid value {val!r} for {name}. {_BBOX_POINT_USAGE}"
             )
 
-    # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
-    # control-point poles, which sit outside the trimmed geometry. For a
-    # placement helper that's a real footgun: bbox_point(shape, x="max")
-    # would return a point floating in space beyond the actual body, so
-    # place_at / assemble would mis-seat NURBS parts. AddOptimal_s gives a
-    # tight box on the same basis as `agentcad measure`. Clean_s first to
-    # drop cached triangulation (matches metrics.compute_metrics).
-    BRepTools.Clean_s(topo)
-    box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(topo, box)
-    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
 
     def _pick(lo, hi, spec):
         if spec == "min":
@@ -733,6 +722,33 @@ def bbox_point(shape, x="center", y="center", z="center"):
         return (lo + hi) / 2.0
 
     return (_pick(xmin, xmax, x), _pick(ymin, ymax, y), _pick(zmin, zmax, z))
+
+
+def bbox_size(shape):
+    """Return axis-aligned bounding-box lengths as an (x, y, z) tuple.
+
+    Accepts raw TopoDS shapes and wrapped build123d/CadQuery shapes, just
+    like :func:`bbox_point`. Lengths are max minus min in model units.
+    """
+    topo = _transform_shape(shape, "Use bbox_size(shape) to get (xlen, ylen, zlen).")
+    xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
+    return (xmax - xmin, ymax - ymin, zmax - zmin)
+
+
+def _bbox_extents(topo):
+    # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
+    # control-point poles, which sit outside the trimmed geometry. For a
+    # placement helper that's a real footgun: bbox_point(shape, x="max")
+    # would return a point floating in space beyond the actual body, so
+    # place_at / assemble would mis-seat NURBS parts. AddOptimal_s gives a
+    # tight box from the underlying geometry. Ignore cached triangulation
+    # without removing it: a bounds query must not force later exports or
+    # previews to remesh the caller's shape.
+    box = Bnd_Box()
+    BRepBndLib.AddOptimal_s(topo, box, False)
+    if box.IsVoid():
+        raise ValueError("Cannot query the bounding box of an empty shape.")
+    return box.Get()
 
 
 def place_at(shape, from_pt, to_pt):
