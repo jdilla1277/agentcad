@@ -48,14 +48,7 @@ def _is_version_dir(directory):
 @project_options
 def export_cmd(step_file, formats, no_daemon):
     """Export a STEP file to mesh formats (STL, GLB, OBJ)."""
-    step_path = Path(step_file)
-    if not step_path.is_file():
-        click.echo(json.dumps(missing_step_payload("export", step_file, {
-            "--format": formats, "--no-daemon": no_daemon,
-        })))
-        sys.exit(1)
-
-    # Parse and validate formats
+    # Reject invalid formats before constructing any missing-path retry.
     fmt_list = parse_export_formats(formats)
     if not fmt_list:
         click.echo(json.dumps({
@@ -77,6 +70,13 @@ def export_cmd(step_file, formats, no_daemon):
             ),
             "next_actions": ["agentcad export --help"],
         }))
+        sys.exit(1)
+
+    step_path = Path(step_file)
+    if not step_path.is_file():
+        click.echo(json.dumps(missing_step_payload("export", step_file, {
+            "--format": formats, "--no-daemon": no_daemon,
+        })))
         sys.exit(1)
 
     # Try routing through daemon. Exits before returning if reachable.

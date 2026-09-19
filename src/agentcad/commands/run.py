@@ -1260,7 +1260,7 @@ def _run_impl(
 
     # Validate --render spec before version allocation (errors should be cheap)
     if render:
-        from agentcad.render import parse_view_spec as _parse_view_spec
+        from agentcad.view_spec import parse_view_spec as _parse_view_spec
         try:
             _parse_view_spec(render)
         except ValueError as e:

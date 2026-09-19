@@ -165,12 +165,23 @@ def test_missing_outputs_are_rejected_before_routing(runner, project, forbid_sta
 
 
 @pytest.mark.parametrize("formats", ["step", "fbx", ","])
-def test_standalone_export_formats_rejected_before_routing(runner, project, forbid_startup, formats):
-    (project / "output.step").write_text("unread until after argument validation")
+@pytest.mark.parametrize("missing", [False, True])
+def test_standalone_export_formats_rejected_before_routing(
+    runner, project, forbid_startup, monkeypatch, formats, missing
+):
+    if not missing:
+        (project / "output.step").write_text("unread until after argument validation")
+
+    def no_recovery(*args, **kwargs):
+        pytest.fail("Invalid format reached missing-path recovery")
+
+    monkeypatch.setattr("agentcad.commands.export_cmd.missing_step_payload", no_recovery)
     result = runner.invoke(cli, ["export", "output.step", "--format", formats])
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["next_actions"]
+    expected = "No export formats" if formats == "," else "Unsupported format(s)"
+    assert expected in payload["message"]
+    assert payload["next_actions"] == ["agentcad export --help"]
     if formats == "step":
         assert "outputs.step" in payload["message"]
 

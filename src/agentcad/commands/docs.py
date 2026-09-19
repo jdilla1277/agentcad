@@ -211,6 +211,9 @@ SECTIONS = {
         "  --name   Custom filename for single-view renders.\n"
         "  --highlight validation  Draw reported validation failures in red;\n"
         "           writes to a validation/ subdirectory and includes the report.\n"
+        "  View/focus syntax, --no-fit's focus requirement, and --name's single-view\n"
+        "  requirement are checked before missing-path recovery, daemon routing,\n"
+        "  or CAD/renderer imports. Input errors return next_actions for help.\n"
     ),
     "schema": (
         "Response schema:\n"

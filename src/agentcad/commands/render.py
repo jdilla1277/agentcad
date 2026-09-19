@@ -11,6 +11,7 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.commands._input_recovery import missing_step_payload
+from agentcad.view_spec import parse_view_spec
 
 MAX_RENDER_DIMENSION = 8192
 MAX_RENDER_PIXELS = 32_000_000
@@ -91,6 +92,25 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon, hi
             param_hint="--size",
         )
 
+    # Reject known-invalid options before even offering missing-path recovery.
+    # This parser is independent of the renderer and must not load CAD libraries.
+    try:
+        if no_fit and not focus:
+            raise ValueError("--no-fit requires --focus")
+        focus_point = _parse_focus(focus) if focus is not None else None
+        view_specs = parse_view_spec(view)
+        if name and len(view_specs) > 1:
+            raise ValueError("--name cannot be used with multiple views")
+    except ValueError as exc:
+        click.echo(json.dumps({
+            "command": "render", "status": "error", "message": str(exc),
+            "next_actions": ["agentcad render --help"],
+        }))
+        sys.exit(1)
+
+    fit = not no_fit
+    width, height = size
+
     step_path = Path(step_file)
     if not step_path.is_file():
         click.echo(json.dumps(missing_step_payload("render", step_file, {
@@ -120,55 +140,9 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon, hi
 
     from agentcad.render import (
         RenderUnavailableError,
-        parse_view_spec,
         render_shape,
         render_shape_custom,
     )
-
-    # Validate --no-fit requires --focus
-    if no_fit and not focus:
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": "--no-fit requires --focus",
-        }))
-        sys.exit(1)
-
-    # Parse --focus
-    focus_point = None
-    if focus:
-        try:
-            focus_point = _parse_focus(focus)
-        except ValueError as e:
-            click.echo(json.dumps({
-                "command": "render",
-                "status": "error",
-                "message": str(e),
-            }))
-            sys.exit(1)
-
-    fit = not no_fit
-    width, height = size
-
-    # Parse view spec
-    try:
-        view_specs = parse_view_spec(view)
-    except ValueError as e:
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": str(e),
-        }))
-        sys.exit(1)
-
-    # Validate --name with multiple views
-    if name and len(view_specs) > 1:
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": "--name cannot be used with multiple views",
-        }))
-        sys.exit(1)
 
     # Determine output directory
     parent_dir = derived_dir("render", step_path)
