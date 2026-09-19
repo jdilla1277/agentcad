@@ -7,7 +7,7 @@ that:
 - CadQuery scripts route to the CadQuery runner (unchanged behavior).
 - build123d scripts route to the build123d runner.
 - The `runtime` field shows up in the JSON output and meta.json.
-- Ambiguous imports produce a clear error without touching disk.
+- Ambiguous imports in unpinned projects produce a clear error without touching disk.
 - The ``--runtime`` override beats auto-detection.
 """
 
@@ -108,7 +108,7 @@ def test_dispatch_no_imports_defaults_to_dispatch_default(runner, isolated_dir):
 
 
 def test_dispatch_ambiguous_imports_rejected(runner, isolated_dir):
-    _init(runner, isolated_dir)
+    _init_unpinned_legacy_project(isolated_dir)
     _write(
         isolated_dir, "both.py",
         "import cadquery\nfrom build123d import Box\nshow_object(Box(1, 1, 1))\n",

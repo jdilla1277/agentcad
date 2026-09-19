@@ -7,9 +7,9 @@ without a runtime field, explicit imports and the old zero-import
 ``cq.Workplane(...)`` preamble select CadQuery. Everything else defaults to
 build123d.
 
-Scripts that somehow import *both* are rejected — silently guessing
-would be worse than a loud error. A ``--runtime`` CLI flag bypasses
-detection entirely when the agent needs to force a choice.
+Unpinned scripts that reference both APIs are ambiguous. In pinned projects,
+conflicting references are a mismatch against the configured runtime, never
+an ambiguous choice. A ``--runtime`` CLI flag bypasses detection entirely.
 
 Precedence (highest to lowest):
   1. ``--runtime`` CLI flag (one-off override)
@@ -123,18 +123,18 @@ def _attribute_root_name(node: ast.AST) -> str | None:
     return current.id if isinstance(current, ast.Name) else None
 
 
-def _declared_runtime(source: str) -> RuntimeName | None:
-    """Return the runtime clearly declared by script syntax, if any.
+def _referenced_runtimes(source: str) -> set[RuntimeName]:
+    """Return the runtimes referenced by script syntax, without choosing one.
 
     Besides imports, recognize ``cq.<name>`` attribute access for scripts from
     the original zero-import CadQuery preamble. Syntax errors deliberately
-    return ``None`` so the selected runner's validator can report them using
+    return an empty set so the selected runner's validator can report them using
     the normal structured contract.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return None
+        return set()
 
     imported = _imports(tree)
     has_cq = "cadquery" in imported or any(
@@ -142,16 +142,22 @@ def _declared_runtime(source: str) -> RuntimeName | None:
         for node in ast.walk(tree)
     )
     has_b3d = "build123d" in imported
-    if has_cq and has_b3d:
+    names: set[RuntimeName] = set()
+    if has_cq:
+        names.add("cadquery")
+    if has_b3d:
+        names.add("build123d")
+    return names
+
+
+def _declared_runtime(source: str) -> RuntimeName | None:
+    names = _referenced_runtimes(source)
+    if len(names) > 1:
         raise ValueError(
             "runtime ambiguous: script references both cadquery and build123d. "
             "Remove one, or pass --runtime=<cadquery|build123d> to force a choice."
         )
-    if has_b3d:
-        return "build123d"
-    if has_cq:
-        return "cadquery"
-    return None
+    return next(iter(names), None)
 
 
 def detect(source: str, default: RuntimeName | None = None) -> RuntimeName:
@@ -191,18 +197,17 @@ def get_runner(name: RuntimeName):
     return runner
 
 
-def resolve(
+def select_runtime(
     source: str,
     override: str | None = None,
     project_default: RuntimeName | None = None,
-) -> tuple[RuntimeName, object]:
-    """Pick a runtime and return ``(name, runner_module)``.
+) -> tuple[RuntimeName, Literal["command", "project", "detection"]]:
+    """Select the runtime and its source before validation or engine imports.
 
     Precedence: ``override`` > ``project_default`` > legacy source detection >
-    ``DEFAULT_RUNTIME``. A declaration that conflicts with a pinned project is
-    an error with a one-off override recovery.
-    Callers (i.e. ``commands/run.py``) typically populate ``project_default``
-    from :func:`project_runtime`.
+    ``DEFAULT_RUNTIME``. Detection includes the build123d fallback when no
+    runtime is referenced. Project conflicts are checked separately so even
+    rejected runs can report the authoritative runtime and its source.
     """
     if override:
         if override not in _VALID_RUNTIMES:
@@ -210,26 +215,39 @@ def resolve(
                 f"unknown --runtime '{override}'. Expected one of: {', '.join(_VALID_RUNTIMES)}"
             )
         name: RuntimeName = override  # type: ignore[assignment]
+        return name, "command"
+    if project_default is not None:
+        return project_default, "project"
+    return detect(source), "detection"
+
+
+def validate_project_source(source: str, runtime: RuntimeName) -> None:
+    """Reject references to another API without overriding the project pin."""
+    other: RuntimeName = "cadquery" if runtime == "build123d" else "build123d"
+    if other not in _referenced_runtimes(source):
+        return
+    message = (
+        f"runtime mismatch: project uses {runtime}, but the script references {other}. "
+        f"Remove the {other} imports and API usage, and use {runtime} throughout. "
+        f"See `agentcad docs preamble --runtime {runtime}`. "
+    )
+    if other == "cadquery" and not runtime_available(other):
+        message += f"If you intended to use {other}: {MISSING_CADQUERY_MESSAGE} Then "
     else:
-        declared = _declared_runtime(source)
-        if project_default is not None:
-            if declared is not None and declared != project_default:
-                if not runtime_available(declared):
-                    # Don't send the agent down a two-hop path ("pass
-                    # --runtime cadquery" → "not installed"); the real
-                    # blocker is the missing extra, say so now.
-                    raise ValueError(
-                        f"runtime mismatch: project uses {project_default}, but "
-                        f"the script uses {declared}. {MISSING_CADQUERY_MESSAGE} "
-                        f"Then pass --runtime {declared} for a one-off run, or "
-                        "update the runtime in agentcad.json."
-                    )
-                raise ValueError(
-                    f"runtime mismatch: project uses {project_default}, but the "
-                    f"script uses {declared}. Pass --runtime {declared} for a "
-                    "one-off run, or update the runtime in agentcad.json."
-                )
-            name = project_default
-        else:
-            name = declared or DEFAULT_RUNTIME
+        message += f"If you intended to use {other}, "
+    message += (
+        f"pass --runtime {other} for a one-off run, or update the runtime in agentcad.json."
+    )
+    raise ValueError(message)
+
+
+def resolve(
+    source: str,
+    override: str | None = None,
+    project_default: RuntimeName | None = None,
+) -> tuple[RuntimeName, object]:
+    """Select and validate a runtime, then return ``(name, runner_module)``."""
+    name, runtime_source = select_runtime(source, override, project_default)
+    if runtime_source == "project":
+        validate_project_source(source, name)
     return name, get_runner(name)
