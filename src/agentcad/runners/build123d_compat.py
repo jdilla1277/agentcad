@@ -6,15 +6,20 @@ build123d rejects every one of those with a bare
 ``unexpected keyword argument`` TypeError, and the agent has to guess
 the fix. Issue #192 counted 35 such failures in a single benchmark run.
 
-This module wraps the primitives in thin subclasses that:
+This module wraps the public constructors in thin subclasses that:
 
 * normalize high-confidence dimension aliases (``diameter``/``d`` ->
   ``radius``, ``h`` -> ``height``, ...) before delegating to the native
   ``__init__``;
 * fail clearly when an alias and its canonical name are both supplied;
+* normalize unambiguous ``align=`` strings and reject coordinate tuples with
+  a copyable ``.translate(...)`` correction instead of treating numbers as
+  :class:`build123d.Align` enum values;
 * reject placement keywords (``center=``, ``at=``, ``centered=``,
   ``axis=``) with a copyable ``.translate(...)`` / ``align=`` /
-  ``rotation=`` example instead of a generic TypeError.
+  ``rotation=`` example instead of a generic TypeError;
+* let builder contexts accept familiar plane strings such as ``"XY"`` while
+  diagnosing other strings before they reach ``WorkplaneList``.
 
 Positional arguments are passed through untouched — native build123d
 semantics are preserved and never guessed at. The wrappers subclass the
@@ -28,6 +33,7 @@ from __future__ import annotations
 import inspect
 import math
 import numbers
+from enum import Enum
 from typing import Any
 
 
@@ -76,7 +82,36 @@ _PLACEMENT_KEYWORDS: dict[str, str] = {
     "normal": "orientation",
 }
 
-_SKETCH_PRIMITIVES = frozenset({"Circle"})
+_ALIGN_DIMENSIONS = {
+    "Box": 3,
+    "Cone": 3,
+    "Cylinder": 3,
+    "Sphere": 3,
+    "Torus": 3,
+    "Wedge": 3,
+    "Circle": 2,
+    "Ellipse": 2,
+    "Polygon": 2,
+    "Rectangle": 2,
+    "RectangleRounded": 2,
+    "RegularPolygon": 2,
+    "SlotOverall": 2,
+    "Text": 2,
+    "Trapezoid": 2,
+    "Triangle": 2,
+}
+
+_SKETCH_PRIMITIVES = frozenset(
+    name for name, dimensions in _ALIGN_DIMENSIONS.items() if dimensions == 2
+)
+
+_BUILDER_NAMES = ("BuildPart", "BuildSketch", "BuildLine")
+_PLANE_NAMES = ("XY", "XZ", "YZ", "YX", "ZX", "ZY")
+_AXIS_ROTATIONS = {
+    "X": (0, 90, 0),
+    "Y": (-90, 0, 0),
+    "Z": None,
+}
 
 _COMPAT_MARKER = "__agentcad_compat__"
 
@@ -95,6 +130,15 @@ def _fmt(value: Any) -> str:
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return repr(value)
+    if isinstance(value, Enum):
+        return f"{type(value).__name__}.{value.name}"
+    if isinstance(value, tuple):
+        values = ", ".join(_fmt(item) for item in value)
+        if len(value) == 1:
+            values += ","
+        return f"({values})"
+    if isinstance(value, list):
+        return "[" + ", ".join(_fmt(item) for item in value) + "]"
     return repr(value)
 
 
@@ -103,17 +147,6 @@ def _positional_names(native_cls: type) -> list[str]:
     return [p.name for p in params[1:] if p.kind in (
         p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD,
     )]
-
-
-def _dimension_kwargs(class_name: str, kwargs: dict[str, Any]) -> str:
-    """Render the dimension keywords as they would appear in a call."""
-    alias_map = _DIMENSION_ALIASES.get(class_name, {})
-    parts = [
-        f"{name}={_fmt(value)}"
-        for name, value in kwargs.items()
-        if name in alias_map
-    ]
-    return ", ".join(parts)
 
 
 def _resolved_dimensions(
@@ -147,12 +180,27 @@ def _resolved_dimensions(
     return resolved
 
 
-def _example_call(class_name: str, args: tuple, kwargs: dict[str, Any]) -> str:
-    """A copyable native call built from what the agent actually passed."""
+def _example_call(
+    class_name: str,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    exclude: frozenset[str] = frozenset(),
+    overrides: dict[str, Any] | None = None,
+) -> str:
+    """Render a copyable call while preserving every non-offending argument."""
+    overrides = overrides or {}
     rendered = [_fmt(a) for a in args]
-    dims = _dimension_kwargs(class_name, kwargs)
-    if dims:
-        rendered.append(dims)
+    rendered.extend(
+        f"{name}={_fmt(overrides.get(name, value))}"
+        for name, value in kwargs.items()
+        if name not in exclude
+    )
+    rendered.extend(
+        f"{name}={_fmt(value)}"
+        for name, value in overrides.items()
+        if name not in kwargs and name not in exclude
+    )
     if not rendered:
         rendered.append("...")
     return f"{class_name}({', '.join(rendered)})"
@@ -164,6 +212,48 @@ def _vector_literal(value: Any, size: int) -> str | None:
     ):
         return "(" + ", ".join(_fmt(v) for v in value) + ")"
     return None
+
+
+def _orientation_correction(
+    class_name: str,
+    value: Any,
+    args: tuple,
+    kwargs: dict[str, Any],
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> tuple[str, str, str | None] | None:
+    """Return ``(axis, target_call, existing_call)`` for an axis guess.
+
+    ``existing_call`` is present when the caller also supplied ``rotation=``.
+    That is a semantic conflict, not a rotation-composition request: the
+    diagnostic presents the two calls separately so neither intent is hidden.
+    """
+    if not isinstance(value, str):
+        return None
+    axis = value.strip().upper()
+    if axis not in _AXIS_ROTATIONS:
+        return None
+
+    call = _example_call(class_name, args, kwargs, exclude=exclude)
+    rotation = _AXIS_ROTATIONS[axis]
+    if "rotation" in kwargs and "rotation" not in exclude:
+        target_rotation = (0, 0, 0) if rotation is None else rotation
+        return axis, _example_call(
+            class_name,
+            args,
+            kwargs,
+            exclude=exclude,
+            overrides={"rotation": target_rotation},
+        ), call
+    if rotation is None:
+        return axis, call, None
+    return axis, _example_call(
+        class_name,
+        args,
+        kwargs,
+        exclude=exclude,
+        overrides={"rotation": rotation},
+    ), None
 
 
 def _placement_message(
@@ -193,14 +283,50 @@ def _placement_message(
         )
 
     if kind == "orientation":
+        if is_sketch:
+            return (
+                f"{head} Choose the sketch plane with a builder context, e.g. "
+                f"with BuildSketch(Plane.XZ): {call}. The rotation= keyword on "
+                "a sketch primitive is only an in-plane angle in degrees."
+            )
+        correction = _orientation_correction(
+            class_name, value, args, kwargs
+        )
+        if correction is not None:
+            axis, oriented_call, existing_call = correction
+            if existing_call is not None:
+                return (
+                    f"{head} rotation= and {keyword}={value!r} request two "
+                    f"orientations and cannot both be preserved. To keep the "
+                    f"existing rotation, drop {keyword}=: {existing_call}. To "
+                    f"point along +{axis} instead, replace rotation=: "
+                    f"{oriented_call}."
+                )
+            if axis == "Z":
+                return (
+                    f"{head} {class_name} already points along +Z; drop the "
+                    f"keyword: {oriented_call}"
+                )
+            return (
+                f"{head} Build along Z and orient it explicitly: "
+                f"{oriented_call} points along +{axis}."
+            )
         return (
-            f"{head} Build along Z and rotate: "
+            f"{head} axis must be 'X', 'Y', or 'Z'. Build along Z and rotate: "
             f"{call.rstrip(')')}, rotation=(0, 90, 0)) points along X, "
-            f"rotation=(90, 0, 0) points along Y. Move it afterwards with "
+            f"rotation=(-90, 0, 0) points along Y. Move it afterwards with "
             f".translate((x, y, z))."
         )
 
     # Position-style placement.
+    if "mode" in kwargs:
+        vec = _vector_literal(value, 2 if is_sketch else 3) or (
+            "(x, y)" if is_sketch else "(x, y, z)"
+        )
+        return (
+            f"{head} The mode= argument means this runs inside a builder. "
+            f"Position it with a location context: with Locations({vec}): {call}"
+        )
     if is_sketch:
         vec = _vector_literal(value, 2) or "(x, y)"
         return (
@@ -213,6 +339,118 @@ def _placement_message(
         f"{head} Build at the origin, then move it: "
         f"{call}.translate({vec}) or Pos{vec} * {call}. Inside a BuildPart, "
         f"use with Locations({vec}): {call}"
+    )
+
+
+def _alignment_message(
+    class_name: str, value: Any, args: tuple, kwargs: dict[str, Any],
+) -> str:
+    """Return targeted guidance for an invalid or positional ``align=`` value."""
+    dimensions = _ALIGN_DIMENSIONS[class_name]
+    call = _example_call(class_name, args, kwargs, exclude=frozenset({"align"}))
+    tuple_example = ", ".join(
+        ("Align.MIN", "Align.CENTER", "Align.MAX")[:dimensions]
+    )
+    supported = (
+        "Use align=Align.MIN, align=Align.CENTER, align=Align.MAX, "
+        "align=Align.NONE, or "
+        f"align=({tuple_example}). The string shortcuts 'min', 'center', "
+        "'max', and 'none' are also accepted."
+    )
+
+    if _vector_literal(value, dimensions) is not None:
+        vector = _vector_literal(value, dimensions)
+        if "mode" in kwargs:
+            correction = f"with Locations({vector}): {call}"
+            instruction = f"Inside a builder, use exactly: {correction}"
+        elif dimensions == 2:
+            correction = f"Pos{vector} * {call}"
+            instruction = f"Move the shape instead: {correction}"
+        else:
+            correction = f"{call}.translate({vector})"
+            instruction = f"Move the shape instead: {correction}"
+        return (
+            f"{class_name}() align= controls which bounding-box side is anchored "
+            f"at the origin; it does not accept position coordinates {vector}. "
+            f"{instruction}. {supported}"
+        )
+
+    orientation = _orientation_correction(
+        class_name,
+        value,
+        args,
+        kwargs,
+        exclude=frozenset({"align"}),
+    )
+    if orientation is None:
+        return f"Invalid align={value!r} for {class_name}(). {supported}"
+    axis, correction, existing_call = orientation
+    if existing_call is not None:
+        axis_hint = (
+            f" align={value!r} and rotation= request two orientations "
+            f"that cannot both be preserved. To keep the existing rotation, drop "
+            f"align=: {existing_call}. To point along +{axis} instead, replace "
+            f"rotation=: {correction}."
+        )
+        return f"Invalid align={value!r} for {class_name}(). {supported}{axis_hint}"
+    if axis == "Z":
+        axis_hint = (
+            f" align={value!r} is not an alignment value; {class_name} already "
+            f"points along +Z. Drop align= and use: {correction}."
+        )
+    else:
+        axis_hint = (
+            f" align={value!r} is not an alignment value. To point the primitive "
+            f"along +{axis}, use: {correction}."
+        )
+    return f"Invalid align={value!r} for {class_name}(). {supported}{axis_hint}"
+
+
+def _normalize_alignment(
+    class_name: str, args: tuple, kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize semantic alignment strings without guessing coordinates."""
+    if "align" not in kwargs:
+        return kwargs
+
+    from build123d import Align
+
+    value = kwargs["align"]
+    dimensions = _ALIGN_DIMENSIONS[class_name]
+    names = {member.name.lower(): member for member in Align}
+
+    if isinstance(value, Align) or value is None:
+        return kwargs
+    if isinstance(value, str):
+        member = names.get(value.strip().lower())
+        if member is None:
+            raise PrimitiveArgumentError(
+                _alignment_message(class_name, value, args, kwargs)
+            )
+        normalized = dict(kwargs)
+        normalized["align"] = member
+        return normalized
+    if isinstance(value, (tuple, list)):
+        if len(value) == dimensions and all(
+            isinstance(item, (Align, str)) for item in value
+        ):
+            members = []
+            for item in value:
+                if isinstance(item, Align):
+                    members.append(item)
+                    continue
+                member = names.get(item.strip().lower())
+                if member is None:
+                    raise PrimitiveArgumentError(
+                        _alignment_message(class_name, value, args, kwargs)
+                    )
+                members.append(member)
+            normalized = dict(kwargs)
+            normalized["align"] = tuple(members)
+            return normalized
+
+    raise PrimitiveArgumentError(
+        _alignment_message(class_name, value, args, kwargs)
     )
 
 
@@ -279,7 +517,7 @@ def normalize_primitive_kwargs(
                 _placement_message(class_name, keyword, value, args, normalized)
             )
 
-    return normalized
+    return _normalize_alignment(class_name, args, normalized)
 
 
 def make_compat_primitive(native_cls: type) -> type:
@@ -302,10 +540,44 @@ def make_compat_primitive(native_cls: type) -> type:
     })
 
 
+def make_compat_builder(native_cls: type, plane_cls: type) -> type:
+    """Wrap a builder context so common plane-name strings are unambiguous."""
+    class_name = native_cls.__name__
+
+    def __init__(self, *workplanes, **kwargs):
+        normalized = []
+        for workplane in workplanes:
+            if not isinstance(workplane, str):
+                normalized.append(workplane)
+                continue
+            name = workplane.strip().upper()
+            if name not in _PLANE_NAMES:
+                choices = ", ".join(f"Plane.{item}" for item in _PLANE_NAMES)
+                raise PrimitiveArgumentError(
+                    f"{class_name}() workplanes cannot be arbitrary strings; "
+                    f"got {workplane!r}. Use one of {choices}, e.g. "
+                    f"with {class_name}(Plane.XY): ..."
+                )
+            normalized.append(getattr(plane_cls, name))
+        native_cls.__init__(self, *normalized, **kwargs)
+
+    __init__.__wrapped__ = native_cls.__init__
+    __init__.__doc__ = native_cls.__init__.__doc__
+
+    return type(class_name, (native_cls,), {
+        "__init__": __init__,
+        "__doc__": native_cls.__doc__,
+        "__module__": __name__,
+        "__qualname__": class_name,
+        _COMPAT_MARKER: native_cls,
+    })
+
+
 def compat_primitives(b3d_module) -> dict[str, type]:
     """Build (or reuse) the compatibility classes for ``b3d_module``."""
     result: dict[str, type] = {}
-    for class_name in _DIMENSION_ALIASES:
+    constructor_names = dict.fromkeys((*_DIMENSION_ALIASES, *_ALIGN_DIMENSIONS))
+    for class_name in constructor_names:
         current = getattr(b3d_module, class_name, None)
         if current is None:
             continue
@@ -316,8 +588,22 @@ def compat_primitives(b3d_module) -> dict[str, type]:
     return result
 
 
+def compat_builders(b3d_module) -> dict[str, type]:
+    """Build (or reuse) wrappers for public builder context constructors."""
+    result: dict[str, type] = {}
+    for class_name in _BUILDER_NAMES:
+        current = getattr(b3d_module, class_name, None)
+        if current is None:
+            continue
+        if getattr(current, _COMPAT_MARKER, None) is not None:
+            result[class_name] = current
+        else:
+            result[class_name] = make_compat_builder(current, b3d_module.Plane)
+    return result
+
+
 def install_compat_primitives(b3d_module) -> dict[str, type]:
-    """Replace the primitives on the ``build123d`` package with the wrappers.
+    """Install compatible primitive and builder constructors on ``build123d``.
 
     Scripts commonly start with ``from build123d import *`` even though
     the runner pre-injects the API. Patching the package namespace means
@@ -327,7 +613,10 @@ def install_compat_primitives(b3d_module) -> dict[str, type]:
     build123d's internal modules keep their native classes, which the
     wrappers subclass, so ``isinstance`` checks inside build123d hold.
     """
-    classes = compat_primitives(b3d_module)
+    classes = {
+        **compat_primitives(b3d_module),
+        **compat_builders(b3d_module),
+    }
     for class_name, compat_cls in classes.items():
         if getattr(b3d_module, class_name) is not compat_cls:
             setattr(b3d_module, class_name, compat_cls)

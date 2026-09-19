@@ -200,13 +200,37 @@ identifies the tracked deliverable.
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
   `copy_shape`, `safe_cut`, `safe_intersection`, `safe_fuse`,
-  `translate`, `rotate`, `annular_boss`, and `raise_annulus`.
+  `translate`, `rotate`, `bbox_point`, `place_at`, `annular_boss`, and
+  `raise_annulus`.
 - For explicit imports and editor completion, import those same AgentCAD
   callables from the stable namespace:
   ```python
   from agentcad.api import load_step, safe_cut, translate, show_object
   ```
   Import primitives and types such as `Box` and `Vector` from `build123d`.
+- Primitive `align=` anchors bounding-box sides at the origin; it is not a
+  position. Use `Align.MIN`, `Align.CENTER`, `Align.MAX`, or `Align.NONE`
+  (preserve native coordinates), either once or per axis. Equivalent
+  case-insensitive strings are accepted:
+  ```python
+  centered = Box(10, 20, 5, align=Align.CENTER)
+  corner = Box(10, 20, 5, align=(Align.MIN, Align.MIN, Align.MIN))
+  mixed = Box(10, 20, 5, align=("min", "center", "max"))
+  with BuildPart("XY") as part:
+      Box(10, 20, 5)
+  ```
+  A numeric tuple is a position, so move after construction instead:
+  `Box(10, 20, 5).translate((10, 0, 5))`. Builder contexts accept `Plane.XY`
+  or plane-name shortcuts such as `"XY"`.
+- The runtime-neutral placement helpers accept either new build123d shapes or
+  raw imported topology and return an independent raw shape:
+  ```python
+  moved = translate(shape, 10, 0, 5)
+  turned = rotate(shape, "Y", 90)
+  seated = place_at(shape,
+      from_pt=bbox_point(shape, "center", "center", "min"),
+      to_pt=(10, 0, 5))
+  ```
 - For imported STEP/BREP edits, `load_step(path)` returns a build123d `Part`:
   ```python
   base = load_step("v1_vendor/output.step")
