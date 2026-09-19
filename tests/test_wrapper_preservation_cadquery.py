@@ -4,20 +4,25 @@ Skipped automatically when the optional ``cadquery`` extra is not installed
 (see the root conftest).
 """
 
+import math
+
 import cadquery as cq
 import pytest
 from OCP.TopoDS import TopoDS_Shape
 
 from agentcad.helpers import (
+    _solid_members,
     assemble,
     bbox_point,
     copy_shape,
     mirror_fuse,
+    raise_annulus,
     rotate,
     safe_cut,
     safe_fuse,
     translate,
 )
+from agentcad.metrics import compute_metrics
 from agentcad.runners import cadquery as cq_runner
 
 
@@ -155,3 +160,93 @@ show_object(trimmed)
 """
     )
     assert result.success, result.exception
+
+
+# ---------------------------------------------------------------------------
+# raise_annulus on a multi-object Workplane (review follow-up on #215)
+# ---------------------------------------------------------------------------
+
+_LAND_VOLUME = math.pi * (2 ** 2 - 1 ** 2) * 1  # inner r 1, outer r 2, height 1
+
+
+@pytest.mark.parametrize("fuse", [False, True], ids=["compound", "fuse"])
+def test_raise_annulus_keeps_every_workplane_object(fuse):
+    source = _two_boxes()
+
+    result = raise_annulus(
+        source, center=(20, 0), inner_radius=1, outer_radius=2, height=1, z=0,
+        fuse=fuse,
+    )
+
+    assert isinstance(result, cq.Workplane)
+    assert _total_volume(result) == pytest.approx(2 + _LAND_VOLUME)
+    assert len(_solid_members(cq.Compound.makeCompound(result.vals()).wrapped)) == 3
+    # One object per piece: the two boxes and the land.
+    assert len(result.vals()) == 3
+    _assert_plane_preserved(source, result)
+    assert result.parent is source
+
+
+def test_raise_annulus_single_object_workplane_and_shape():
+    box = cq.Workplane("XY").box(10, 10, 10)
+    as_workplane = raise_annulus(box, center=(30, 0), inner_radius=1, outer_radius=2, height=1)
+    as_shape = raise_annulus(box.val(), center=(30, 0), inner_radius=1, outer_radius=2, height=1)
+    assert isinstance(as_workplane, cq.Workplane)
+    assert isinstance(as_shape, cq.Shape)
+    assert _total_volume(as_workplane) == pytest.approx(1000 + _LAND_VOLUME)
+    assert as_shape.Volume() == pytest.approx(1000 + _LAND_VOLUME)
+
+
+# ---------------------------------------------------------------------------
+# CadQuery runner: the show_object boundary keeps every Workplane object
+# ---------------------------------------------------------------------------
+
+_PAIR = "pair = cq.Workplane('XY').pushPoints([(0, 0), (5, 0)]).box(1, 1, 1, combine=False)\n"
+
+
+@pytest.mark.parametrize("script", [
+    pytest.param(_PAIR + "show_object(pair)\n", id="direct"),
+    pytest.param(_PAIR + "show_object(translate(pair, 1, 0, 0))\n", id="after_translate"),
+    pytest.param(
+        _PAIR + "show_object(safe_cut(pair, cq.Workplane('XY').box(1, 2, 2).translate((5.25, 0, 0))))\n",
+        id="after_safe_cut",
+    ),
+])
+def test_cadquery_runner_captures_every_workplane_object(script):
+    result = cq_runner.execute(script)
+    assert result.success, result.exception
+    expected = 1.25 if "safe_cut" in script else 2.0
+    assert len(_solid_members(result.topo_shape)) == 2
+    assert compute_metrics(result.topo_shape)["volume"] == pytest.approx(expected)
+    assert len(result.parts) == 1
+    assert len(_solid_members(result.parts[0]["topo_shape"])) == 2
+    assert compute_metrics(result.parts[0]["topo_shape"])["volume"] == pytest.approx(expected)
+
+
+def test_cadquery_runner_multi_object_parts_each_keep_their_objects():
+    result = cq_runner.execute(
+        _PAIR
+        + "show_object(pair, name='pair')\n"
+        + "show_object(cq.Workplane('XY').box(1, 1, 1).translate((0, 5, 0)), name='single')\n"
+    )
+    assert result.success, result.exception
+    assert [len(_solid_members(p["topo_shape"])) for p in result.parts] == [2, 1]
+    assert compute_metrics(result.topo_shape)["volume"] == pytest.approx(3.0)
+
+
+def test_cli_run_reports_every_workplane_object(runner, isolated_dir):
+    import json
+    from agentcad.cli import cli
+
+    runner.invoke(cli, ["init", "--name", "pair", "--runtime", "cadquery"])
+    (isolated_dir / "pair.py").write_text(
+        _PAIR + "show_object(translate(pair, 0, 0, 1))\n"
+    )
+    result = runner.invoke(
+        cli, ["run", "pair.py", "--label", "pair", "--no-daemon", "--no-view", "--no-preview"],
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["status"] == "success"
+    assert parsed["metrics"]["volume"] == pytest.approx(2.0)
+    assert parsed["metrics"]["bounding_box"]["x"] == pytest.approx([-0.5, 5.5])

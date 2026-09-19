@@ -1,5 +1,7 @@
 # collect-on-default-profile
 import json
+
+import pytest
 import shlex
 
 from click.testing import CliRunner
@@ -900,3 +902,34 @@ def test_cadquery_editing_docs_teach_wrapper_preserving_helpers(runner):
     assert "every\n  stack object preserved" in content or "stack object preserved" in content
     assert "show_object(assemble(result))" not in content
     assert "importers.importStep" in content
+
+
+@pytest.mark.parametrize("section", ["helpers", "patterns", "editing", "preamble"])
+def test_cadquery_overlays_do_not_teach_val_wrapped_bridge(runner, section):
+    """Issue #194 review: every CadQuery overlay must show Workplane-in /
+    Workplane-out helper use; `.val().wrapped` drops all but the first
+    object of a multi-object Workplane."""
+    result = runner.invoke(cli, ["docs", section, "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "= cq.Workplane('XY').box(10, 20, 5).val().wrapped" not in content
+    assert ".extrude(120).val().wrapped" not in content
+    assert ".box(5, 5, 80).val().wrapped" not in content
+
+
+def test_cadquery_helpers_docs_state_same_kind_contract(runner):
+    result = runner.invoke(cli, ["docs", "helpers", "--runtime", "cadquery"])
+    content = json.loads(result.stdout)["content"]
+    assert "cq.Workplane in, cq.Workplane out" in content
+    assert "every stack object preserved" in content
+    assert "combine=False" in content
+    assert "Combine cq.Workplane, cq.Shape, or raw TopoDS_Shape" in content
+    assert "STEP path, raw shape, cq.Shape, or" in content
+
+
+def test_cadquery_patterns_docs_use_workplanes_with_helpers(runner):
+    result = runner.invoke(cli, ["docs", "patterns", "--runtime", "cadquery"])
+    content = json.loads(result.stdout)["content"]
+    assert "placed = translate(part, 50, 0, 0)     # still a cq.Workplane" in content
+    assert "do\n    not pass .val().wrapped" in content
+    assert "base = cq.Workplane('XY').box(100, 100, 10)\n" in content

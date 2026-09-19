@@ -1115,10 +1115,19 @@ def raise_annulus(
     if source is None:
         return land
 
-    base = _coerce_topods_shape(source)
-    template = None if isinstance(source, (str, Path)) else source
+    if isinstance(source, (str, Path)):
+        base, template = _coerce_topods_shape(source), None
+    else:
+        base, template = _require_shape(source, "raise_annulus source"), source
+    # Flatten a compound base so each existing piece and the land sit side
+    # by side in the result; a multi-object Workplane then gets one object
+    # per piece back instead of a nested compound plus the land.
+    pieces = (
+        _top_level_children(base)
+        if base.ShapeType() == TopAbs_COMPOUND else [base]
+    )
     if not fuse:
-        return _rewrap_like(_compound_topods(base, land), template)
+        return _rewrap_like(_compound_topods(*pieces, land), template)
 
     try:
         fused = BRepAlgoAPI_Fuse(base, land)
@@ -1128,7 +1137,7 @@ def raise_annulus(
         pass
 
     warnings.warn("raise_annulus boolean fuse failed, returning compound instead")
-    return _rewrap_like(_compound_topods(base, land), template)
+    return _rewrap_like(_compound_topods(*pieces, land), template)
 
 
 def _compound_topods(*shapes):
@@ -1141,14 +1150,17 @@ def _compound_topods(*shapes):
 
 
 def _coerce_topods_shape(shape):
+    """Return raw topology for a path, raw shape, or wrapped shape.
+
+    Wrapped values go through :func:`_unwrap_shape`, so a multi-object
+    CadQuery Workplane contributes every object on its stack rather than
+    only the first one ``.val()`` would return.
+    """
     if isinstance(shape, (str, Path)):
         from agentcad.step_io import load_cad_shape
         return load_cad_shape(shape)
-    if hasattr(shape, "wrapped"):
-        return shape.wrapped
-    if hasattr(shape, "val"):
-        return shape.val().wrapped
-    return shape
+    topo = _unwrap_shape(shape)
+    return shape if topo is None else topo
 
 
 def _coerce_radius(*, radius, diameter, radius_name, diameter_name):
