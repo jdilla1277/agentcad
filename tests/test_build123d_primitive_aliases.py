@@ -1,9 +1,13 @@
-"""Issue #192: build123d primitives accept common generated constructor forms.
+"""Issues #192/#197: generated constructor and placement compatibility.
 
 Cylinder(diameter=10, h=20), Box(l=10, w=20, h=5) and friends normalize to
 the native keywords; radius/diameter conflicts fail clearly; placement
 keywords (center=, at=, centered=, axis=) are rejected with a copyable
 translate / align / rotation example; native forms are untouched.
+
+Unambiguous align strings and builder plane strings are normalized, while
+coordinate tuples and invalid axis-like align strings receive targeted,
+copyable placement guidance.
 """
 
 import math
@@ -223,6 +227,184 @@ def test_circle_center_guidance_is_2d(prims):
 
 
 # ---------------------------------------------------------------------------
+# Constructor alignment and builder workplanes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("align", [
+    "center", "CENTER", Align.CENTER,
+])
+def test_scalar_alignment_forms_are_centered(prims, align):
+    lo, hi = _bbox(prims["Box"](10, 20, 30, align=align))
+    assert lo == pytest.approx((-5, -10, -15))
+    assert hi == pytest.approx((5, 10, 15))
+
+
+def test_none_alignment_string_matches_native_enum(prims):
+    string_bounds = _bbox(prims["Box"](10, 20, 30, align="none"))
+    enum_bounds = _bbox(prims["Box"](10, 20, 30, align=Align.NONE))
+    assert string_bounds[0] == pytest.approx(enum_bounds[0])
+    assert string_bounds[1] == pytest.approx(enum_bounds[1])
+
+
+@pytest.mark.parametrize("align", [
+    ("min", "center", "MAX"),
+    ["min", Align.CENTER, "max"],
+    (Align.MIN, Align.CENTER, Align.MAX),
+])
+def test_per_axis_alignment_forms_are_normalized(prims, align):
+    lo, hi = _bbox(prims["Box"](10, 20, 30, align=align))
+    assert lo == pytest.approx((0, -10, -30))
+    assert hi == pytest.approx((10, 10, 0))
+
+
+def test_two_dimensional_alignment_is_normalized(prims):
+    circle = prims["Circle"](3, align=("min", "max"))
+    bb = circle.bounding_box()
+    assert tuple(bb.min)[:2] == pytest.approx((0, -6))
+    assert tuple(bb.max)[:2] == pytest.approx((6, 0))
+
+
+def test_alignment_shortcuts_cover_other_native_primitives(prims):
+    rectangle = prims["Rectangle"](10, 20, align=("min", "max"))
+    rect_bounds = rectangle.bounding_box()
+    assert tuple(rect_bounds.min)[:2] == pytest.approx((0, -20))
+    assert tuple(rect_bounds.max)[:2] == pytest.approx((10, 0))
+
+    torus = prims["Torus"](10, 2, align=("min", "center", "max"))
+    torus_bounds = torus.bounding_box()
+    assert tuple(torus_bounds.min) == pytest.approx((0, -12, -4))
+    assert tuple(torus_bounds.max) == pytest.approx((24, 12, 0))
+
+
+def test_sketch_axis_guidance_uses_a_plane_not_3d_rotation(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Rectangle"](10, 20, axis="X")
+    msg = str(exc.value)
+    assert "with BuildSketch(Plane.XZ)" in msg
+    assert "in-plane angle" in msg
+
+
+@pytest.mark.parametrize("value", [(1, 2, 3), [1, 2, 3]])
+def test_align_coordinates_point_to_translation(prims, value):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Box"](10, 20, 30, align=value)
+    msg = str(exc.value)
+    assert "align= controls which bounding-box side" in msg
+    assert "Box(10, 20, 30).translate((1, 2, 3))" in msg
+    assert "align=(Align.MIN, Align.CENTER, Align.MAX)" in msg
+
+
+@pytest.mark.parametrize("value", ["X", "middle", ("min", "max")])
+def test_invalid_align_has_supported_values(prims, value):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](5, 20, align=value)
+    msg = str(exc.value)
+    assert "Invalid align=" in msg
+    assert "Align.MIN" in msg and "Align.CENTER" in msg and "Align.MAX" in msg
+    if value == "X":
+        assert "not an alignment value" in msg
+        assert "rotation=(0, 90, 0)" in msg
+
+
+@pytest.mark.parametrize("axis,correction,expected_size", [
+    ("X", "Cylinder(5, 20, rotation=(0, 90, 0))", (20, 10, 10)),
+    ("Y", "Cylinder(5, 20, rotation=(-90, 0, 0))", (10, 20, 10)),
+    ("Z", "Cylinder(5, 20)", (10, 10, 20)),
+])
+def test_axis_like_align_has_literal_executable_correction(
+    prims, axis, correction, expected_size,
+):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](5, 20, align=axis)
+    msg = str(exc.value)
+    assert correction in msg
+    if axis == "Z":
+        assert "already points along +Z" in msg
+    else:
+        assert f"along +{axis}" in msg
+
+    result = b3d_runner.execute(f"show_object({correction})")
+    assert result.success, result.exception
+    bounds = build123d.Compound(result.topo_shape).bounding_box()
+    assert tuple(bounds.size) == pytest.approx(expected_size)
+
+
+@pytest.mark.parametrize("keyword", ["align", "axis"])
+def test_existing_rotation_and_axis_guess_report_executable_choices(prims, keyword):
+    kwargs = {
+        "rotation": (15, 0, 0),
+        "mode": Mode.SUBTRACT,
+        keyword: "X",
+    }
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](2, 20, **kwargs)
+
+    keep_rotation = (
+        "Cylinder(2, 20, rotation=(15, 0, 0), mode=Mode.SUBTRACT)"
+    )
+    point_along_x = (
+        "Cylinder(2, 20, rotation=(0, 90, 0), mode=Mode.SUBTRACT)"
+    )
+    msg = str(exc.value)
+    assert "request two orientations" in msg
+    assert "cannot both be preserved" in msg
+    assert f"drop {keyword}=: {keep_rotation}" in msg
+    assert f"point along +X instead, replace rotation=: {point_along_x}" in msg
+    assert "rotate(" not in msg
+
+    namespace = vars(build123d)
+    with prims["BuildPart"]() as part:
+        prims["Box"](60, 10, 10)
+        tool = eval(point_along_x, namespace)
+    assert tuple(tool.bounding_box().size) == pytest.approx((20, 4, 4))
+    assert _volume(part.part) == pytest.approx(60 * 10 * 10 - math.pi * 2**2 * 20)
+
+
+def test_numeric_align_repair_preserves_and_executes_native_arguments(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](
+            radius=2,
+            height=12,
+            rotation=(0, 90, 0),
+            mode=Mode.SUBTRACT,
+            align=(20, 0, 0),
+        )
+    repair = (
+        "with Locations((20, 0, 0)): "
+        "Cylinder(radius=2, height=12, rotation=(0, 90, 0), "
+        "mode=Mode.SUBTRACT)"
+    )
+    assert f"Inside a builder, use exactly: {repair}" in str(exc.value)
+
+    result = b3d_runner.execute(
+        "with BuildPart() as part:\n"
+        "    Box(60, 20, 20)\n"
+        f"    {repair}\n"
+        "show_object(part.part)"
+    )
+    assert result.success, result.exception
+    expected_volume = 60 * 20 * 20 - math.pi * 2**2 * 12
+    assert compute_metrics(result.topo_shape)["volume"] == pytest.approx(
+        expected_volume
+    )
+
+
+@pytest.mark.parametrize("builder_name", ["BuildPart", "BuildSketch", "BuildLine"])
+def test_builder_plane_strings_are_normalized(prims, builder_name):
+    builder = prims[builder_name]("xy")
+    assert builder.workplanes[0] == Plane.XY
+
+
+def test_invalid_builder_plane_string_has_copyable_guidance(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["BuildPart"]("horizontal")
+    msg = str(exc.value)
+    assert "WorkplaneList" not in msg
+    assert "with BuildPart(Plane.XY): ..." in msg
+    assert "Plane.XZ" in msg and "Plane.YZ" in msg
+
+
+# ---------------------------------------------------------------------------
 # End to end through the runner and the CLI
 # ---------------------------------------------------------------------------
 
@@ -247,6 +429,25 @@ def test_runner_surfaces_placement_guidance():
     assert "Box(10, 20, 5).translate((0, 0, 10))" in result.exception
 
 
+def test_runner_normalizes_alignment_and_builder_plane_strings():
+    result = b3d_runner.execute(
+        "from build123d import *\n"
+        "with BuildPart('XY') as part:\n"
+        "    Box(10, 20, 5, align=('min', 'center', 'max'))\n"
+        "show_object(part.part)"
+    )
+    assert result.success, result.exception
+    bounds = build123d.Compound(result.topo_shape).bounding_box()
+    assert tuple(bounds.min) == pytest.approx((0, -10, -5))
+    assert tuple(bounds.max) == pytest.approx((10, 10, 0))
+
+
+def test_runner_surfaces_numeric_align_correction():
+    result = b3d_runner.execute("show_object(Box(10, 20, 5, align=(1, 2, 3)))")
+    assert not result.success
+    assert "Box(10, 20, 5).translate((1, 2, 3))" in result.exception
+
+
 def test_runner_surfaces_conflict():
     result = b3d_runner.execute("show_object(Cylinder(radius=5, d=10, height=20))")
     assert not result.success
@@ -258,3 +459,7 @@ def test_preamble_docs_mention_aliases():
     assert result.exit_code == 0, result.output
     assert "Cylinder(diameter=10, height=20)" in result.output
     assert ".translate((x, y, z))" in result.output
+    assert "align=('min', 'center', 'max')" in result.output
+    assert "align=(10, 0, 5) is" in result.output
+    assert "with BuildPart('XY') as part:" in result.output
+    assert "place_at(shape, from_pt=" in result.output

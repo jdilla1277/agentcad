@@ -116,6 +116,7 @@ def execute(
     # in declaration order.
     captured: list[tuple] = []
     assembly_requested = False
+    loaded_files: list[str] = []
 
     def show_object(
         obj,
@@ -248,85 +249,31 @@ def execute(
 
     import build123d as _b3d
 
+    from agentcad import api as _api
+
     script_globals: dict[str, Any] = {
         "__name__": "__agentcad_script__",
         "__file__": filename,
-        "show_object": show_object,
-        "show_assembly": show_assembly,
-        "show_compound": show_assembly,
         "build123d": _b3d,
     }
     for attr in getattr(_b3d, "__all__", dir(_b3d)):
         if not attr.startswith("_"):
             script_globals[attr] = getattr(_b3d, attr)
 
-    # Issue #192: generated scripts call Cylinder(diameter=10, h=20) and
-    # Box(..., center=(x, y, z)). Swap in subclasses that normalize the
-    # dimension aliases and reject placement keywords with a copyable fix.
+    # Issues #192/#197: generated scripts call Cylinder(diameter=10, h=20),
+    # Box(..., center=(x, y, z)), align="center", and BuildPart("XY"). Swap
+    # in subclasses that normalize unambiguous constructor/placement forms
+    # and reject ambiguous ones with a copyable fix.
     # Installed on the build123d package too, so an explicit
     # `from build123d import *` in the script picks up the same classes.
     from agentcad.runners.build123d_compat import install_compat_primitives
 
     script_globals.update(install_compat_primitives(_b3d))
 
-    try:
-        from agentcad import helpers as _helpers
-    except ImportError:
-        _helpers = None
-    if _helpers is not None:
-        for attr in (
-            "loft_sections", "tapered_sweep", "naca_wire", "mirror_fuse",
-            "copy_shape", "safe_cut", "safe_intersection", "safe_fuse",
-            "translate", "rotate", "bbox_point", "place_at",
-            "annular_boss", "raise_annulus",
-            "ellipse_wire", "spline_wire", "polygon_wire", "rounded_rect_wire",
-            "elliptical_sweep", "involute_gear_profile",
-        ):
-            if hasattr(_helpers, attr):
-                script_globals[attr] = getattr(_helpers, attr)
-
-    # agentcad.helpers.assemble() returns a cq.Workplane — wrong type for b3d
-    # scripts. Substitute a build123d-native version that accepts either
-    # build123d Shapes or raw OCP TopoDS_* and returns a Compound.
-    def _b3d_assemble(*shapes):
-        from build123d import Compound
-
-        # Raw shapes are wrapped by topology type. `Compound(raw_solid)` is
-        # NOT the right idiom: it yields a wrapper with zero volume whose
-        # iteration walks shells (issue #194).
-        return Compound(children=[_as_build123d(s) for s in shapes])
-
-    script_globals["assemble"] = _b3d_assemble
-
-    # M60 Phase 2: edit-journey helpers for loading existing CAD files.
-    # `load_step` returns a build123d Part for the algebraic API; the
-    # `_shape` variant returns the raw TopoDS_Shape for use with helpers
-    # like mirror_fuse that operate on raw OCCT types.
-    script_globals["load_step"] = _load_step
-    script_globals["load_step_shape"] = _load_step_shape
-
-    # M60 Phase 3: addressability — agents read inspect --ids output to
-    # identify a face/edge by ID, then pick it here for use in edit ops.
-    # Returns build123d Face / Edge so the algebraic API works directly.
-    script_globals["pick_face"] = _pick_face
-    script_globals["pick_edge"] = _pick_edge
-
-    # M60 Phase 4a: edit helpers built on Phase 3's pick_*. Each takes
-    # an ID (or list of IDs) from `inspect --ids` and applies a
-    # high-level operation, returning a build123d Part.
-    script_globals["fillet_edges"] = _fillet_edges
-    script_globals["chamfer_edges"] = _chamfer_edges
-    script_globals["shell_faces"] = _shell_faces
-
-    # M60 Phase 4b: split a shape by an infinite plane. Returns both
-    # halves; agents can keep one or use both.
-    script_globals["split_by_plane"] = _split_by_plane
-
-    # M60 Phase 4c: feature ops — add NEW geometry by extruding a 2D
-    # profile from a picked face. cut_pocket goes into the solid;
-    # boss goes outward.
-    script_globals["cut_pocket"] = _cut_pocket
-    script_globals["boss"] = _boss
+    # The injected surface is the exact same set of callables users get from
+    # ``from agentcad.api import ...``. Keep this as the only injection list so
+    # the concise and explicit authoring styles cannot drift apart.
+    script_globals.update({name: getattr(_api, name) for name in _api.__all__})
 
     effective_params = dict(discovered)
     if params:
@@ -346,7 +293,12 @@ def execute(
         with _warnings.catch_warnings(record=True) as ws:
             _warnings.simplefilter("always", category=UserWarning)
             code = compile(source, filename, "exec")
-            exec(code, script_globals)
+            with _api._capture_output_with(
+                show_object,
+                show_assembly,
+                loaded_file_callback=loaded_files.append,
+            ):
+                exec(code, script_globals)
             captured_warnings = list(ws)
     except Exception as e:
         return ExecutionResult(
@@ -418,6 +370,7 @@ def execute(
         warnings=warnings,
         output_type=output_type,
         parts=parts,
+        loaded_files=loaded_files,
     )
 
 

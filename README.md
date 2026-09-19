@@ -119,6 +119,17 @@ box = Box(10, 20, 5)
 show_object(box)
 ```
 
+For editor completion or explicit dependencies, the same AgentCAD-owned
+callables are available from the stable authoring module:
+
+```python
+from agentcad.api import load_step, safe_cut, translate, show_object
+```
+
+Import build123d primitives such as `Box` or `Vector` from `build123d` itself.
+Do not import STEP writers: `show_object` hands the result back to AgentCAD,
+which writes and tracks the canonical STEP file.
+
 `agentcad init` records build123d as the project runtime. That keeps the
 script API, built-in docs, and subsequent runs on one clear default.
 
@@ -156,8 +167,12 @@ agentcad docs preamble --runtime cadquery
 agentcad run legacy.py --label legacy --runtime cadquery
 ```
 
-Keep each script on one CAD API. If a script clearly targets the other engine,
-agentcad reports the mismatch and the exact one-off override. Run
+Keep each script on one CAD API. Conflicting imports, including mixed imports,
+are rejected against the project runtime before daemon startup or version
+creation, with guidance for fixing the script or intentionally overriding the
+runtime. Unpinned projects still detect the runtime and reject ambiguous scripts.
+Run responses identify the selection in `runtime_source` (`command`, `project`,
+or `detection`, which includes the default fallback). Run
 `agentcad docs runtimes` for the complete dispatch contract.
 
 ## MCP integration

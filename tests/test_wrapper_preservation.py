@@ -107,7 +107,7 @@ def test_bbox_point_accepts_wrapped_shapes():
     box = Box(10, 20, 30)
     assert bbox_point(box, "max", "max", "max") == pytest.approx((5, 10, 15))
     assert bbox_point(box.wrapped, "min", "min", "min") == pytest.approx((-5, -10, -15))
-    with pytest.raises(TypeError, match="bbox_point shape"):
+    with pytest.raises(TypeError, match="bbox_point"):
         bbox_point("not a shape")
 
 

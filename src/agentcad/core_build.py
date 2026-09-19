@@ -5,6 +5,7 @@ metrics where applicable, final geometry validation, and STEP export. Visual
 artifacts and browser work happen only after this boundary.
 """
 
+import shlex
 from copy import deepcopy
 from pathlib import Path
 
@@ -100,7 +101,7 @@ def validated_metrics(
         report = bounded_validate_file(source_path, profile=profile)
         report.pop("timings", None)
     else:
-        report = validate_shape(topo_shape, profile=profile)
+        report = validate_shape(topo_shape, profile=profile, shape_metrics=metrics)
     return apply_validation(metrics, report), report
 
 
@@ -136,6 +137,87 @@ def validate_delivered_step(
         elif report.get("worker") == "subprocess":
             timings["delivered_validation_ms"] = total_ms
     return report
+
+
+def annotate_input_provenance(
+    validation: dict, loaded_files, *, profile: str = "deliverable", cwd=None
+) -> dict:
+    """Say whether an invalid result inherited its failure from a loaded input.
+
+    Only runs when the delivered verdict is a definite failure and the script
+    loaded at least one file. Each distinct input is validated the same way
+    (bounded), and ``validation.inherited_from_input`` records the input whose
+    own first failing layer matches the result's. When every input passes that
+    layer the failure was introduced by this run. The message and suggestion
+    are rewritten so the agent repairs the right thing.
+    """
+    if validation.get("is_valid") is not False or not loaded_files:
+        return validation
+    from pathlib import Path
+
+    from agentcad.validation import bounded_validate_file
+
+    failing = validation.get("first_failure")
+    base = Path(cwd) if cwd is not None else Path.cwd()
+    checked = []
+    seen = set()
+    for raw in loaded_files:
+        path = Path(raw)
+        resolved = (path if path.is_absolute() else base / path).resolve()
+        if str(resolved) in seen:
+            continue
+        seen.add(str(resolved))
+        if not resolved.is_file():
+            continue
+        report = bounded_validate_file(resolved, profile=profile)
+        checked.append({
+            "path": raw,
+            "is_valid": report.get("is_valid"),
+            "first_failure": report.get("first_failure"),
+        })
+    if not checked:
+        return validation
+    inherited = next((c for c in checked if c["first_failure"] == failing and failing), None)
+    layer_text = (failing or "validation").replace("_", " ")
+    validation["inputs_checked"] = checked
+    if inherited is not None:
+        input_arg = shlex.quote(str(inherited["path"]))
+        validation["inherited_from_input"] = inherited
+        validation["message"] = (
+            f"{validation.get('message', '')} The loaded input {inherited['path']} already "
+            f"fails {layer_text}; this run did not introduce the failure."
+        ).strip()
+        validation["suggestion"] = (
+            f"Repair or replace the input file rather than the edit: run `agentcad inspect "
+            f"{input_arg} --ids` to see its defect. The deliverable gate will keep failing "
+            "until the input itself passes."
+        )
+        # The generic repair possibilities describe fixing an operation in the
+        # script; none applies when the defect predates the script.
+        validation["repairs"] = [{
+            "kind": "repair_or_replace_input",
+            "changes_intent": False,
+            "why": (
+                f"The input file already fails {layer_text} before this script runs, "
+                "so no change to the script's operations can make the result pass."
+            ),
+            "how": (
+                f"Inspect the input (`agentcad inspect {input_arg} --ids`), repair it "
+                "in its source tool or request a corrected export, then rerun the script "
+                "against the repaired file."
+            ),
+            "precondition": "The failing layer and entities are the input's own, as inputs_checked shows.",
+            "applicability": "diagnosed",
+            "evidence": {"layer": failing, "input": inherited},
+        }]
+    else:
+        validation["inherited_from_input"] = False
+        passing = ", ".join(c["path"] for c in checked)
+        validation["message"] = (
+            f"{validation.get('message', '')} The loaded input ({passing}) passes "
+            f"{layer_text}; this run introduced the failure."
+        ).strip()
+    return validation
 
 
 def reliability_warning(metrics: dict) -> str | None:
