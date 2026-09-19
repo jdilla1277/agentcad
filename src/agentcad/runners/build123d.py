@@ -520,7 +520,7 @@ def _shell_faces(shape, ids, thickness: float):
     parameter shape varies across versions; the low-level OCP path is
     stable and matches what every other commercial CAD shells to.
     """
-    from build123d import Part, Shape
+    from build123d import Shape
     from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
     from OCP.TopTools import TopTools_ListOfShape
 
@@ -554,7 +554,12 @@ def _shell_faces(shape, ids, thickness: float):
             "thickness, or the face selection may not produce a valid hollow. "
             "Try a smaller |thickness| or different opening face(s)."
         )
-    return Part(builder.Shape())
+    # MakeThickSolid returns a bare TopoDS_Solid. Part(raw_solid) would be
+    # the zero-volume wrapper issue #194 removes; build a compound-backed
+    # Part instead so .volume and .solids() agree with the run JSON.
+    from agentcad.helpers import _wrap_build123d
+
+    return _wrap_build123d(builder.Shape(), as_part=True)
 
 
 def _split_by_plane(shape, plane):

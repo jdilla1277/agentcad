@@ -242,15 +242,36 @@ def _unwrap_shape(shape):
     topo = getattr(shape, "wrapped", None)
     if isinstance(topo, TopoDS_Shape):
         return topo
-    val = getattr(shape, "val", None)  # CadQuery Workplane
-    if callable(val):
-        try:
-            topo = getattr(val(), "wrapped", None)
-        except Exception:
-            topo = None
-        if isinstance(topo, TopoDS_Shape):
-            return topo
-    return None
+    objects = _workplane_topods(shape)
+    if not objects:
+        return None
+    if len(objects) == 1:
+        return objects[0]
+    # A multi-object Workplane (e.g. pushPoints(...).box(..., combine=False))
+    # is one container of geometry: operate on every object, not just the
+    # first one that ``.val()`` would return.
+    return _compound_topods(*objects)
+
+
+def _workplane_topods(obj):
+    """Return the TopoDS shapes on a CadQuery Workplane stack, or ``None``.
+
+    ``None`` means ``obj`` is not a Workplane-like value; an empty list means
+    a Workplane with no shape objects on its stack.
+    """
+    vals = getattr(obj, "vals", None)
+    if not callable(vals) or not callable(getattr(obj, "newObject", None)):
+        return None
+    try:
+        items = vals()
+    except Exception:
+        return None
+    shapes = []
+    for item in items:
+        topo = getattr(item, "wrapped", None)
+        if isinstance(topo, TopoDS_Shape) and not topo.IsNull():
+            shapes.append(topo)
+    return shapes
 
 
 def _is_build123d_shape(obj):
@@ -288,13 +309,14 @@ def _top_level_children(shape):
     return children
 
 
-def _wrap_build123d(topo, template=None):
+def _wrap_build123d(topo, template=None, *, as_part=False):
     """Wrap a raw ``TopoDS_Shape`` in the build123d class matching its topology.
 
     ``template`` is the caller's original input. When it is a compound-family
     wrapper (``Part``/``Compound``, which is what ``load_step`` and the
-    primitives such as ``Box`` are) the result comes back as a ``Part``
-    wrapping a compound, so ``.volume`` and ``.solids()`` stay measurable.
+    primitives such as ``Box`` are), or ``as_part`` is set, the result comes
+    back as a ``Part`` wrapping a compound, so ``.volume`` and ``.solids()``
+    stay measurable.
     Wrapping a bare ``TopoDS_Solid`` directly in ``Part(...)`` or
     ``Compound(...)`` yields a shape that reports zero volume and iterates
     over shells, which is the failure this helper exists to prevent.
@@ -304,7 +326,7 @@ def _wrap_build123d(topo, template=None):
 
     shape = downcast(topo)
     kind = shape.ShapeType()
-    compound_family = isinstance(template, Compound)
+    compound_family = as_part or isinstance(template, Compound)
     if kind == TopAbs_COMPOUND:
         solids = _solid_members(shape)
         children = _top_level_children(shape)
@@ -336,8 +358,11 @@ def _rewrap_like(topo, template):
 
     Raw or unknown templates (including ``None`` and file paths) return the
     raw shape unchanged; build123d templates return build123d wrappers;
-    CadQuery ``Shape`` templates return ``cq.Shape`` and ``Workplane``
-    templates return a ``Workplane`` holding the result.
+    CadQuery ``Shape`` templates return ``cq.Shape``. A ``Workplane``
+    template returns a new Workplane chained from the original (same plane
+    and parent) holding the result; when the original stack held several
+    objects, each top-level piece of the result becomes its own object so
+    nothing is silently dropped.
     """
     if template is None or isinstance(template, TopoDS_Shape):
         return topo
@@ -347,10 +372,14 @@ def _rewrap_like(topo, template):
     if kind is not None:
         import cadquery as cq
 
-        wrapped = cq.Shape.cast(topo)
         if kind == "workplane":
-            return cq.Workplane("XY").newObject([wrapped])
-        return wrapped
+            stack = _workplane_topods(template) or []
+            if len(stack) > 1 and topo.ShapeType() == TopAbs_COMPOUND:
+                pieces = _top_level_children(topo)
+            else:
+                pieces = [topo]
+            return template.newObject([cq.Shape.cast(piece) for piece in pieces])
+        return cq.Shape.cast(topo)
     return topo
 
 

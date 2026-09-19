@@ -331,17 +331,31 @@ _CADQUERY_SCRIPT_RULES = """## Script writing rules
   part = cq.Workplane('XY').box(10, 20, 5)
   show_object(part)
   ```
-- Helpers that operate on `TopoDS_Shape` use `.val().wrapped` as the bridge:
+- The edit helpers (`translate`, `rotate`, `place_at`, `copy_shape`,
+  `mirror_fuse`, `safe_cut`, `safe_intersection`, `safe_fuse`,
+  `raise_annulus`) take CadQuery objects directly and return the same kind
+  they were given: a `cq.Workplane` in gives a `cq.Workplane` out (same plane,
+  chained from the original), a `cq.Shape` gives a `cq.Shape`, and a raw
+  `TopoDS_Shape` stays raw.
   ```python
-  part = cq.Workplane('XY').box(10, 20, 5).val().wrapped
-  moved = translate(part, 50, 0, 0)
+  base = cq.importers.importStep('v1_vendor/output.step')   # cq.Workplane
+  moved = translate(base, 50, 0, 0)                          # cq.Workplane
+  trimmed = safe_cut(moved, cq.Workplane('XY').cylinder(40, 3).translate((50, 0, 0)))
+  show_object(trimmed.faces('>Z').fillet(0.5))              # still CadQuery
   ```
+  Every object on a multi-object Workplane (for example
+  `pushPoints([...]).box(..., combine=False)`) is transformed or used in the
+  Boolean, and the result keeps one object per resulting piece. Do not bridge
+  through `.val().wrapped`: `.val()` keeps only the first object, and the raw
+  result would have to be re-wrapped by hand.
 - Imported-geometry Booleans should use `safe_cut`, `safe_intersection`, or
   `safe_fuse`; these independently copy inputs and reject invalid or
   physically impossible output.
-- To show raw helper output:
+- Only the constructors return raw shapes (`annular_boss`, the wire and sweep
+  helpers, or `raise_annulus` given a STEP path). `show_object` accepts a raw
+  `TopoDS_Shape` directly; to keep editing it in CadQuery, wrap it once:
   ```python
-  show_object(cq.Workplane('XY').newObject([cq.Shape.cast(topo_shape)]))
+  show_object(assemble(raw_shape))   # or cq.Workplane('XY').newObject([cq.Shape.cast(raw_shape)])
   ```
 - For OCP internals (`gp_Pnt`, `BRepPrimAPI`, etc.), import manually.
 

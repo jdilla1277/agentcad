@@ -853,3 +853,17 @@ def test_docs_patterns_mixed_edge_wire(runner):
     content = json.loads(result.stdout)["content"]
     assert "BRepBuilderAPI_MakeWire" in content
     assert "BRepBuilderAPI_MakeEdge" in content
+
+
+def test_cadquery_editing_docs_teach_wrapper_preserving_helpers(runner):
+    """Issue #194 review: the CadQuery overlay must not send agents back to
+    the raw .val().wrapped bridge, which drops every object but the first on
+    a multi-object Workplane."""
+    result = runner.invoke(cli, ["docs", "editing", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "operate on raw shapes" not in content
+    assert "Workplane in, Workplane out" in content
+    assert "every\n  stack object preserved" in content or "stack object preserved" in content
+    assert "show_object(assemble(result))" not in content
+    assert "importers.importStep" in content

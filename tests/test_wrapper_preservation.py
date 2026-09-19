@@ -259,3 +259,25 @@ show_object(base)
     )
     assert clean.success, clean.exception
     assert not any("bare solid" in w for w in clean.warnings)
+
+
+def test_shell_faces_raw_input_returns_measurable_compound_backed_part():
+    """MakeThickSolid yields a bare TopoDS_Solid; shell_faces must not hand
+    that back inside Part(...) (volume 0, iterates shells)."""
+    result = b3d_runner.execute(
+        """
+from OCP.TopAbs import TopAbs_COMPOUND
+for source in (Box(10, 20, 30).wrapped, Box(10, 20, 30)):
+    shelled = shell_faces(source, 1, -1)
+    assert isinstance(shelled, Part), type(shelled)
+    assert shelled.wrapped.ShapeType() == TopAbs_COMPOUND
+    assert shelled.volume > 0, shelled.volume
+    assert len(shelled.solids()) == 1
+    assert [type(child).__name__ for child in shelled] == ['Solid']
+    assert abs(shelled.volume - shelled.solids()[0].volume) < 1e-6
+show_object(shelled)
+"""
+    )
+    assert result.success, result.exception
+    assert 0 < compute_metrics(result.topo_shape)["volume"] < 6000
+    assert not any("bare solid" in w for w in result.warnings)
