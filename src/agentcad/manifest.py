@@ -19,6 +19,10 @@ def load_manifest(command=None):
             error["command"] = command
         error["status"] = "error"
         error["message"] = f"{MANIFEST_FILE} not found. Run 'agentcad init' first."
+        error["next_actions"] = ["agentcad init"]
+        if command == "run":
+            from agentcad.commands.run import _run_contract_payload
+            error = _run_contract_payload(error)
         click.echo(json.dumps(error))
         sys.exit(1)
     return layout.read_manifest()

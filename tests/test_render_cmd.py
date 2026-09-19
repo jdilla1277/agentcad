@@ -357,8 +357,8 @@ def test_render_routes_through_daemon_when_available(runner, isolated_dir, monke
         "agentcad.daemon.send_request",
         lambda *a, **kw: {"type": "result", "exit_code": 0, "output": daemon_output},
     )
-    # render doesn't need a real STEP because the daemon mock short-circuits
-    # before the file would be read.
+    # The client checks existence; the daemon mock handles parsing.
+    (isolated_dir / "any.step").write_text("daemon reads this file")
     result = runner.invoke(cli, ["render", "any.step", "--view", "iso"])
     assert result.exit_code == 0, result.stdout
     parsed = json.loads(result.stdout)
@@ -383,6 +383,7 @@ def test_render_forwards_size_and_msaa_to_daemon(runner, isolated_dir, monkeypat
         }
 
     monkeypatch.setattr("agentcad.daemon.send_request", _capture)
+    (isolated_dir / "any.step").write_text("daemon reads this file")
     result = runner.invoke(cli, [
         "render", "any.step", "--view", "iso", "--size", "2400x1800",
         "--msaa", "8",
