@@ -112,6 +112,15 @@ _AXIS_ROTATIONS = {
     "Y": (-90, 0, 0),
     "Z": None,
 }
+# Sketch primitives are flat faces: their orientation is the plane they are
+# drawn on, not a rotation tuple. Map each axis to the familiar named plane
+# whose normal lies along it, plus the signed normal build123d actually uses
+# (``Plane.XZ`` faces -Y, so ``extrude`` from it grows toward -Y).
+_AXIS_SKETCH_PLANES = {
+    "X": ("Plane.YZ", "+X"),
+    "Y": ("Plane.XZ", "-Y"),
+    "Z": ("Plane.XY", "+Z"),
+}
 
 _COMPAT_MARKER = "__agentcad_compat__"
 
@@ -214,6 +223,72 @@ def _vector_literal(value: Any, size: int) -> str | None:
     return None
 
 
+def _axis_from_value(value: Any) -> str | None:
+    """Return ``"X"``/``"Y"``/``"Z"`` for an axis name or a unit axis vector."""
+    if isinstance(value, str):
+        axis = value.strip().upper()
+        return axis if axis in _AXIS_ROTATIONS else None
+    if isinstance(value, (tuple, list)) and len(value) == 3 and all(
+        _is_number(v) for v in value
+    ):
+        for axis, unit in (("X", (1, 0, 0)), ("Y", (0, 1, 0)), ("Z", (0, 0, 1))):
+            if tuple(value) == unit:
+                return axis
+    return None
+
+
+def _sketch_orientation_hint(
+    class_name: str,
+    keyword: str,
+    axis: str,
+    args: tuple,
+    kwargs: dict[str, Any],
+) -> str:
+    """Plane-based repair for an axis-like request on a sketch primitive.
+
+    Sketch primitives have no 3D ``rotation=`` tuple: ``Circle`` rejects the
+    keyword, ``RegularPolygon`` expects a scalar, and ``Rectangle`` silently
+    stays on XY. The orientation comes from the builder plane instead, and
+    any scalar ``rotation=`` the caller supplied is an in-plane angle that
+    composes with the plane, so it is preserved rather than reported as a
+    conflict.
+    """
+    call = _example_call(class_name, args, kwargs, exclude=frozenset({keyword}))
+    plane, normal = _AXIS_SKETCH_PLANES[axis]
+    if axis == "Z":
+        hint = (
+            f"Plane.XY, the default sketch plane, already has its normal along "
+            f"+Z, so drop {keyword}=: with BuildSketch(Plane.XY): {call}."
+        )
+        if "mode" not in kwargs:
+            hint += f" Outside a builder: {call}."
+        return hint
+    hint = (
+        f"Choose the sketch plane instead: with BuildSketch({plane}): {call} "
+        f"lies on {plane}, whose normal points along {normal}, so "
+        f"extrude(amount=N) grows toward {normal}."
+    )
+    if axis == "Y":
+        hint += " Use Plane.ZX for a +Y normal."
+    if "mode" not in kwargs:
+        hint += f" Outside a builder: {plane} * {call}."
+    if "rotation" in kwargs:
+        hint += " rotation= stays an in-plane angle on that plane."
+    return hint
+
+
+def _sketch_plane_menu(class_name: str, keyword: str, call: str) -> str:
+    """Diagnostic for an orientation request whose axis cannot be read."""
+    return (
+        f"Could not read an axis from {keyword}=. {class_name} takes its "
+        f"orientation from the sketch plane, not a keyword: "
+        f"with BuildSketch(Plane.YZ): {call} faces +X, Plane.XZ faces -Y, "
+        f"and Plane.XY (the default) faces +Z; extrude(amount=N) grows along "
+        f"that normal. The rotation= keyword on a sketch primitive is only "
+        f"an in-plane angle in degrees."
+    )
+
+
 def _orientation_correction(
     class_name: str,
     value: Any,
@@ -228,10 +303,8 @@ def _orientation_correction(
     That is a semantic conflict, not a rotation-composition request: the
     diagnostic presents the two calls separately so neither intent is hidden.
     """
-    if not isinstance(value, str):
-        return None
-    axis = value.strip().upper()
-    if axis not in _AXIS_ROTATIONS:
+    axis = _axis_from_value(value)
+    if axis is None:
         return None
 
     call = _example_call(class_name, args, kwargs, exclude=exclude)
@@ -284,10 +357,11 @@ def _placement_message(
 
     if kind == "orientation":
         if is_sketch:
-            return (
-                f"{head} Choose the sketch plane with a builder context, e.g. "
-                f"with BuildSketch(Plane.XZ): {call}. The rotation= keyword on "
-                "a sketch primitive is only an in-plane angle in degrees."
+            axis = _axis_from_value(value)
+            if axis is None:
+                return f"{head} {_sketch_plane_menu(class_name, keyword, call)}"
+            return f"{head} " + _sketch_orientation_hint(
+                class_name, keyword, axis, args, kwargs,
             )
         correction = _orientation_correction(
             class_name, value, args, kwargs
@@ -373,6 +447,16 @@ def _alignment_message(
             f"{class_name}() align= controls which bounding-box side is anchored "
             f"at the origin; it does not accept position coordinates {vector}. "
             f"{instruction}. {supported}"
+        )
+
+    if dimensions == 2:
+        axis = _axis_from_value(value)
+        if axis is None:
+            return f"Invalid align={value!r} for {class_name}(). {supported}"
+        hint = _sketch_orientation_hint(class_name, "align", axis, args, kwargs)
+        return (
+            f"Invalid align={value!r} for {class_name}(): it names an axis, "
+            f"not an alignment. {hint} {supported}"
         )
 
     orientation = _orientation_correction(
@@ -560,6 +644,15 @@ def make_compat_builder(native_cls: type, plane_cls: type) -> type:
                 )
             normalized.append(getattr(plane_cls, name))
         native_cls.__init__(self, *normalized, **kwargs)
+        # build123d links a nested builder to its parent only when both were
+        # created in the same Python frame, which Builder.__init__ records as
+        # the frame two levels up (script -> BuildPart.__init__ -> Builder).
+        # This wrapper adds a level, so without this line a BuildSketch
+        # inside a BuildPart never hands its faces over and extrude() fails
+        # with "A face or sketch must be provided".
+        frame = inspect.currentframe()
+        if frame is not None and frame.f_back is not None:
+            self._python_frame = frame.f_back
 
     __init__.__wrapped__ = native_cls.__init__
     __init__.__doc__ = native_cls.__init__.__doc__
