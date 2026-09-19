@@ -713,6 +713,30 @@ def bbox_point(shape, x="center", y="center", z="center"):
                 f"Invalid value {val!r} for {name}. {_BBOX_POINT_USAGE}"
             )
 
+    xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
+
+    def _pick(lo, hi, spec):
+        if spec == "min":
+            return lo
+        elif spec == "max":
+            return hi
+        return (lo + hi) / 2.0
+
+    return (_pick(xmin, xmax, x), _pick(ymin, ymax, y), _pick(zmin, zmax, z))
+
+
+def bbox_size(shape):
+    """Return axis-aligned bounding-box lengths as an (x, y, z) tuple.
+
+    Accepts raw TopoDS shapes and wrapped build123d/CadQuery shapes, just
+    like :func:`bbox_point`. Lengths are max minus min in model units.
+    """
+    topo = _transform_shape(shape, "Use bbox_size(shape) to get (xlen, ylen, zlen).")
+    xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
+    return (xmax - xmin, ymax - ymin, zmax - zmin)
+
+
+def _bbox_extents(topo):
     # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
     # control-point poles, which sit outside the trimmed geometry. For a
     # placement helper that's a real footgun: bbox_point(shape, x="max")
@@ -723,16 +747,9 @@ def bbox_point(shape, x="center", y="center", z="center"):
     BRepTools.Clean_s(topo)
     box = Bnd_Box()
     BRepBndLib.AddOptimal_s(topo, box)
-    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-
-    def _pick(lo, hi, spec):
-        if spec == "min":
-            return lo
-        elif spec == "max":
-            return hi
-        return (lo + hi) / 2.0
-
-    return (_pick(xmin, xmax, x), _pick(ymin, ymax, y), _pick(zmin, zmax, z))
+    if box.IsVoid():
+        raise ValueError("Cannot query the bounding box of an empty shape.")
+    return box.Get()
 
 
 def place_at(shape, from_pt, to_pt):
