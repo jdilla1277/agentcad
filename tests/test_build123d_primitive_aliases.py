@@ -290,8 +290,81 @@ def test_align_coordinates_point_to_translation(prims, value):
         prims["Box"](10, 20, 30, align=value)
     msg = str(exc.value)
     assert "align= controls which bounding-box side" in msg
+    assert "with Locations((1, 2, 3)): Box(10, 20, 30)" in msg
+    assert "Outside builders only, use:" in msg
     assert "Box(10, 20, 30).translate((1, 2, 3))" in msg
     assert "align=(Align.MIN, Align.CENTER, Align.MAX)" in msg
+
+
+def _builder_repair(message):
+    """Copy the literal statement from the diagnostic, including its arguments."""
+    marker = "Inside a builder, use exactly: "
+    assert marker in message
+    return message.split(marker, 1)[1].split(". ", 1)[0]
+
+
+@pytest.mark.parametrize("builder,primitive,dimensions,attribute", [
+    ("BuildPart", "Box", 3, "part"),
+    ("BuildSketch", "Rectangle", 2, "sketch"),
+])
+@pytest.mark.parametrize("coordinates", [tuple, list])
+@pytest.mark.parametrize("mode", [None, Mode.ADD])
+def test_numeric_align_emitted_repair_places_default_builder_geometry(
+    prims, builder, primitive, dimensions, attribute, coordinates, mode,
+):
+    kwargs = {"align": coordinates([10, 0, 0][:dimensions])}
+    if mode is not None:
+        kwargs["mode"] = mode
+    with prims[builder]():
+        with pytest.raises(PrimitiveArgumentError) as exc:
+            prims[primitive](*([10] * dimensions), **kwargs)
+    repair = _builder_repair(str(exc.value))
+
+    result = b3d_runner.execute(
+        f"with {builder}() as model:\n"
+        f"    {repair}\n"
+        f"show_object(model.{attribute})"
+    )
+    assert result.success, result.exception
+    lo, hi = _bbox(build123d.Compound(result.topo_shape))
+    assert lo == pytest.approx((5, -5, -5 if dimensions == 3 else 0))
+    assert hi == pytest.approx((15, 5, 5 if dimensions == 3 else 0))
+
+
+@pytest.mark.parametrize("builder,primitive,dimensions,attribute", [
+    ("BuildPart", "Box", 3, "part"),
+    ("BuildSketch", "Rectangle", 2, "sketch"),
+])
+@pytest.mark.parametrize("mode,expected_x", [
+    (Mode.ADD, (-5, 9)),
+    (Mode.SUBTRACT, (-5, -1)),
+    (Mode.INTERSECT, (-1, 5)),
+    (Mode.REPLACE, (-1, 9)),
+    (Mode.PRIVATE, (-5, 5)),
+])
+def test_numeric_align_emitted_repair_preserves_builder_mode(
+    prims, builder, primitive, dimensions, attribute, mode, expected_x,
+):
+    args = [10] * dimensions
+    with prims[builder]():
+        prims[primitive](*args)
+        with pytest.raises(PrimitiveArgumentError) as exc:
+            prims[primitive](*args, align=(4, 0, 0)[:dimensions], mode=mode)
+    repair = _builder_repair(str(exc.value))
+
+    result = b3d_runner.execute(
+        f"with {builder}() as model:\n"
+        f"    {primitive}({', '.join(map(str, args))})\n"
+        f"    {repair}\n"
+        f"show_object(model.{attribute})"
+    )
+    assert result.success, result.exception
+    shape = build123d.Compound(result.topo_shape)
+    lo, hi = _bbox(shape)
+    assert lo == pytest.approx((expected_x[0], -5, -5 if dimensions == 3 else 0))
+    assert hi == pytest.approx((expected_x[1], 5, 5 if dimensions == 3 else 0))
+    measure = shape.volume if dimensions == 3 else shape.area
+    assert measure == pytest.approx((expected_x[1] - expected_x[0]) * 10**(dimensions - 1))
 
 
 @pytest.mark.parametrize("value", ["X", "middle", ("min", "max")])
@@ -369,12 +442,12 @@ def test_numeric_align_repair_preserves_and_executes_native_arguments(prims):
             mode=Mode.SUBTRACT,
             align=(20, 0, 0),
         )
-    repair = (
+    repair = _builder_repair(str(exc.value))
+    assert repair == (
         "with Locations((20, 0, 0)): "
         "Cylinder(radius=2, height=12, rotation=(0, 90, 0), "
         "mode=Mode.SUBTRACT)"
     )
-    assert f"Inside a builder, use exactly: {repair}" in str(exc.value)
 
     result = b3d_runner.execute(
         "with BuildPart() as part:\n"
@@ -445,6 +518,7 @@ def test_runner_normalizes_alignment_and_builder_plane_strings():
 def test_runner_surfaces_numeric_align_correction():
     result = b3d_runner.execute("show_object(Box(10, 20, 5, align=(1, 2, 3)))")
     assert not result.success
+    assert "with Locations((1, 2, 3)): Box(10, 20, 5)" in result.exception
     assert "Box(10, 20, 5).translate((1, 2, 3))" in result.exception
 
 
@@ -461,5 +535,8 @@ def test_preamble_docs_mention_aliases():
     assert ".translate((x, y, z))" in result.output
     assert "align=('min', 'center', 'max')" in result.output
     assert "align=(10, 0, 5) is" in result.output
+    assert "with Locations((10, 0, 5)): Box(10, 20, 5)" in result.output
+    assert "with Locations((10, 5)): Rectangle(10, 20)" in result.output
+    assert "also applies when mode=Mode.ADD is omitted" in result.output
     assert "with BuildPart('XY') as part:" in result.output
     assert "place_at(shape, from_pt=" in result.output

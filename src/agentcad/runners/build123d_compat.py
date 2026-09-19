@@ -13,7 +13,7 @@ This module wraps the public constructors in thin subclasses that:
   ``__init__``;
 * fail clearly when an alias and its canonical name are both supplied;
 * normalize unambiguous ``align=`` strings and reject coordinate tuples with
-  a copyable ``.translate(...)`` correction instead of treating numbers as
+  a copyable ``Locations(...)`` correction instead of treating numbers as
   :class:`build123d.Align` enum values;
 * reject placement keywords (``center=``, ``at=``, ``centered=``,
   ``axis=``) with a copyable ``.translate(...)`` / ``align=`` /
@@ -360,19 +360,23 @@ def _alignment_message(
 
     if _vector_literal(value, dimensions) is not None:
         vector = _vector_literal(value, dimensions)
-        if "mode" in kwargs:
-            correction = f"with Locations({vector}): {call}"
-            instruction = f"Inside a builder, use exactly: {correction}"
-        elif dimensions == 2:
-            correction = f"Pos{vector} * {call}"
-            instruction = f"Move the shape instead: {correction}"
-        else:
-            correction = f"{call}.translate({vector})"
-            instruction = f"Move the shape instead: {correction}"
+        # Omitting mode= still adds the primitive to an active builder. Moving
+        # the returned copy afterwards cannot change that builder's geometry.
+        correction = f"with Locations({vector}): {call}"
+        instruction = (
+            f"Inside a builder, use exactly: {correction}. "
+            "This also applies when mode=Mode.ADD is omitted."
+        )
+        if "mode" not in kwargs:
+            algebra = (
+                f"Pos{vector} * {call}" if dimensions == 2
+                else f"{call}.translate({vector})"
+            )
+            instruction += f" Outside builders only, use: {algebra}."
         return (
             f"{class_name}() align= controls which bounding-box side is anchored "
             f"at the origin; it does not accept position coordinates {vector}. "
-            f"{instruction}. {supported}"
+            f"{instruction} {supported}"
         )
 
     orientation = _orientation_correction(
