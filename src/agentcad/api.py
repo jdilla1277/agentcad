@@ -44,6 +44,9 @@ _OutputCallback = Callable[..., object]
 _output_callbacks: ContextVar[tuple[_OutputCallback, _OutputCallback] | None] = (
     ContextVar("agentcad_output_callbacks", default=None)
 )
+_loaded_file_callback: ContextVar[Callable[[str], object] | None] = ContextVar(
+    "agentcad_loaded_file_callback", default=None
+)
 
 
 def _active_output_callback(kind: str) -> _OutputCallback:
@@ -76,13 +79,22 @@ show_compound = show_assembly
 def _capture_output_with(
     object_callback: _OutputCallback,
     assembly_callback: _OutputCallback,
+    loaded_file_callback: Callable[[str], object] | None = None,
 ) -> Iterator[None]:
-    """Bind output callbacks for one runner execution (internal)."""
-    token = _output_callbacks.set((object_callback, assembly_callback))
+    """Bind capture/provenance callbacks for one runner execution (internal)."""
+    output_token = _output_callbacks.set((object_callback, assembly_callback))
+    loaded_file_token = _loaded_file_callback.set(loaded_file_callback)
     try:
         yield
     finally:
-        _output_callbacks.reset(token)
+        _loaded_file_callback.reset(loaded_file_token)
+        _output_callbacks.reset(output_token)
+
+
+def _record_loaded_file(path) -> None:
+    callback = _loaded_file_callback.get()
+    if callback is not None:
+        callback(str(path))
 
 
 def assemble(*shapes):
@@ -104,6 +116,7 @@ def load_step(path: str):
     """Load a STEP/STP file as a build123d ``Part``."""
     from agentcad.runners.build123d import _load_step
 
+    _record_loaded_file(path)
     return _load_step(path)
 
 
@@ -111,6 +124,7 @@ def load_step_shape(path: str):
     """Load a STEP/STP/BREP file as a raw ``TopoDS_Shape``."""
     from agentcad.runners.build123d import _load_step_shape
 
+    _record_loaded_file(path)
     return _load_step_shape(path)
 
 

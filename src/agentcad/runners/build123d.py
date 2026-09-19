@@ -116,6 +116,7 @@ def execute(
     # in declaration order.
     captured: list[tuple] = []
     assembly_requested = False
+    loaded_files: list[str] = []
 
     def show_object(
         obj,
@@ -271,7 +272,11 @@ def execute(
         with _warnings.catch_warnings(record=True) as ws:
             _warnings.simplefilter("always", category=UserWarning)
             code = compile(source, filename, "exec")
-            with _api._capture_output_with(show_object, show_assembly):
+            with _api._capture_output_with(
+                show_object,
+                show_assembly,
+                loaded_file_callback=loaded_files.append,
+            ):
                 exec(code, script_globals)
             captured_warnings = list(ws)
     except Exception as e:
@@ -344,6 +349,7 @@ def execute(
         warnings=warnings,
         output_type=output_type,
         parts=parts,
+        loaded_files=loaded_files,
     )
 
 

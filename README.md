@@ -167,8 +167,12 @@ agentcad docs preamble --runtime cadquery
 agentcad run legacy.py --label legacy --runtime cadquery
 ```
 
-Keep each script on one CAD API. If a script clearly targets the other engine,
-agentcad reports the mismatch and the exact one-off override. Run
+Keep each script on one CAD API. Conflicting imports, including mixed imports,
+are rejected against the project runtime before daemon startup or version
+creation, with guidance for fixing the script or intentionally overriding the
+runtime. Unpinned projects still detect the runtime and reject ambiguous scripts.
+Run responses identify the selection in `runtime_source` (`command`, `project`,
+or `detection`, which includes the default fallback). Run
 `agentcad docs runtimes` for the complete dispatch contract.
 
 ## MCP integration
