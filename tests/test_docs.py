@@ -1,5 +1,6 @@
 # collect-on-default-profile
 import json
+import shlex
 
 from click.testing import CliRunner
 from agentcad.cli import cli
@@ -201,6 +202,38 @@ def test_docs_schema_documents_stdout_vs_stderr(runner):
     assert "stdout" in content
     assert "stderr" in content
     assert "2>&1" in content
+
+
+def test_docs_schema_scopes_next_actions_contract(runner, isolated_dir):
+    schema = runner.invoke(cli, ["docs", "schema"])
+    assert schema.exit_code == 0, schema.output
+    content = " ".join(json.loads(schema.stdout)["content"].split())
+    assert (
+        "For these CLI input-error recoveries, next_actions contains "
+        "commands or SCRIPT/LABEL templates; prose belongs in suggestion."
+    ) in content
+    assert (
+        "Successful init/context guidance may include explanations "
+        "after ' — '; execute only the command before that separator."
+    ) in content
+
+    initialized = runner.invoke(cli, ["init", "--no-agent-setup"])
+    context = runner.invoke(cli, ["context"])
+    for result in (initialized, context):
+        assert result.exit_code == 0, result.output
+        for action in json.loads(result.stdout)["next_actions"]:
+            command, separator, explanation = action.partition(" — ")
+            assert separator and explanation
+            followed = runner.invoke(cli, shlex.split(command)[1:])
+            assert followed.exit_code == 0, followed.output
+
+    # With no scripts to recommend, input-error recovery is a literal docs command.
+    failed = runner.invoke(cli, ["run", "missing.py", "--label", "first", "--no-daemon"])
+    assert failed.exit_code == 1, failed.output
+    for action in json.loads(failed.stdout)["next_actions"]:
+        assert " — " not in action
+        followed = runner.invoke(cli, shlex.split(action)[1:])
+        assert followed.exit_code == 0, followed.output
 
 
 def test_docs_schema_lists_current_inspect_measure_fields(runner):

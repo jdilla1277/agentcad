@@ -19,7 +19,8 @@ def _current_step(layout):
         ), None)
         if entry is None:
             return None
-        meta = json.loads((layout.version_dir(entry) / "meta.json").read_text())
+        version_dir = layout.version_dir(entry)
+        meta = json.loads((version_dir / "meta.json").read_text())
         if not isinstance(meta, dict) or meta.get("status") != "success":
             return None
         outputs = meta.get("outputs")
@@ -27,6 +28,9 @@ def _current_step(layout):
         if not isinstance(recorded, str) or not recorded:
             return None
         step = layout.artifact_path(recorded)
+        # Both paths are resolved, so symlinks cannot select another version.
+        if not step.is_relative_to(version_dir):
+            return None
         return step if step.is_file() else None
     except (ProjectError, OSError, ValueError, RuntimeError):
         return None

@@ -337,3 +337,49 @@ def test_missing_step_retry_uses_current_success_not_latest_attempt(
     assert result.exit_code == 1
     action = json.loads(result.stdout)["next_actions"][0]
     assert shlex.split(action)[2] == str(project / "v1_first/recorded.step")
+
+
+@pytest.mark.parametrize("command, options", [
+    ("render", ["--view", "iso"]), ("export", ["--format", "stl"]),
+])
+@pytest.mark.parametrize("reference", ["direct", "file_symlink", "directory_symlink"])
+def test_missing_step_rejects_cross_version_metadata(
+    runner, project, forbid_startup, command, options, reference
+):
+    first = project / "v1_first"
+    newer = project / "v2_newer"
+    first.mkdir()
+    newer.mkdir()
+    other_step = newer / "newer.step"
+    other_step.write_text("must not render or export this other version")
+    # Even a conventional local file is not a fallback for corrupted metadata.
+    (first / "output.step").write_text("must not guess this file either")
+    if reference == "direct":
+        recorded = other_step
+    else:
+        link = first / "linked"
+        try:
+            if reference == "file_symlink":
+                link.symlink_to(other_step)
+                recorded = link
+            else:
+                link.symlink_to(newer, target_is_directory=True)
+                recorded = link / "newer.step"
+        except OSError as exc:
+            pytest.skip(f"Symlinks unavailable: {exc}")
+    manifest = json.loads((project / "agentcad.json").read_text())
+    manifest.update(current="first", versions=[
+        {"version": 1, "label": "first", "status": "success", "path": "v1_first/"},
+        {"version": 2, "label": "newer", "status": "success", "path": "v2_newer/"},
+    ])
+    (project / "agentcad.json").write_text(json.dumps(manifest))
+    (first / "meta.json").write_text(json.dumps({
+        "status": "success", "outputs": {"step": recorded.relative_to(project).as_posix()},
+    }))
+    result = runner.invoke(cli, [command, "missing.step", *options])
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert "No existing outputs.step" in payload["message"]
+    assert payload["next_actions"] == ["agentcad docs artifacts"]
+    followed = runner.invoke(cli, shlex.split(payload["next_actions"][0])[1:])
+    assert followed.exit_code == 0, followed.output
