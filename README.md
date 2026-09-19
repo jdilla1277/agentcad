@@ -119,6 +119,17 @@ box = Box(10, 20, 5)
 show_object(box)
 ```
 
+For editor completion or explicit dependencies, the same AgentCAD-owned
+callables are available from the stable authoring module:
+
+```python
+from agentcad.api import load_step, safe_cut, translate, show_object
+```
+
+Import build123d primitives such as `Box` or `Vector` from `build123d` itself.
+Do not import STEP writers: `show_object` hands the result back to AgentCAD,
+which writes and tracks the canonical STEP file.
+
 `agentcad init` records build123d as the project runtime. That keeps the
 script API, built-in docs, and subsequent runs on one clear default.
 

@@ -27,6 +27,18 @@ def test_runner_records_loaded_files(tmp_path, monkeypatch):
     assert result.loaded_files == ["box.step", "box.step"]
 
 
+def test_runner_records_files_loaded_through_explicit_api_import(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    shutil.copyfile(FIXTURES / "closed_box.step", tmp_path / "box.step")
+    result = runner.execute(
+        'from agentcad.api import load_step, show_object\n'
+        'show_object(load_step("box.step"))\n',
+        None,
+    )
+    assert result.success, result.exception
+    assert result.loaded_files == ["box.step"]
+
+
 def test_runner_without_loads_has_no_loaded_files():
     result = runner.execute("show_object(Box(1, 1, 1))\n", None)
     assert result.success and result.loaded_files == []
