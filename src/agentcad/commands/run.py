@@ -64,6 +64,9 @@ def _run_contract_payload(payload: dict) -> dict:
     """Apply the stable label/artifact contract to one run response."""
     ctx = click.get_current_context(silent=True)
     contract = ctx.meta if ctx is not None else {}
+    for key in ("runtime", "runtime_source"):
+        if f"run_{key}" in contract:
+            payload.setdefault(key, contract[f"run_{key}"])
     label = contract.get("run_label")
     payload.setdefault("label", label)
 
@@ -631,6 +634,7 @@ def _record_failure(
     reservation,
     error_msg,
     runtime=None,
+    runtime_source=None,
     guidance=None,
 ):
     """Record a script failure on disk and in the manifest."""
@@ -655,6 +659,8 @@ def _record_failure(
     }
     if runtime is not None:
         meta["runtime"] = runtime
+    if runtime_source is not None:
+        meta["runtime_source"] = runtime_source
     if guidance:
         meta.update(guidance)
     commit_version(reservation, meta, {
@@ -1062,6 +1068,8 @@ def _run_impl(
     # manifest check so a fresh folder does not hide it behind "run init".
     if runtime:
         from agentcad.runners import dispatch as _dispatch
+        ctx.meta["run_runtime"] = runtime
+        ctx.meta["run_runtime_source"] = "command"
         try:
             _dispatch.require_runtime_available(runtime)
         except ValueError as e:
@@ -1131,9 +1139,14 @@ def _run_impl(
     project_default = dispatch.project_runtime()
 
     try:
-        runtime_name, runner = dispatch.resolve(
+        runtime_name, runtime_source = dispatch.select_runtime(
             raw_source, override=runtime, project_default=project_default
         )
+        ctx.meta["run_runtime"] = runtime_name
+        ctx.meta["run_runtime_source"] = runtime_source
+        if runtime_source == "project":
+            dispatch.validate_project_source(raw_source, runtime_name)
+        runner = dispatch.get_runner(runtime_name)
     except ValueError as e:
         # Ambiguous/mismatched source, unknown --runtime, or a runtime whose
         # optional extra is not installed — surface cleanly.
@@ -1141,6 +1154,7 @@ def _run_impl(
             "command": "run",
             "status": "error",
             "message": str(e),
+            "runtime_source": ctx.meta.get("run_runtime_source", "detection"),
         }
         if dispatch.MISSING_CADQUERY_MESSAGE in str(e):
             payload["suggestion"] = dispatch.PORT_TO_BUILD123D_HINT
@@ -1254,6 +1268,7 @@ def _run_impl(
             reservation,
             error_msg,
             runtime=runtime_name,
+            runtime_source=runtime_source,
             guidance=guidance,
         )
 
@@ -1443,7 +1458,9 @@ def _run_impl(
         _sub = time.perf_counter()
         annotate_input_provenance(
             validation, result.loaded_files, profile=validation_profile,
-            cwd=script_path.parent,
+            # The injected loaders resolve relative paths from the process
+            # working directory, even when the script itself is elsewhere.
+            cwd=Path.cwd(),
         )
         _timings["input_validation_ms"] = round((time.perf_counter() - _sub) * 1000)
     _finish_phase("export_step", _t, "export_step_ms")
@@ -1464,6 +1481,7 @@ def _run_impl(
 
     invalid_response = invalid_geometry_payload("run", metrics, validation)
     if invalid_response is not None:
+        invalid_response["runtime_source"] = runtime_source
         _discard_staged_step()
         if dry_run:
             invalid_response.update({
@@ -1581,6 +1599,7 @@ def _run_impl(
         "version": version_num,
         "label": label,
         "runtime": runtime_name,
+        "runtime_source": runtime_source,
         "output_type": output_type,
         "created": created,
         "script": f"{dir_name}/script.py",
