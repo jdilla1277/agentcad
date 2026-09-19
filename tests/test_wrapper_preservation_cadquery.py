@@ -197,6 +197,38 @@ def test_raise_annulus_single_object_workplane_and_shape():
     assert as_shape.Volume() == pytest.approx(1000 + _LAND_VOLUME)
 
 
+def test_raise_annulus_single_object_workplane_gets_one_object_per_piece():
+    """Review follow-up on #215: the non-fused result must expose the source
+    and the land as separate stack objects even when the source Workplane
+    held a single object, matching the documented per-piece contract."""
+    source = cq.Workplane("XY").box(2, 2, 1)
+
+    result = raise_annulus(
+        source, center=(10, 0), inner_radius=1, outer_radius=2, height=1, fuse=False,
+    )
+
+    assert isinstance(result, cq.Workplane)
+    assert len(result.vals()) == 2
+    assert [type(v).__name__ for v in result.vals()] == ["Solid", "Solid"]
+    assert sorted(v.Volume() for v in result.vals()) == pytest.approx(
+        sorted([4.0, _LAND_VOLUME])
+    )
+    _assert_plane_preserved(source, result)
+    assert result.parent is source
+
+    # fuse=True on the same input merges nothing (the land is detached), so
+    # the kernel still returns two solids; they stay individually addressable.
+    fused = raise_annulus(
+        source, center=(10, 0), inner_radius=1, outer_radius=2, height=1, fuse=True,
+    )
+    assert _total_volume(fused) == pytest.approx(4.0 + _LAND_VOLUME)
+
+    # Downstream helpers keep both pieces as separate objects.
+    moved = translate(result, 0, 0, 5)
+    assert len(moved.vals()) == 2
+    assert _total_volume(moved) == pytest.approx(4.0 + _LAND_VOLUME)
+
+
 # ---------------------------------------------------------------------------
 # CadQuery runner: the show_object boundary keeps every Workplane object
 # ---------------------------------------------------------------------------

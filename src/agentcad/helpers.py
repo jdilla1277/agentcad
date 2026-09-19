@@ -353,7 +353,7 @@ def _wrap_build123d(topo, template=None, *, as_part=False):
     return simple[kind](shape)
 
 
-def _rewrap_like(topo, template):
+def _rewrap_like(topo, template, *, split_pieces=False):
     """Return raw ``topo`` at ``template``'s abstraction level.
 
     Raw or unknown templates (including ``None`` and file paths) return the
@@ -361,8 +361,9 @@ def _rewrap_like(topo, template):
     CadQuery ``Shape`` templates return ``cq.Shape``. A ``Workplane``
     template returns a new Workplane chained from the original (same plane
     and parent) holding the result; when the original stack held several
-    objects, each top-level piece of the result becomes its own object so
-    nothing is silently dropped.
+    objects, or ``split_pieces`` is set, each top-level piece of a compound
+    result becomes its own stack object so nothing is silently dropped and
+    side-by-side pieces stay individually addressable.
     """
     if template is None or isinstance(template, TopoDS_Shape):
         return topo
@@ -374,7 +375,8 @@ def _rewrap_like(topo, template):
 
         if kind == "workplane":
             stack = _workplane_topods(template) or []
-            if len(stack) > 1 and topo.ShapeType() == TopAbs_COMPOUND:
+            split = split_pieces or len(stack) > 1
+            if split and topo.ShapeType() == TopAbs_COMPOUND:
                 pieces = _top_level_children(topo)
             else:
                 pieces = [topo]
@@ -1127,7 +1129,12 @@ def raise_annulus(
         if base.ShapeType() == TopAbs_COMPOUND else [base]
     )
     if not fuse:
-        return _rewrap_like(_compound_topods(*pieces, land), template)
+        # Non-fused output is "pieces side by side" by definition, so a
+        # Workplane source gets one stack object per piece even when its own
+        # stack held a single object.
+        return _rewrap_like(
+            _compound_topods(*pieces, land), template, split_pieces=True
+        )
 
     try:
         fused = BRepAlgoAPI_Fuse(base, land)
@@ -1137,7 +1144,9 @@ def raise_annulus(
         pass
 
     warnings.warn("raise_annulus boolean fuse failed, returning compound instead")
-    return _rewrap_like(_compound_topods(*pieces, land), template)
+    return _rewrap_like(
+        _compound_topods(*pieces, land), template, split_pieces=True
+    )
 
 
 def _compound_topods(*shapes):
