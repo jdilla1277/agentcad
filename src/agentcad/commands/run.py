@@ -1,4 +1,6 @@
 import ast
+import contextlib
+import io
 import json
 import os
 import re
@@ -69,6 +71,9 @@ def _run_contract_payload(payload: dict) -> dict:
             payload.setdefault(key, contract[f"run_{key}"])
     label = contract.get("run_label")
     payload.setdefault("label", label)
+    script_output = contract.get("run_script_output")
+    if script_output:
+        payload.setdefault("script_output", script_output)
 
     outputs = payload.get("outputs")
     if not isinstance(outputs, dict):
@@ -120,6 +125,22 @@ def _run_contract_payload(payload: dict) -> dict:
     if contract.get("run_legacy_output"):
         payload["deprecation"] = _OUTPUT_DEPRECATION
     return payload
+
+
+_SCRIPT_OUTPUT_LIMIT = 4000
+
+
+def _bounded_script_output(text: str) -> str:
+    """Keep the tail of script prints; the lines before a failure matter most."""
+    if len(text) <= _SCRIPT_OUTPUT_LIMIT:
+        return text
+    tail = text[-_SCRIPT_OUTPUT_LIMIT:]
+    # Start at a whole line when one begins inside the kept tail.
+    newline = tail.find("\n")
+    if 0 <= newline < len(tail) - 1:
+        tail = tail[newline + 1:]
+    dropped = len(text) - len(tail)
+    return f"[{dropped} earlier characters omitted]\n" + tail
 
 
 def _emit_run(payload: dict) -> None:
@@ -1328,7 +1349,13 @@ def _run_impl(
     # Execute via the runner — returns a runtime-agnostic ExecutionResult.
     _heartbeat(f"running script ({runtime_name})…")
     _t = _start_phase("script_exec")
-    result = runner.execute(raw_source, parsed_params)
+    # stdout carries exactly one JSON document. Capture script print()s and
+    # return them as script_output instead of letting them corrupt it.
+    script_stdout = io.StringIO()
+    with contextlib.redirect_stdout(script_stdout):
+        result = runner.execute(raw_source, parsed_params)
+    if script_stdout.getvalue():
+        ctx.meta["run_script_output"] = _bounded_script_output(script_stdout.getvalue())
 
     # Param validation errors (unknown names, CQGI InvalidParameterError) —
     # surface them without consuming a version number.
