@@ -600,6 +600,34 @@ def _coordinate_error_suggestion(msg):
     return None
 
 
+def _transform_method_suggestion(msg):
+    """Point foreign translate method forms at the supported equivalents.
+
+    build123d and CadQuery shapes only offer ``.translate(vector)``;
+    ``Translate(...)``, ``.translated(...)`` and ``.translate(x, y, z)``
+    come from other CAD libraries and fail with generic Python errors.
+    Native ``.translate`` returns a moved copy, so the correction assigns it.
+    """
+    if "name 'Translate' is not defined" in msg:
+        return (
+            "`Translate(...)` is not defined here. Use the helper "
+            "`moved = translate(shape, (x, y, z))`."
+        )
+    if "object has no attribute 'translated'" in msg:
+        return (
+            "`.translated(...)` is not a build123d or CadQuery method. Use "
+            "`moved = translate(shape, (x, y, z))`, or the native "
+            "`moved = shape.translate((x, y, z))`."
+        )
+    if re.search(r"\.translate\(\) takes 2 positional arguments but \d+ were given", msg):
+        return (
+            "Native `.translate()` takes one vector, not separate numbers, "
+            "and returns a moved copy: `moved = shape.translate((x, y, z))`, "
+            "or use `moved = translate(shape, (x, y, z))`."
+        )
+    return None
+
+
 def _execution_error_guidance(msg, runtime, source):
     """Return focused recovery fields for known script API mistakes."""
     from agentcad.output_contract import step_export_guidance
@@ -607,6 +635,9 @@ def _execution_error_guidance(msg, runtime, source):
     export_guidance = step_export_guidance(msg, source)
     if export_guidance:
         return export_guidance
+    transform = _transform_method_suggestion(msg)
+    if transform:
+        return {"suggestion": transform, "more_at": "agentcad docs helpers"}
     if runtime != "build123d":
         return {}
 
