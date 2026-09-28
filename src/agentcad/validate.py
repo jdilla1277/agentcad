@@ -228,6 +228,46 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
             # Creating a generator evaluates its outer iterable, not its body.
             expression(node.generators[0].iter, env)
             return ("generator", node)
+        if isinstance(node, ast.IfExp):
+            expression(node.test, env)
+            if isinstance(node.test, ast.Constant):
+                return expression(node.body if node.test.value else node.orelse,
+                                  env)
+            choices = (expression(node.body, env.copy()),
+                       expression(node.orelse, env.copy()))
+            return ("choice", tuple(value for value in choices if value))
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return ("sequence", tuple(expression(item, env)
+                                      for item in node.elts))
+        if isinstance(node, ast.Dict):
+            values = {}
+            for key, value in zip(node.keys, node.values):
+                resolved = expression(value, env)
+                if key is None and resolved and resolved[0] == "mapping":
+                    values.update(resolved[1])
+                elif isinstance(key, ast.Constant):
+                    values[key.value] = resolved
+                else:
+                    expression(key, env)
+            return ("mapping", values)
+        if isinstance(node, ast.Subscript):
+            collection = expression(node.value, env)
+            if collection and collection[0] in {"sequence", "mapping"}:
+                if isinstance(node.slice, ast.Constant):
+                    index = node.slice.value
+                    if collection[0] == "mapping":
+                        return collection[1].get(index)
+                    if isinstance(index, int) and -len(collection[1]) <= index < len(collection[1]):
+                        return collection[1][index]
+                    return None
+                expression(node.slice, env)
+                if collection[0] == "sequence":
+                    return ("choice", tuple(value for value in collection[1]
+                                            if value))
+                return ("choice", tuple(value for value in collection[1].values()
+                                        if value))
+            expression(node.slice, env)
+            return None
         if isinstance(node, ast.Attribute):
             owner = expression(node.value, env)
             if owner and owner[0] in {"instance", "class"}:
@@ -250,12 +290,23 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
                 found = True
                 return None
             target = expression(func, env)
-            args = [expression(arg, env) for arg in node.args]
+            args = []
+            for arg in node.args:
+                if isinstance(arg, ast.Starred):
+                    expanded = expression(arg.value, env)
+                    if expanded and expanded[0] == "sequence":
+                        args.extend(expanded[1])
+                    else:
+                        args.append(None)
+                else:
+                    args.append(expression(arg, env))
             kwargs = {keyword.arg: expression(keyword.value, env)
                       for keyword in node.keywords if keyword.arg is not None}
             for keyword in node.keywords:
                 if keyword.arg is None:
-                    expression(keyword.value, env)
+                    expanded = expression(keyword.value, env)
+                    if expanded and expanded[0] == "mapping":
+                        kwargs.update(expanded[1])
             if isinstance(func, ast.Name) and func.id == "getattr" and args:
                 owner = args[0]
                 if owner and owner[0] in {"instance", "class"}:
@@ -290,7 +341,10 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
 
     def invoke_target(target, env, args=(), kwargs=None):
         nonlocal found
-        if target[0] == "capture":
+        if target[0] == "choice":
+            for choice in target[1]:
+                invoke_target(choice, env, args, kwargs)
+        elif target[0] == "capture":
             found = True
         elif target[0] == "function":
             return run_function(target[1], env, args=args, kwargs=kwargs)

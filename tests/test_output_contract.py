@@ -157,6 +157,12 @@ def test_uncalled_capture_fails_before_routing_and_execution(
     "def emit():\n    show_object(Box(1, 2, 3))\n    yield 1\nlist(emit())\n",
     "import asyncio\nasync def emit():\n    show_object(Box(1, 2, 3))\nasyncio.run(emit())\n",
     "import asyncio\nasync def emit():\n    show_object(Box(1, 2, 3))\nasync def main():\n    await emit()\nasyncio.run(main())\n",
+    "def emit():\n    show_object(Box(1, 2, 3))\ndef noop():\n    pass\ncallback = emit if True else noop\ncallback()\n",
+    "def emit():\n    show_object(Box(1, 2, 3))\ncallbacks = [emit]\ncallbacks[0]()\n",
+    "def emit():\n    show_object(Box(1, 2, 3))\ncallbacks = [emit]\nindex = 0\ncallbacks[index]()\n",
+    "def emit():\n    show_object(Box(1, 2, 3))\ncallbacks = {'emit': emit}\ncallbacks['emit']()\n",
+    "def emit():\n    show_object(Box(1, 2, 3))\ndef consume(cb):\n    cb()\nconsume(**{'cb': emit})\n",
+    "def emit():\n    show_object(Box(1, 2, 3))\ndef consume(cb):\n    cb()\nconsume(*[emit])\n",
 ])
 def test_resolvable_capture_reaches_execution(runner, isolated_dir, source):
     assert runner.invoke(cli, ["init", "--name", "capture"]).exit_code == 0
@@ -241,6 +247,10 @@ def test_uncalled_function_capture_fails():
 @pytest.mark.parametrize("source", [
     "def make():\n    show_object(Box(1, 2, 3))\nalias = make\n",
     "def make():\n    show_object(Box(1, 2, 3))\ncallbacks = [make]\n",
+    "def make():\n    show_object(Box(1, 2, 3))\ncallback = make if True else None\n",
+    "value = show_object(Box(1, 2, 3)) if False else None\n",
+    "def make():\n    show_object(Box(1, 2, 3))\ncallbacks = [make]\nentry = callbacks[0]\n",
+    "def make():\n    show_object(Box(1, 2, 3))\ndef consume(cb):\n    pass\nconsume(**{'cb': make})\n",
     "def make():\n    show_object(Box(1, 2, 3))\nconsume(make)\n",
     "def make():\n    show_object(Box(1, 2, 3))\niterator = map(make, [1])\n",
     "callback = lambda: show_object(Box(1, 2, 3))\n",
