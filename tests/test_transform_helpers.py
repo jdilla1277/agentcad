@@ -214,11 +214,14 @@ _BENCHMARK_SUPPORTED = [
     "translate(part, dx=x, dy=y, dz=z)",
 ]
 _BENCHMARK_FOREIGN = [
-    ("translate(x, y, z)(part)", "exception", "Use translate(shape, (x, y, z))"),
-    ("translate((x, y, z))", "exception", "Use translate(shape, (x, y, z))"),
-    ("Translate((x, y, z))", "suggestion", "moved = translate(shape, (x, y, z))"),
-    ("part.translated((x, y, z))", "suggestion", "moved = translate(shape, (x, y, z))"),
-    ("part.translate(x, y, z)", "suggestion", "moved = shape.translate((x, y, z))"),
+    ("translate(x, y, z)(part)", "Use translate(shape, (x, y, z))"),
+    ("translate((x, y, z))", "Use translate(shape, (x, y, z))"),
+    ("translate(part, dx=x, dy=y)", "Use translate(shape, (x, y, z))"),
+    ("translate(part, x=x, dy=y, dz=z)", "Use translate(shape, (x, y, z))"),
+    ("rotate(part, 'Z')", "Use rotate(shape, axis, angle_deg)"),
+    ("Translate((x, y, z))", "moved = translate(shape, (x, y, z))"),
+    ("part.translated((x, y, z))", "moved = translate(shape, (x, y, z))"),
+    ("part.translate(x, y, z)", "moved = shape.translate((x, y, z))"),
 ]
 _BENCHMARK_PREFIX = "x, y, z = 10, 20, 30\npart = Box(10, 20, 30)\n"
 
@@ -232,17 +235,16 @@ def test_benchmark_supported_translate_forms_replay(expression):
     assert bbox_point(result.topo_shape) == pytest.approx((10, 20, 30))
 
 
-@pytest.mark.parametrize("expression,field,correction", _BENCHMARK_FOREIGN)
-def test_benchmark_foreign_translate_forms_replay(expression, field, correction):
+@pytest.mark.parametrize("expression,correction", _BENCHMARK_FOREIGN)
+def test_benchmark_foreign_translate_forms_replay(expression, correction):
+    # Agents may read only the suggestion field, so every correction must
+    # appear there, not just inside the error text.
     source = f"{_BENCHMARK_PREFIX}show_object(Compound({expression}))\n"
     result = b3d_runner.execute(source)
     assert not result.success
-    if field == "exception":
-        assert correction in result.exception
-    else:
-        guidance = _execution_error_guidance(result.exception, "build123d", source)
-        assert correction in guidance["suggestion"]
-        assert guidance["more_at"] == "agentcad docs helpers"
+    guidance = _execution_error_guidance(result.exception, "build123d", source)
+    assert correction in guidance["suggestion"]
+    assert guidance["more_at"] == "agentcad docs helpers"
 
 
 def test_translate_method_guidance_ignores_unrelated_errors():
@@ -250,6 +252,7 @@ def test_translate_method_guidance_ignores_unrelated_errors():
         "TypeError: Shape.rotate() takes 3 positional arguments but 4 were given",
         "AttributeError: 'Box' object has no attribute 'translate_by'",
         "NameError: name 'Translation' is not defined",
+        "ValueError: Use the force",
     ):
         assert _execution_error_guidance(message, "build123d", "") == {}
 

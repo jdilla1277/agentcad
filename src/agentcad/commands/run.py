@@ -628,6 +628,21 @@ def _transform_method_suggestion(msg):
     return None
 
 
+_HELPER_CORRECTION = re.compile(
+    r"\b(Use (?:translate|rotate|bbox_point|bbox_size|place_at)\(.*)", re.DOTALL
+)
+
+
+def _helper_correction_suggestion(msg):
+    """Lift an injected helper's correction into the suggestion field.
+
+    Placement helpers end their errors with a copyable ``Use helper(...)``
+    call; agents that read only ``suggestion`` would otherwise miss it.
+    """
+    match = _HELPER_CORRECTION.search(msg)
+    return match.group(1).strip() if match else None
+
+
 def _execution_error_guidance(msg, runtime, source):
     """Return focused recovery fields for known script API mistakes."""
     from agentcad.output_contract import step_export_guidance
@@ -635,7 +650,7 @@ def _execution_error_guidance(msg, runtime, source):
     export_guidance = step_export_guidance(msg, source)
     if export_guidance:
         return export_guidance
-    transform = _transform_method_suggestion(msg)
+    transform = _transform_method_suggestion(msg) or _helper_correction_suggestion(msg)
     if transform:
         return {"suggestion": transform, "more_at": "agentcad docs helpers"}
     if runtime != "build123d":
