@@ -132,7 +132,9 @@ which writes and tracks the canonical STEP file.
 
 In build123d scripts, capture each shape object once, including across
 `show_object()`, `show_assembly()`, and `show_compound()` calls and within
-assembly iterables. Repeated references fail with `error_kind: "duplicate_capture"`;
+assembly iterables. Capturing an assembly also captures all its descendants;
+do not capture a child separately or reuse it in another captured assembly.
+Repeated references fail with `error_kind: "duplicate_capture"`;
 changing the name or ID does not create another instance. For intentional
 instances, use `from copy import deepcopy`, then copy the shape before positioning
 and capturing it. See `agentcad docs parts` for an example.

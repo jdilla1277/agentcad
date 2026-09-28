@@ -24,6 +24,75 @@ DUPLICATE_OUTPUTS = [
     "show_assembly([part])\nshow_object(part.parent)",
 ]
 
+COMPOUND_SETUP = (
+    "part = Box(1, 1, 1)\n"
+    "sibling = Box(1, 1, 1).translate((2, 0, 0))\n"
+    "assembly = Compound(children=[part, sibling])\n"
+)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("output", [
+    "show_object(assembly)\nshow_object(part)",
+    "show_object(part)\nshow_object(assembly)",
+    "show_assembly([assembly, part])",
+    "show_assembly([part, assembly])",
+    "show_assembly([assembly])\nshow_object(part)",
+    "show_object(part)\nshow_compound([assembly])",
+    "show_object(assembly)\nother = Compound(children=[part])\nshow_object(other)",
+])
+def test_captured_descendants_cannot_be_reused(output, nested):
+    source = COMPOUND_SETUP
+    if nested:
+        source += "assembly = Compound(children=[assembly])\n"
+    result = runner.execute(source + output)
+    assert result.status == "execution_error"
+    assert result.error_kind == "duplicate_capture"
+    assert result.topo_shape is None
+    assert result.traceback is None
+
+
+def test_rejected_descendants_leave_tree_and_registry_unchanged():
+    result = runner.execute(COMPOUND_SETUP +
+        "try:\n"
+        "    show_assembly([assembly, part])\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "assert part.parent is assembly\n"
+        "assert len(assembly.children) == 2\n"
+        "show_object(assembly)\n"
+    )
+    assert result.success, result.exception
+    assert compute_metrics(result.topo_shape)["volume"] == pytest.approx(2)
+
+
+@pytest.mark.parametrize("instance", ["part", "assembly"])
+def test_copied_descendants_and_assemblies_export_consistently(instance, tmp_path):
+    from build123d import Compound
+    from agentcad.step_io import load_cad_shape
+
+    result = runner.execute(COMPOUND_SETUP +
+        "from copy import deepcopy\n"
+        "show_object(assembly, name='original')\n"
+        f"show_object(deepcopy({instance}).translate((10, 0, 0)), name='copy')\n"
+    )
+    assert result.success, result.exception
+    expected_volume = 3 if instance == "part" else 4
+    assert sum(compute_metrics(p["topo_shape"])["volume"] for p in result.parts) == pytest.approx(expected_volume)
+    assert compute_metrics(result.topo_shape)["volume"] == pytest.approx(expected_volume)
+    path = tmp_path / "copied.step"
+    runner.export_step(result.native_shape, str(path))
+    exported = load_cad_shape(path)
+    assert compute_metrics(exported)["volume"] == pytest.approx(expected_volume)
+    assert len(Compound(exported).solids()) == expected_volume
+
+
+def test_separate_siblings_can_be_captured():
+    result = runner.execute(COMPOUND_SETUP + "show_object(part)\nshow_object(sibling)")
+    assert result.success, result.exception
+    assert len(result.parts) == 2
+    assert compute_metrics(result.topo_shape)["volume"] == pytest.approx(2)
+
 
 @pytest.mark.parametrize("output", DUPLICATE_OUTPUTS)
 def test_duplicate_identity_is_a_targeted_error(output):
@@ -104,7 +173,11 @@ def test_caught_duplicate_does_not_poison_subsequent_capture():
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
-@pytest.mark.parametrize("output", [DUPLICATE_OUTPUTS[0], DUPLICATE_OUTPUTS[4]])
+@pytest.mark.parametrize("output", [
+    DUPLICATE_OUTPUTS[0], DUPLICATE_OUTPUTS[4],
+    "assembly = Compound(children=[part])\nshow_object(assembly)\nshow_object(part)",
+    "assembly = Compound(children=[part])\nshow_object(part)\nshow_object(assembly)",
+])
 def test_cli_duplicate_capture_is_json_with_recovery(
     runner, b3d_project, output, dry_run
 ):

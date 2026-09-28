@@ -1226,6 +1226,8 @@ SECTIONS = {
         "  Capture each shape object once. Repeating the same Python object\n"
         "  across show_object(), show_assembly(), or show_compound(), or within\n"
         "  an assembly iterable, fails with error_kind='duplicate_capture'.\n"
+        "  Capturing an assembly includes all its descendants: a child cannot\n"
+        "  also be captured separately or reused in another captured assembly.\n"
         "  Different names or IDs do not create separate instances. This is\n"
         "  a capture error, not an invalid_geometry result. Normal runs record\n"
         "  a failed version without STEP output; --dry-run records no version.\n"

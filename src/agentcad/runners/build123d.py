@@ -129,18 +129,23 @@ def execute(
     def register_objects(objects):
         pending = {}
         for obj in objects:
-            identity = builtins.id(obj)
-            if identity in captured_objects or identity in pending:
-                raise DuplicateCaptureError(
-                    "Output capture received the same object more than once. "
-                    "Capture each object once, including across show_object(), "
-                    "show_assembly(), and show_compound(). Different names or "
-                    "IDs do not create instances. For intentional repeats, use "
-                    "`from copy import deepcopy` and create a separate object "
-                    "with `instance = deepcopy(part)` before positioning and "
-                    "capturing it. See `agentcad docs parts`."
-                )
-            pending[identity] = obj
+            # Capturing a tree also captures its descendants. Retain that
+            # identity even if later script code reparents a child elsewhere.
+            nodes = (obj, *obj.descendants) if isinstance(obj, Shape) else (obj,)
+            for node in nodes:
+                identity = builtins.id(node)
+                if identity in captured_objects or identity in pending:
+                    raise DuplicateCaptureError(
+                        "Output capture received the same object more than once, "
+                        "either directly or as an assembly descendant. "
+                        "Capture each object once, including across show_object(), "
+                        "show_assembly(), and show_compound(). Different names or "
+                        "IDs do not create instances. For intentional repeats, use "
+                        "`from copy import deepcopy` and create a separate object "
+                        "with `instance = deepcopy(part)` before positioning and "
+                        "capturing it. See `agentcad docs parts`."
+                    )
+                pending[identity] = node
         # Commit only after checking the entire call, so a caught duplicate
         # error does not leave partially registered output behind.
         captured_objects.update(pending)
@@ -253,8 +258,9 @@ def execute(
         register_objects(children)
         assembly = Compound(children=children)
         # Scripts can reach this generated node through a child's parent.
-        # It is itself an output, so recapturing it must also be rejected.
-        register_objects([assembly])
+        # Its descendants were registered before parenting; only the new
+        # assembly node remains to be recorded.
+        captured_objects[builtins.id(assembly)] = assembly
         captured.append(
             (assembly, id, name, color, part_of, group_color, structure_options(options))
         )
