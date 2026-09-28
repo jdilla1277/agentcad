@@ -130,10 +130,25 @@ def test_common_generated_names_get_build123d_guidance(name, expected, more_at):
 @pytest.mark.parametrize("name", ["Vec", "Translate", "difference", "cos"])
 def test_generated_name_guidance_is_runtime_scoped(name):
     assert _execution_error_guidance(
-        f"NameError: name '{name}' is not defined",
+        f"Script execution failed: NameError: name '{name}' is not defined",
         runtime="cadquery",
         source="",
     ) == {}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Script execution failed: RuntimeError: name 'Vec' is not defined",
+        "Script execution failed: ValueError: name 'cos' is not defined",
+        (
+            "Script execution failed: RuntimeError: "
+            "NameError: name 'Translate' is not defined"
+        ),
+    ],
+)
+def test_undefined_name_guidance_requires_actual_name_error(message):
+    assert _execution_error_guidance(message, "build123d", "") == {}
 
 
 def test_cli_reports_common_generated_name_replacements(runner, isolated_dir):
@@ -163,3 +178,31 @@ def test_cli_reports_common_generated_name_replacements(runner, isolated_dir):
         assert payload["runtime"] == "build123d"
         assert "active build123d runtime" in payload["suggestion"]
         assert expected in payload["suggestion"]
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "name"),
+    [("RuntimeError", "Vec"), ("ValueError", "cos")],
+)
+def test_cli_does_not_misclassify_exception_message_as_name_error(
+    runner, isolated_dir, exception_type, name
+):
+    assert runner.invoke(cli, ["init", "--name", "ordinary-error"]).exit_code == 0
+    script = isolated_dir / f"{exception_type}.py"
+    script.write_text(
+        "show_object(Box(4, 4, 4))\n"
+        f"raise {exception_type}(\"name '{name}' is not defined\")\n"
+    )
+
+    result = runner.invoke(
+        cli,
+        ["run", str(script), "--dry-run", "--no-daemon"],
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["message"].startswith(
+        f"Script execution failed: {exception_type}:"
+    )
+    assert "suggestion" not in payload
+    assert "more_at" not in payload

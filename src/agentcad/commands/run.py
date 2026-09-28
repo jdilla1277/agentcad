@@ -615,7 +615,10 @@ def _undefined_name_guidance(msg):
     aliases: silently choosing a Boolean or placement operation can produce a
     valid but unintended model.
     """
-    match = re.search(r"\bname '([^']+)' is not defined\b", msg)
+    match = re.fullmatch(
+        r"Script execution failed: NameError: name '([^']+)' is not defined",
+        msg,
+    )
     if match is None:
         return None
 
