@@ -20,7 +20,7 @@ _AGENTCAD_API_NAMES = frozenset({
     "fillet_edges", "chamfer_edges", "shell_faces", "split_by_plane",
     "cut_pocket", "boss", "loft_sections", "tapered_sweep", "naca_wire",
     "mirror_fuse", "copy_shape", "safe_cut", "safe_intersection", "safe_fuse",
-    "translate", "rotate", "bbox_point", "place_at", "assemble",
+    "translate", "rotate", "bbox_point", "bbox_size", "place_at", "assemble",
     "annular_boss", "raise_annulus", "ellipse_wire", "spline_wire",
     "polygon_wire", "rounded_rect_wire", "elliptical_sweep",
     "involute_gear_profile",

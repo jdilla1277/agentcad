@@ -200,7 +200,7 @@ identifies the tracked deliverable.
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
   `chamfer_edges`, `shell_faces`, `cut_pocket`, `boss`, `split_by_plane`,
   `copy_shape`, `safe_cut`, `safe_intersection`, `safe_fuse`,
-  `translate`, `rotate`, `bbox_point`, `place_at`, `annular_boss`, and
+  `translate`, `rotate`, `bbox_point`, `bbox_size`, `place_at`, `annular_boss`, and
   `raise_annulus`.
 - For explicit imports and editor completion, import those same AgentCAD
   callables from the stable namespace:
@@ -231,6 +231,18 @@ identifies the tracked deliverable.
       from_pt=bbox_point(shape, "center", "center", "min"),
       to_pt=(10, 0, 5))
   ```
+- Query bounds on a Part or raw TopoDS shape with pre-injected helpers
+  (also available from `agentcad.api`). Each returns an X/Y/Z tuple in model units:
+  ```python
+  xmin, ymin, zmin = bbox_point(shape, 'min', 'min', 'min')
+  xc, yc, zc = bbox_point(shape)  # bounding-box center
+  xmax, ymax, zmax = bbox_point(shape, 'max', 'max', 'max')
+  xlen, ylen, zlen = bbox_size(shape)  # max minus min
+  top_center = bbox_point(shape, x='center', y='center', z='max')
+  ```
+  For native build123d bounds, use `bbox.min.X`, `bbox.center().X`,
+  `bbox.max.X`, and `bbox.size.X` (likewise Y/Z). Vector coordinates are
+  uppercase; `bbox.xmin`, `bbox.lower_z`, and `vector.x` are unsupported.
 - For imported STEP/BREP edits, `load_step(path)` returns a build123d `Part`:
   ```python
   base = load_step("v1_vendor/output.step")
