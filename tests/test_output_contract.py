@@ -114,19 +114,93 @@ def test_cli_missing_capture_precedes_runtime_and_daemon(runner, isolated_dir, m
     assert json.loads(repaired.stdout)["status"] == "success"
 
 
+@pytest.mark.parametrize("source", [
+    "def make():\n    show_object(Box(1, 2, 3))\nalias = make\n",
+    "class Model:\n    def emit(self):\n        show_object(Box(1, 2, 3))\nModel()\n",
+    "class Model:\n    def __init__(self):\n        show_object(Box(1, 2, 3))\n",
+])
+def test_uncalled_capture_fails_before_routing_and_execution(
+    runner, isolated_dir, monkeypatch, source,
+):
+    from agentcad.commands import run as run_mod
+    from agentcad.runners import build123d
+
+    assert runner.invoke(cli, ["init", "--name", "capture"]).exit_code == 0
+    script = isolated_dir / "plate.py"
+    script.write_text("from build123d import Box\n" + source)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Uncalled capture must fail before daemon or runner work")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(run_mod, "maybe_route_through_daemon", forbidden)
+        patch.setattr(build123d, "validate", forbidden)
+        patch.setattr(build123d, "execute", forbidden)
+        result = runner.invoke(cli, ["run", str(script), "--label", "uncalled"])
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "validation_error"
+    assert payload["checks"][0]["check"] == "show_object_missing"
+    assert not list(isolated_dir.rglob("*.step"))
+
+
 def test_syntax_error_has_no_candidates():
     assert output_candidates("def broken(") == []
 
 
 @pytest.mark.parametrize("call", ["main()", "alias = main\nalias()", "list(map(main, [1]))"])
-def test_referenced_function_capture_passes(call):
+def test_called_function_capture_passes(call):
     source = "def main(*args):\n    show_object(Box(1, 2, 3))\n" + call
+    assert validate_script(source, check_imports=False) == []
+
+
+def test_called_lambda_capture_passes():
+    source = "callback = lambda: show_object(Box(1, 2, 3))\ncallback()\n"
+    assert validate_script(source, check_imports=False) == []
+
+
+@pytest.mark.parametrize("consume", [
+    "list(items)",
+    "for _ in items:\n    pass",
+])
+def test_consumed_generator_capture_passes(consume):
+    source = "items = (show_object(Box(1, 2, 3)) for _ in [1])\n" + consume
     assert validate_script(source, check_imports=False) == []
 
 
 def test_uncalled_function_capture_fails():
     source = "def main():\n    show_object(Box(1, 2, 3))\n"
     assert validate_script(source, check_imports=False)[0]["check"] == "show_object_missing"
+
+
+@pytest.mark.parametrize("source", [
+    "def make():\n    show_object(Box(1, 2, 3))\nalias = make\n",
+    "def make():\n    show_object(Box(1, 2, 3))\ncallbacks = [make]\n",
+    "def make():\n    show_object(Box(1, 2, 3))\nconsume(make)\n",
+    "def make():\n    show_object(Box(1, 2, 3))\niterator = map(make, [1])\n",
+    "callback = lambda: show_object(Box(1, 2, 3))\n",
+    "items = (show_object(Box(1, 2, 3)) for _ in [1])\n",
+    "class Model:\n    def __init__(self):\n        show_object(Box(1, 2, 3))\n",
+    "class Model:\n    def emit(self):\n        show_object(Box(1, 2, 3))\n",
+    "class Model:\n    def emit(self):\n        show_object(Box(1, 2, 3))\nModel()\n",
+    "class Model:\n    def emit(self):\n        show_object(Box(1, 2, 3))\nmodel = Model()\nmethod = model.emit\n",
+])
+def test_uncalled_references_do_not_count_as_capture(source):
+    check, = validate_script(source, check_imports=False)
+    assert check["check"] == "show_object_missing"
+
+
+@pytest.mark.parametrize("source", [
+    "class Model:\n    def __init__(self):\n        show_object(Box(1, 2, 3))\nModel()\n",
+    "class Model:\n    def emit(self):\n        show_object(Box(1, 2, 3))\nModel().emit()\n",
+    "class Model:\n    def emit(self):\n        show_object(Box(1, 2, 3))\nmodel = Model()\nmodel.emit()\n",
+    "class Model:\n    def emit(self):\n        show_object(Box(1, 2, 3))\nmodel = Model()\nmethod = model.emit\nmethod()\n",
+    "class Model:\n    @staticmethod\n    def emit():\n        show_object(Box(1, 2, 3))\nModel.emit()\n",
+    "class Model:\n    def __init__(self):\n        self.emit()\n    def emit(self):\n        show_object(Box(1, 2, 3))\nModel()\n",
+])
+def test_invoked_methods_and_constructors_count_as_capture(source):
+    assert validate_script(source, check_imports=False) == []
 
 
 @pytest.mark.parametrize("guard", ["__name__ == '__main__'", "'__main__' == __name__"])
