@@ -324,7 +324,7 @@ def test_show_assembly_rejects_non_shape_elements():
     result = b3d_runner.execute(_BAD_ASSEMBLY_ELEMENT_SCRIPT)
     assert not result.success
     assert result.status == "execution_error"
-    assert "expects only build123d Shape objects" in (result.exception or "")
+    assert "expects build123d Shape objects or raw OCP TopoDS_Shape" in (result.exception or "")
 
 
 def test_show_object_rejects_empty_shapelist_with_hint():
