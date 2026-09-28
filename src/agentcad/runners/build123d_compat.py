@@ -165,6 +165,29 @@ def _positional_names(native_cls: type) -> list[str]:
     )]
 
 
+def _keyword_rotation(
+    native_cls: type | None, args: tuple, kwargs: dict[str, Any],
+) -> tuple[tuple, dict[str, Any]]:
+    """Re-express a positionally passed ``rotation`` as ``rotation=``.
+
+    Repair messages only inspect ``kwargs["rotation"]``; binding against the
+    native signature first means ``RegularPolygon(5, 6, True, (0, 90, 0))``
+    is judged exactly like ``RegularPolygon(5, 6, rotation=(0, 90, 0))``.
+    Positional arguments after ``rotation`` become keywords too, so dropping
+    the rotation never shifts them into the wrong slot.
+    """
+    if native_cls is None:
+        return args, kwargs
+    names = _positional_names(native_cls)
+    if "rotation" not in names:
+        return args, kwargs
+    index = names.index("rotation")
+    if len(args) <= index:
+        return args, kwargs
+    moved = dict(zip(names[index:], args[index:]))
+    return args[:index], {**moved, **kwargs}
+
+
 def _resolved_dimensions(
     class_name: str, kwargs: dict[str, Any], skip: str,
 ) -> dict[str, Any]:
@@ -327,6 +350,7 @@ def _sketch_orientation_hint(
     primitive needs its own BuildSketch, and outside any builder the face
     is relocated with ``Plane.YZ * Circle(5)``.
     """
+    args, kwargs = _keyword_rotation(native_cls, args, kwargs)
     plane = _AXIS_SKETCH_PLANES[axis]
     exclude = {keyword}
     rotation_note = ""
@@ -368,11 +392,33 @@ def _sketch_orientation_hint(
                 f"has nothing to operate on."
             )
     elif kind == "BuildPart":
-        hint = (
-            f"Sketch primitives need a BuildSketch inside the BuildPart; drop "
-            f"{keyword}= and use: with BuildSketch({plane}): {call}. The "
-            f"sketch lies on {where}."
-        )
+        mode = kwargs.get("mode")
+        if mode is not None and getattr(mode, "name", "ADD") != "ADD":
+            # A subtractive primitive alone in a new sketch has nothing to
+            # subtract from; the part's solids are not sketch geometry. Draw
+            # the profile additively and apply the mode when extruding.
+            profile = _example_call(
+                class_name, args, kwargs,
+                exclude=frozenset(exclude | {"mode"}),
+            )
+            hint = (
+                f"Sketch primitives need a BuildSketch inside the BuildPart, "
+                f"and mode={_fmt(mode)} there only acts on other geometry in "
+                f"that same sketch, not on the part's solids. To apply it to "
+                f"the part, drop {keyword}= and mode=, draw the profile, and "
+                f"move the mode to the extrude: with BuildSketch({plane}): "
+                f"{profile} then extrude(amount=N, mode={_fmt(mode)}). The "
+                f"sketch lies on {where}, so without both=True it reaches only "
+                f"one side of the plane. To go through a part centered on the "
+                f"plane, use extrude(amount=N, both=True, mode={_fmt(mode)}) "
+                f"with N at least half the part's size along {axis[1]}."
+            )
+        else:
+            hint = (
+                f"Sketch primitives need a BuildSketch inside the BuildPart; "
+                f"drop {keyword}= and use: with BuildSketch({plane}): {call}. "
+                f"The sketch lies on {where}."
+            )
     else:
         standalone = call if plane == "Plane.XY" else f"{plane} * {call}"
         hint = (
@@ -470,6 +516,8 @@ def _placement_message(
         )
 
     if kind == "orientation":
+        args, kwargs = _keyword_rotation(native_cls, args, kwargs)
+        call = _example_call(class_name, args, kwargs)
         if is_sketch:
             axis = _axis_from_value(value)
             if axis is None:
@@ -575,6 +623,7 @@ def _alignment_message(
             f"{instruction} {supported}"
         )
 
+    args, kwargs = _keyword_rotation(native_cls, args, kwargs)
     if dimensions == 2:
         axis = _axis_from_value(value)
         if axis is None:

@@ -479,6 +479,98 @@ def test_subtractive_repair_executes_beside_its_additive_geometry(prims):
     )
 
 
+@pytest.mark.parametrize("mode", [Mode.SUBTRACT, Mode.INTERSECT])
+def test_non_additive_repair_directly_in_buildpart_moves_mode_to_extrude(
+    prims, mode,
+):
+    """A subtractive primitive alone in a new sketch has nothing to cut."""
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        with prims["BuildPart"]():
+            prims["Box"](20, 20, 10)
+            prims["Circle"](2, direction="X", mode=mode)
+    msg = str(exc.value)
+    sketch_line = "with BuildSketch(Plane.YZ): Circle(2)"
+    extrude_line = f"extrude(amount=N, mode=Mode.{mode.name})"
+    assert f"{sketch_line} then {extrude_line}" in msg
+    assert f"Circle(2, mode=Mode.{mode.name})" not in msg
+    assert "not on the part's solids" in msg
+    assert "without both=True it reaches only one side" in msg
+    assert f"extrude(amount=N, both=True, mode=Mode.{mode.name})" in msg
+
+    result = b3d_runner.execute(
+        "with BuildPart() as part:\n"
+        "    Box(20, 20, 10)\n"
+        f"    {sketch_line}\n"
+        f"    {extrude_line.replace('amount=N', 'amount=20')}\n"
+        "show_object(part.part)"
+    )
+    assert result.success, result.exception
+    shape = build123d.Compound(result.topo_shape)
+    if mode == Mode.SUBTRACT:
+        # The cut runs from the YZ plane toward +X through half the box.
+        assert _volume(shape) == pytest.approx(4000 - math.pi * 4 * 10)
+    else:
+        bounds = shape.bounding_box()
+        assert tuple(bounds.min) == pytest.approx((0, -2, -2))
+        assert tuple(bounds.max) == pytest.approx((10, 2, 2))
+
+
+def test_additive_repair_directly_in_buildpart_keeps_one_line_sketch(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        with prims["BuildPart"]():
+            prims["Circle"](2, direction="X", mode=Mode.ADD)
+    msg = str(exc.value)
+    assert "use: with BuildSketch(Plane.YZ): Circle(2, mode=Mode.ADD)." in msg
+    assert "move the mode to the extrude" not in msg
+
+
+@pytest.mark.parametrize("class_name,args,literal", [
+    ("RegularPolygon", (5, 6, True, (0, 90, 0)), "Plane.YZ * RegularPolygon(5, 6, True)"),
+    ("Rectangle", (10, 20, (0, 90, 0)), "Plane.YZ * Rectangle(10, 20)"),
+    ("Rectangle", (10, 20, 30), "Plane.YZ * Rectangle(10, 20, rotation=30)"),
+    ("RegularPolygon", (5, 6, True, 15), "Plane.YZ * RegularPolygon(5, 6, True, rotation=15)"),
+])
+@pytest.mark.parametrize("keyword", ["axis", "align"])
+def test_positional_rotation_is_validated_like_keyword_rotation(
+    prims, class_name, args, literal, keyword,
+):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims[class_name](*args, **{keyword: "X"})
+    msg = str(exc.value)
+    assert f"use: {literal}." in msg
+    if isinstance(args[-1], tuple):
+        assert "single in-plane angle in degrees, not (0, 90, 0)" in msg
+    else:
+        assert "stays an in-plane angle" in msg
+    result = b3d_runner.execute(f"show_object({literal})")
+    assert result.success, result.exception
+    face = build123d.Compound(result.topo_shape)
+    native_call = literal.split(" * ", 1)[1]
+    reference = eval(native_call, {**vars(build123d)}).bounding_box()
+    bounds = face.bounding_box()
+    assert bounds.size.X == pytest.approx(0)
+    assert (bounds.size.Y, bounds.size.Z) == pytest.approx(
+        (reference.size.X, reference.size.Y)
+    )
+
+
+def test_positional_rotation_conflict_on_solids_is_executable(prims):
+    with pytest.raises(PrimitiveArgumentError) as exc:
+        prims["Cylinder"](5, 20, 360, (15, 0, 0), axis="X")
+    msg = str(exc.value)
+    keep = "Cylinder(5, 20, 360, rotation=(15, 0, 0))"
+    point = "Cylinder(5, 20, 360, rotation=(0, 90, 0))"
+    assert f"drop axis=: {keep}." in msg
+    assert f"replace rotation=: {point}." in msg
+    for literal in (keep, point):
+        result = b3d_runner.execute(f"show_object({literal})")
+        assert result.success, result.exception
+    bounds = build123d.Compound(
+        b3d_runner.execute(f"show_object({point})").topo_shape
+    ).bounding_box()
+    assert tuple(bounds.size) == pytest.approx((20, 10, 10))
+
+
 def test_scalar_rotation_is_preserved_on_primitives_that_accept_it(prims):
     with pytest.raises(PrimitiveArgumentError) as exc:
         prims["Rectangle"](10, 20, align="X", rotation=30)
