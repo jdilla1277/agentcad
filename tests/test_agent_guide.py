@@ -54,6 +54,12 @@ def test_guide_distinguishes_json_commands_from_human_readable_help():
         assert "`--help` and `agentcad docs` return readable text" in body
 
 
+def test_build123d_guide_requires_explicit_math_imports():
+    body = guide_body("build123d")
+    assert "Python math names are not pre-injected" in body
+    assert "from math import cos, sin, sqrt, pi" in body
+
+
 # --- init installs the guide by default ---
 
 

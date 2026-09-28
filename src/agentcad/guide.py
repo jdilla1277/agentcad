@@ -208,6 +208,8 @@ identifies the tracked deliverable.
   from agentcad.api import load_step, safe_cut, translate, show_object
   ```
   Import primitives and types such as `Box` and `Vector` from `build123d`.
+- Python math names are not pre-injected. Import the ones the script uses,
+  for example `from math import cos, sin, sqrt, pi`.
 - Primitive `align=` anchors bounding-box sides at the origin; it is not a
   position. Use `Align.MIN`, `Align.CENTER`, `Align.MAX`, or `Align.NONE`
   (preserve native coordinates), either once or per axis. Equivalent

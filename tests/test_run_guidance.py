@@ -1,7 +1,10 @@
 """Focused tests for build123d execution-error recovery guidance."""
 
+import json
+
 import pytest
 
+from agentcad.cli import cli
 from agentcad.commands.run import _execution_error_guidance
 
 
@@ -100,3 +103,63 @@ def test_is_null_guidance_points_to_product_validity_surfaces():
     assert "agentcad inspect" in guidance["suggestion"]
     assert "run metrics" in guidance["suggestion"]
     assert guidance["more_at"] == "agentcad docs editing"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected", "more_at"),
+    [
+        ("Vec", "Vector(x, y, z)", "agentcad docs preamble"),
+        ("Translate", "shape.translate((x, y, z))", "agentcad docs preamble"),
+        ("difference", "left - right", "agentcad docs quickstart"),
+        ("cos", "from math import cos", "agentcad docs preamble"),
+        ("pi", "from math import pi", "agentcad docs preamble"),
+    ],
+)
+def test_common_generated_names_get_build123d_guidance(name, expected, more_at):
+    guidance = _execution_error_guidance(
+        f"Script execution failed: NameError: name '{name}' is not defined",
+        runtime="build123d",
+        source="",
+    )
+
+    assert "active build123d runtime" in guidance["suggestion"]
+    assert expected in guidance["suggestion"]
+    assert guidance["more_at"] == more_at
+
+
+@pytest.mark.parametrize("name", ["Vec", "Translate", "difference", "cos"])
+def test_generated_name_guidance_is_runtime_scoped(name):
+    assert _execution_error_guidance(
+        f"NameError: name '{name}' is not defined",
+        runtime="cadquery",
+        source="",
+    ) == {}
+
+
+def test_cli_reports_common_generated_name_replacements(runner, isolated_dir):
+    assert runner.invoke(cli, ["init", "--name", "aliases"]).exit_code == 0
+    cases = {
+        "Vec": ("value = Vec(1, 2, 3)", "Vector(x, y, z)"),
+        "Translate": (
+            "value = Translate((1, 2, 3)) * Box(1, 1, 1)",
+            "shape.translate((x, y, z))",
+        ),
+        "difference": (
+            "value = difference(Box(2, 2, 2), Box(1, 1, 1))",
+            "left - right",
+        ),
+        "cos": ("value = cos(0)", "from math import cos"),
+    }
+
+    for name, (statement, expected) in cases.items():
+        script = isolated_dir / f"{name}.py"
+        script.write_text(f"{statement}\nshow_object(Box(1, 1, 1))\n")
+        result = runner.invoke(
+            cli,
+            ["run", str(script), "--dry-run", "--no-daemon"],
+        )
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.stdout)
+        assert payload["runtime"] == "build123d"
+        assert "active build123d runtime" in payload["suggestion"]
+        assert expected in payload["suggestion"]

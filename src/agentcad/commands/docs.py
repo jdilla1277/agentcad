@@ -620,6 +620,8 @@ SECTIONS = {
         "    Mode, Align, Kind, Until, Select               Enums\n"
         "    BuildPart, BuildSketch, BuildLine              Builder contexts\n"
         "    (and everything else exported by `from build123d import *`)\n"
+        "  Python math names are not pre-injected. Import the ones you use:\n"
+        "    from math import cos, sin, sqrt, pi\n"
         "\n"
         "  Primitive constructor aliases (build123d compatibility layer):\n"
         "    Cylinder(diameter=10, height=20)   # diameter / dia / d -> radius\n"
