@@ -555,6 +555,51 @@ def _apply_kernel_layer(part_metrics: dict, report: dict) -> dict:
     return part_metrics
 
 
+def _coordinate_error_suggestion(msg):
+    """Offer conditional advice: error text alone cannot establish the type."""
+    match = re.search(r"'(BoundBox|Vector)' object has no attribute '([^']+)'", msg)
+    if match is None:
+        return None
+    kind, attr = match.groups()
+    if kind == "Vector":
+        if attr in {"x", "y", "z"}:
+            return (
+                "If the receiver is a build123d Vector, coordinates are uppercase: "
+                f"use `vector.{attr.upper()}` "
+                f"instead of `vector.{attr}` (also for bbox.min, bbox.max, and bbox.size)."
+            )
+        return None
+
+    for axis in "xyz":
+        equivalents = {
+            f"{axis}min": f"bbox.min.{axis.upper()}",
+            f"lower_{axis}": f"bbox.min.{axis.upper()}",
+            f"{axis}max": f"bbox.max.{axis.upper()}",
+            f"upper_{axis}": f"bbox.max.{axis.upper()}",
+            f"{axis}center": f"bbox.center().{axis.upper()}",
+            f"{axis}len": f"bbox.size.{axis.upper()}",
+        }
+        if attr in equivalents:
+            return (
+                "If the receiver is a build123d BoundBox from "
+                f"`bbox = shape.bounding_box()`, replace `bbox.{attr}` with "
+                f"`{equivalents[attr]}`. For a Part or raw TopoDS shape, use "
+                "`bbox_point(shape, x='min', y='center', z='max')` for coordinates "
+                "or `bbox_size(shape)` for (xlen, ylen, zlen)."
+            )
+        if attr == axis:
+            return (
+                "If the receiver is a build123d BoundBox, "
+                f"`bbox.{axis}` is ambiguous. For `bbox = shape.bounding_box()`, "
+                f"choose `bbox.min.{axis.upper()}`, `bbox.center().{axis.upper()}`, "
+                f"`bbox.max.{axis.upper()}`, or `bbox.size.{axis.upper()}` "
+                "for the minimum, center, maximum, or length respectively. "
+                "For a Part or raw TopoDS shape, use `bbox_point(shape)` "
+                "(center by default) or `bbox_size(shape)` (lengths)."
+            )
+    return None
+
+
 def _execution_error_guidance(msg, runtime, source):
     """Return focused recovery fields for known script API mistakes."""
     from agentcad.output_contract import step_export_guidance
@@ -565,7 +610,7 @@ def _execution_error_guidance(msg, runtime, source):
     if runtime != "build123d":
         return {}
 
-    suggestion = None
+    suggestion = _coordinate_error_suggestion(msg)
     if "'Part' object has no attribute 'BoundingBox'" in msg:
         suggestion = (
             "`load_step()` returns a build123d `Part`. Get its bounds with "
