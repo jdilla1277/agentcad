@@ -302,8 +302,10 @@ class TestCopyShape:
         source = cq.Workplane("XY").box(10, 10, 10).val()
         copied = copy_shape(source)
 
-        assert not source.wrapped.IsPartner(copied)
-        assert _volume(copied) == pytest.approx(1000.0)
+        # Issue #194: a CadQuery shape in gives a CadQuery shape out.
+        assert isinstance(copied, cq.Shape)
+        assert not source.wrapped.IsPartner(copied.wrapped)
+        assert _volume(copied.wrapped) == pytest.approx(1000.0)
 
     def test_copy_rejects_non_shape(self):
         with pytest.raises(TypeError, match="TopoDS_Shape"):
@@ -331,9 +333,10 @@ class TestTranslate:
     def test_translate_accepts_cadquery_shape_and_vector(self, offset):
         box = cq.Workplane("XY").box(10, 10, 10).val()
         moved = translate(box, offset)
+        assert isinstance(moved, cq.Shape)  # issue #194: kind preserved
         assert bbox_point(moved) == pytest.approx((50, -40, 30))
         assert bbox_point(box.wrapped) == pytest.approx((0, 0, 0))
-        assert not box.wrapped.IsPartner(moved)
+        assert not box.wrapped.IsPartner(moved.wrapped)
 
     def test_translate_moves_bounding_box(self):
         box = cq.Workplane("XY").box(10, 10, 10).val().wrapped
