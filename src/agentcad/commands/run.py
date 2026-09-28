@@ -1449,6 +1449,8 @@ def _run_impl(
             runtime=runtime_name,
             source=raw_source,
         )
+        if result.error_kind:
+            guidance["error_kind"] = result.error_kind
         if dry_run:
             _emit_run({
                 "command": "run", "status": "error", "runtime": runtime_name,

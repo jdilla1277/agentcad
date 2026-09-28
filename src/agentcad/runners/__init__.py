@@ -57,6 +57,8 @@ class ExecutionResult:
     # the script, in call order. run.py uses them to say whether an invalid
     # result inherited its defect from an input or introduced it.
     loaded_files: list[str] = field(default_factory=list)
+    # Machine-readable classification for targeted execution failures.
+    error_kind: str | None = None
 
     @property
     def success(self) -> bool:

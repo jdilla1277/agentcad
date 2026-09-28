@@ -21,6 +21,7 @@ the internal ``RunResult`` to the runtime-agnostic ``ExecutionResult``.
 from __future__ import annotations
 
 import ast
+import builtins
 import traceback
 import warnings as _warnings
 from typing import Any
@@ -29,6 +30,10 @@ from agentcad.runners import ExecutionResult
 
 
 PREAMBLE = ""
+
+
+class DuplicateCaptureError(ValueError):
+    """One shape object was submitted as more than one output instance."""
 
 
 def with_preamble(user_source: str) -> str:
@@ -115,8 +120,35 @@ def execute(
     # List of (obj, explicit_id, name, color, part_of, group_color) tuples
     # in declaration order.
     captured: list[tuple] = []
+    # Keep strong references: assembly parenting can otherwise release nodes
+    # and allow Python to reuse their IDs during the same script execution.
+    captured_objects: dict[int, Any] = {}
     assembly_requested = False
     loaded_files: list[str] = []
+
+    def register_objects(objects):
+        pending = {}
+        for obj in objects:
+            # Capturing a tree also captures its descendants. Retain that
+            # identity even if later script code reparents a child elsewhere.
+            nodes = (obj, *obj.descendants) if isinstance(obj, Shape) else (obj,)
+            for node in nodes:
+                identity = builtins.id(node)
+                if identity in captured_objects or identity in pending:
+                    raise DuplicateCaptureError(
+                        "Output capture received the same object more than once, "
+                        "either directly or as an assembly descendant. "
+                        "Capture each object once, including across show_object(), "
+                        "show_assembly(), and show_compound(). Different names or "
+                        "IDs do not create instances. For intentional repeats, use "
+                        "`from copy import deepcopy` and create a separate object "
+                        "with `instance = deepcopy(part)` before positioning and "
+                        "capturing it. See `agentcad docs parts`."
+                    )
+                pending[identity] = node
+        # Commit only after checking the entire call, so a caught duplicate
+        # error does not leave partially registered output behind.
+        captured_objects.update(pending)
 
     def show_object(
         obj,
@@ -184,6 +216,7 @@ def execute(
             if group_color is None:
                 group_color = options.get("group_color")
         from agentcad.validation_guidance import structure_options
+        register_objects([obj])
         captured.append((obj, id, name, color, part_of, group_color, structure_options(options)))
 
     def show_assembly(
@@ -242,8 +275,14 @@ def execute(
                 group_color = options.get("group_color")
 
         from agentcad.validation_guidance import structure_options
+        register_objects(children)
+        assembly = Compound(children=children)
+        # Scripts can reach this generated node through a child's parent.
+        # Its descendants were registered before parenting; only the new
+        # assembly node remains to be recorded.
+        captured_objects[builtins.id(assembly)] = assembly
         captured.append(
-            (Compound(children=children), id, name, color, part_of, group_color, structure_options(options))
+            (assembly, id, name, color, part_of, group_color, structure_options(options))
         )
         assembly_requested = True
 
@@ -300,6 +339,14 @@ def execute(
             ):
                 exec(code, script_globals)
             captured_warnings = list(ws)
+    except DuplicateCaptureError as e:
+        return ExecutionResult(
+            status="execution_error",
+            discovered_parameters=discovered,
+            parameters=effective_params,
+            exception=str(e),
+            error_kind="duplicate_capture",
+        )
     except Exception as e:
         return ExecutionResult(
             status="execution_error",
