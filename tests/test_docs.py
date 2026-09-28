@@ -646,6 +646,14 @@ def test_docs_patterns_angled_positioning_example(runner):
     assert "arm" in content.lower() or "angle" in content.lower()
 
 
+def test_docs_preamble_requires_explicit_math_imports(runner):
+    result = runner.invoke(cli, ["docs", "preamble"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "math names are not pre-injected" in content
+    assert "from math import cos, sin, sqrt, pi" in content
+
+
 # --- Daemon docs (auto-managed: minimal surface area) ---
 
 

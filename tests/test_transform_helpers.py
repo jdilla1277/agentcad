@@ -234,6 +234,9 @@ _BENCHMARK_FOREIGN = [
     ("part.translated((x, y, z))", "moved = translate(shape, (x, y, z))"),
     ("part.translate(x, y, z)", "moved = shape.translate((x, y, z))"),
 ]
+# Translate is an undefined name, diagnosed with the other generated aliases
+# (#199), so its hint points at the preamble docs.
+_BENCHMARK_MORE_AT = {"Translate((x, y, z))": "agentcad docs preamble"}
 _BENCHMARK_PREFIX = "x, y, z = 10, 20, 30\npart = Box(10, 20, 30)\n"
 
 
@@ -255,7 +258,9 @@ def test_benchmark_foreign_translate_forms_replay(expression, correction):
     assert not result.success
     guidance = _execution_error_guidance(result.exception, "build123d", source)
     assert correction in guidance["suggestion"]
-    assert guidance["more_at"] == "agentcad docs helpers"
+    assert guidance["more_at"] == _BENCHMARK_MORE_AT.get(
+        expression, "agentcad docs helpers"
+    )
 
 
 @pytest.mark.parametrize("source", [
