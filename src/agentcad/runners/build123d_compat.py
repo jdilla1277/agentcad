@@ -408,7 +408,7 @@ def _sketch_orientation_hint(
                 f"the part, drop {keyword}= and mode=, draw the profile, and "
                 f"move the mode to the extrude: with BuildSketch({plane}): "
                 f"{profile} then extrude(amount=N, mode={_fmt(mode)}). The "
-                f"sketch lies on {where}, so without both=True it reaches only "
+                f"sketch lies on {where}; without both=True it reaches only "
                 f"one side of the plane. To go through a part centered on the "
                 f"plane, use extrude(amount=N, both=True, mode={_fmt(mode)}) "
                 f"with N at least half the part's size along {axis[1]}."
