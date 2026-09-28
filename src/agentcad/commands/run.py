@@ -1,5 +1,4 @@
 import ast
-import importlib
 import json
 import os
 import re
@@ -609,6 +608,8 @@ _CAD_BASE_CLASSES = {
 
 def _is_cad_class(name, runtime, source):
     """True when ``name`` is the runtime's own shape class, not a user class."""
+    import importlib
+
     try:
         tree = ast.parse(source)
     except SyntaxError:
