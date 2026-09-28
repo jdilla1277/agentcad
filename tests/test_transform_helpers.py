@@ -247,6 +247,47 @@ def test_benchmark_foreign_translate_forms_replay(expression, correction):
     assert guidance["more_at"] == "agentcad docs helpers"
 
 
+@pytest.mark.parametrize("source", [
+    # User helper with its own translate(vector) method (PR #223 review).
+    "class Helper:\n"
+    "    def translate(self, vector):\n"
+    "        return vector\n"
+    "Helper().translate(1, 2, 3)\n"
+    "show_object(Box(1, 1, 1))\n",
+    # Plain value, not a CAD shape.
+    "value = 'text'\n"
+    "value.translated((1, 2, 3))\n"
+    "show_object(Box(1, 1, 1))\n",
+    # User class that shadows a build123d name.
+    "class Box:\n"
+    "    pass\n"
+    "Box().translated((1, 2, 3))\n"
+    "show_object(Sphere(1))\n",
+])
+def test_translate_method_guidance_requires_a_cad_receiver(source):
+    result = b3d_runner.execute(source)
+    assert not result.success
+    assert _execution_error_guidance(result.exception, "build123d", source) == {}
+
+
+def test_translate_method_guidance_matches_build123d_subclasses():
+    for name in ("Box", "Part", "Solid", "Compound", "Shape", "Cylinder"):
+        message = f"AttributeError: '{name}' object has no attribute 'translated'"
+        guidance = _execution_error_guidance(message, "build123d", "")
+        assert "moved = translate(shape, (x, y, z))" in guidance["suggestion"], name
+    for name in ("Vector", "Location", "Helper", "str"):
+        message = f"AttributeError: '{name}' object has no attribute 'translated'"
+        assert _execution_error_guidance(message, "build123d", "") == {}, name
+
+
+def test_helper_suggestion_requires_agentcad_correction_text():
+    for message in (
+        "ValueError: Use translate(part) before exporting",
+        "ValueError: Use rotate(shape, 'Z') here",
+    ):
+        assert _execution_error_guidance(message, "build123d", "") == {}
+
+
 def test_translate_method_guidance_ignores_unrelated_errors():
     for message in (
         "TypeError: Shape.rotate() takes 3 positional arguments but 4 were given",

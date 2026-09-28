@@ -1,4 +1,5 @@
 import ast
+import importlib
 import json
 import os
 import re
@@ -600,26 +601,63 @@ def _coordinate_error_suggestion(msg):
     return None
 
 
-def _transform_method_suggestion(msg):
-    """Point foreign translate method forms at the supported equivalents.
+_CAD_BASE_CLASSES = {
+    "build123d": ("Shape",),
+    "cadquery": ("Shape", "Workplane"),
+}
+
+
+def _is_cad_class(name, runtime, source):
+    """True when ``name`` is the runtime's own shape class, not a user class."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+    if tree is not None and any(
+        isinstance(node, ast.ClassDef) and node.name == name
+        for node in ast.walk(tree)
+    ):
+        return False
+    try:
+        module = importlib.import_module(runtime)
+    except ImportError:
+        return False
+    cls = getattr(module, name, None)
+    bases = tuple(
+        getattr(module, base) for base in _CAD_BASE_CLASSES.get(runtime, ())
+        if isinstance(getattr(module, base, None), type)
+    )
+    return isinstance(cls, type) and bool(bases) and issubclass(cls, bases)
+
+
+def _transform_method_suggestion(msg, runtime, source):
+    """Point foreign translate forms at the supported equivalents.
 
     build123d and CadQuery shapes only offer ``.translate(vector)``;
     ``Translate(...)``, ``.translated(...)`` and ``.translate(x, y, z)``
     come from other CAD libraries and fail with generic Python errors.
-    Native ``.translate`` returns a moved copy, so the correction assigns it.
+    Method hints require the receiver (or the method's owner) to be one of
+    the runtime's own shape classes, so user helpers and plain values that
+    happen to use these names are left alone. Native ``.translate`` returns
+    a moved copy, so the correction assigns it.
     """
     if "name 'Translate' is not defined" in msg:
         return (
             "`Translate(...)` is not defined here. Use the helper "
             "`moved = translate(shape, (x, y, z))`."
         )
-    if "object has no attribute 'translated'" in msg:
+    match = re.search(r"'(\w+)' object has no attribute 'translated'", msg)
+    if match and _is_cad_class(match.group(1), runtime, source):
         return (
             "`.translated(...)` is not a build123d or CadQuery method. Use "
             "`moved = translate(shape, (x, y, z))`, or the native "
             "`moved = shape.translate((x, y, z))`."
         )
-    if re.search(r"\.translate\(\) takes 2 positional arguments but \d+ were given", msg):
+    match = re.search(
+        r"\b(\w+)\.translate\(\) takes 2 positional arguments but \d+ were given",
+        msg,
+    )
+    if match and _is_cad_class(match.group(1), runtime, source):
         return (
             "Native `.translate()` takes one vector, not separate numbers, "
             "and returns a moved copy: `moved = shape.translate((x, y, z))`, "
@@ -628,19 +666,16 @@ def _transform_method_suggestion(msg):
     return None
 
 
-_HELPER_CORRECTION = re.compile(
-    r"\b(Use (?:translate|rotate|bbox_point|bbox_size|place_at)\(.*)", re.DOTALL
-)
-
-
 def _helper_correction_suggestion(msg):
     """Lift an injected helper's correction into the suggestion field.
 
     Placement helpers end their errors with a copyable ``Use helper(...)``
-    call; agents that read only ``suggestion`` would otherwise miss it.
+    sentence; agents that read only ``suggestion`` would otherwise miss it.
+    Only agentcad's exact sentences match, never arbitrary user errors.
     """
-    match = _HELPER_CORRECTION.search(msg)
-    return match.group(1).strip() if match else None
+    from agentcad.helpers import HELPER_CORRECTIONS
+
+    return next((usage for usage in HELPER_CORRECTIONS if usage in msg), None)
 
 
 def _execution_error_guidance(msg, runtime, source):
@@ -650,7 +685,10 @@ def _execution_error_guidance(msg, runtime, source):
     export_guidance = step_export_guidance(msg, source)
     if export_guidance:
         return export_guidance
-    transform = _transform_method_suggestion(msg) or _helper_correction_suggestion(msg)
+    transform = (
+        _transform_method_suggestion(msg, runtime, source)
+        or _helper_correction_suggestion(msg)
+    )
     if transform:
         return {"suggestion": transform, "more_at": "agentcad docs helpers"}
     if runtime != "build123d":

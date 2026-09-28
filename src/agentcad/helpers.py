@@ -590,6 +590,13 @@ _BBOX_POINT_USAGE = (
 _PLACE_AT_USAGE = (
     "Use place_at(shape, from_pt=(x, y, z), to_pt=(x, y, z))."
 )
+_BBOX_SIZE_USAGE = "Use bbox_size(shape) to get (xlen, ylen, zlen)."
+_TRANSLATE_SHAPE_FIRST = "Use translate(shape, (x, y, z))."
+# Exact correction sentences the run command lifts into its suggestion field.
+HELPER_CORRECTIONS = (
+    _TRANSLATE_USAGE, _TRANSLATE_SHAPE_FIRST, _ROTATE_USAGE,
+    _BBOX_POINT_USAGE, _PLACE_AT_USAGE, _BBOX_SIZE_USAGE,
+)
 
 
 def _transform_shape(shape, usage):
@@ -667,8 +674,7 @@ def translate(
     if _looks_like_offset(shape):
         raise TypeError(
             "translate() takes the shape first; translate(x, y, z)(shape) "
-            "and translate((x, y, z)) are not supported. "
-            "Use translate(shape, (x, y, z))."
+            f"and translate((x, y, z)) are not supported. {_TRANSLATE_SHAPE_FIRST}"
         )
     topo = _transform_shape(shape, _TRANSLATE_USAGE)
     deltas = (dx, dy, dz)
@@ -781,7 +787,7 @@ def bbox_size(shape):
     Accepts raw TopoDS shapes and wrapped build123d/CadQuery shapes, just
     like :func:`bbox_point`. Lengths are max minus min in model units.
     """
-    topo = _transform_shape(shape, "Use bbox_size(shape) to get (xlen, ylen, zlen).")
+    topo = _transform_shape(shape, _BBOX_SIZE_USAGE)
     xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
     return (xmax - xmin, ymax - ymin, zmax - zmin)
 
