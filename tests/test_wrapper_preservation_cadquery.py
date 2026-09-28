@@ -216,17 +216,50 @@ def test_raise_annulus_single_object_workplane_gets_one_object_per_piece():
     _assert_plane_preserved(source, result)
     assert result.parent is source
 
-    # fuse=True on the same input merges nothing (the land is detached), so
-    # the kernel still returns two solids; they stay individually addressable.
+    # Downstream helpers keep both pieces as separate objects.
+    moved_default = translate(result, 0, 0, 5)
+    assert len(moved_default.vals()) == 2
+
+
+def test_raise_annulus_fuse_with_detached_land_keeps_one_object_per_piece():
+    """Review follow-up on #215: a successful fuse whose land does not touch
+    the base returns two disconnected solids; they must stay separate stack
+    objects, not one Compound item."""
+    source = cq.Workplane("XY").box(2, 2, 1)
+
     fused = raise_annulus(
         source, center=(10, 0), inner_radius=1, outer_radius=2, height=1, fuse=True,
     )
-    assert _total_volume(fused) == pytest.approx(4.0 + _LAND_VOLUME)
 
-    # Downstream helpers keep both pieces as separate objects.
-    moved = translate(result, 0, 0, 5)
+    assert isinstance(fused, cq.Workplane)
+    assert len(fused.vals()) == 2
+    assert [type(v).__name__ for v in fused.vals()] == ["Solid", "Solid"]
+    assert sorted(v.Volume() for v in fused.vals()) == pytest.approx(
+        sorted([4.0, _LAND_VOLUME])
+    )
+    _assert_plane_preserved(source, fused)
+    assert fused.parent is source
+
+    moved = translate(fused, 0, 0, 5)
     assert len(moved.vals()) == 2
+    assert [type(v).__name__ for v in moved.vals()] == ["Solid", "Solid"]
     assert _total_volume(moved) == pytest.approx(4.0 + _LAND_VOLUME)
+
+
+def test_raise_annulus_fuse_with_attached_land_is_one_solid():
+    """When the land sits on the base, fuse=True really merges: one Solid
+    stack object, not a Compound wrapping it."""
+    source = cq.Workplane("XY").box(10, 10, 1)  # top face at z=0.5
+
+    fused = raise_annulus(
+        source, center=(0, 0), inner_radius=1, outer_radius=2, height=1, z=0.5,
+        fuse=True,
+    )
+
+    assert len(fused.vals()) == 1
+    assert type(fused.val()).__name__ == "Solid"
+    assert fused.val().Volume() == pytest.approx(100.0 + _LAND_VOLUME)
+
 
 
 # ---------------------------------------------------------------------------

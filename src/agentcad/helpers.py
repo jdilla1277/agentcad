@@ -1155,7 +1155,11 @@ def raise_annulus(
     try:
         fused = BRepAlgoAPI_Fuse(base, land)
         if fused.IsDone():
-            return _rewrap_like(fused.Shape(), template)
+            # The kernel returns a compound. When the land does not touch the
+            # base it holds two disconnected solids; split them into stack
+            # objects like the non-fused path. A real merge is a single
+            # solid either way.
+            return _rewrap_like(fused.Shape(), template, split_pieces=True)
     except Exception:
         pass
 
