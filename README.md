@@ -130,6 +130,13 @@ Import build123d primitives such as `Box` or `Vector` from `build123d` itself.
 Do not import STEP writers: `show_object` hands the result back to AgentCAD,
 which writes and tracks the canonical STEP file.
 
+In build123d scripts, capture each shape object once, including across
+`show_object()`, `show_assembly()`, and `show_compound()` calls and within
+assembly iterables. Repeated references fail with `error_kind: "duplicate_capture"`;
+changing the name or ID does not create another instance. For intentional
+instances, use `from copy import deepcopy`, then copy the shape before positioning
+and capturing it. See `agentcad docs parts` for an example.
+
 `agentcad init` records build123d as the project runtime. That keeps the
 script API, built-in docs, and subsequent runs on one clear default.
 
