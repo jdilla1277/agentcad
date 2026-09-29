@@ -16,11 +16,11 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-### Introducing parts
+### On CADGenBench: 48% higher CAD Score and 21.8% lower model cost
 
-[![Watch agentcad parts rebuild a toy assembly](https://img.youtube.com/vi/VdMhRUiCaNU/maxresdefault.jpg)](https://youtu.be/VdMhRUiCaNU)
+[![Watch measuring agentcad's effectiveness](https://img.youtube.com/vi/IacqGZH8Gu4/maxresdefault.jpg)](https://www.youtube.com/watch?v=IacqGZH8Gu4)
 
-Parts let an agent build CAD as named, color-coded pieces and groups, then hand back a viewer a human can inspect. Watch the demo on [YouTube](https://youtu.be/VdMhRUiCaNU) or read the story at [agentcad.dev/parts](https://agentcad.dev/parts).
+In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
 
 ## Quick start
 
