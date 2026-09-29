@@ -20,7 +20,7 @@ A coding agent designing in agentcad, live. See more at [agentcad.dev](https://a
 
 [![Watch measuring agentcad's effectiveness](https://img.youtube.com/vi/IacqGZH8Gu4/maxresdefault.jpg)](https://www.youtube.com/watch?v=IacqGZH8Gu4)
 
-In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view our change log](https://agentcad.dev/changelog) for more recent updates.
+In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
 
 ## Quick start
 
