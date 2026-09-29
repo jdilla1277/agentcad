@@ -682,6 +682,63 @@ _COMMON_MATH_NAMES = {
 }
 
 
+def _undefined_name(msg):
+    """Name from a genuine script NameError, or None for any other failure."""
+    match = re.fullmatch(
+        r"Script execution failed: NameError: name '([^']+)' is not defined",
+        msg,
+    )
+    return match.group(1) if match else None
+
+
+def _uses_unbound_name(source, name):
+    """True when the script reads ``name`` but never defines or imports it."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    loaded = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            loaded = True
+        elif isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ) and node.name == name:
+            return False
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split(".")[0]) == name
+            for alias in node.names
+        ):
+            return False
+    return loaded
+
+
+def _cadquery_undefined_name_guidance(msg, source):
+    """CadQuery counterpart for the generated names both runtimes share.
+
+    The CadQuery runner reports ``Script execution failed: name 'X' is not
+    defined`` without the exception type, so require source evidence that
+    the script really reads an unbound ``Translate``.
+    """
+    match = re.fullmatch(
+        r"Script execution failed: (?:NameError: )?name '([^']+)' is not defined",
+        msg,
+    )
+    if match and match.group(1) == "Translate" and _uses_unbound_name(source, "Translate"):
+        return {
+            "suggestion": (
+                "The active CadQuery runtime has no `Translate` constructor. "
+                "Use the pre-injected `moved = translate(shape, (x, y, z))`, "
+                "or the native `moved = shape.translate((x, y, z))` (it "
+                "returns a moved copy)."
+            ),
+            "more_at": "agentcad docs helpers",
+        }
+    return None
+
+
 def _undefined_name_guidance(msg):
     """Return build123d-specific recovery for common generated-code names.
 
@@ -690,14 +747,10 @@ def _undefined_name_guidance(msg):
     aliases: silently choosing a Boolean or placement operation can produce a
     valid but unintended model.
     """
-    match = re.fullmatch(
-        r"Script execution failed: NameError: name '([^']+)' is not defined",
-        msg,
-    )
-    if match is None:
+    name = _undefined_name(msg)
+    if name is None:
         return None
 
-    name = match.group(1)
     suggestions = {
         "Vec": (
             "The active build123d runtime has no `Vec` name. Use the "
@@ -780,7 +833,7 @@ def _execution_error_guidance(msg, runtime, source):
     if transform:
         return {"suggestion": transform, "more_at": "agentcad docs helpers"}
     if runtime != "build123d":
-        return {}
+        return _cadquery_undefined_name_guidance(msg, source) or {}
 
     undefined_guidance = _undefined_name_guidance(msg)
     if undefined_guidance is not None:
