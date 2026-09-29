@@ -37,6 +37,15 @@ _EXPECTED = {
     "binary_buffer": "buffer debug\n",
 }
 
+# C stdio is buffered separately from Python and flushes later unless the
+# capture flushes it first. POSIX libc only: CDLL(None) has no Windows twin.
+if os.name != "nt":
+    _WRITES["c_stdio"] = (
+        "import ctypes\n"
+        "ctypes.CDLL(None).printf(b\"c buffered debug\\n\")\n"
+    )
+    _EXPECTED["c_stdio"] = "c buffered debug\n"
+
 
 def _env():
     env = dict(os.environ)
@@ -158,3 +167,23 @@ def test_isolate_protocol_stdout_moves_stray_fd_writes_to_stderr():
     assert result.stdout == '{"jsonrpc": "2.0"}\n'
     assert "stray fd write" in result.stderr
     assert "stray child" in result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="uses POSIX libc printf via ctypes")
+def test_silence_native_stdout_flushes_buffered_c_output_to_stderr():
+    """OCCT writes through C stdio; its buffered output must reach stderr
+    before fd 1 is restored, not surface after the command's JSON."""
+    snippet = (
+        "import ctypes, json\n"
+        "from agentcad.native_io import silence_native_stdout\n"
+        "with silence_native_stdout():\n"
+        "    ctypes.CDLL(None).printf(b'occt diagnostic\\n')\n"
+        "print(json.dumps({'status': 'success'}))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", snippet],
+        capture_output=True, text=True, env=_env(), timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"status": "success"}
+    assert "occt diagnostic" in result.stderr
