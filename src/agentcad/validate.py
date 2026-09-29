@@ -120,34 +120,164 @@ def _is_main_guard(node):
 
 
 def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
-    """Conservatively follow referenced functions, skipping known dead guards.
+    """Follow calls reachable from module execution, skipping known dead guards.
 
-    A function definition alone does not execute its capture. References count
-    as potentially executing it, including aliases and callback arguments.
-    Dynamic conditionals still pass; the runners diagnose empty results later.
+    Resolve simple local functions, aliases, constructors, and methods. Leave
+    genuinely dynamic method dispatch to the runner when capture is possible.
     """
     output_calls = set(output_calls or ("show_object",))
     direct_output_names, api_module_names = _output_import_bindings(
         tree, output_calls
     )
-    functions = {}
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            functions.setdefault(node.name, []).append(node)
-    visited = set()
-    pending = [tree]
-    while pending:
-        node = pending.pop()
-        if id(node) in visited:
-            continue
-        if isinstance(node, ast.ClassDef):
-            # Construction and Python protocols invoke methods implicitly.
-            # Preserve these possible captures without modeling descriptors,
-            # metaclasses, or special method dispatch.
-            for method in node.body:
-                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    pending.extend(method.body)
-        visited.add(id(node))
+    active_calls = set()
+    defaults = {}
+    class_bases = {}
+    try_nodes = (ast.Try, getattr(ast, "TryStar", ast.Try))
+    found = False
+
+    def known_empty(node):
+        return (
+            isinstance(node, (ast.List, ast.Tuple, ast.Set)) and not node.elts
+        ) or (
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "range" and len(node.args) == 1
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == 0
+        )
+
+    def method_on(cls, name):
+        method = next((item for item in reversed(cls.body)
+                       if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                       and item.name == name), None)
+        if method:
+            return method
+        for base in class_bases.get(id(cls), ()):
+            method = method_on(base, name)
+            if method:
+                return method
+        return None
+
+    def class_may_capture(cls, seen=None):
+        seen = set() if seen is None else seen
+        if id(cls) in seen:
+            return False
+        seen.add(id(cls))
+        for method in cls.body:
+            if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for call in ast.walk(method):
+                    if isinstance(call, ast.Call) and (
+                        isinstance(call.func, ast.Name)
+                        and call.func.id in direct_output_names
+                        or isinstance(call.func, ast.Attribute)
+                        and call.func.attr in output_calls
+                        and _dotted_name(call.func.value) in api_module_names
+                    ):
+                        return True
+        return any(class_may_capture(base, seen)
+                   for base in class_bases.get(id(cls), ()))
+
+    def is_generator_function(node):
+        def has_yield(body):
+            for child in ast.iter_child_nodes(body):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.Lambda, ast.ClassDef)):
+                    continue
+                if isinstance(child, (ast.Yield, ast.YieldFrom)) or has_yield(child):
+                    return True
+            return False
+        return has_yield(node)
+
+    def run_function(node, env, receiver=None, args=(), kwargs=None):
+        key = id(node)
+        if key in active_calls:
+            return None
+        local = env.copy()
+        params = node.args.posonlyargs + node.args.args
+        local.update(defaults.get(key, {}))
+        if receiver is not None and params:
+            local[params[0].arg] = receiver
+            params = params[1:]
+        for param, value in zip(params, args):
+            local[param.arg] = value
+        for name, value in (kwargs or {}).items():
+            local[name] = value
+        if isinstance(node, ast.AsyncFunctionDef):
+            return ("coroutine", node, local)
+        if is_generator_function(node):
+            return ("generator_call", node, local)
+        active_calls.add(key)
+        try:
+            if isinstance(node, ast.Lambda):
+                return expression(node.body, local)
+            return statements(node.body, local)[1]
+        finally:
+            active_calls.remove(key)
+
+    def expression(node, env):
+        nonlocal found
+        if node is None or found:
+            return None
+        if isinstance(node, ast.Name):
+            if node.id in direct_output_names and node.id not in env:
+                return ("capture",)
+            return env.get(node.id)
+        if isinstance(node, ast.Lambda):
+            expression(node.args, env)  # Defaults execute; the body does not.
+            return ("function", node)
+        if isinstance(node, ast.GeneratorExp):
+            # Creating a generator evaluates its outer iterable, not its body.
+            expression(node.generators[0].iter, env)
+            return ("generator", node)
+        if isinstance(node, ast.IfExp):
+            expression(node.test, env)
+            if isinstance(node.test, ast.Constant):
+                return expression(node.body if node.test.value else node.orelse,
+                                  env)
+            choices = (expression(node.body, env.copy()),
+                       expression(node.orelse, env.copy()))
+            return ("choice", tuple(value for value in choices if value))
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return ("sequence", tuple(expression(item, env)
+                                      for item in node.elts))
+        if isinstance(node, ast.Dict):
+            values = {}
+            for key, value in zip(node.keys, node.values):
+                resolved = expression(value, env)
+                if key is None and resolved and resolved[0] == "mapping":
+                    values.update(resolved[1])
+                elif isinstance(key, ast.Constant):
+                    values[key.value] = resolved
+                else:
+                    expression(key, env)
+            return ("mapping", values)
+        if isinstance(node, ast.Subscript):
+            collection = expression(node.value, env)
+            if collection and collection[0] in {"sequence", "mapping"}:
+                if isinstance(node.slice, ast.Constant):
+                    index = node.slice.value
+                    if collection[0] == "mapping":
+                        return collection[1].get(index)
+                    if isinstance(index, int) and -len(collection[1]) <= index < len(collection[1]):
+                        return collection[1][index]
+                    return None
+                expression(node.slice, env)
+                if collection[0] == "sequence":
+                    return ("choice", tuple(value for value in collection[1]
+                                            if value))
+                return ("choice", tuple(value for value in collection[1].values()
+                                        if value))
+            expression(node.slice, env)
+            return None
+        if isinstance(node, ast.Attribute):
+            owner = expression(node.value, env)
+            if owner and owner[0] in {"instance", "class"}:
+                method = method_on(owner[1], node.attr)
+                if method:
+                    return ("method", method, owner)
+            if (node.attr in output_calls
+                    and _dotted_name(node.value) in api_module_names):
+                return ("capture",)
+            return None
         if isinstance(node, ast.Call):
             func = node.func
             if (
@@ -157,28 +287,215 @@ def _has_output_call(tree, output_calls=None, *, skip_main_guard=True):
                 and func.attr in output_calls
                 and _dotted_name(func.value) in api_module_names
             ):
-                return True
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            for function in functions.get(node.id, []):
-                pending.extend(function.body)
-        if isinstance(node, ast.Attribute):
-            # Methods and attributes may reference locally defined callables.
-            for function in functions.get(node.attr, []):
-                pending.extend(function.body)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            pending.extend(node.decorator_list)
-            pending.append(node.args)
-            if node.decorator_list:
-                pending.extend(node.body)  # A decorator can execute the function.
-            continue
-        if skip_main_guard and _is_main_guard(node):
-            pending.extend(node.orelse)
-            continue
-        if isinstance(node, ast.If) and isinstance(node.test, ast.Constant):
-            pending.extend(node.body if node.test.value else node.orelse)
-            continue
-        pending.extend(ast.iter_child_nodes(node))
-    return False
+                found = True
+                return None
+            target = expression(func, env)
+            args = []
+            for arg in node.args:
+                if isinstance(arg, ast.Starred):
+                    expanded = expression(arg.value, env)
+                    if expanded and expanded[0] == "sequence":
+                        args.extend(expanded[1])
+                    else:
+                        args.append(None)
+                else:
+                    args.append(expression(arg, env))
+            kwargs = {keyword.arg: expression(keyword.value, env)
+                      for keyword in node.keywords if keyword.arg is not None}
+            for keyword in node.keywords:
+                if keyword.arg is None:
+                    expanded = expression(keyword.value, env)
+                    if expanded and expanded[0] == "mapping":
+                        kwargs.update(expanded[1])
+            if isinstance(func, ast.Name) and func.id == "getattr" and args:
+                owner = args[0]
+                if owner and owner[0] in {"instance", "class"}:
+                    if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                        method = method_on(owner[1], node.args[1].value)
+                        if method:
+                            return ("method", method, owner)
+                        return None
+                    if class_may_capture(owner[1]):
+                        return ("dynamic_method", owner[1])
+                    return None
+            if target:
+                result = invoke_target(target, env, args, kwargs)
+            else:
+                result = None
+            # These built-ins consume a lazy iterable immediately.
+            if (isinstance(func, ast.Name) and func.id in {"list", "tuple", "set"}
+                    and node.args):
+                consume_iterable(node.args[0], env)
+            if (_dotted_name(func) == "asyncio.run" and args
+                    and args[0] and args[0][0] == "coroutine"):
+                statements(args[0][1].body, args[0][2])
+            return result
+        if isinstance(node, ast.Await):
+            value = expression(node.value, env)
+            if value and value[0] == "coroutine":
+                statements(value[1].body, value[2])
+            return None
+        for child in ast.iter_child_nodes(node):
+            expression(child, env)
+        return None
+
+    def invoke_target(target, env, args=(), kwargs=None):
+        nonlocal found
+        if target[0] == "choice":
+            for choice in target[1]:
+                invoke_target(choice, env, args, kwargs)
+        elif target[0] == "capture":
+            found = True
+        elif target[0] == "function":
+            return run_function(target[1], env, args=args, kwargs=kwargs)
+        elif target[0] == "method":
+            method, owner = target[1:]
+            decorators = {name.id for name in method.decorator_list
+                          if isinstance(name, ast.Name)}
+            receiver = None if "staticmethod" in decorators else (
+                ("class", owner[1]) if "classmethod" in decorators else
+                owner if owner[0] == "instance" else None
+            )
+            return run_function(method, env, receiver=receiver,
+                                args=args, kwargs=kwargs)
+        elif target[0] == "class":
+            cls = target[1]
+            new = method_on(cls, "__new__")
+            if new:
+                run_function(new, env, receiver=("class", cls), args=args,
+                             kwargs=kwargs)
+            constructor = method_on(cls, "__init__")
+            if constructor:
+                run_function(constructor, env, receiver=("instance", cls),
+                             args=args, kwargs=kwargs)
+            return ("instance", cls)
+        elif target[0] == "instance":
+            caller = method_on(target[1], "__call__")
+            if caller:
+                return run_function(caller, env, receiver=target,
+                                    args=args, kwargs=kwargs)
+        elif target[0] == "dynamic_method":
+            # A dynamic lookup on a known local instance may select a method
+            # that captures output. Let the runner decide which one executes.
+            found = True
+        return None
+
+    def consume_iterable(node, env):
+        target = expression(node, env)
+        if target and target[0] == "generator_call":
+            statements(target[1].body, target[2])
+            return
+        if isinstance(node, ast.Name):
+            if target and target[0] == "generator":
+                node = target[1]
+        if isinstance(node, ast.GeneratorExp):
+            if known_empty(node.generators[0].iter):
+                return
+            expression(node.elt, env)
+            for generator in node.generators:
+                for condition in generator.ifs:
+                    expression(condition, env)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id == "map" and node.args):
+            if len(node.args) > 1 and known_empty(node.args[1]):
+                return
+            callback = expression(node.args[0], env)
+            if callback:
+                invoke_target(callback, env)
+
+    def bind(target, value, env):
+        if isinstance(target, ast.Name):
+            env[target.id] = value
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                bind(item, None, env)
+
+    def statements(body, env):
+        for node in body:
+            if found:
+                return False, None
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for decorator in node.decorator_list:
+                    expression(decorator, env)
+                expression(node.args, env)
+                params = node.args.posonlyargs + node.args.args
+                bound_defaults = {
+                    param.arg: expression(value, env)
+                    for param, value in zip(params[-len(node.args.defaults):],
+                                            node.args.defaults)
+                } if node.args.defaults else {}
+                bound_defaults.update({
+                    param.arg: expression(value, env)
+                    for param, value in zip(node.args.kwonlyargs,
+                                            node.args.kw_defaults)
+                    if value is not None
+                })
+                defaults[id(node)] = bound_defaults
+                env[node.name] = ("function", node)
+            elif isinstance(node, ast.ClassDef):
+                for base in node.bases:
+                    expression(base, env)
+                for decorator in node.decorator_list:
+                    expression(decorator, env)
+                class_bases[id(node)] = [value[1] for base in node.bases
+                                         if (value := expression(base, env))
+                                         and value[0] == "class"]
+                statements(node.body, env.copy())
+                env[node.name] = ("class", node)
+            elif isinstance(node, ast.Assign):
+                value = expression(node.value, env)
+                for target in node.targets:
+                    bind(target, value, env)
+            elif isinstance(node, ast.AnnAssign):
+                bind(node.target, expression(node.value, env), env)
+            elif isinstance(node, ast.If):
+                expression(node.test, env)
+                if skip_main_guard and _is_main_guard(node):
+                    result = statements(node.orelse, env)
+                elif isinstance(node.test, ast.Constant):
+                    result = statements(node.body if node.test.value else node.orelse, env)
+                else:
+                    left = statements(node.body, env.copy())
+                    right = statements(node.orelse, env.copy())
+                    result = left if left[0] and right[0] else (False, None)
+                if result[0]:
+                    return result
+            elif isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+                is_for = isinstance(node, (ast.For, ast.AsyncFor))
+                expression(node.iter if is_for else node.test, env)
+                if is_for:
+                    consume_iterable(node.iter, env)
+                if (is_for and not known_empty(node.iter)) or (
+                    not is_for and not (isinstance(node.test, ast.Constant)
+                                        and not node.test.value)
+                ):
+                    statements(node.body, env.copy())
+                statements(node.orelse, env.copy())
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    expression(item.context_expr, env)
+                statements(node.body, env.copy())
+            elif isinstance(node, try_nodes):
+                body_result = statements(node.body, env.copy())
+                for handler in node.handlers:
+                    statements(handler.body, env.copy())
+                statements(node.orelse, env.copy())
+                final_result = statements(node.finalbody, env.copy())
+                if final_result[0]:
+                    return final_result
+                if body_result[0] and not node.handlers:
+                    return body_result
+            elif isinstance(node, ast.Return):
+                return True, expression(node.value, env)
+            elif isinstance(node, (ast.Raise, ast.Break, ast.Continue)):
+                expression(node, env)
+                return True, None
+            else:
+                expression(node, env)
+        return False, None
+
+    statements(tree.body, {})
+    return found
 
 
 def _output_import_bindings(tree, output_calls):
