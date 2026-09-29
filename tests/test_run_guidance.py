@@ -127,13 +127,48 @@ def test_common_generated_names_get_build123d_guidance(name, expected, more_at):
     assert guidance["more_at"] == more_at
 
 
-@pytest.mark.parametrize("name", ["Vec", "Translate", "difference", "cos"])
+@pytest.mark.parametrize("name", ["Vec", "difference", "cos"])
 def test_generated_name_guidance_is_runtime_scoped(name):
     assert _execution_error_guidance(
         f"Script execution failed: NameError: name '{name}' is not defined",
         runtime="cadquery",
         source="",
     ) == {}
+
+
+@pytest.mark.parametrize("message", [
+    # What the CadQuery runner actually reports (no exception type).
+    "Script execution failed: name 'Translate' is not defined",
+    "Script execution failed: NameError: name 'Translate' is not defined",
+])
+def test_translate_name_guidance_covers_cadquery(message):
+    # #203 requires Translate(...) to get a canonical repair on both runtimes;
+    # build123d's richer wording comes from the alias table above.
+    guidance = _execution_error_guidance(
+        message, runtime="cadquery", source="moved = Translate((1, 2, 3))",
+    )
+    assert "active CadQuery runtime" in guidance["suggestion"]
+    assert "moved = translate(shape, (x, y, z))" in guidance["suggestion"]
+    assert "moved = shape.translate((x, y, z))" in guidance["suggestion"]
+    assert guidance["more_at"] == "agentcad docs helpers"
+
+
+@pytest.mark.parametrize("message,source", [
+    ("Script execution failed: RuntimeError: NameError: name 'Translate' is not defined",
+     "moved = Translate((1, 2, 3))"),
+    ("Script execution failed: name 'Translation' is not defined",
+     "moved = Translation((1, 2, 3))"),
+    # Same text, but the script never reads Translate: not a NameError.
+    ("Script execution failed: name 'Translate' is not defined",
+     "raise RuntimeError(\"name 'Translate' is not defined\")"),
+    # Script binds Translate itself, so the error is not an undefined name.
+    ("Script execution failed: name 'Translate' is not defined",
+     "from mylib import Translate\nmoved = Translate((1, 2, 3))"),
+    ("Script execution failed: name 'Translate' is not defined",
+     "def Translate(v):\n    return v\nmoved = Translate((1, 2, 3))"),
+])
+def test_cadquery_translate_guidance_requires_an_unbound_translate(message, source):
+    assert _execution_error_guidance(message, "cadquery", source) == {}
 
 
 @pytest.mark.parametrize(
