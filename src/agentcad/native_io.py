@@ -11,6 +11,7 @@ goes to stderr (where it belongs), leaving stdout clean for our JSON.
 """
 import os
 import sys
+import tempfile
 from contextlib import contextmanager
 
 
@@ -57,3 +58,52 @@ def suppress_native_output():
         os.close(saved_stdout)
         os.close(saved_stderr)
         os.close(null_fd)
+
+
+class CapturedOutput:
+    """Text collected by :func:`capture_stdout`; filled in when the block exits."""
+
+    text = ""
+
+
+@contextmanager
+def capture_stdout():
+    """Collect everything written to stdout inside the block, at the fd level.
+
+    Covers ``print()``, ``sys.stdout.buffer`` writes, raw ``os.write(1, ...)``,
+    child processes, and C extensions, so none of it can precede a command's
+    JSON on stdout. ``sys.stdout`` is a real line-buffered text file sharing
+    the capture, so the normal text and ``.buffer`` interfaces keep working.
+    If fd 1 is unusable, Python-level writes are still captured.
+    """
+    captured = CapturedOutput()
+    with tempfile.TemporaryFile() as sink:
+        stream = open(
+            os.dup(sink.fileno()), "w", encoding="utf-8", errors="replace",
+            buffering=1,
+        )
+        for existing in (sys.stdout, sys.__stdout__):
+            if existing is not None:
+                existing.flush()
+        try:
+            saved_fd = os.dup(1)
+            os.dup2(sink.fileno(), 1)
+        except OSError:
+            saved_fd = None
+        saved_stdout = sys.stdout
+        sys.stdout = stream
+        try:
+            yield captured
+        finally:
+            sys.stdout = saved_stdout
+            stream.close()
+            if sys.__stdout__ is not None:
+                try:
+                    sys.__stdout__.flush()
+                except (OSError, ValueError):
+                    pass
+            if saved_fd is not None:
+                os.dup2(saved_fd, 1)
+                os.close(saved_fd)
+            sink.seek(0)
+            captured.text = sink.read().decode("utf-8", errors="replace")

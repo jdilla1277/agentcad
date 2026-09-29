@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import traceback
 
 from click.testing import CliRunner
@@ -12,15 +13,36 @@ from agentcad.cli import cli
 mcp = FastMCP(name="agentcad")
 
 
-def _format_result(output: str, exit_code: int, exception: BaseException | None = None) -> dict:
-    """Build the MCP response dict from a Click invocation's output.
+def isolate_protocol_stdout() -> None:
+    """Move the stdio JSON-RPC stream off fd 1 before the transport starts.
 
-    Normal commands print JSON, which we pass through. When Click *catches*
-    an unexpected exception (``exception`` is non-None), the output is often
-    empty — previously this collapsed to ``{"message": "No output"}``, hiding
-    the traceback and leaving callers (notably on Windows) with no way to
-    diagnose the failure. We surface the exception type, message, and
-    traceback in that case instead.
+    CAD scripts, child processes, and OCCT can write to fd 1 directly, and
+    ``agentcad run`` briefly redirects fd 1 to capture script output. Neither
+    may touch the protocol stream, so the transport gets a private duplicate
+    of the original stdout (via ``sys.stdout``, which it wraps at startup)
+    and fd 1 is pointed at stderr for everything else.
+    """
+    sys.stdout.flush()
+    protocol_fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = open(protocol_fd, "w", encoding="utf-8", buffering=1)
+
+
+def _format_result(
+    output: str,
+    exit_code: int,
+    exception: BaseException | None = None,
+    stderr: str = "",
+) -> dict:
+    """Build the MCP response dict from a Click invocation's stdout.
+
+    Normal commands print JSON on stdout, which we pass through; progress
+    heartbeats live on stderr and must not be parsed with it. When Click
+    *catches* an unexpected exception (``exception`` is non-None), the output
+    is often empty — previously this collapsed to ``{"message": "No output"}``,
+    hiding the traceback and leaving callers (notably on Windows) with no way
+    to diagnose the failure. We surface the exception type, message, and
+    traceback in that case instead, falling back to stderr for context.
     """
     try:
         return {**json.loads(output), "_exit_code": exit_code}
@@ -28,6 +50,8 @@ def _format_result(output: str, exit_code: int, exception: BaseException | None 
         pass
 
     message = output.strip() if output else ""
+    if not message and stderr:
+        message = stderr.strip()
     if exception is not None:
         tb = "".join(traceback.format_exception(
             type(exception), exception, exception.__traceback__
@@ -59,7 +83,11 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     finally:
         os.chdir(old_cwd)
 
-    return _format_result(result.output, result.exit_code, result.exception)
+    # result.output merges stdout and stderr heartbeats; the JSON contract
+    # is stdout only (the daemon reads it the same way).
+    return _format_result(
+        result.stdout, result.exit_code, result.exception, stderr=result.stderr,
+    )
 
 
 @mcp.tool()

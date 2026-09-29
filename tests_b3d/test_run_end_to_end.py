@@ -1707,9 +1707,13 @@ class TestScriptOutput:
         "print('size', box.bounding_box().size.X)\n"
         "show_object(box)\n"
     )
+    # The raise sits behind a runtime condition so static reachability
+    # checks still see show_object and the script actually executes.
     PRINT_THEN_FAIL = (
+        "import os\n"
         "print('before crash')\n"
-        "raise ValueError('boom')\n"
+        "if os.getpid() > 0:\n"
+        "    raise ValueError('boom')\n"
         "show_object(None)\n"
     )
 

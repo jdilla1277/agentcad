@@ -1,6 +1,4 @@
 import ast
-import contextlib
-import io
 import json
 import os
 import re
@@ -1578,13 +1576,15 @@ def _run_impl(
     # Execute via the runner — returns a runtime-agnostic ExecutionResult.
     _heartbeat(f"running script ({runtime_name})…")
     _t = _start_phase("script_exec")
-    # stdout carries exactly one JSON document. Capture script print()s and
-    # return them as script_output instead of letting them corrupt it.
-    script_stdout = io.StringIO()
-    with contextlib.redirect_stdout(script_stdout):
+    # stdout carries exactly one JSON document. Capture everything the script
+    # writes to stdout (print, raw fd 1, child processes, C extensions) and
+    # return it as script_output instead of letting it corrupt the JSON.
+    from agentcad.native_io import capture_stdout
+
+    with capture_stdout() as script_stdout:
         result = runner.execute(raw_source, parsed_params)
-    if script_stdout.getvalue():
-        ctx.meta["run_script_output"] = _bounded_script_output(script_stdout.getvalue())
+    if script_stdout.text:
+        ctx.meta["run_script_output"] = _bounded_script_output(script_stdout.text)
 
     # Param validation errors (unknown names, CQGI InvalidParameterError) —
     # surface them without consuming a version number.
