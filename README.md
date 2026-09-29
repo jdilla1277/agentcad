@@ -16,11 +16,11 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-### Measuring agentcad's effectiveness
+### On CADGenBench: 48% higher CAD Score and 21.8% lower model cost
 
 [![Watch measuring agentcad's effectiveness](https://img.youtube.com/vi/IacqGZH8Gu4/maxresdefault.jpg)](https://www.youtube.com/watch?v=IacqGZH8Gu4)
 
-See how agentcad performed on CADGenBench with GPT-5 Nano. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view our change log](https://agentcad.dev/changelog) for more recent updates.
+In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view our change log](https://agentcad.dev/changelog) for more recent updates.
 
 ## Quick start
 
