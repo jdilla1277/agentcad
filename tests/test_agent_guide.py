@@ -54,6 +54,12 @@ def test_guide_distinguishes_json_commands_from_human_readable_help():
         assert "`--help` and `agentcad docs` return readable text" in body
 
 
+def test_build123d_guide_requires_explicit_math_imports():
+    body = guide_body("build123d")
+    assert "Python math names are not pre-injected" in body
+    assert "from math import cos, sin, sqrt, pi" in body
+
+
 # --- init installs the guide by default ---
 
 
@@ -208,3 +214,15 @@ def test_instructions_install_replaces_stale_block_only(runner, isolated_dir):
     assert "Keep this." in content
     assert guide_body("build123d").rstrip() in content
     assert content.count(START_MARKER) == 1
+
+
+def test_cadquery_guide_teaches_wrapper_preserving_helpers():
+    """Issue #194 review: the CadQuery guide must show native cq.Workplane /
+    cq.Shape helper use and must not teach the .val().wrapped bridge."""
+    from agentcad.guide import guide_body
+
+    body = guide_body("cadquery")
+    assert "return the same kind" in body
+    assert "multi-object Workplane" in body
+    assert "`.val()` keeps only the first object" in body
+    assert "box(10, 20, 5).val().wrapped" not in body

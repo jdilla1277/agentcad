@@ -600,6 +600,96 @@ def _coordinate_error_suggestion(msg):
     return None
 
 
+_COMMON_MATH_NAMES = {
+    "acos", "asin", "atan", "atan2", "ceil", "cos", "degrees", "e",
+    "exp", "floor", "hypot", "log", "log10", "pi", "radians", "sin",
+    "sqrt", "tan", "tau",
+}
+
+
+def _undefined_name_guidance(msg):
+    """Return build123d-specific recovery for common generated-code names.
+
+    These names come from adjacent CAD libraries or from Python's standard
+    math module.  Keep ambiguous modeling concepts as diagnostics instead of
+    aliases: silently choosing a Boolean or placement operation can produce a
+    valid but unintended model.
+    """
+    match = re.fullmatch(
+        r"Script execution failed: NameError: name '([^']+)' is not defined",
+        msg,
+    )
+    if match is None:
+        return None
+
+    name = match.group(1)
+    suggestions = {
+        "Vec": (
+            "The active build123d runtime has no `Vec` name. Use the "
+            "pre-injected `Vector(x, y, z)`, or explicitly import it with "
+            "`from build123d import Vector`."
+        ),
+        "V": (
+            "The active build123d runtime has no `V` name. If this value is a "
+            "3D vector, use `Vector(x, y, z)`; otherwise define or import the "
+            "intended name explicitly."
+        ),
+        "Pnt3D": (
+            "The active build123d runtime has no `Pnt3D` name. For a 3D point "
+            "or direction, use `Vector(x, y, z)` or an `(x, y, z)` tuple, "
+            "depending on the receiving API."
+        ),
+        "Translate": (
+            "The active build123d runtime has no `Translate` constructor. For "
+            "a build123d shape use `shape.translate((x, y, z))`; for a raw or "
+            "wrapped shape use the pre-injected `translate(shape, (x, y, z))`."
+        ),
+        "difference": (
+            "The active build123d runtime does not define a `difference()` "
+            "operation. For new build123d shapes use `left - right`; for raw "
+            "or imported shapes use the pre-injected `safe_cut(left, right)`."
+        ),
+        "cylinder": (
+            "The active build123d runtime is case-sensitive. Use "
+            "`Cylinder(radius=..., height=...)` instead of `cylinder(...)`."
+        ),
+        "Pocket": (
+            "The active build123d runtime has no `Pocket` constructor. For new "
+            "geometry subtract the tool shape with `base - tool`; for imported "
+            "geometry use the pre-injected `cut_pocket(...)` or `safe_cut(...)` "
+            "helper, depending on the intended edit."
+        ),
+        "Center": (
+            "The active build123d runtime has no standalone `Center` name. If "
+            "this is primitive alignment, use `Align.CENTER`; otherwise define "
+            "the intended point or operation explicitly."
+        ),
+        "Capsule": (
+            "The active build123d runtime has no `Capsule` primitive. Construct "
+            "the intended profile or solid explicitly from build123d primitives "
+            "so its dimensions and axis are unambiguous."
+        ),
+    }
+    if name in suggestions:
+        return {
+            "suggestion": suggestions[name],
+            "more_at": (
+                "agentcad docs quickstart"
+                if name == "difference"
+                else "agentcad docs preamble"
+            ),
+        }
+    if name in _COMMON_MATH_NAMES:
+        return {
+            "suggestion": (
+                f"The active build123d runtime does not pre-inject Python's "
+                f"`{name}` math name. Add `from math import {name}` to the script."
+            ),
+            "more_at": "agentcad docs preamble",
+        }
+    return None
+
+
 def _execution_error_guidance(msg, runtime, source):
     """Return focused recovery fields for known script API mistakes."""
     from agentcad.output_contract import step_export_guidance
@@ -609,6 +699,10 @@ def _execution_error_guidance(msg, runtime, source):
         return export_guidance
     if runtime != "build123d":
         return {}
+
+    undefined_guidance = _undefined_name_guidance(msg)
+    if undefined_guidance is not None:
+        return undefined_guidance
 
     suggestion = _coordinate_error_suggestion(msg)
     if "'Part' object has no attribute 'BoundingBox'" in msg:
@@ -1355,6 +1449,8 @@ def _run_impl(
             runtime=runtime_name,
             source=raw_source,
         )
+        if result.error_kind:
+            guidance["error_kind"] = result.error_kind
         if dry_run:
             _emit_run({
                 "command": "run", "status": "error", "runtime": runtime_name,
