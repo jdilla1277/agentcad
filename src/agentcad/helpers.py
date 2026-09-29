@@ -776,8 +776,9 @@ def safe_fuse(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
 
 _TRANSFORM_MISSING = object()
 _TRANSLATE_USAGE = (
-    "Use translate(shape, x, y, z), translate(shape, (x, y, z)), "
-    "or translate(shape, Vector(x, y, z))."
+    "Use translate(shape, (x, y, z)); translate(shape, x, y, z), "
+    "translate(shape, Vector(x, y, z)), and "
+    "translate(shape, dx=x, dy=y, dz=z) also work."
 )
 _ROTATE_USAGE = (
     "Use rotate(shape, axis, angle_deg), e.g. rotate(shape, 'Z', 90); "
@@ -789,6 +790,13 @@ _BBOX_POINT_USAGE = (
 )
 _PLACE_AT_USAGE = (
     "Use place_at(shape, from_pt=(x, y, z), to_pt=(x, y, z))."
+)
+_BBOX_SIZE_USAGE = "Use bbox_size(shape) to get (xlen, ylen, zlen)."
+_TRANSLATE_SHAPE_FIRST = "Use translate(shape, (x, y, z))."
+# Exact correction sentences the run command lifts into its suggestion field.
+HELPER_CORRECTIONS = (
+    _TRANSLATE_USAGE, _TRANSLATE_SHAPE_FIRST, _ROTATE_USAGE,
+    _BBOX_POINT_USAGE, _PLACE_AT_USAGE, _BBOX_SIZE_USAGE,
 )
 
 
@@ -816,9 +824,37 @@ def _transform_number(value, name, usage):
     return result
 
 
+def _is_translation_vector(value):
+    return (
+        isinstance(value, (tuple, list))
+        or isinstance(getattr(value, "wrapped", value), gp_Vec)
+    )
+
+
+def _looks_like_offset(value):
+    def is_number(item):
+        return isinstance(item, Real) and not isinstance(item, bool)
+
+    if isinstance(value, (tuple, list)):
+        return bool(value) and all(is_number(item) for item in value)
+    return is_number(value) or isinstance(getattr(value, "wrapped", value), gp_Vec)
+
+
+def _missing_coordinates(names, values):
+    missing = [n for n, v in zip(names, values) if v is _TRANSFORM_MISSING]
+    if missing:
+        required = f"{', '.join(names[:-1])}, and {names[-1]}"
+        raise TypeError(
+            f"Missing translation coordinate(s) {', '.join(missing)}; "
+            f"{required} are all required. {_TRANSLATE_USAGE}"
+        )
+
+
 def translate(
     shape=_TRANSFORM_MISSING, x=_TRANSFORM_MISSING,
-    y=_TRANSFORM_MISSING, z=_TRANSFORM_MISSING, *extra, **kwargs,
+    y=_TRANSFORM_MISSING, z=_TRANSFORM_MISSING, *extra,
+    dx=_TRANSFORM_MISSING, dy=_TRANSFORM_MISSING, dz=_TRANSFORM_MISSING,
+    **kwargs,
 ):
     """Translate a shape by (x, y, z).
 
@@ -826,6 +862,8 @@ def translate(
         shape: Raw TopoDS_Shape or build123d/CadQuery shape to translate.
         x, y, z: Translation distances, or pass a single three-coordinate
             tuple/list or Vector as x (omitting y and z).
+        dx, dy, dz: Keyword aliases for x, y, z. All three are required and
+            cannot be mixed with x/y/z.
 
     Returns:
         An independently copied shape at the new position, at the same
@@ -834,13 +872,30 @@ def translate(
     """
     if extra or kwargs:
         raise TypeError(f"Unexpected translation arguments. {_TRANSLATE_USAGE}")
+    # Curried translate(x, y, z)(shape) and translate((x, y, z)) put the
+    # offset where the shape belongs. Name the shape-first form directly.
+    if _looks_like_offset(shape):
+        raise TypeError(
+            "translate() takes the shape first; translate(x, y, z)(shape) "
+            f"and translate((x, y, z)) are not supported. {_TRANSLATE_SHAPE_FIRST}"
+        )
     topo = _transform_shape(shape, _TRANSLATE_USAGE)
-    vector = getattr(x, "wrapped", x)
-    if isinstance(x, (tuple, list)) or isinstance(vector, gp_Vec):
+    deltas = (dx, dy, dz)
+    if any(value is not _TRANSFORM_MISSING for value in deltas):
+        if any(value is not _TRANSFORM_MISSING for value in (x, y, z)):
+            raise TypeError(
+                "Ambiguous translation: got both x/y/z (positional or keyword) "
+                "and dx/dy/dz; pass one set. "
+                f"{_TRANSLATE_USAGE}"
+            )
+        _missing_coordinates(("dx", "dy", "dz"), deltas)
+        names, coordinates = ("dx", "dy", "dz"), deltas
+    elif _is_translation_vector(x):
         if y is not _TRANSFORM_MISSING or z is not _TRANSFORM_MISSING:
             raise TypeError(
                 f"Pass either one vector or three coordinates. {_TRANSLATE_USAGE}"
             )
+        vector = getattr(x, "wrapped", x)
         coordinates = (
             (vector.X(), vector.Y(), vector.Z())
             if isinstance(vector, gp_Vec) else x
@@ -849,11 +904,13 @@ def translate(
             raise ValueError(
                 f"Translation requires exactly three coordinates. {_TRANSLATE_USAGE}"
             )
+        names = ("x", "y", "z")
     else:
-        coordinates = (x, y, z)
+        names, coordinates = ("x", "y", "z"), (x, y, z)
+        _missing_coordinates(names, coordinates)
     x, y, z = (
         _transform_number(value, name, _TRANSLATE_USAGE)
-        for name, value in zip(("x", "y", "z"), coordinates)
+        for name, value in zip(names, coordinates)
     )
     independent = copy_shape(topo)
     trsf = gp_Trsf()
@@ -936,7 +993,7 @@ def bbox_size(shape):
     Accepts raw TopoDS shapes and wrapped build123d/CadQuery shapes, just
     like :func:`bbox_point`. Lengths are max minus min in model units.
     """
-    topo = _transform_shape(shape, "Use bbox_size(shape) to get (xlen, ylen, zlen).")
+    topo = _transform_shape(shape, _BBOX_SIZE_USAGE)
     xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
     return (xmax - xmin, ymax - ymin, zmax - zmin)
 

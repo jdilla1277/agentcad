@@ -9,6 +9,7 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS_Shape
 
+from agentcad.commands.run import _execution_error_guidance
 from agentcad.helpers import bbox_point, place_at, rotate, translate
 from agentcad.metrics import compute_metrics
 from agentcad.runners import build123d as b3d_runner
@@ -55,6 +56,45 @@ def test_translation_forms_move_without_mutating_source(shape, offset):
 def test_existing_keyword_translation(shape):
     assert bbox_point(translate(shape=shape, x=10, y=20, z=30)) == pytest.approx((10, 20, 30))
     assert bbox_point(translate(shape, 10, y=20, z=30)) == pytest.approx((10, 20, 30))
+
+
+def test_delta_keyword_translation(shape):
+    result = translate(shape, dx=50, dy=-40, dz=30)
+    assert bbox_point(result) == pytest.approx((50, -40, 30))
+    assert bbox_point(shape) == pytest.approx((0, 0, 0))
+    _assert_independent(shape, result)
+    assert bbox_point(translate(shape=shape, dz=3, dx=1, dy=2)) == pytest.approx((1, 2, 3))
+
+
+@pytest.mark.parametrize("args,kwargs", [
+    ((), {"x": 1, "dy": 2, "dz": 3}),
+    ((1, 2, 3), {"dx": 1}),
+    (((1, 2, 3),), {"dx": 1, "dy": 2, "dz": 3}),
+    ((), {"x": 1, "y": 2, "z": 3, "dz": 3}),
+])
+def test_mixing_coordinate_and_delta_keywords_is_ambiguous(shape, args, kwargs):
+    with pytest.raises(TypeError, match=r"Ambiguous translation: got both x/y/z .* pass one set"):
+        translate(shape, *args, **kwargs)
+
+
+@pytest.mark.parametrize("args,kwargs,missing,required", [
+    ((), {"dx": 1}, "dy, dz", "dx, dy, and dz"),
+    ((), {"dx": 1, "dz": 3}, "dy", "dx, dy, and dz"),
+    ((), {"dz": 3}, "dx, dy", "dx, dy, and dz"),
+    ((), {"x": 1}, "y, z", "x, y, and z"),
+    ((1, 2), {}, "z", "x, y, and z"),
+    ((), {"x": 1, "z": 3}, "y", "x, y, and z"),
+    ((), {}, "x, y, z", "x, y, and z"),
+])
+def test_partial_coordinates_name_every_required_coordinate(
+    shape, args, kwargs, missing, required,
+):
+    with pytest.raises(TypeError) as excinfo:
+        translate(shape, *args, **kwargs)
+    message = str(excinfo.value)
+    assert f"Missing translation coordinate(s) {missing};" in message
+    assert f"{required} are all required" in message
+    assert "Use translate(shape, (x, y, z))" in message
 
 
 @pytest.mark.parametrize("offset", [(0, 0, 0), ((0, 0, 0),), (Vector(0, 0, 0),)])
@@ -111,7 +151,7 @@ def test_invalid_place_at_points_have_exact_signature(shape, from_pt, to_pt):
     ((1, float("inf"), 3),), (1, 2, 3, 4),
 ])
 def test_invalid_translation_has_correction(shape, args):
-    with pytest.raises((TypeError, ValueError), match=r"Use translate\(shape, x, y, z\)"):
+    with pytest.raises((TypeError, ValueError), match=r"Use translate\(shape, \(x, y, z\)\)"):
         translate(shape, *args)
 
 
@@ -122,6 +162,22 @@ def test_invalid_translation_has_correction(shape, args):
 def test_invalid_rotation_identifies_all_required_arguments(shape, args):
     with pytest.raises((TypeError, ValueError), match=r"Use rotate\(shape, axis, angle_deg\)"):
         rotate(shape, *args)
+
+
+@pytest.mark.parametrize("args", [
+    (1, 2, 3), (1.5,), ((1, 2, 3),), ([1, 2, 3],), (Vector(1, 2, 3),),
+])
+def test_offset_in_shape_position_gets_canonical_repair(args):
+    with pytest.raises(TypeError) as excinfo:
+        translate(*args)
+    message = str(excinfo.value)
+    assert "takes the shape first" in message
+    assert message.endswith("Use translate(shape, (x, y, z)).")
+
+
+def test_list_of_shapes_is_not_mistaken_for_an_offset():
+    with pytest.raises(TypeError, match="The first argument must be a TopoDS_Shape"):
+        translate([Box(1, 1, 1)], 1, 2, 3)
 
 
 @pytest.mark.parametrize("function,args", [
@@ -136,7 +192,8 @@ def test_missing_or_invalid_shape_has_correction(function, args):
 
 @pytest.mark.parametrize("expression", [
     "translate(box, 10, 20, 30)", "translate(box, (10, 20, 30))",
-    "translate(box, Vector(10, 20, 30))", "rotate(box, 'Z', 90)",
+    "translate(box, Vector(10, 20, 30))", "translate(box, dx=10, dy=20, dz=30)",
+    "rotate(box, 'Z', 90)",
 ])
 def test_injected_helpers_execute_end_to_end(expression):
     result = b3d_runner.execute(f"box = Box(10, 20, 30)\nshow_object(Compound({expression}))\n")
@@ -145,7 +202,9 @@ def test_injected_helpers_execute_end_to_end(expression):
 
 
 @pytest.mark.parametrize("expression,correction", [
-    ("translate(1, 2, 3)(Box(10, 20, 30))", "Use translate(shape, x, y, z)"),
+    ("translate(1, 2, 3)(Box(10, 20, 30))", "Use translate(shape, (x, y, z))"),
+    ("translate(Box(10, 20, 30), dx=1, dy=2)", "dx, dy, and dz are all required"),
+    ("translate(Box(10, 20, 30), x=1, dy=2, dz=3)", "Ambiguous translation"),
     ("rotate(Box(10, 20, 30), 'Z')", "shape, axis, and angle_deg are required"),
     ("rotate(Box(10, 20, 30), axis='Z', angle=90)", "Use rotate(shape, axis, angle_deg)"),
 ])
@@ -153,6 +212,106 @@ def test_runner_surfaces_transform_corrections(expression, correction):
     result = b3d_runner.execute(expression)
     assert not result.success
     assert correction in result.exception
+
+
+# Transform forms generated in the September 12 CADGenBench run (#189, #203).
+# Supported forms must move the part; foreign forms must fail with a
+# correction that names a working call. Nothing may silently succeed with
+# the wrong geometry.
+_BENCHMARK_SUPPORTED = [
+    "translate(part, (x, y, z))",
+    "translate(part, x, y, z)",
+    "translate(part, Vector(x, y, z))",
+    "translate(part, dx=x, dy=y, dz=z)",
+]
+_BENCHMARK_FOREIGN = [
+    ("translate(x, y, z)(part)", "Use translate(shape, (x, y, z))"),
+    ("translate((x, y, z))", "Use translate(shape, (x, y, z))"),
+    ("translate(part, dx=x, dy=y)", "Use translate(shape, (x, y, z))"),
+    ("translate(part, x=x, dy=y, dz=z)", "Use translate(shape, (x, y, z))"),
+    ("rotate(part, 'Z')", "Use rotate(shape, axis, angle_deg)"),
+    ("Translate((x, y, z))", "moved = translate(shape, (x, y, z))"),
+    ("part.translated((x, y, z))", "moved = translate(shape, (x, y, z))"),
+    ("part.translate(x, y, z)", "moved = shape.translate((x, y, z))"),
+]
+# Translate is an undefined name, diagnosed with the other generated aliases
+# (#199), so its hint points at the preamble docs.
+_BENCHMARK_MORE_AT = {"Translate((x, y, z))": "agentcad docs preamble"}
+_BENCHMARK_PREFIX = "x, y, z = 10, 20, 30\npart = Box(10, 20, 30)\n"
+
+
+@pytest.mark.parametrize("expression", _BENCHMARK_SUPPORTED)
+def test_benchmark_supported_translate_forms_replay(expression):
+    result = b3d_runner.execute(
+        f"{_BENCHMARK_PREFIX}show_object(Compound({expression}))\n"
+    )
+    assert result.success, result.exception
+    assert bbox_point(result.topo_shape) == pytest.approx((10, 20, 30))
+
+
+@pytest.mark.parametrize("expression,correction", _BENCHMARK_FOREIGN)
+def test_benchmark_foreign_translate_forms_replay(expression, correction):
+    # Agents may read only the suggestion field, so every correction must
+    # appear there, not just inside the error text.
+    source = f"{_BENCHMARK_PREFIX}show_object(Compound({expression}))\n"
+    result = b3d_runner.execute(source)
+    assert not result.success
+    guidance = _execution_error_guidance(result.exception, "build123d", source)
+    assert correction in guidance["suggestion"]
+    assert guidance["more_at"] == _BENCHMARK_MORE_AT.get(
+        expression, "agentcad docs helpers"
+    )
+
+
+@pytest.mark.parametrize("source", [
+    # User helper with its own translate(vector) method (PR #223 review).
+    "class Helper:\n"
+    "    def translate(self, vector):\n"
+    "        return vector\n"
+    "Helper().translate(1, 2, 3)\n"
+    "show_object(Box(1, 1, 1))\n",
+    # Plain value, not a CAD shape.
+    "value = 'text'\n"
+    "value.translated((1, 2, 3))\n"
+    "show_object(Box(1, 1, 1))\n",
+    # User class that shadows a build123d name.
+    "class Box:\n"
+    "    pass\n"
+    "Box().translated((1, 2, 3))\n"
+    "show_object(Sphere(1))\n",
+])
+def test_translate_method_guidance_requires_a_cad_receiver(source):
+    result = b3d_runner.execute(source)
+    assert not result.success
+    assert _execution_error_guidance(result.exception, "build123d", source) == {}
+
+
+def test_translate_method_guidance_matches_build123d_subclasses():
+    for name in ("Box", "Part", "Solid", "Compound", "Shape", "Cylinder"):
+        message = f"AttributeError: '{name}' object has no attribute 'translated'"
+        guidance = _execution_error_guidance(message, "build123d", "")
+        assert "moved = translate(shape, (x, y, z))" in guidance["suggestion"], name
+    for name in ("Vector", "Location", "Helper", "str"):
+        message = f"AttributeError: '{name}' object has no attribute 'translated'"
+        assert _execution_error_guidance(message, "build123d", "") == {}, name
+
+
+def test_helper_suggestion_requires_agentcad_correction_text():
+    for message in (
+        "ValueError: Use translate(part) before exporting",
+        "ValueError: Use rotate(shape, 'Z') here",
+    ):
+        assert _execution_error_guidance(message, "build123d", "") == {}
+
+
+def test_translate_method_guidance_ignores_unrelated_errors():
+    for message in (
+        "TypeError: Shape.rotate() takes 3 positional arguments but 4 were given",
+        "AttributeError: 'Box' object has no attribute 'translate_by'",
+        "NameError: name 'Translation' is not defined",
+        "ValueError: Use the force",
+    ):
+        assert _execution_error_guidance(message, "build123d", "") == {}
 
 
 def test_imported_compound_repeated_transforms_are_independent():

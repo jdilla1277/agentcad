@@ -621,6 +621,225 @@ def _coordinate_error_suggestion(msg):
     return None
 
 
+_CAD_BASE_CLASSES = {
+    "build123d": ("Shape",),
+    "cadquery": ("Shape", "Workplane"),
+}
+
+
+def _is_cad_class(name, runtime, source):
+    """True when ``name`` is the runtime's own shape class, not a user class."""
+    import importlib
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+    if tree is not None and any(
+        isinstance(node, ast.ClassDef) and node.name == name
+        for node in ast.walk(tree)
+    ):
+        return False
+    try:
+        module = importlib.import_module(runtime)
+    except ImportError:
+        return False
+    cls = getattr(module, name, None)
+    bases = tuple(
+        getattr(module, base) for base in _CAD_BASE_CLASSES.get(runtime, ())
+        if isinstance(getattr(module, base, None), type)
+    )
+    return isinstance(cls, type) and bool(bases) and issubclass(cls, bases)
+
+
+def _transform_method_suggestion(msg, runtime, source):
+    """Point foreign translate method forms at the supported equivalents.
+
+    build123d and CadQuery shapes only offer ``.translate(vector)``;
+    ``.translated(...)`` and ``.translate(x, y, z)`` come from other CAD
+    libraries and fail with generic Python errors. ``Translate(...)`` is
+    covered by ``_undefined_name_guidance``. Method hints require the
+    receiver (or the method's owner) to be one of the runtime's own shape
+    classes, so user helpers and plain values that happen to use these
+    names are left alone. Native ``.translate`` returns a moved copy, so
+    the correction assigns it.
+    """
+    match = re.search(r"'(\w+)' object has no attribute 'translated'", msg)
+    if match and _is_cad_class(match.group(1), runtime, source):
+        return (
+            "`.translated(...)` is not a build123d or CadQuery method. Use "
+            "`moved = translate(shape, (x, y, z))`, or the native "
+            "`moved = shape.translate((x, y, z))`."
+        )
+    match = re.search(
+        r"\b(\w+)\.translate\(\) takes 2 positional arguments but \d+ were given",
+        msg,
+    )
+    if match and _is_cad_class(match.group(1), runtime, source):
+        return (
+            "Native `.translate()` takes one vector, not separate numbers, "
+            "and returns a moved copy: `moved = shape.translate((x, y, z))`, "
+            "or use `moved = translate(shape, (x, y, z))`."
+        )
+    return None
+
+
+def _helper_correction_suggestion(msg):
+    """Lift an injected helper's correction into the suggestion field.
+
+    Placement helpers end their errors with a copyable ``Use helper(...)``
+    sentence; agents that read only ``suggestion`` would otherwise miss it.
+    Only agentcad's exact sentences match, never arbitrary user errors.
+    """
+    from agentcad.helpers import HELPER_CORRECTIONS
+
+    return next((usage for usage in HELPER_CORRECTIONS if usage in msg), None)
+
+
+_COMMON_MATH_NAMES = {
+    "acos", "asin", "atan", "atan2", "ceil", "cos", "degrees", "e",
+    "exp", "floor", "hypot", "log", "log10", "pi", "radians", "sin",
+    "sqrt", "tan", "tau",
+}
+
+
+def _undefined_name(msg):
+    """Name from a genuine script NameError, or None for any other failure."""
+    match = re.fullmatch(
+        r"Script execution failed: NameError: name '([^']+)' is not defined",
+        msg,
+    )
+    return match.group(1) if match else None
+
+
+def _uses_unbound_name(source, name):
+    """True when the script reads ``name`` but never defines or imports it."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    loaded = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            loaded = True
+        elif isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ) and node.name == name:
+            return False
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split(".")[0]) == name
+            for alias in node.names
+        ):
+            return False
+    return loaded
+
+
+def _cadquery_undefined_name_guidance(msg, source):
+    """CadQuery counterpart for the generated names both runtimes share.
+
+    The CadQuery runner reports ``Script execution failed: name 'X' is not
+    defined`` without the exception type, so require source evidence that
+    the script really reads an unbound ``Translate``.
+    """
+    match = re.fullmatch(
+        r"Script execution failed: (?:NameError: )?name '([^']+)' is not defined",
+        msg,
+    )
+    if match and match.group(1) == "Translate" and _uses_unbound_name(source, "Translate"):
+        return {
+            "suggestion": (
+                "The active CadQuery runtime has no `Translate` constructor. "
+                "Use the pre-injected `moved = translate(shape, (x, y, z))`, "
+                "or the native `moved = shape.translate((x, y, z))` (it "
+                "returns a moved copy)."
+            ),
+            "more_at": "agentcad docs helpers",
+        }
+    return None
+
+
+def _undefined_name_guidance(msg):
+    """Return build123d-specific recovery for common generated-code names.
+
+    These names come from adjacent CAD libraries or from Python's standard
+    math module.  Keep ambiguous modeling concepts as diagnostics instead of
+    aliases: silently choosing a Boolean or placement operation can produce a
+    valid but unintended model.
+    """
+    name = _undefined_name(msg)
+    if name is None:
+        return None
+
+    suggestions = {
+        "Vec": (
+            "The active build123d runtime has no `Vec` name. Use the "
+            "pre-injected `Vector(x, y, z)`, or explicitly import it with "
+            "`from build123d import Vector`."
+        ),
+        "V": (
+            "The active build123d runtime has no `V` name. If this value is a "
+            "3D vector, use `Vector(x, y, z)`; otherwise define or import the "
+            "intended name explicitly."
+        ),
+        "Pnt3D": (
+            "The active build123d runtime has no `Pnt3D` name. For a 3D point "
+            "or direction, use `Vector(x, y, z)` or an `(x, y, z)` tuple, "
+            "depending on the receiving API."
+        ),
+        "Translate": (
+            "The active build123d runtime has no `Translate` constructor. For "
+            "a build123d shape use `moved = shape.translate((x, y, z))` (it "
+            "returns a moved copy); for a raw or wrapped shape use the "
+            "pre-injected `moved = translate(shape, (x, y, z))`."
+        ),
+        "difference": (
+            "The active build123d runtime does not define a `difference()` "
+            "operation. For new build123d shapes use `left - right`; for raw "
+            "or imported shapes use the pre-injected `safe_cut(left, right)`."
+        ),
+        "cylinder": (
+            "The active build123d runtime is case-sensitive. Use "
+            "`Cylinder(radius=..., height=...)` instead of `cylinder(...)`."
+        ),
+        "Pocket": (
+            "The active build123d runtime has no `Pocket` constructor. For new "
+            "geometry subtract the tool shape with `base - tool`; for imported "
+            "geometry use the pre-injected `cut_pocket(...)` or `safe_cut(...)` "
+            "helper, depending on the intended edit."
+        ),
+        "Center": (
+            "The active build123d runtime has no standalone `Center` name. If "
+            "this is primitive alignment, use `Align.CENTER`; otherwise define "
+            "the intended point or operation explicitly."
+        ),
+        "Capsule": (
+            "The active build123d runtime has no `Capsule` primitive. Construct "
+            "the intended profile or solid explicitly from build123d primitives "
+            "so its dimensions and axis are unambiguous."
+        ),
+    }
+    if name in suggestions:
+        return {
+            "suggestion": suggestions[name],
+            "more_at": (
+                "agentcad docs quickstart"
+                if name == "difference"
+                else "agentcad docs preamble"
+            ),
+        }
+    if name in _COMMON_MATH_NAMES:
+        return {
+            "suggestion": (
+                f"The active build123d runtime does not pre-inject Python's "
+                f"`{name}` math name. Add `from math import {name}` to the script."
+            ),
+            "more_at": "agentcad docs preamble",
+        }
+    return None
+
+
 def _execution_error_guidance(msg, runtime, source):
     """Return focused recovery fields for known script API mistakes."""
     from agentcad.output_contract import step_export_guidance
@@ -628,8 +847,18 @@ def _execution_error_guidance(msg, runtime, source):
     export_guidance = step_export_guidance(msg, source)
     if export_guidance:
         return export_guidance
+    transform = (
+        _transform_method_suggestion(msg, runtime, source)
+        or _helper_correction_suggestion(msg)
+    )
+    if transform:
+        return {"suggestion": transform, "more_at": "agentcad docs helpers"}
     if runtime != "build123d":
-        return {}
+        return _cadquery_undefined_name_guidance(msg, source) or {}
+
+    undefined_guidance = _undefined_name_guidance(msg)
+    if undefined_guidance is not None:
+        return undefined_guidance
 
     suggestion = _coordinate_error_suggestion(msg)
     if "'Part' object has no attribute 'BoundingBox'" in msg:
@@ -1382,6 +1611,8 @@ def _run_impl(
             runtime=runtime_name,
             source=raw_source,
         )
+        if result.error_kind:
+            guidance["error_kind"] = result.error_kind
         if dry_run:
             _emit_run({
                 "command": "run", "status": "error", "runtime": runtime_name,
