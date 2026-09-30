@@ -35,9 +35,75 @@ the full command reference when you need more than this guide.
 
 If `agentcad.json` already exists in the selected build directory (the project
 root by default), this project is already initialized — skip `init` and go
-straight to the core workflow. Use `agentcad context` to check configured state.
+straight to the required workflow. Use `agentcad context` to check configured
+state.
 
-## Core workflow
+## Required workflow
+
+Use this workflow for every CAD task, whether generating a new model or editing
+an existing one:
+
+**Inspect -> Specify -> Build -> Validate -> Deliver**
+
+Do not skip directly from the request to building. Each stage produces the
+evidence needed by the next stage. If validation fails, return to the earliest
+stage whose assumptions were wrong, then build and validate again.
+
+### 1. Inspect
+
+Understand the available evidence before writing geometry.
+
+- For generation, inspect every supplied drawing, image, and requirement. Note
+  units, views, orientation, repeated features, and which dimensions are
+  explicit versus inferred.
+- For edits, inspect the source STEP/BREP before writing the edit script:
+  ```bash
+  agentcad inspect input.step --summary
+  agentcad measure input.step
+  ```
+  Use `--ids` only when you need addressable faces or edges. IDs are stable
+  within the same shape but can change after an edit.
+- Read `edit_risk` and validation findings before choosing an editing strategy.
+  Do not start with fragile Boolean or fillet operations against a high-risk
+  imported model.
+- Use `agentcad render FILE --view top,front,right,iso` when orientation or a
+  feature location is unclear. In a project, `agentcad context` reports the
+  runtime, build root, current version, and recovery state.
+
+Inspection is complete when you can describe the relevant geometry, its
+orientation and units, and any uncertainty that affects the requested result.
+
+### 2. Specify
+
+Turn the request into a concrete geometry contract before building.
+
+- Record the required features, dimensions, counts, spatial relationships,
+  body/part expectations, and output formats. Distinguish explicit requirements
+  from assumptions.
+- For an edit, additionally identify the precise target, expected change, and
+  geometry that must remain unchanged. A successful edit must satisfy both the
+  requested delta and the preservation requirements.
+- Write the acceptance checklist in working notes or `requirements.md` so it
+  remains visible while building. Give every item a planned measurement,
+  structural check, comparison, or visual review; do not rely on memory alone.
+- If the prompt names measurable holes, bores, or cylindrical bosses, write
+  them into `spec.json` before building:
+  ```json
+  {"features":[{"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4}]}
+  ```
+- Declare structural intent when known, for example with
+  `show_object(part, options={"expect_solids": 1})`. Use named parts and
+  `floating: true` when separated bodies are intentional.
+
+Specification is complete when the result could be judged without relying on
+the same reasoning that constructs it. When a requirement cannot be checked
+automatically, state the visual or geometric evidence you will use.
+
+### 3. Build
+
+Create the simplest geometry that can satisfy the specification. For edits,
+prefer the smallest operation that changes the target without touching
+unrelated geometry.
 
 To separate generated artifacts from source, set `build_dir = "./build"` in
 `agentcad.toml` before `agentcad init`. Use `--build-dir PATH` for one command;
@@ -57,11 +123,11 @@ including imported aliases and generic exporters with an explicit STEP destinati
 Remove those calls even if they work in standalone Python; only `outputs.step`
 identifies the tracked deliverable.
 
-1. **Write a script.** No imports needed — build123d primitives,
+**Write a script.** No imports needed — build123d primitives,
    `show_object`, and agentcad edit helpers are pre-injected by default.
    `show_object(result)` is required.
 
-2. **Dry-run first** to check metrics without consuming a version:
+**Dry-run first** to check metrics without consuming a version:
    ```bash
    agentcad run script.py --label test --dry-run
    ```
@@ -71,7 +137,7 @@ identifies the tracked deliverable.
    layer in `validation.first_failure`, `null` means a check timed out
    (`validation.timed_out_layer`; raise `AGENTCAD_VALIDATION_TIMEOUT_S`).
 
-3. **Run for real.** Visual feedback is on by default:
+**Run for real.** Visual feedback is on by default:
    ```bash
    agentcad run script.py --label label
    ```
@@ -105,6 +171,23 @@ identifies the tracked deliverable.
    opening a browser. You can still run an explicit
    `agentcad diff OLD NEW` later.
 
+### 4. Validate
+
+Prove that the geometry satisfies the request and that the written artifact is
+structurally deliverable. A successful command or plausible preview is not
+enough.
+
+- Read `preview.png`; the lower views can expose geometry hidden from the top.
+- For edits, read `diff.side_by_side` and `diff.overlay`, then use the numeric
+  comparison to confirm the intended region changed and unrelated geometry
+  stayed stable. An unchanged output is not a successful edit. In
+  `changes.outputs`, however, `unchanged` means an artifact category exists in
+  both versions; it does not mean the STEP bytes or geometry are identical.
+  Use metric deltas and `comparison_3d` to judge the geometry.
+- Use measurements and explicit feature checks below to compare the result to
+  the specification.
+- Read top-level `metrics.is_valid`, not only a successful command status.
+
    When a comparison is slow or incomplete, read `comparison_phases` in the
    JSON response. `source_loading`, `comparison_rendering`,
    `projection_comparison`, `exact_3d_comparison`,
@@ -131,7 +214,7 @@ identifies the tracked deliverable.
    context`, existing outputs, and `agentcad daemon status` before retrying; the
    original command may already have completed.
 
-4. **Review with the user.** The live project viewer opens automatically and
+**Review with the user.** The live project viewer opens automatically and
    reuses an active tab. Share `project_viewer.url` for ongoing iteration;
    share `viewer` for a fixed version. Use `agentcad viewer open` to reopen the
    project, and `agentcad viewer status` or `stop` for service diagnostics. On v2+
@@ -139,7 +222,7 @@ identifies the tracked deliverable.
    without selecting files manually. Use `agentcad view old.step new.step` only
    for an explicit non-adjacent comparison.
 
-5. **Read the validation report if invalid.** A `status: invalid_geometry` run
+**Read the validation report if invalid.** A `status: invalid_geometry` run
    already carries `validation`: the failing layer, free edges by ID with
    endpoints, or the located mesh defect, plus a `suggestion`. If the script
    loaded a file, `validation.inherited_from_input` says whether that input
@@ -166,14 +249,14 @@ identifies the tracked deliverable.
    and solid counts, not shape fidelity or printability; on large parts
    `skipped_layers` names checks run only on the reloaded STEP.
 
-6. **Measure feature sizes.** For dimensions beyond top-level metrics:
+**Measure feature sizes.** For dimensions beyond top-level metrics:
    ```bash
    agentcad measure v1_label/output.step
    ```
    Use this for hole diameters, cylindrical boss diameters, edge lengths,
    face areas, and full per-feature measurements with `--features`.
 
-7. **Check explicit feature requirements.** If the prompt names measurable
+**Check explicit feature requirements.** If the prompt names measurable
    holes, bores, or cylindrical bosses, write them into `spec.json` before
    final handoff:
    ```json
@@ -187,8 +270,25 @@ identifies the tracked deliverable.
    comparison ran; `passed` is the actual spec-check result. If you include
    `axis`, copy it from `agentcad measure`'s `cylindrical_features[].axis`.
 
-8. **Iterate.** Fix the script, run with a new `--label` value. Use
-   `agentcad diff 1 2` to compare versions.
+If any intent or artifact check fails, revise the specification when an
+assumption was wrong; otherwise revise the script. Build a new candidate and
+repeat validation. Use `agentcad diff 1 2` to compare versions.
+
+### 5. Deliver
+
+Deliver only the exact artifact that passed validation. Use the path returned
+in `outputs.step`; `--label` and deprecated `--output` values are not paths.
+
+Before handoff, confirm:
+
+- required measurements and feature checks pass;
+- edit differences are intentional and localized when a source model exists;
+- top-level `metrics.is_valid` is `true` under the intended profile;
+- `validation.step_round_trip` has been reviewed for disagreements; and
+- every requested mesh has its own `mesh_validation.<format>.is_valid: true`.
+
+Export success only means a file was written. The STEP verdict does not certify
+STL, GLB, or OBJ bytes.
 
 ## Script writing rules
 
@@ -299,9 +399,38 @@ identifies the tracked deliverable.
 
 ## Key commands
 
+### Setup and recovery
+
 | Command | Purpose |
 |---------|---------|
 | `agentcad init --name NAME` | Initialize project |
+| `agentcad context` | Inspect project state and interrupted-version recovery candidates |
+| `agentcad recover VERSION_DIR` | Validate and reconcile interrupted history without deleting files |
+| `agentcad docs [SECTION]` | Read runtime-aware built-in documentation |
+| `agentcad instructions install` | Refresh this guide in AGENTS.md/CLAUDE.md |
+
+### Inspect
+
+| Command | Purpose |
+|---------|---------|
+| `agentcad inspect STEP` | Bounded topology, orientation, IDs, risk, and validation evidence |
+| `agentcad measure STEP` | Overall dimensions and feature sizes |
+| `agentcad render STEP --view SPEC` | Render orientation and feature evidence |
+| `agentcad parts list REF` | List captured parts and stable part identities |
+| `agentcad parts show REF ID` | Isolate one versioned part |
+
+### Specify
+
+| Command | Purpose |
+|---------|---------|
+| `agentcad check-spec STEP spec.json` | Evaluate explicit cylindrical-feature and structure requirements |
+
+Write the specification before building; run `check-spec` during Validate.
+
+### Build
+
+| Command | Purpose |
+|---------|---------|
 | `agentcad run SCRIPT --label LABEL` | Execute script, produce STEP + metrics |
 | `agentcad run ... --dry-run` | Metrics only, no version consumed; `--label` optional |
 | `agentcad run ... --no-preview` | Suppress preview (on by default) |
@@ -310,19 +439,23 @@ identifies the tracked deliverable.
 | `agentcad run ... --render iso,front` | PNG views |
 | `agentcad run ... --export stl,glb` | Mesh export |
 | `agentcad run ... --params k=v,k=v` | Override script parameters |
-| `agentcad render STEP --view SPEC` | Post-hoc renders with camera control |
+
+### Validate
+
+| Command | Purpose |
+|---------|---------|
+| `agentcad diff REF1 REF2` | Compare intended and unintended geometric changes |
+| `agentcad check-spec STEP spec.json` | Check measured features against the specification |
+| `agentcad inspect STEP` | Confirm structural deliverability and locate failures |
+| `agentcad measure STEP` | Confirm required dimensions and feature sizes |
+| `agentcad view FILE [FILE_B]` | Review one model or an explicit synchronized A/B comparison |
+
+### Deliver
+
+| Command | Purpose |
+|---------|---------|
 | `agentcad export STEP --format stl,glb` | Post-hoc mesh export |
-| `agentcad measure STEP` | Dimensional report (overall metrics + feature sizes) |
-| `agentcad check-spec STEP spec.json` | Pass/fail checklist against intended cylindrical features |
-| `agentcad inspect STEP` | Bounded topology report with observable validation phases |
-| `agentcad parts list REF` | List parts captured for a version |
-| `agentcad parts show REF ID` | Show one versioned part by stable id |
-| `agentcad diff REF1 REF2` | Compare versions |
-| `agentcad context` | Project state and interrupted-version recovery candidates |
-| `agentcad recover VERSION_DIR` | Validate and reconcile interrupted history without deleting files |
-| `agentcad docs [SECTION]` | Runtime-aware built-in documentation |
-| `agentcad instructions install` | Refresh this guide in AGENTS.md/CLAUDE.md |
-| `agentcad view FILE [FILE_B]` | Open one model or an explicit synchronized A/B comparison |
+| `agentcad viewer open` | Open the live project review artifact |
 
 `--label` names a version; read the generated file from `outputs.step`.
 `--output` remains a deprecated compatibility alias and is not a path option.
@@ -451,10 +584,10 @@ def _cadquery_guide_body() -> str:
         "```",
     )
     content = content.replace(
-        "1. **Write a script.** No imports needed — build123d primitives,\n"
+        "**Write a script.** No imports needed — build123d primitives,\n"
         "   `show_object`, and agentcad edit helpers are pre-injected by default.\n"
         "   `show_object(result)` is required.",
-        "1. **Write a script.** No imports needed — `cq`, `show_object`, and\n"
+        "**Write a script.** No imports needed — `cq`, `show_object`, and\n"
         "   CadQuery compatibility helpers are pre-injected. At least one\n"
         "   `show_object(result)` call is required.",
     )

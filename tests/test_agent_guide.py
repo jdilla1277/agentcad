@@ -60,6 +60,24 @@ def test_build123d_guide_requires_explicit_math_imports():
     assert "from math import cos, sin, sqrt, pi" in body
 
 
+def test_guide_requires_five_stage_workflow_for_both_runtimes():
+    for runtime in ("build123d", "cadquery"):
+        body = guide_body(runtime)
+        assert "**Inspect -> Specify -> Build -> Validate -> Deliver**" in body
+        for heading in (
+            "### 1. Inspect",
+            "### 2. Specify",
+            "### 3. Build",
+            "### 4. Validate",
+            "### 5. Deliver",
+        ):
+            assert heading in body
+
+        assert "For generation" in body
+        assert "For edits" in body
+        assert "Do not skip directly" in body
+
+
 # --- init installs the guide by default ---
 
 

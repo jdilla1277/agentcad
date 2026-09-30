@@ -265,6 +265,26 @@ def test_docs_workflow_section(runner):
     assert "opens automatically" in content
 
 
+def test_default_docs_follow_required_workflow_order(runner):
+    result = runner.invoke(cli, ["docs"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+
+    headings = [
+        "=== Inspect ===",
+        "=== Specify ===",
+        "=== Build ===",
+        "=== Validate ===",
+        "=== Deliver ===",
+    ]
+    positions = [content.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+
+    assert content.index("Inspecting shape topology") < content.index("Measurement workflow")
+    assert content.index("Spec checks") < content.index("Quickstart")
+    assert content.index("Geometry validation") < content.index("Exporting mesh formats")
+
+
 def test_docs_and_skill_present_viewer_as_default_review_path(runner):
     commands = json.loads(runner.invoke(cli, ["docs", "commands"]).stdout)["content"]
     parts = json.loads(runner.invoke(cli, ["docs", "parts"]).stdout)["content"]
