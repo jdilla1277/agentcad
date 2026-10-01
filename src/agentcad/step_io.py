@@ -12,6 +12,13 @@ Public API:
         Raises ValueError with a context-rich message on failure
         (missing file, unsupported extension, parser failure, empty
         compound — none of which should leak as stack traces to agents).
+    write_step_shape(shape, path) -> None
+        Writes a raw TopoDS_Shape through OCCT's STEP writer.
+
+Both talk to OpenCascade through OCP directly. Nothing here imports
+CadQuery: this module sits on every shared command path (render, inspect,
+measure, diff, export, import), and those must work on the default
+build123d-only installation where the ``cadquery`` extra is absent.
 
 Failure modes worth knowing about:
     - Empty compound: the file parsed but contains no solids / shells /
@@ -21,10 +28,14 @@ Failure modes worth knowing about:
     - Null shape: the parser succeeded but returned a TopoDS_Shape with
       ``IsNull() == True``. Rare but seen with truncated or zero-byte
       files that slip past extension sniffing.
-    - OCCT exception: any exception from ``importers.importStep`` or
+    - OCCT exception: any exception from ``STEPControl_Reader`` or
       ``BRepTools.Read_s`` is wrapped with the input path so error
       messages name the file at fault instead of bubbling up an OCP
       stack frame.
+    - Multiple root shapes: a STEP with several top-level entities loads
+      as one compound holding all of them (``STEPControl_Reader.OneShape``),
+      matching build123d's ``import_step``. The CadQuery loader this
+      replaced silently kept only the first root.
 """
 from pathlib import Path
 from typing import Union
@@ -103,29 +114,55 @@ def _cad_format(path: Path, *, format_hint: str | None) -> str | None:
     return None
 
 def _load_step_topods(path: Path):
-    from cadquery import Shape, importers
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_Reader
 
     try:
         with silence_native_stdout():
-            wp = importers.importStep(str(path))
+            reader = STEPControl_Reader()
+            status = reader.ReadFile(str(path))
+            if status != IFSelect_RetDone:
+                raise ValueError(f"STEP reader returned status {status}")
+            reader.TransferRoots()
+            n_shapes = reader.NbShapes()
+            shape = reader.OneShape() if n_shapes else None
     except Exception as exc:
         raise ValueError(
             f"Could not parse STEP file {path.name}: {exc}. "
             "The file may be incomplete or corrupted."
         ) from exc
 
-    # An empty STEP yields a Workplane whose .val() falls through to the
-    # plane origin (a Vector), not a Shape. Detect that explicitly so the
-    # downstream IsNull / empty-compound checks have a real shape to work
-    # with — and so the agent gets an honest "no geometry" message.
-    val = wp.val()
-    if not isinstance(val, Shape):
+    # A STEP that parses but transfers nothing (header-only file, or every
+    # entity failed transfer) has no shape to hand back. Say so explicitly
+    # so the agent gets an honest "no geometry" message rather than a null
+    # shape that fails a later check with a vaguer error.
+    if shape is None:
         raise ValueError(
             f"{path.name} parsed but contains no geometric shapes. "
             "The file may be empty or contain only metadata. Try re-exporting "
             "with 'include solids' enabled in your CAD tool."
         )
-    return val.wrapped
+    return shape
+
+
+def write_step_shape(shape, path: Union[str, Path]) -> None:
+    """Write a raw TopoDS_Shape to ``path`` via OCCT's STEP writer.
+
+    Silences OCCT's native stdout so the JSON-on-stdout contract holds.
+    Raises ``RuntimeError`` naming the failing stage when the transfer or
+    write does not complete.
+    """
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+
+    with silence_native_stdout():
+        writer = STEPControl_Writer()
+        status = writer.Transfer(shape, STEPControl_AsIs)
+        if status != IFSelect_RetDone:
+            raise RuntimeError(f"OCCT STEP transfer failed with status {status}")
+        status = writer.Write(str(path))
+        if status != IFSelect_RetDone:
+            raise RuntimeError(f"OCCT STEP write failed with status {status}")
 
 
 def _load_brep_topods(path: Path):

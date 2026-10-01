@@ -1,13 +1,14 @@
-"""Local persistence for human review comments.
+"""Local persistence for shared human/agent review comments.
 
 Review state deliberately lives in a plain JSON file under ``.agentcad``.
-The browser talks to it through the loopback-only review server; agents use
+The browser talks to it through the loopback-only project viewer; agents use
 the CLI helpers in this module through ``agentcad review``.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import base64
 import binascii
 import os
@@ -22,7 +23,6 @@ from agentcad.versioning import atomic_write_json
 
 REVIEW_FILE = Path(".agentcad/reviews/comments.json")
 _LOCK_TIMEOUT_S = 5.0
-_STALE_LOCK_S = 60.0
 _STATUSES = {"draft", "open", "addressed", "resolved"}
 
 
@@ -42,29 +42,35 @@ def review_path(project_dir: Path) -> Path:
 def _review_lock(project_dir: Path):
     state_dir = Path(project_dir) / ".agentcad"
     state_dir.mkdir(parents=True, exist_ok=True)
-    lock_dir = state_dir / "reviews.lock"
-    deadline = time.monotonic() + _LOCK_TIMEOUT_S
-    while True:
-        try:
-            lock_dir.mkdir()
-            break
-        except FileExistsError:
+    # OS-owned locks are released on crashes; never steal a slow writer's lock.
+    with (state_dir / "reviews-write.lock").open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+            def acquire():
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            def release():
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            def acquire():
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            def release():
+                fcntl.flock(handle, fcntl.LOCK_UN)
+        deadline = time.monotonic() + _LOCK_TIMEOUT_S
+        while True:
             try:
-                if time.time() - lock_dir.stat().st_mtime > _STALE_LOCK_S:
-                    lock_dir.rmdir()
-                    continue
-            except (FileNotFoundError, OSError):
-                pass
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"Timed out waiting for review lock at {lock_dir}")
-            time.sleep(0.01)
-    try:
-        yield
-    finally:
+                acquire()
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Review is busy; retry shortly")
+                time.sleep(0.01)
         try:
-            lock_dir.rmdir()
-        except FileNotFoundError:
-            pass
+            yield
+        finally:
+            release()
 
 
 def _load_unlocked(project_dir: Path) -> dict:
@@ -137,6 +143,47 @@ def get_comment(project_dir: Path, comment_id: str) -> dict | None:
     )
 
 
+def _validate_payload(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("Comment must be an object")
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 20000:
+        raise ValueError("Comment text is required (maximum 20000 characters)")
+    anchor = payload.get("anchor")
+    if not isinstance(anchor, dict) or anchor.get("kind") not in {"surface", "part", "view"}:
+        raise ValueError("Comment anchor must be surface, part, or view")
+    for key, size in (("point_mm", 3), ("normal", 3), ("part_relative", 3), ("screen", 2)):
+        value = anchor.get(key)
+        if value is not None and (not isinstance(value, list) or len(value) != size or any(
+            not isinstance(n, (float, int)) or isinstance(n, bool) or not math.isfinite(n)
+            for n in value
+        )):
+            raise ValueError(f"Anchor {key} must contain {size} finite numbers")
+    if anchor["kind"] == "surface" and anchor.get("point_mm") is None:
+        raise ValueError("Surface anchors require point_mm")
+    target = payload.get("target") or {}
+    if not isinstance(target, dict) or target.get("model") not in {None, "a", "b", "both"}:
+        raise ValueError("Invalid comment target")
+    if target.get("scope") not in {None, "current", "previous", "both"}:
+        raise ValueError("Invalid comment scope")
+    if target.get("source_model") not in {None, "a", "b"}:
+        raise ValueError("Invalid source model")
+    if target.get("part_id") is not None and not isinstance(target["part_id"], str):
+        raise ValueError("Part id must be a string")
+    if anchor["kind"] == "part" and not target.get("part_id"):
+        raise ValueError("Part anchors require a part id")
+    view = payload.get("view", {})
+    if not isinstance(view, dict):
+        raise ValueError("Comment view must be an object")
+    for key in ("position", "target"):
+        vector = view.get(key)
+        if vector is not None and (not isinstance(vector, list) or len(vector) != 3 or any(
+            not isinstance(n, (float, int)) or isinstance(n, bool) or not math.isfinite(n)
+            for n in vector
+        )):
+            raise ValueError(f"View {key} must contain three finite numbers")
+
+
 def create_comment(
     project_dir: Path,
     payload: dict,
@@ -144,6 +191,7 @@ def create_comment(
     actor: str = "human",
     status: str | None = None,
 ) -> dict:
+    _validate_payload(payload)
     text = str(payload.get("text", "")).strip()
     if not text:
         raise ValueError("Comment text is required")
@@ -192,7 +240,9 @@ def reply_to_comment(
     actor: str,
     version: str | int | None = None,
 ) -> dict:
-    message = str(text).strip()
+    if not isinstance(text, str) or len(text) > 20000:
+        raise ValueError("Reply must be text (maximum 20000 characters)")
+    message = text.strip()
     if not message:
         raise ValueError("Reply text is required")
     if actor not in {"human", "agent"}:
@@ -228,6 +278,7 @@ def reply_to_comment(
 
 
 def update_draft_comment(project_dir: Path, comment_id: str, payload: dict) -> dict:
+    _validate_payload(payload)
     text = str(payload.get("text", "")).strip()
     if not text:
         raise ValueError("Comment text is required")
@@ -295,6 +346,10 @@ def delete_draft_comment(project_dir: Path, comment_id: str) -> dict:
 
 
 def submit_drafts(project_dir: Path, comment_ids: list[str] | None = None) -> dict:
+    if comment_ids is not None and (not isinstance(comment_ids, list) or any(
+        not isinstance(value, str) for value in comment_ids
+    )):
+        raise ValueError("comment_ids must be a list of comment ids")
     project_dir = Path(project_dir)
     wanted = set(comment_ids or [])
     with _review_lock(project_dir):
@@ -329,6 +384,8 @@ def transition_comment(
     actor: str | None = None,
     message: str | None = None,
 ) -> dict:
+    if message is not None and (not isinstance(message, str) or len(message) > 20000):
+        raise ValueError("Message must be text (maximum 20000 characters)")
     transitions = {
         "address": ({"open"}, "addressed", actor or "agent"),
         "resolve": ({"open", "addressed"}, "resolved", actor or "human"),

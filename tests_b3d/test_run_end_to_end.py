@@ -1413,14 +1413,14 @@ class TestMultiShow:
 
 # ---------- invalid geometry contract + warnings parity ----------
 
-def _fake_metrics_invalid(real_compute):
-    """Wrap compute_metrics to force is_valid=False (mirrors cq fixture)."""
-    def wrapper(topo_shape):
-        m = real_compute(topo_shape)
-        m["is_valid"] = False
-        m["validity_errors"] = ["BRepCheck_InvalidToleranceValue"]
-        return m
-    return wrapper
+def _force_kernel_invalid(monkeypatch):
+    """Make the delivered STEP fail the validator's kernel layer."""
+    from agentcad import validation
+
+    def failing_brep_check(shape, **_):
+        return {"status": "fail", "errors": ["BRepCheck_InvalidToleranceValue"]}
+
+    monkeypatch.setitem(validation._RUNNERS, "brep_check", failing_brep_check)
 
 
 class TestWarnings:
@@ -1437,11 +1437,7 @@ class TestWarnings:
     def test_invalid_shape_returns_explicit_outcome(self, runner, isolated_dir, monkeypatch):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
-        from agentcad import metrics
-        monkeypatch.setattr(
-            "agentcad.metrics.compute_metrics",
-            _fake_metrics_invalid(metrics.compute_metrics),
-        )
+        _force_kernel_invalid(monkeypatch)
         r = _run(runner, "s.py", "--output", "inv")
         assert r.exit_code == 1
         parsed = json.loads(r.stdout)
@@ -1453,11 +1449,7 @@ class TestWarnings:
     ):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
-        from agentcad import metrics
-        monkeypatch.setattr(
-            "agentcad.metrics.compute_metrics",
-            _fake_metrics_invalid(metrics.compute_metrics),
-        )
+        _force_kernel_invalid(monkeypatch)
         _run(runner, "s.py", "--output", "inv")
         meta = json.loads(
             (isolated_dir / "v1_inv_invalid" / "meta.json").read_text()
@@ -1470,11 +1462,7 @@ class TestWarnings:
     def test_invalid_shape_dry_run_is_explicit(self, runner, isolated_dir, monkeypatch):
         _init(runner, isolated_dir)
         _write(isolated_dir, "s.py", SIMPLE)
-        from agentcad import metrics
-        monkeypatch.setattr(
-            "agentcad.metrics.compute_metrics",
-            _fake_metrics_invalid(metrics.compute_metrics),
-        )
+        _force_kernel_invalid(monkeypatch)
         r = _run(runner, "s.py", "--output", "inv", "--dry-run")
         assert r.exit_code == 1
         parsed = json.loads(r.stdout)
@@ -1522,8 +1510,8 @@ class TestWarnings:
         from agentcad import metrics
         real = metrics.compute_metrics
 
-        def fake(topo_shape):
-            m = real(topo_shape)
+        def fake(topo_shape, **kwargs):
+            m = real(topo_shape, **kwargs)
             m["volume"] = -1000.0
             m["warnings"] = ["Negative volume detected — check winding order."]
             return m
@@ -1636,7 +1624,10 @@ class TestViewerHints:
 
         assert result.exit_code == 0, result.output
         assert json.loads(result.stdout)["viewer_opened"] is True
-        assert opened == [(isolated_dir / "v1" / "viewer.html").as_uri()]
+        payload = json.loads(result.stdout)
+        assert opened == [payload["project_viewer"]["url"]]
+        assert opened[0].startswith("http://127.0.0.1:")
+        assert payload["viewer"] == "v1/viewer.html"
 
     def test_no_view_suppresses_browser_launch(self, runner, isolated_dir, monkeypatch):
         opened = []
@@ -1701,6 +1692,78 @@ show_object(Box(8, 2, 1).translate((0, 5, 0)), id="arm", name="Arm")
         assert "hint" in parsed
         assert "previous" in parsed["hint"]
         assert parsed["viewer"] in parsed["hint"]
+
+
+# ---------- script print() output ----------
+
+class TestScriptOutput:
+    """stdout must stay one JSON document even when the script prints.
+    Agents (and the MCP server) parse it directly, so debug prints are
+    returned in script_output instead of being written ahead of the JSON."""
+
+    PRINTING = (
+        "from build123d import Box\n"
+        "box = Box(1, 2, 3)\n"
+        "print('size', box.bounding_box().size.X)\n"
+        "show_object(box)\n"
+    )
+    # The raise sits behind a runtime condition so static reachability
+    # checks still see show_object and the script actually executes.
+    PRINT_THEN_FAIL = (
+        "import os\n"
+        "print('before crash')\n"
+        "if os.getpid() > 0:\n"
+        "    raise ValueError('boom')\n"
+        "show_object(None)\n"
+    )
+
+    def test_success_keeps_stdout_json(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", self.PRINTING)
+        r = _run(runner, "s.py", "--label", "p")
+        assert r.exit_code == 0, r.output
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["script_output"] == "size 1.0\n"
+
+    def test_dry_run_keeps_stdout_json(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", self.PRINTING)
+        r = _run(runner, "s.py", "--dry-run")
+        assert r.exit_code == 0, r.output
+        assert json.loads(r.stdout)["script_output"] == "size 1.0\n"
+
+    def test_failure_keeps_prints_before_the_error(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", self.PRINT_THEN_FAIL)
+        r = _run(runner, "s.py", "--label", "bad")
+        assert r.exit_code == 1
+        parsed = json.loads(r.stdout)
+        assert parsed["status"] == "failed"
+        assert parsed["script_output"] == "before crash\n"
+
+    def test_no_prints_no_field(self, runner, isolated_dir):
+        _init(runner, isolated_dir)
+        _write(isolated_dir, "s.py", SIMPLE)
+        r = _run(runner, "s.py", "--label", "quiet")
+        assert "script_output" not in json.loads(r.stdout)
+
+    def test_long_output_keeps_the_tail(self):
+        from agentcad.commands.run import _SCRIPT_OUTPUT_LIMIT, _bounded_script_output
+
+        text = "x" * 10 + "y" * _SCRIPT_OUTPUT_LIMIT
+        bounded = _bounded_script_output(text)
+        assert bounded == "[10 earlier characters omitted]\n" + "y" * _SCRIPT_OUTPUT_LIMIT
+        assert _bounded_script_output("short\n") == "short\n"
+
+    def test_long_output_starts_at_a_whole_line(self):
+        from agentcad.commands.run import _SCRIPT_OUTPUT_LIMIT, _bounded_script_output
+
+        text = "".join(f"line {i}\n" for i in range(_SCRIPT_OUTPUT_LIMIT))
+        header, kept = _bounded_script_output(text).split("\n", 1)
+        assert kept.startswith("line ")
+        assert text.endswith(kept)
+        assert header == f"[{len(text) - len(kept)} earlier characters omitted]"
 
 
 # ---------- daemon via field (parity) ----------

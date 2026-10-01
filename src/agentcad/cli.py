@@ -1,9 +1,13 @@
 import json
 import os
+import shlex
 import sys
+import time
 from pathlib import Path
 
 import click
+
+from agentcad.project import ProjectError, format_response, get_project
 
 from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
@@ -22,10 +26,25 @@ from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.recover import recover
 from agentcad.commands.review import review_cmd
-from agentcad.commands.run import run
+from agentcad.commands.run import _OUTPUT_DEPRECATION, candidate_scripts, run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
 from agentcad.commands.view import view
+from agentcad.commands.viewer import viewer
+
+
+_SCRIPT_EDIT_HELPERS = {
+    "boss",
+    "chamfer_edges",
+    "cut_pocket",
+    "fillet_edges",
+    "load_step",
+    "load_step_shape",
+    "pick_edge",
+    "pick_face",
+    "shell_faces",
+    "split_by_plane",
+}
 
 
 # Runtime placeholders keep the how-to guide aligned with the current project.
@@ -37,9 +56,9 @@ __AUTHORING_GUIDE__
 QUICK START WORKFLOW
   1. Write script.py using the authoring API above and surface geometry with
      show_object(). Check metrics without consuming a version:
-       $ agentcad run script.py --output test --dry-run
-  2. Run for real. The interactive review viewer opens automatically:
-       $ agentcad run script.py --output first --render iso
+       $ agentcad run script.py --label test --dry-run
+  2. Run for real. The live project viewer opens automatically:
+       $ agentcad run script.py --label first --render iso
   3. Verify dimensions and feature sizes from the generated STEP:
        $ agentcad measure v1_first/output.step
   4. Iterate with a new label and review the automatic previous/current diff.
@@ -56,16 +75,24 @@ EXAMPLE SESSION
   {"command": "init", "status": "success", "project": "myproject",
    "runtime": "__RUNTIME__"}
   # Write script.py (see `agentcad docs quickstart`), then:
-  $ agentcad run script.py --output first --render iso
+  $ agentcad run script.py --label first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
    "output_type": "single_part", "version": 1, "label": "first",
+   "artifact_created": true,
    "outputs": {"step": "v1_first/output.step", "script": "v1_first/script.py"},
    "viewer": "v1_first/viewer.html", "viewer_glb": "v1_first/output.glb",
+   "project_viewer": {"url": "http://127.0.0.1:PORT/projects/TOKEN/",
+                      "latest_version": 1, "opened": true, "reused": false},
    "metrics": {"dimensions": {"x": 10.0, "y": 20.0, "z": 5.0},
                "volume": 1000.0, "is_valid": true, ...},
    "preview": "v1_first/preview.png"}
 
 VERSION OUTPUTS
+  To separate generated files from source, set build_dir = "./build" in
+  agentcad.toml before init, or pass --build-dir PATH to a command. Relative
+  build paths resolve from the project root. --label names a version;
+  --output is only its deprecated alias. See `agentcad docs artifacts`.
+
   A successful first run creates:
     v1_first/
       output.step       STEP geometry
@@ -78,7 +105,7 @@ VERSION OUTPUTS
       diff_volume.png   source-frame shared/reference-only/candidate-only
                         3D volume vs. prior (from v2 onward, valid solids)
       diff_volume.glb   interactive colored geometry backing the 3D volume map
-      viewer.html       interactive review viewer (opens automatically;
+      viewer.html       immutable review snapshot (live project opens automatically;
                         from v2: A=previous, B=current)
       renders/          requested PNG views
 
@@ -87,6 +114,9 @@ VERSION OUTPUTS
   preview.png and per-part previews; viewer.html, its GLB, and diff PNGs still
   generate. `--no-view` prevents the automatic browser launch without removing
   viewer artifacts.
+  Share project_viewer.url for a stable local page that follows successful
+  builds, reuses an active tab, and preserves compatible camera/review state.
+  The viewer field remains the immutable snapshot for this particular version.
   `--no-diff` skips automatic comparison with the prior version; an explicit
   `agentcad diff` remains available. Combine
   `--no-preview --no-diff --no-view` for the core-only fast path: output.step,
@@ -98,17 +128,22 @@ COMMAND REFERENCE: CREATE AND IMPORT
     __INIT_COMMAND_DESCRIPTION__
     --force replaces an existing manifest.
 
-  agentcad run SCRIPT --output LABEL [OPTIONS]
+  agentcad run SCRIPT --label LABEL [OPTIONS]
     Execute a script and produce a versioned STEP, metrics, viewer, and preview.
     Passing a STEP/STP/BREP path dispatches to `agentcad import` automatically.
+    --label LABEL        Name this version; outputs.step is the artifact path.
+                         Required unless --dry-run.
+    --output LABEL       Deprecated compatibility alias for --label. It never
+                         denotes an output path.
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
                          outputs.glb; viewer_glb normally generates separately.
+                         STEP is always produced; read outputs.step.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
-    --view / --no-view   Open the review viewer after success (default on).
+    --view / --no-view   Open or reuse the live project after success (default on).
                          From v2, previous/current comparison is preloaded.
     --diff / --no-diff   Generate or skip automatic comparison with the prior
                          successful version (default on).
@@ -116,7 +151,7 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          booleans, or strings.
     __RUN_RUNTIME_HELP__
     --dry-run            Return validation and metrics without consuming a
-                         version or writing artifacts.
+                         version or writing artifacts. --label is optional.
 
   agentcad import FILE [--label LABEL] [--init] [--no-diff]
     Adopt STEP/STP/BREP as a versioned baseline with provenance. --init creates
@@ -125,6 +160,10 @@ COMMAND REFERENCE: CREATE AND IMPORT
     automatic prior-version comparison without disabling explicit diff commands.
 
 COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
+  agentcad viewer [open|status|stop]
+    Open the live project (default), inspect the local service, or stop it.
+    Its URL survives service restarts; the next viewed build starts it again.
+
   agentcad render STEP --view SPEC [OPTIONS]
     Render PNGs after a run. SPEC accepts named views, `all`, custom
     azimuth:elevation, or a mix. Camera options: --zoom N, --size WxH,
@@ -180,7 +219,7 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     Create a temporary part review handoff viewer. Repeat --isolate/--hide for parts,
     or --isolate-group/--hide-group for groups; use --ghost-rest, --focus,
     --focus-group, --label, --note, and --no-open as needed.
-    Browser changes to part visibility are not saved; submitted comments are.
+    Browser changes are not saved. Use `agentcad viewer open` for comments.
 
   agentcad review list [--status open]
   agentcad review show COMMENT_ID
@@ -193,9 +232,8 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     thread on a named part; humans and agents may both
     reply, resolve, and reopen; actor, message, timestamp, and revision history
     are retained. `mark-addressed` remains available for compatibility.
-  agentcad review open [REF]
-    Open a version viewer through the loopback-only local review service so
-    surface-and-part comment threads persist under .agentcad/reviews.
+    Use `agentcad viewer open` for comments in the live project viewer.
+    `agentcad review --build-dir PATH ...` selects an independent build history.
 
 COMMAND REFERENCE: VERIFY AND DEBUG
   agentcad measure FILE [OPTIONS]
@@ -212,11 +250,15 @@ COMMAND REFERENCE: VERIFY AND DEBUG
     the model meets the spec. Results include matches, missing features, and
     count errors. Specs may set diameter/count tolerances and an axis.
 
-  agentcad inspect FILE [--ids] [--summary] [--limit N|--no-limit]
+  agentcad inspect FILE [--validate-only] [--validation-timeout SECONDS]
+                        [--ids] [--summary] [--limit N|--no-limit]
     Report recognized format and, for STEP/STP/BREP, solids, shells, face
     orientations, edges, free edges, and validity. --summary clusters topology;
     --ids returns 1-indexed feature IDs used by editing helpers. Lists are capped
-    unless --no-limit is requested.
+    unless --no-limit is requested. Validation reports native_load,
+    structural_validation, topology_extraction, and feature_extraction phases.
+    --validate-only skips deep topology; AGENTCAD_INSPECT_TIMEOUT_S configures
+    the same budget as --validation-timeout (90s default, 0 disables it).
 
 COMMAND REFERENCE: PROJECT AND INTEGRATIONS
   agentcad context
@@ -236,12 +278,14 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
     and mcp.
 
   agentcad instructions install
-    Record a short project note so future agents read `agentcad --help`.
+    Install or refresh the full agent guide in AGENTS.md/CLAUDE.md so future
+    agents receive it automatically. `agentcad init` runs this by default.
 
   agentcad skill install
   agentcad skill show
-    Install the Claude Code skill in the current project, or return its content
-    as JSON for another agent integration.
+    Install or refresh the Claude Code skill in the current project (also run
+    by `agentcad init` by default), or return its content as JSON for another
+    agent integration.
 
   agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
     Save a diagnostic bundle under .agentcad/feedback and, unless --local-only,
@@ -264,10 +308,12 @@ JSON RESPONSE CONTRACT
                        version_recorded/current_advanced
 
   Run/import metrics include bounding_box, dimensions, volume, surface_area,
-  center_of_mass, face_count, edge_count, and is_valid. A successful materialized
-  build has is_valid=true and an exported STEP; --dry-run is explicitly metrics
-  only. Check metrics before rendering; visual appearance alone does not prove
-  dimensional correctness.
+  center_of_mass, face_count, edge_count, is_valid, and reliable. is_valid is
+  the deliverable verdict (kernel check, closed shells, manifold mesh); false
+  takes the invalid_geometry path with validation.first_failure named, null
+  means a layer could not finish. --dry-run is explicitly metrics only. Check
+  metrics before rendering; visual appearance alone does not prove dimensional
+  correctness. See `agentcad docs validation`.
 
   Materialized run/import responses separate `core.status` from `artifacts`.
   Core success is committed before optional work. Each artifact reports pending,
@@ -291,10 +337,15 @@ SPEC AND MEASUREMENT CHECKS
 
 DEBUGGING
   Geometry wrong? Check metrics first — volume and dimensions catch most issues.
-  $ agentcad run script.py --output test --dry-run        # metrics, no disk artifacts
+  $ agentcad run script.py --label test --dry-run        # metrics, no disk artifacts
   $ agentcad measure v1_test/output.step                  # dimensions + feature sizes
   $ agentcad check-spec v1_test/output.step spec.json     # compare against intended features
   $ agentcad inspect v1_test/output.step                  # successful STEP deep-dive
+
+  Geometry edits belong in script.py or an imported model's edit.py; helper
+  names such as fillet_edges are Python calls, not top-level commands. A failed
+  run returns outputs.step=null and an exact rerun command. Never repair STEP by
+  writing or truncating text; use agentcad run or import so the CAD kernel writes it.
     Hollow shape?     -> free_edge_count > 0, shell not closed
     Inverted normals? -> face_orientations imbalanced
     Invalid?          -> is_valid: false
@@ -327,13 +378,15 @@ _BUILD123D_AUTHORING_GUIDE = """BUILD123D AUTHORING
     $ agentcad docs examples     # worked build123d examples
     $ agentcad docs patterns     # idioms + footguns
 
-  CadQuery compatibility remains available for existing projects and scripts.
-  See `agentcad docs runtimes` for the explicit compatibility workflow.
+  CadQuery compatibility remains available for existing projects and scripts
+  via the optional extra: pip install "agentcad[cadquery]". It is not part of
+  the default install. See `agentcad docs runtimes` for the workflow.
 """
 
 
 _CADQUERY_AUTHORING_GUIDE = """CADQUERY COMPATIBILITY AUTHORING
-  This project is pinned to the CadQuery compatibility runtime. Scripts call
+  This project is pinned to the CadQuery compatibility runtime, which needs
+  the optional extra: pip install "agentcad[cadquery]". Scripts call
   show_object() to surface geometry, and the CadQuery preamble is pre-injected:
 
     box = cq.Workplane('XY').box(10, 20, 5)
@@ -391,6 +444,316 @@ def _build_guide(runtime: str = "build123d") -> str:
 class _LoggingGroup(click.Group):
     """Click Group that auto-logs every command invocation to session.jsonl."""
 
+    def main(
+        self,
+        args=None,
+        prog_name=None,
+        complete_var=None,
+        standalone_mode=True,
+        **extra,
+    ):
+        """Run Click while keeping every usage failure on the JSON contract."""
+        raw_args = list(sys.argv[1:] if args is None else args)
+        try:
+            return super().main(
+                args=raw_args,
+                prog_name=prog_name,
+                complete_var=complete_var,
+                standalone_mode=False,
+                **extra,
+            )
+        except click.UsageError as exc:
+            click.echo(json.dumps(self._usage_error_payload(exc, raw_args)))
+            if standalone_mode:
+                raise SystemExit(exc.exit_code)
+            raise
+
+    def _usage_error_payload(self, exc, raw_args):
+        command = (
+            raw_args[0]
+            if raw_args and not raw_args[0].startswith("-")
+            else None
+        )
+        message = exc.format_message()
+        if isinstance(exc, click.NoSuchOption):
+            error_kind = "unknown_option"
+            invalid_option = exc.option_name
+        elif isinstance(exc, click.BadOptionUsage):
+            error_kind = (
+                "missing_parameter"
+                if "requires an argument" in message
+                else "usage_error"
+            )
+            invalid_option = exc.option_name
+        elif isinstance(exc, click.MissingParameter):
+            error_kind = "missing_parameter"
+            invalid_option = (
+                exc.param_hint if exc.param_type == "option" else None
+            )
+        elif isinstance(exc, click.BadParameter):
+            error_kind = "invalid_value"
+            invalid_option = None
+            param = getattr(exc, "param", None)
+            if isinstance(param, click.Option) and param.opts:
+                invalid_option = param.opts[0]
+        elif message.startswith("No such command"):
+            error_kind = "unknown_command"
+            invalid_option = None
+        else:
+            error_kind = "usage_error"
+            invalid_option = getattr(exc, "option_name", None)
+
+        if command in self.commands:
+            command_obj = self.commands[command]
+            usage_ctx = click.Context(
+                command_obj,
+                info_name=f"agentcad {command}",
+            )
+            usage = command_obj.get_usage(usage_ctx).strip()
+            next_actions = [f"agentcad {command} --help"]
+        else:
+            usage = (
+                exc.ctx.get_usage().strip()
+                if exc.ctx is not None
+                else "Usage: agentcad [OPTIONS] COMMAND [ARGS]..."
+            )
+            next_actions = ["agentcad --help"]
+
+        if error_kind == "unknown_command" and command:
+            if command in _SCRIPT_EDIT_HELPERS:
+                message = (
+                    f"`{command}` is a script helper, not a top-level "
+                    "AgentCAD command. Call it inside edit.py, then run the "
+                    "script to create a STEP."
+                )
+            else:
+                message = (
+                    f"`{command}` is not a top-level AgentCAD command. "
+                    "AgentCAD geometry edits are written in a Python script "
+                    "such as edit.py, then executed with `agentcad run`."
+                )
+            if Path("edit.py").is_file():
+                run_action = "agentcad run edit.py --label recovered-edit"
+                if not get_project().manifest_path.is_file():
+                    run_action = (
+                        "agentcad init --name recovered && " + run_action
+                    )
+                next_actions = [run_action]
+            else:
+                next_actions = ["agentcad docs editing"]
+
+        payload = {
+            "command": command,
+            "status": "error",
+            "error_kind": error_kind,
+            "message": message,
+            "usage": usage,
+            "invalid_option": invalid_option,
+            "next_actions": next_actions,
+        }
+        if command == "run":
+            label, used_output = self._run_label_from_args(raw_args)
+            payload.update({
+                "label": label,
+                "artifact_created": False,
+                "outputs": {"step": None},
+            })
+            if used_output:
+                payload["deprecation"] = _OUTPUT_DEPRECATION
+            self._add_run_recovery(payload, raw_args, label)
+        return payload
+
+    # Tool bridges that forward argv verbatim (jdilla1277/agentcad#193) hand
+    # agents the raw Click message, so every `run` usage error carries a
+    # copyable corrected command: the script and label that parsed, every
+    # other valid option kept, and only the offending token removed.
+    _RUN_CANONICAL = "agentcad run SCRIPT --label LABEL"
+    # Spellings agents use when they mistake the script positional for an option.
+    _RUN_SCRIPT_OPTION_SPELLINGS = ("--script", "--file", "--path")
+    _RUN_LABEL_OPTIONS = ("--label", "--output")
+
+    def _add_run_recovery(self, payload, raw_args, label):
+        run_command = self.commands["run"]
+        value_options, flag_options = set(), set()
+        for param in run_command.params:
+            if not isinstance(param, click.Option):
+                continue
+            spellings = (*param.opts, *param.secondary_opts)
+            (flag_options if param.is_flag else value_options).update(spellings)
+        script, kept = self._recover_run_argv(
+            raw_args[1:], value_options, flag_options, payload["invalid_option"],
+        )
+
+        message = payload["message"].rstrip()
+        if not message.endswith((".", "?", "!")):
+            message += "."
+        candidates = candidate_scripts() if script is None else []
+        if script is None and len(candidates) == 1:
+            script = candidates[0]
+            message += f" Using the only Python script here: {script}."
+        elif script is None:
+            message += " Replace SCRIPT with the path to your Python CAD script."
+            if candidates:
+                message += f" Python scripts here: {', '.join(candidates)}."
+        if label is None and "--dry-run" not in kept:
+            message += (
+                " --label names this version; replace LABEL with any short "
+                "name, for example v1."
+            )
+
+        invalid_option = payload["invalid_option"]
+        if invalid_option == "--runtime" and payload["error_kind"] == "invalid_value":
+            from agentcad.project import resolve_project
+            from agentcad.runners.dispatch import DEFAULT_RUNTIME
+
+            # Click rejects the choice before project_options runs. Honor the
+            # recovered --build-dir instead of inspecting an unrelated history.
+            build_dir = None
+            for index, token in enumerate(kept):
+                if token == "--build-dir" and index + 1 < len(kept):
+                    build_dir = kept[index + 1]
+                elif token.startswith("--build-dir="):
+                    build_dir = token.partition("=")[2]
+            try:
+                configured = resolve_project(build_dir).read_manifest().get("runtime")
+            except ProjectError:
+                configured = None
+            message += (
+                " --runtime names the CAD library, not the language; scripts "
+                "are always Python. Omit it to use the project runtime."
+            )
+            if configured in {"build123d", "cadquery"}:
+                message += f" This project uses {configured} (--runtime {configured})."
+            else:
+                message += (
+                    f" Unpinned projects detect source syntax, then default to "
+                    f"{DEFAULT_RUNTIME}; supported runtimes are build123d and cadquery."
+                )
+        elif (
+            payload["error_kind"] == "unknown_option"
+            and invalid_option in self._RUN_SCRIPT_OPTION_SPELLINGS
+        ):
+            message += (
+                " The script path is the positional argument after `run`, "
+                "not an option."
+            )
+        elif payload["error_kind"] == "usage_error" and message.startswith(
+            "Got unexpected extra argument"
+        ):
+            message += " `run` takes exactly one script path."
+
+        argv = ["agentcad", "run", script if script is not None else "SCRIPT"]
+        if label is not None and str(label).startswith("-"):
+            argv.append(f"--label={label}")
+        elif label is not None:
+            argv += ["--label", str(label)]
+        elif "--dry-run" not in kept:
+            argv += ["--label", "LABEL"]
+        argv += kept
+        payload["message"] = f"{message} Canonical form: {self._RUN_CANONICAL}."
+        payload["canonical_command"] = self._RUN_CANONICAL
+        payload["next_actions"] = [shlex.join(argv), *payload["next_actions"]]
+
+    @classmethod
+    def _recover_run_argv(cls, run_args, value_options, flag_options, invalid_option):
+        """Return ``(script, kept_options)`` from `run` argv.
+
+        The script is the first positional, or the value of ``--script X`` /
+        ``--script=X`` when an agent mistakes the positional for an option.
+        Click cannot say whether an unknown option such as ``--wat`` consumed
+        the token after it, so a positional in that spot only counts as the
+        script when it exists on disk; a later unambiguous positional wins
+        over it. ``kept_options`` are the recognised options in their
+        original order minus the label options (re-emitted by the caller),
+        the option Click rejected, unknown options, and extra positionals.
+        """
+        # Split ``--opt=value`` but remember the value was attached: attached
+        # values may start with a dash (``--render=-45:30``), so they must not
+        # be mistaken for the next option.
+        tokens, attached = [], []
+        for token in run_args:
+            name, sep, value = token.partition("=")
+            if sep and name.startswith("--"):
+                tokens.extend([name, value])
+                attached.extend([False, True])
+            else:
+                tokens.append(token)
+                attached.append(False)
+
+        script, kept = None, []
+        script_ambiguous = False
+        after_unknown_option = False
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if attached[index] or not token.startswith("-"):
+                ambiguous = after_unknown_option
+                after_unknown_option = False
+                if not ambiguous and (script is None or script_ambiguous):
+                    script, script_ambiguous = token, False
+                elif ambiguous and script is None and Path(token).is_file():
+                    script, script_ambiguous = token, True
+                index += 1
+                continue
+            after_unknown_option = False
+            takes_value = token in value_options or token in cls._RUN_SCRIPT_OPTION_SPELLINGS
+            has_attached_value = index + 1 < len(tokens) and attached[index + 1]
+            value = (
+                tokens[index + 1]
+                if takes_value and index + 1 < len(tokens)
+                and (attached[index + 1] or not tokens[index + 1].startswith("-"))
+                else None
+            )
+            if token in cls._RUN_SCRIPT_OPTION_SPELLINGS:
+                if value and (script is None or script_ambiguous):
+                    script, script_ambiguous = value, False
+            elif token not in value_options and token not in flag_options and token != "--help":
+                after_unknown_option = True
+            elif (
+                token != invalid_option
+                and token not in cls._RUN_LABEL_OPTIONS
+                and token != "--help"
+                and (token in flag_options or value is not None)
+            ):
+                # A dash-prefixed value must stay attached to survive a re-parse.
+                if value is not None and value.startswith("-"):
+                    kept.append(f"{token}={value}")
+                else:
+                    kept.append(token)
+                    if value is not None:
+                        kept.append(value)
+            # An attached fragment belongs to this option even when the option
+            # is a flag and Click rejects the value (for example
+            # ``--dry-run=true``). Never reinterpret that fragment as SCRIPT.
+            index += 2 if value is not None or has_attached_value else 1
+        return script, kept
+
+    @staticmethod
+    def _run_label_from_args(raw_args):
+        label = None
+        used_output = False
+        for index, token in enumerate(raw_args):
+            for option in ("--label", "--output"):
+                if token == option:
+                    value = (
+                        raw_args[index + 1]
+                        if index + 1 < len(raw_args)
+                        and not raw_args[index + 1].startswith("-")
+                        else None
+                    )
+                else:
+                    prefix = f"{option}="
+                    if not token.startswith(prefix):
+                        continue
+                    value = token[len(prefix):]
+                if option == "--label":
+                    label = value
+                else:
+                    used_output = True
+                    if label is None:
+                        label = value
+        return label, used_output
+
     def format_epilog(self, ctx, formatter):
         # Write the guide verbatim rather than passing it through Click's
         # paragraph wrapper. Shell snippets and JSON examples must retain their
@@ -404,8 +767,19 @@ class _LoggingGroup(click.Group):
     def invoke(self, ctx):
         captured = []
         original_echo = click.echo
+        project_root = Path.cwd()
+        ctx.meta["viewer_started_ns"] = time.time_ns()
 
         def _capturing_echo(message=None, **kwargs):
+            if message is not None and not kwargs.get("err"):
+                layout = ctx.meta.get("project_layout")
+                if layout is not None:
+                    try:
+                        payload = json.loads(message)
+                        if isinstance(payload, dict) and "command" in payload:
+                            message = json.dumps(format_response(payload, layout))
+                    except (TypeError, json.JSONDecodeError):
+                        pass
             if message is not None:
                 captured.append(str(message))
             original_echo(message, **kwargs)
@@ -413,12 +787,53 @@ class _LoggingGroup(click.Group):
         click.echo = _capturing_echo
         try:
             return super().invoke(ctx)
+        except ProjectError as exc:
+            ctx.meta["project_error"] = True
+            payload = exc.payload(ctx.invoked_subcommand or "unknown")
+            if ctx.invoked_subcommand == "run":
+                payload.update(label=ctx.meta.get("run_label"), artifact_created=False,
+                               outputs={"step": None})
+            click.echo(json.dumps(payload))
+            sys.exit(1)
         finally:
             click.echo = original_echo
             self._log_session(ctx, captured)
+            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
+
+    def _record_live_build(self, ctx, captured, root, exception=None):
+        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
+            return
+        layout = ctx.meta.get("project_layout")
+        if layout is not None:
+            root = layout.build_root
+        if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
+            return
+        result = {}
+        for line in reversed(captured):
+            try:
+                candidate = json.loads(line)
+                if isinstance(candidate, dict):
+                    result = candidate
+                    break
+            except (ValueError, TypeError):
+                continue
+        if result.get("via") == "daemon":
+            return  # The child already recorded the attempt with its own start time.
+        failed = result.get("status") in {"error", "failed", "validation_error", "invalid_geometry", "timeout"}
+        if not result and exception is not None:
+            failed = not isinstance(exception, SystemExit) or exception.code not in (0, None)
+        unavailable = result.get("status") == "success" and result.get("version") and not result.get("viewer")
+        if failed or unavailable:
+            try:
+                from agentcad.project_viewer import record_failure
+                record_failure(root, result.get("label") or "unlabeled",
+                               "failed" if failed else "preview_unavailable",
+                               started_ns=ctx.meta["viewer_started_ns"])
+            except Exception:
+                pass  # Optional UI state must never replace the command result.
 
     def _log_session(self, ctx, captured):
-        if os.environ.get("AGENTCAD_NO_LOG"):
+        if os.environ.get("AGENTCAD_NO_LOG") or ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
@@ -432,10 +847,14 @@ class _LoggingGroup(click.Group):
                 break
             except (json.JSONDecodeError, TypeError):
                 continue
+        # Eager help/argument parsing can exit before --build-dir is applied.
+        # With no command result, do not create state in an unselected root.
+        if not result:
+            return
         # Collect the raw args from sys.argv
         args = sys.argv[2:] if len(sys.argv) > 2 else []
         try:
-            logger = SessionLogger(Path.cwd())
+            logger = SessionLogger(get_project().build_root)
             logger.log(cmd_name, {"argv": args}, result)
         except Exception:
             pass  # Never let logging break the CLI
@@ -470,6 +889,7 @@ cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)
 cli.add_command(view)
+cli.add_command(viewer)
 
 
 if __name__ == "__main__":

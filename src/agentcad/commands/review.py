@@ -3,14 +3,12 @@
 import json
 import math
 import sys
-import webbrowser
-from pathlib import Path
 
 import click
 
 from agentcad.commands.parts import _load_version_meta, _parts_from_meta, _resolve_version
 from agentcad.manifest import load_manifest
-from agentcad.review_server import viewer_url
+from agentcad.project import get_project, project_options
 from agentcad.reviews import (
     create_comment,
     get_comment,
@@ -26,17 +24,28 @@ def _error(message):
     sys.exit(1)
 
 
-@click.group("review")
+class ReviewGroup(click.Group):
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except (OSError, ValueError) as exc:
+            _error(str(exc))
+
+
+@click.group("review", cls=ReviewGroup)
+@project_options
 def review_cmd():
-    """Read and manage human comments from the review viewer."""
+    """Read and participate in shared spatial comment threads."""
 
 
 @review_cmd.command("list")
 @click.option("--status", type=click.Choice(["draft", "open", "addressed", "resolved"]))
 def list_review_comments(status):
-    """List spatial review comments as structured JSON."""
+    """List sent comments; request --status draft explicitly for unsent drafts."""
     load_manifest(command="review")
-    comments = list_comments(Path.cwd(), status=status)
+    comments = list_comments(get_project().build_root, status=status)
+    if status is None:
+        comments = [comment for comment in comments if comment.get("status") != "draft"]
     click.echo(json.dumps({
         "command": "review",
         "action": "list",
@@ -52,7 +61,7 @@ def list_review_comments(status):
 def show_review_comment(comment_id):
     """Show one review comment."""
     load_manifest(command="review")
-    comment = get_comment(Path.cwd(), comment_id)
+    comment = get_comment(get_project().build_root, comment_id)
     if comment is None:
         _error(f"Comment '{comment_id}' not found")
     click.echo(json.dumps({"command": "review", "action": "show", "status": "success", "comment": comment}))
@@ -64,7 +73,7 @@ def submit_review(comment_ids):
     """Submit draft viewer comments as one review batch."""
     load_manifest(command="review")
     try:
-        batch = submit_drafts(Path.cwd(), list(comment_ids) or None)
+        batch = submit_drafts(get_project().build_root, list(comment_ids) or None)
     except ValueError as exc:
         _error(str(exc))
     click.echo(json.dumps({"command": "review", "action": "submit", "status": "success", **batch}))
@@ -82,7 +91,7 @@ def mark_addressed(comment_id, version_ref, message):
         _error(f"Version '{version_ref}' not found")
     try:
         comment = transition_comment(
-            Path.cwd(), comment_id, "address", version=version.get("version"),
+            get_project().build_root, comment_id, "address", version=version.get("version"),
             actor="agent", message=message,
         )
     except KeyError:
@@ -146,7 +155,8 @@ def _point_anchor(part, point_value):
     for value, axis in zip(values, axes):
         extent = float(axis[1]) - float(axis[0])
         relative.append((value - float(axis[0])) / extent if extent else 0.5)
-    return {"kind": "surface", "point_mm": values, "part_relative": relative}
+    return {"kind": "surface", "point_mm": values,
+            "part_relative": [relative[0], relative[2], 1 - relative[1]]}
 
 
 @review_cmd.command("comment")
@@ -170,7 +180,14 @@ def create_review_comment(message, part_id, scope, version_ref, point_mm):
     current = _resolve_version(manifest, version_ref)
     if current is None:
         _error(f"Version '{version_ref}' not found")
+    if current.get("status") != "success":
+        _error("Comments require a successful saved revision")
+    meta = _load_version_meta(current)
+    models = (meta.get("viewer_context") or {}).get("models")
     previous = _previous_successful_version(manifest, current)
+    if models is not None:
+        previous = (_resolve_version(manifest, str(models["a"]["version"]))
+                    if "b" in models else None)
     if scope in {"previous", "both"} and previous is None:
         _error(f"Revision '{version_ref}' has no previous successful revision")
 
@@ -186,12 +203,13 @@ def create_review_comment(message, part_id, scope, version_ref, point_mm):
         "text": message,
         "source_version": source_meta.get("version", source.get("version")),
         "source_label": source_meta.get("label", source.get("label")),
-        "target": {"model": model, "source_model": source_model, "part_id": str(part.get("id"))},
+        "target": {"model": model, "scope": scope, "source_model": source_model,
+                   "part_id": str(part.get("id"))},
         "anchor": _point_anchor(part, point_mm),
         "view": {"mode": "side-by-side" if scope == "both" else f"single-{source_model}"},
     }
     try:
-        comment = create_comment(Path.cwd(), payload, actor="agent", status="open")
+        comment = create_comment(get_project().build_root, payload, actor="agent", status="open")
     except ValueError as exc:
         _error(str(exc))
     click.echo(json.dumps({
@@ -209,7 +227,7 @@ def reply_to_review_comment(comment_id, message, version_ref):
     version = _optional_version(manifest, version_ref)
     try:
         comment = reply_to_comment(
-            Path.cwd(), comment_id, message, actor="agent", version=version
+            get_project().build_root, comment_id, message, actor="agent", version=version
         )
     except KeyError:
         _error(f"Comment '{comment_id}' not found")
@@ -230,7 +248,7 @@ def resolve_review_comment(comment_id, message, version_ref):
     version = _optional_version(manifest, version_ref)
     try:
         comment = transition_comment(
-            Path.cwd(), comment_id, "resolve", version=version,
+            get_project().build_root, comment_id, "resolve", version=version,
             actor="agent", message=message,
         )
     except KeyError:
@@ -250,7 +268,7 @@ def reopen_review_comment(comment_id, message):
     load_manifest(command="review")
     try:
         comment = transition_comment(
-            Path.cwd(), comment_id, "reopen", actor="agent", message=message
+            get_project().build_root, comment_id, "reopen", actor="agent", message=message
         )
     except KeyError:
         _error(f"Comment '{comment_id}' not found")
@@ -258,36 +276,4 @@ def reopen_review_comment(comment_id, message):
         _error(str(exc))
     click.echo(json.dumps({
         "command": "review", "action": "reopen", "status": "success", "comment": comment,
-    }))
-
-
-@review_cmd.command("open")
-@click.argument("ref", default="current")
-@click.option("--open/--no-open", "open_browser", default=True)
-def open_review(ref, open_browser):
-    """Open a version viewer with persistent comments enabled."""
-    manifest = load_manifest(command="review")
-    version = _resolve_version(manifest, ref)
-    if version is None:
-        _error(f"Version '{ref}' not found")
-    meta = _load_version_meta(version)
-    relative = meta.get("viewer")
-    if not relative:
-        _error(f"Version '{ref}' has no viewer artifact")
-    path = (Path.cwd() / relative).resolve()
-    if not path.exists():
-        _error(f"Viewer not found for version '{ref}'")
-    try:
-        url = viewer_url(path, project_dir=Path.cwd(), require_review=True)
-    except RuntimeError as exc:
-        _error(str(exc))
-    opened = webbrowser.open(url) is not False if open_browser else False
-    click.echo(json.dumps({
-        "command": "review",
-        "action": "open",
-        "status": "success",
-        "version": version.get("version"),
-        "label": version.get("label"),
-        "url": url,
-        "viewer_opened": opened,
     }))

@@ -16,11 +16,11 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-### Introducing parts
+### On CADGenBench: 48% higher CAD Score and 21.8% lower model cost
 
-[![Watch agentcad parts rebuild a toy assembly](https://img.youtube.com/vi/VdMhRUiCaNU/maxresdefault.jpg)](https://youtu.be/VdMhRUiCaNU)
+[![Watch measuring agentcad's effectiveness](https://img.youtube.com/vi/IacqGZH8Gu4/maxresdefault.jpg)](https://www.youtube.com/watch?v=IacqGZH8Gu4)
 
-Parts let an agent build CAD as named, color-coded pieces and groups, then hand back a viewer a human can inspect. Watch the demo on [YouTube](https://youtu.be/VdMhRUiCaNU) or read the story at [agentcad.dev/parts](https://agentcad.dev/parts).
+In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
 
 ## Quick start
 
@@ -30,25 +30,42 @@ Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
 Create a Python 3.12 virtual environment, then:
 
 pip install agentcad
-agentcad skill install
-agentcad instructions install
-agentcad --help
 agentcad init --name phone-stand
 
-Read the --help output — it's your guide to creating, checking, and sharing a model.
-Use the default build123d runtime unless the task explicitly requires
-CadQuery compatibility.
-
-Then design me a phone stand: a simple angled cradle that holds a phone
+Design me a phone stand: a simple angled cradle that holds a phone
 at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
 to keep the phone from sliding. Show me a preview when you're done.
 ```
 
+### Keep generated files in a build directory
+
+Create `agentcad.toml` in your source project before initialization:
+
+```toml
+build_dir = "./build"
+```
+
+Then run `agentcad init`. Version directories, the generated manifest, viewers,
+exports, and logs go under `build/`; authored scripts and installed guidance
+stay in the source project. Add the build directory to your own `.gitignore`.
+
+For CI, initialize and select an independent root with
+`agentcad init --build-dir /tmp/cad-build` and
+`agentcad run model.py --label first --build-dir /tmp/cad-build`.
+Overrides do not edit project configuration. Relative build paths resolve from
+the project root, not the caller's working directory. Existing projects keep
+their current layout unless configured. `--output` remains a deprecated version
+label, never a destination. See `agentcad docs artifacts` for the full contract.
+
 ## What it does
 
-- **`agentcad run script.py --output label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
-- **Automatic review viewer** — successful runs open `viewer.html`; from v2,
-  previous and current revisions are preloaded for side-by-side, overlay, and
+- **`agentcad run script.py --label label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+- **Live project viewer** — successful runs open one stable local project URL
+  and refresh it after subsequent completed builds. Leave the tab open while
+  iterating; camera and compatible review settings survive updates. Failed
+  builds leave the last successful model visible. Versioned `viewer.html`
+  snapshots remain available; from v2,
+  previous and current are preloaded for side-by-side, overlay, and
   Parts-tab change review (`--no-view` opts out)
 - **Spatial review comments** — pin human feedback to a surface and named part;
   comments persist locally for the agent's next revision
@@ -57,7 +74,7 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
-- **`agentcad inspect output.step`** — topology deep-dive (shells, free edges, validity)
+- **`agentcad inspect output.step`** — bounded topology deep-dive with observable loading, validity, and extraction phases
 - **`agentcad parts list REF`** — list named/captured parts for a version
 - **`agentcad parts show REF ID`** — show one versioned part by stable id
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
@@ -65,17 +82,19 @@ to keep the phone from sliding. Show me a preview when you're done.
   and agents can reply, resolve, and reopen with an auditable history
 - **`agentcad diff 1 2`** — compare versions, including actual shared/reference-only/candidate-only source-frame volume for valid closed solids
 - **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
+- **`agentcad viewer [open|status|stop]`** — open the live project or manage its
+  lightweight local service; `open` is the default
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
 
 ## Spatial review comments
 
-Viewers opened automatically after a run use a token-protected service bound to
+Live project viewers opened after a run or with `agentcad viewer open` use the existing service bound to
 `127.0.0.1`. Press `C`, click the model, confirm the inferred named part and
 revision scope, then choose **Send comment**. To hold feedback back, choose
 **Save draft** instead; unsent drafts can be edited, deleted, sent individually,
 or submitted together with **Send all drafts**.
 
-Comments are plain local JSON under `.agentcad/reviews`—there is no database or
+Comments are plain local JSON under the selected build root's `.agentcad/reviews`—there is no database or
 hosted account. On its next turn, an agent can discover and reply to the review:
 
 ```bash
@@ -88,9 +107,45 @@ agentcad review resolve C1 --message "Implemented in the current revision." --ve
 
 Agents can also initiate an immediately-open thread on a named part. Add
 `--scope previous|both` to target comparison sides or `--point-mm X,Y,Z` to
-place its pin more precisely. Humans and agents can both reply, resolve, or reopen. Every action records its
+place its pin more precisely. Humans and agents can both reply, resolve, or
+reopen. Every action records its
 actor, timestamp, optional message, and associated revision. The older
 `mark-addressed` command remains available for compatibility.
+
+New builds wait while you write or send a comment or reply, then update the
+model once you send, save, or cancel. Current/Previous/Both follow the displayed
+revision sides; the original source version stays in the thread. If a part
+disappears, its comment remains in the list as unplaced. Comments become
+available to the agent on its next turn; they do not start a new agent run.
+File viewers and temporary part/diff viewers remain read-only.
+
+`--label` names the version; the JSON response returns the actual file under
+`outputs.step`. The older `--output LABEL` spelling remains a deprecated
+compatibility alias and never denotes a destination path.
+
+### Keep one preview open
+
+After a normal `run` or `import`, give the human `project_viewer.url` from the
+JSON response. That URL tracks the latest completed viewer; `viewer` still
+points to this version's snapshot. An active page prevents another browser tab
+opening. Updates are checked about once a second (less often in background
+tabs). A new model replaces the previous one only after it loads successfully.
+
+`--no-view` never launches a browser or starts the viewer service. If it still
+generates viewer artifacts, an already-open project page can receive them.
+The core-only `--no-preview --no-diff --no-view` combination generates no viewer;
+the page retains the older model and reports that the new preview is unavailable.
+
+The service binds to `127.0.0.1` and serves only registered viewer snapshots at
+private project URLs. These are local bookmarks, not public share links. URLs
+survive service restarts and builds, but moving the project folder changes its
+identity. Viewer state lives in `~/.cache/agentcad/viewer` (override with
+`AGENTCAD_VIEWER_HOME` for isolated automation). Keep that directory to preserve
+the saved port and private URLs. If the port is occupied, AgentCAD reports the
+problem without silently changing the URL. Use `agentcad viewer status` and
+`agentcad viewer stop` for diagnostics; `agentcad viewer open` restarts it.
+An incompatible service protocol requires stopping the service with the
+installation that started it before reopening with the new installation.
 
 ## No boilerplate
 
@@ -101,31 +156,69 @@ box = Box(10, 20, 5)
 show_object(box)
 ```
 
+For editor completion or explicit dependencies, the same AgentCAD-owned
+callables are available from the stable authoring module:
+
+```python
+from agentcad.api import load_step, safe_cut, translate, show_object
+```
+
+Import build123d primitives such as `Box` or `Vector` from `build123d` itself.
+Do not import STEP writers: `show_object` hands the result back to AgentCAD,
+which writes and tracks the canonical STEP file.
+
+In build123d scripts, capture each shape object once, including across
+`show_object()`, `show_assembly()`, and `show_compound()` calls and within
+assembly iterables. Capturing an assembly also captures all its descendants;
+do not capture a child separately or reuse it in another captured assembly.
+Repeated references fail with `error_kind: "duplicate_capture"`;
+changing the name or ID does not create another instance. For intentional
+instances, use `from copy import deepcopy`, then copy the shape before positioning
+and capturing it. See `agentcad docs parts` for an example.
+
 `agentcad init` records build123d as the project runtime. That keeps the
 script API, built-in docs, and subsequent runs on one clear default.
 
 ## CadQuery compatibility
 
 CadQuery remains supported for existing scripts and projects, but it is not
-the default authoring path.
+the default authoring path and it is not installed by default. `pip install
+agentcad` ships build123d and the OpenCascade binding only. Enable the
+compatibility runtime with the optional extra:
+
+```bash
+pip install "agentcad[cadquery]"
+agentcad daemon restart   # if a daemon was already running
+```
+
+The extra pulls in CadQuery and its own dependency chain (CasADi and the
+COIN-OR solver libraries it bundles), which carries a larger third-party
+license surface than the default install. Selecting the CadQuery runtime
+without the extra returns a structured error naming this command. Adopting
+agentcad inside a product or hosted service? See
+[Incorporating agentcad into your project](https://agentcad.dev/incorporating-agentcad).
 
 For a CadQuery project:
 
 ```bash
 agentcad init --name legacy-model --runtime cadquery
 agentcad docs quickstart --runtime cadquery
-agentcad run script.py --output first
+agentcad run script.py --label first
 ```
 
 For a one-off CadQuery script inside a build123d project:
 
 ```bash
 agentcad docs preamble --runtime cadquery
-agentcad run legacy.py --output legacy --runtime cadquery
+agentcad run legacy.py --label legacy --runtime cadquery
 ```
 
-Keep each script on one CAD API. If a script clearly targets the other engine,
-agentcad reports the mismatch and the exact one-off override. Run
+Keep each script on one CAD API. Conflicting imports, including mixed imports,
+are rejected against the project runtime before daemon startup or version
+creation, with guidance for fixing the script or intentionally overriding the
+runtime. Unpinned projects still detect the runtime and reject ambiguous scripts.
+Run responses identify the selection in `runtime_source` (`command`, `project`,
+or `detection`, which includes the default fallback). Run
 `agentcad docs runtimes` for the complete dispatch contract.
 
 ## MCP integration
@@ -135,6 +228,8 @@ For native tool integration with Claude Code, Cursor, or Windsurf:
 ```bash
 pip install agentcad[mcp]
 ```
+
+Extras combine: `pip install "agentcad[mcp,cadquery]"` installs both.
 
 Add to `.mcp.json`:
 

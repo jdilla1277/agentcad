@@ -9,9 +9,10 @@ without knowing which engine is in play:
     execute(src, params) -> ExecutionResult
 
 Adding a runner means adding a module here and wiring it into the
-dispatcher (Phase 2). Today: `cadquery` is the only runner the CLI
-actually calls; `build123d` lives alongside and is exercised by
-`tests_b3d/` only.
+dispatcher. `build123d` is the default runtime and a hard dependency;
+`cadquery` is the compatibility runtime behind the optional
+`agentcad[cadquery]` extra, so its module must only import CadQuery
+lazily inside ``execute``/``export_*`` — never at module scope.
 """
 
 from __future__ import annotations
@@ -52,6 +53,12 @@ class ExecutionResult:
     # topo_shape (TopoDS_Shape). run.py resolves public IDs and enriches with
     # metrics + preview path.
     parts: list[dict[str, Any]] = field(default_factory=list)
+    # CAD files the script loaded through the injected loaders, as written in
+    # the script, in call order. run.py uses them to say whether an invalid
+    # result inherited its defect from an input or introduced it.
+    loaded_files: list[str] = field(default_factory=list)
+    # Machine-readable classification for targeted execution failures.
+    error_kind: str | None = None
 
     @property
     def success(self) -> bool:

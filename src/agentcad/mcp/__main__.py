@@ -1,7 +1,7 @@
 """Entry point for `python -m agentcad.mcp`."""
 
 try:
-    from agentcad.mcp.server import mcp
+    from agentcad.mcp.server import isolate_protocol_stdout, mcp
 except ImportError as e:
     import sys
     print(
@@ -12,4 +12,5 @@ except ImportError as e:
     )
     sys.exit(1)
 
+isolate_protocol_stdout()
 mcp.run(transport="stdio")

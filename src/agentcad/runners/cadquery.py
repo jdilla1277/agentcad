@@ -85,6 +85,23 @@ def _check_b3d_only_helpers(source: str) -> list:
     }]
 
 
+def _workplane_shape(workplane):
+    """Return one cq.Shape covering every object on a Workplane stack.
+
+    ``.val()`` keeps only the first object, so a Workplane built with
+    ``pushPoints(...).box(..., combine=False)`` or returned by a helper on
+    such a stack would lose solids at the show_object boundary.
+    """
+    import cadquery as cq
+
+    shapes = [value for value in workplane.vals() if isinstance(value, cq.Shape)]
+    if len(shapes) == 1:
+        return shapes[0]
+    if shapes:
+        return cq.Compound.makeCompound(shapes)
+    return workplane.val()
+
+
 def execute(user_source: str, params: dict[str, Any] | None = None) -> ExecutionResult:
     """Parse, validate params, execute via CQGI, extract the result shape.
 
@@ -111,6 +128,8 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
     def _safe_show_object(self, shape, options=None, **kwargs):
         opts = dict(options) if options else {}
         opts.update(kwargs)
+        from agentcad.validation_guidance import structure_options
+        structure_options(opts)
         sr = cqgi.ShapeResult()
         sr.options = opts
         sr.shape = shape
@@ -173,11 +192,18 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
         )
 
     if not build_result.results:
+        from agentcad.output_contract import missing_output_message
+        from OCP.TopoDS import TopoDS_Shape
+
+        candidates = [
+            name for name, value in build_result.env.items()
+            if isinstance(value, (cq.Workplane, cq.Shape, TopoDS_Shape))
+        ]
         return ExecutionResult(
             status="execution_error",
             discovered_parameters=discovered,
             parameters=params or {},
-            exception="Script produced no results. Did you call show_object()?",
+            exception=missing_output_message(user_source, candidates),
         )
 
     warnings: list[str] = [
@@ -191,9 +217,18 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
         parts: list[dict[str, Any]] = []
         for idx, r in enumerate(build_result.results):
             s = r.shape
-            wp = s.val() if hasattr(s, "val") else cq.Shape.cast(s)
+            # Shape.cast accepts raw TopoDS shapes, not an already wrapped
+            # cq.Shape (including Compound). Keep wrappers intact so their
+            # declared structure reaches the shared validator.
+            if isinstance(s, cq.Shape):
+                wp = s
+            elif hasattr(s, "val"):
+                wp = _workplane_shape(s)
+            else:
+                wp = cq.Shape.cast(s)
             per_part_shapes.append(wp)
             opts = r.options or {}
+            from agentcad.validation_guidance import structure_options
             parts.append({
                 "id": idx,
                 "explicit_id": opts.get("id"),
@@ -202,6 +237,7 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
                 "part_of": opts.get("part_of") or opts.get("group"),
                 "group_color": opts.get("group_color"),
                 "topo_shape": wp.wrapped,
+                "validation_options": structure_options(opts),
             })
 
         if len(per_part_shapes) == 1:
@@ -210,6 +246,10 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
                 shape = original_shape
             else:
                 shape = cq.Workplane("XY").newObject([per_part_shapes[0]])
+            # Issue #194: read the compound of every stack object, not
+            # `.val()`, so a multi-object Workplane keeps all its solids in
+            # the metrics and the tracked STEP.
+            topo_shape = per_part_shapes[0].wrapped
         else:
             shape = cq.Workplane("XY").newObject(
                 [cq.Compound.makeCompound(per_part_shapes)]
@@ -218,8 +258,7 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
             # per-part breakdown, so the old "consider makeCompound()" tip
             # would be actively misleading — following it would collapse the
             # breakdown into a single result.
-
-        topo_shape = shape.val().wrapped
+            topo_shape = shape.val().wrapped
     except AttributeError as e:
         # Typically: non-CadQuery shape passed to show_object (e.g. forcing
         # --runtime=cadquery on a build123d script). Surface as an execution

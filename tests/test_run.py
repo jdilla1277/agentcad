@@ -340,8 +340,8 @@ def test_run_runtime_error_creates_failed_version(runner, isolated_dir):
     script = """\
 import cadquery as cq
 result = cq.Workplane("XY").box(10, 10, 10)
-raise ValueError("something went wrong")
 show_object(result)
+raise ValueError("something went wrong")
 """
     _write_script(isolated_dir, content=script)
     result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
@@ -380,6 +380,9 @@ def test_run_timeout_during_script_execution_reports_phase(
     assert parsed["completed_phases"] == ["validation"]
     assert "validation_ms" in parsed["phase_timings"]
     assert "script" in parsed["suggestion"].lower()
+    assert parsed["label"] == "slow"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
 
 
 def test_run_timeout_during_step_export_reports_completed_phases(
@@ -417,6 +420,9 @@ def test_run_timeout_during_step_export_reports_completed_phases(
     assert "script_exec_ms" in parsed["phase_timings"]
     assert "metrics_ms" in parsed["phase_timings"]
     assert "export" in parsed["suggestion"].lower()
+    assert parsed["label"] == "slow_export"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
 
 
 def test_run_preview_failure_preserves_registered_core(
@@ -489,6 +495,8 @@ def test_run_preview_timeout_preserves_registered_core(
     parsed = json.loads(result.stdout)
     assert parsed["status"] == "success"
     assert parsed["artifacts"]["preview"]["status"] == "timeout"
+    assert parsed["artifact_created"] is True
+    assert parsed["outputs"]["step"] == "v2_timeout/output.step"
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
     assert manifest["current"] == "timeout"
     assert manifest["versions"][-1]["status"] == "success"
@@ -1961,24 +1969,34 @@ def test_run_direct_no_via_field(runner, isolated_dir):
 # --- M68 1.2: invalid geometry is a core build failure ---
 
 def _fake_metrics_invalid(real_compute):
-    """Wrap compute_metrics to force is_valid=False."""
-    def wrapper(topo_shape):
-        m = real_compute(topo_shape)
+    """Wrap compute_metrics to force is_valid=False (legacy helper).
+
+    The verdict now comes from the layered validator, so tests that need an
+    invalid shape patch its kernel layer with ``_force_kernel_invalid``.
+    """
+    def wrapper(topo_shape, **kwargs):
+        m = real_compute(topo_shape, **kwargs)
         m["is_valid"] = False
         m["validity_errors"] = ["BRepCheck_InvalidToleranceValue"]
         return m
     return wrapper
 
 
+def _force_kernel_invalid(monkeypatch):
+    """Make the validator's kernel layer report an invalid shape."""
+    from agentcad import validation
+
+    def failing_brep_check(shape, **_):
+        return {"status": "fail", "errors": ["BRepCheck_InvalidToleranceValue"]}
+
+    monkeypatch.setitem(validation._RUNNERS, "brep_check", failing_brep_check)
+
+
 def test_run_invalid_shape_returns_explicit_outcome(runner, isolated_dir, monkeypatch):
     """Invalid final geometry must never be reported as an ordinary success."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from agentcad import metrics
-    monkeypatch.setattr(
-        "agentcad.metrics.compute_metrics",
-        _fake_metrics_invalid(metrics.compute_metrics),
-    )
+    _force_kernel_invalid(monkeypatch)
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv"])
     assert result.exit_code == 1
     parsed = json.loads(result.stdout)
@@ -1989,6 +2007,9 @@ def test_run_invalid_shape_returns_explicit_outcome(runner, isolated_dir, monkey
     ]
     assert parsed["version_recorded"] is True
     assert parsed["current_advanced"] is False
+    assert parsed["label"] == "inv"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
     assert not (isolated_dir / "v1_inv" / "output.step").exists()
 
 
@@ -2008,7 +2029,7 @@ def test_run_emits_json_error_on_unexpected_exception_after_script_start(
     _init_project(runner)
     _write_script(isolated_dir)
 
-    def _raise_bnd_box_void(_):
+    def _raise_bnd_box_void(_, **_kwargs):
         raise RuntimeError("Bnd_Box is void")
 
     monkeypatch.setattr("agentcad.metrics.compute_metrics", _raise_bnd_box_void)
@@ -2019,6 +2040,9 @@ def test_run_emits_json_error_on_unexpected_exception_after_script_start(
     parsed = json.loads(result.stdout)
     assert parsed["command"] == "run"
     assert parsed["status"] == "error"
+    assert parsed["label"] == "boom"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
     # The error payload should help the agent — surface the exception text
     # so the agent can decide whether to retry or fix the script.
     assert "Bnd_Box is void" in (parsed.get("message", "") + parsed.get("traceback", ""))
@@ -2040,11 +2064,7 @@ def test_run_invalid_shape_is_recorded_without_advancing_current(
     }]
     manifest["current"] = "baseline"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    from agentcad import metrics
-    monkeypatch.setattr(
-        "agentcad.metrics.compute_metrics",
-        _fake_metrics_invalid(metrics.compute_metrics),
-    )
+    _force_kernel_invalid(monkeypatch)
     runner.invoke(cli, ["run", "script.py", "--output", "inv"])
 
     meta = json.loads(
@@ -2064,11 +2084,7 @@ def test_run_invalid_shape_dry_run_is_explicit_without_artifacts(
     """Dry-run surfaces invalidity without allocating a version."""
     _init_project(runner)
     _write_script(isolated_dir)
-    from agentcad import metrics
-    monkeypatch.setattr(
-        "agentcad.metrics.compute_metrics",
-        _fake_metrics_invalid(metrics.compute_metrics),
-    )
+    _force_kernel_invalid(monkeypatch)
     result = runner.invoke(cli, ["run", "script.py", "--output", "inv", "--dry-run"])
     assert result.exit_code == 1
     parsed = json.loads(result.stdout)
@@ -2076,6 +2092,9 @@ def test_run_invalid_shape_dry_run_is_explicit_without_artifacts(
     assert parsed["metrics"]["is_valid"] is False
     assert parsed["version_recorded"] is False
     assert parsed["current_advanced"] is False
+    assert parsed["label"] == "inv"
+    assert parsed["artifact_created"] is False
+    assert parsed["outputs"]["step"] is None
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
     assert manifest["versions"] == []
     assert not (isolated_dir / "v1_inv_invalid").exists()
@@ -2096,8 +2115,8 @@ def test_run_negative_volume_warning_surfaces(runner, isolated_dir, monkeypatch)
     _write_script(isolated_dir)
     from agentcad import metrics
     real = metrics.compute_metrics
-    def fake(topo_shape):
-        m = real(topo_shape)
+    def fake(topo_shape, **kwargs):
+        m = real(topo_shape, **kwargs)
         m["volume"] = -1000.0
         m["warnings"] = ["Negative volume detected — check winding order."]
         return m
@@ -2408,7 +2427,9 @@ def test_run_opens_generated_viewer_by_default(runner, isolated_dir, monkeypatch
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.stdout)
     assert parsed["viewer_opened"] is True
-    assert opened == [(isolated_dir / "v1" / "viewer.html").as_uri()]
+    assert opened == [parsed["project_viewer"]["url"]]
+    assert opened[0].startswith("http://127.0.0.1:")
+    assert parsed["viewer"] == "v1/viewer.html"
 
 
 def test_run_no_view_suppresses_browser_launch(runner, isolated_dir, monkeypatch):
@@ -2472,7 +2493,8 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert "partMatchesNameExact" in viewer_html
     assert "Longest IDs first avoids" in viewer_html
     assert "&& !partState.ghostRest" in viewer_html
-    assert "attach(sceneA_split, MODEL_A_URL, { alignToCenter: true })" in viewer_html
+    assert "attach(sceneA_split, MODEL_A_URL, {" in viewer_html
+    assert "onMesh: m => reviewSplitModelA = m" in viewer_html
 
     from PIL import Image
     preview_img = Image.open(isolated_dir / "v1" / "preview.png").convert("RGB")

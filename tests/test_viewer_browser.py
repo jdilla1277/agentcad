@@ -1,14 +1,11 @@
 import json
 import os
-import threading
-import urllib.parse
 
 import pytest
 
 from agentcad.cli import cli
-from agentcad.review_server import ReviewHandler
+from agentcad import project_viewer as live
 from agentcad.reviews import create_comment, submit_drafts
-from http.server import ThreadingHTTPServer
 
 
 GROUPED_PARTS_SCRIPT = """\
@@ -249,6 +246,18 @@ def test_previous_current_modes_preserve_camera_orientation(runner, isolated_dir
                 page.click(button)
                 after = page.evaluate("window.agentcadViewer.debugState().camera")
                 assert after == before
+
+            # At the narrow width used by the live viewer, the two version
+            # labels have their own row instead of sitting underneath the
+            # mode switcher.
+            page.set_viewport_size({"width": 712, "height": 443})
+            modes = page.locator("#modes").bounding_box()
+            label_a = page.locator("#label-left").bounding_box()
+            label_b = page.locator("#label-right").bounding_box()
+            assert label_a["y"] > modes["y"] + modes["height"]
+            assert label_b["y"] > modes["y"] + modes["height"]
+            assert label_a["x"] + label_a["width"] <= 712 / 2
+            assert label_b["x"] >= 712 / 2
         finally:
             browser.close()
 
@@ -264,14 +273,8 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
     )
     assert run.exit_code == 0, run.output
 
-    token = "browser-test-token"
-    server = ThreadingHTTPServer(("127.0.0.1", 0), ReviewHandler)
-    server.project_dir = isolated_dir
-    server.review_token = token
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    query = urllib.parse.urlencode({"path": "v1_commented/viewer.html", "token": token})
-    url = f"http://127.0.0.1:{server.server_port}/viewer?{query}"
+    project_url = live.open_project(isolated_dir, lambda _: True)["url"]
+    url = project_url + "artifacts/1/viewer.html"
 
     try:
         with sync_playwright() as playwright:
@@ -418,12 +421,8 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                     ["run", "script.py", "--output", "revised", "--no-preview", "--no-view", "--no-daemon"],
                 )
                 assert second.exit_code == 0, second.output
-                comparison_query = urllib.parse.urlencode({
-                    "path": "v2_revised/viewer.html",
-                    "token": token,
-                })
                 page.goto(
-                    f"http://127.0.0.1:{server.server_port}/viewer?{comparison_query}",
+                    project_url + "artifacts/2/viewer.html",
                     wait_until="domcontentloaded",
                 )
                 page.wait_for_function(
@@ -447,8 +446,8 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                 assert pin_layout["C1"]["display"] == "block"
                 assert pin_layout["C2"]["display"] == "block"
                 assert pin_layout["C3"]["display"] == "block"
-                assert pin_layout["C2"]["x"] < 1280 / 2
-                assert pin_layout["C3"]["x"] < 1280 / 2
+                assert pin_layout["C2"]["x"] > 1280 / 2
+                assert pin_layout["C3"]["x"] > 1280 / 2
                 page.click("#btn-agent")
                 assert not page.locator("#comment-toggle-btn").is_visible()
                 assert all(
@@ -469,7 +468,13 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                 page.click("#btn-side")
                 page.click("#comment-toggle-btn")
                 page.click("#new-comment-btn")
-                page.mouse.click(pin_layout["C2"]["x"], pin_layout["C2"]["y"])
+                page.wait_for_timeout(100)
+                # Opening the sidebar resizes both viewports. Sample the pin
+                # after layout, then target the same point on Previous.
+                placement_point = page.locator('.comment-pin[data-comment-id="C2"]').evaluate(
+                    "pin => ({x: parseFloat(pin.style.left) - document.querySelector('#canvas').clientWidth / 2, y: parseFloat(pin.style.top)})"
+                )
+                page.mouse.click(placement_point["x"], placement_point["y"])
                 page.wait_for_function(
                     "() => window.agentcadViewer.reviewDebugState().pending_anchor?.kind === 'surface'"
                 )
@@ -498,7 +503,7 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                 assert page.locator('.comment-pin[data-comment-id="C4"]').first.inner_text() == "C4 · Both"
 
                 page.click("#new-comment-btn")
-                page.mouse.click(pin_layout["C2"]["x"], pin_layout["C2"]["y"])
+                page.mouse.click(placement_point["x"], placement_point["y"])
                 page.wait_for_function(
                     "() => window.agentcadViewer.reviewDebugState().pending_anchor?.kind === 'surface'"
                 )
@@ -520,12 +525,8 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                     ["run", "script.py", "--output", "new-current", "--no-preview", "--no-view", "--no-daemon"],
                 )
                 assert third.exit_code == 0, third.output
-                newest_query = urllib.parse.urlencode({
-                    "path": "v3_new-current/viewer.html",
-                    "token": token,
-                })
                 page.goto(
-                    f"http://127.0.0.1:{server.server_port}/viewer?{newest_query}",
+                    project_url + "artifacts/3/viewer.html",
                     wait_until="domcontentloaded",
                 )
                 page.wait_for_function(
@@ -546,8 +547,8 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                 for comment_id in ("C1", "C2", "C3"):
                     matches = [pin for pin in carried_pins if pin["id"] == comment_id]
                     assert len(matches) == 1
-                    assert matches[0]["role"] == "a"
-                    assert matches[0]["x"] < 1280 / 2
+                    assert matches[0]["role"] == "b"
+                    assert matches[0]["x"] > 1280 / 2
                 both_pins = [pin for pin in carried_pins if pin["id"] == "C4"]
                 assert {pin["role"] for pin in both_pins} == {"a", "b"}
                 assert any(pin["x"] < 1280 / 2 for pin in both_pins)
@@ -583,9 +584,7 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
             finally:
                 browser.close()
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        live.stop_service()
 
     listed = runner.invoke(cli, ["review", "list", "--status", "open"])
     assert listed.exit_code == 0, listed.output
@@ -625,14 +624,8 @@ def test_carried_surface_comment_maps_by_part_and_missing_part_is_unplaced(runne
     create_comment(isolated_dir, carried_payload("removed_part", "This part no longer exists."))
     submit_drafts(isolated_dir)
 
-    token = "carry-test-token"
-    server = ThreadingHTTPServer(("127.0.0.1", 0), ReviewHandler)
-    server.project_dir = isolated_dir
-    server.review_token = token
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    query = urllib.parse.urlencode({"path": "v1_current/viewer.html", "token": token})
-    url = f"http://127.0.0.1:{server.server_port}/viewer?{query}"
+    project_url = live.open_project(isolated_dir, lambda _: True)["url"]
+    url = project_url + "artifacts/1/viewer.html"
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
@@ -653,6 +646,4 @@ def test_carried_surface_comment_maps_by_part_and_missing_part_is_unplaced(runne
             finally:
                 browser.close()
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        live.stop_service()

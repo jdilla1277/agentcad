@@ -7,9 +7,9 @@ without a runtime field, explicit imports and the old zero-import
 ``cq.Workplane(...)`` preamble select CadQuery. Everything else defaults to
 build123d.
 
-Scripts that somehow import *both* are rejected — silently guessing
-would be worse than a loud error. A ``--runtime`` CLI flag bypasses
-detection entirely when the agent needs to force a choice.
+Unpinned scripts that reference both APIs are ambiguous. In pinned projects,
+conflicting references are a mismatch against the configured runtime, never
+an ambiguous choice. A ``--runtime`` CLI flag bypasses detection entirely.
 
 Precedence (highest to lowest):
   1. ``--runtime`` CLI flag (one-off override)
@@ -21,7 +21,7 @@ Precedence (highest to lowest):
 from __future__ import annotations
 
 import ast
-import json
+import importlib.util
 from pathlib import Path
 from typing import Literal
 
@@ -30,43 +30,76 @@ RuntimeName = Literal["cadquery", "build123d"]
 _VALID_RUNTIMES: tuple[RuntimeName, ...] = ("cadquery", "build123d")
 DEFAULT_RUNTIME: RuntimeName = "build123d"
 
+# The default `pip install agentcad` ships build123d only. CadQuery lives
+# behind the `cadquery` extra, so a project or script that selects it on a
+# default installation gets this one message everywhere (run, init, daemon,
+# helpers) instead of a ModuleNotFoundError from whichever import fires first.
+MISSING_CADQUERY_MESSAGE = (
+    "CadQuery compatibility is not installed. Install it with "
+    "`pip install \"agentcad[cadquery]\"` in the same environment as agentcad, "
+    "then run `agentcad daemon restart` if a daemon is running."
+)
+
+# Offered alongside the missing-extra error on `run`, where porting is a
+# real alternative to installing (it is not on `init`).
+PORT_TO_BUILD123D_HINT = (
+    "Without the extra, port the script to build123d: `agentcad docs runtimes` "
+    "shows the same shape written both ways."
+)
+
+
+def runtime_available(name: RuntimeName) -> bool:
+    """Report whether the package backing ``name`` is importable.
+
+    Uses ``importlib.util.find_spec`` so the check never imports the
+    engine: runtime detection, ``--help``, ``docs`` and daemon status must
+    stay cheap and must not pull CadQuery (and its CasADi stack) into a
+    process that only needs build123d.
+    """
+    if name == "cadquery":
+        return importlib.util.find_spec("cadquery") is not None
+    if name == "build123d":
+        return importlib.util.find_spec("build123d") is not None
+    return False
+
+
+def require_runtime_available(name: RuntimeName) -> None:
+    """Raise ``ValueError`` with the documented install hint if ``name``'s
+    engine is not installed. build123d is a hard dependency, so only the
+    optional CadQuery extra can actually be missing."""
+    if name == "cadquery" and not runtime_available("cadquery"):
+        raise ValueError(MISSING_CADQUERY_MESSAGE)
+
 
 def project_runtime(
     start: Path | None = None,
     *,
     search_parents: bool = False,
 ) -> RuntimeName | None:
-    """Read the ``runtime`` field from the nearest ``agentcad.json``.
+    """Read the runtime from the selected project's build manifest.
 
-    By default reads only ``start`` (or cwd) — matches the existing
-    ``manifest.load_manifest`` contract used by ``run``/``inspect``, which
-    expect the manifest in the current working directory.
-
-    Pass ``search_parents=True`` to walk up the directory tree until a
-    manifest is found, the filesystem root is reached, or none exists.
-    Used by ``docs`` so an agent invoking it from a subdir of the project
-    (a common pattern when driving via shell tools that don't preserve
-    cwd between calls) still gets runtime-aware documentation.
+    CLI invocations share the discovered project and any --build-dir override.
+    Outside Click, legacy projects retain cwd-only lookup unless callers pass
+    ``search_parents=True``. Configured projects always follow their build root.
 
     Returns ``None`` if no manifest is found or it doesn't pin a runtime;
     callers should fall back to ``DEFAULT_RUNTIME``.
     """
-    base = Path.cwd() if start is None else start
-    candidates: list[Path] = [base]
-    if search_parents:
-        candidates.extend(base.parents)
-    for directory in candidates:
-        manifest_path = directory / "agentcad.json"
-        if not manifest_path.exists():
-            continue
-        try:
-            data = json.loads(manifest_path.read_text())
-        except (OSError, json.JSONDecodeError):
+    from agentcad.project import ProjectError, get_project, resolve_project
+
+    try:
+        layout = get_project() if start is None else resolve_project(start=start)
+        import click
+        # Preserve the helper's opt-in parent search outside a CLI invocation.
+        if (not search_parents and click.get_current_context(silent=True) is None
+                and not layout.configured and layout.project_root != (start or Path.cwd()).resolve()):
             return None
-        rt = data.get("runtime")
-        if rt in _VALID_RUNTIMES:
-            return rt  # type: ignore[return-value]
+        data = layout.read_manifest()
+    except (ProjectError, OSError, ValueError):
         return None
+    rt = data.get("runtime")
+    if rt in _VALID_RUNTIMES:
+        return rt
     return None
 
 
@@ -90,18 +123,18 @@ def _attribute_root_name(node: ast.AST) -> str | None:
     return current.id if isinstance(current, ast.Name) else None
 
 
-def _declared_runtime(source: str) -> RuntimeName | None:
-    """Return the runtime clearly declared by script syntax, if any.
+def _referenced_runtimes(source: str) -> set[RuntimeName]:
+    """Return the runtimes referenced by script syntax, without choosing one.
 
     Besides imports, recognize ``cq.<name>`` attribute access for scripts from
     the original zero-import CadQuery preamble. Syntax errors deliberately
-    return ``None`` so the selected runner's validator can report them using
+    return an empty set so the selected runner's validator can report them using
     the normal structured contract.
     """
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return None
+        return set()
 
     imported = _imports(tree)
     has_cq = "cadquery" in imported or any(
@@ -109,16 +142,22 @@ def _declared_runtime(source: str) -> RuntimeName | None:
         for node in ast.walk(tree)
     )
     has_b3d = "build123d" in imported
-    if has_cq and has_b3d:
+    names: set[RuntimeName] = set()
+    if has_cq:
+        names.add("cadquery")
+    if has_b3d:
+        names.add("build123d")
+    return names
+
+
+def _declared_runtime(source: str) -> RuntimeName | None:
+    names = _referenced_runtimes(source)
+    if len(names) > 1:
         raise ValueError(
             "runtime ambiguous: script references both cadquery and build123d. "
             "Remove one, or pass --runtime=<cadquery|build123d> to force a choice."
         )
-    if has_b3d:
-        return "build123d"
-    if has_cq:
-        return "cadquery"
-    return None
+    return next(iter(names), None)
 
 
 def detect(source: str, default: RuntimeName | None = None) -> RuntimeName:
@@ -147,6 +186,7 @@ def get_runner(name: RuntimeName):
     doesn't pull in both engines.
     """
     if name == "cadquery":
+        require_runtime_available("cadquery")
         from agentcad.runners import cadquery as runner
     elif name == "build123d":
         from agentcad.runners import build123d as runner
@@ -157,18 +197,17 @@ def get_runner(name: RuntimeName):
     return runner
 
 
-def resolve(
+def select_runtime(
     source: str,
     override: str | None = None,
     project_default: RuntimeName | None = None,
-) -> tuple[RuntimeName, object]:
-    """Pick a runtime and return ``(name, runner_module)``.
+) -> tuple[RuntimeName, Literal["command", "project", "detection"]]:
+    """Select the runtime and its source before validation or engine imports.
 
     Precedence: ``override`` > ``project_default`` > legacy source detection >
-    ``DEFAULT_RUNTIME``. A declaration that conflicts with a pinned project is
-    an error with a one-off override recovery.
-    Callers (i.e. ``commands/run.py``) typically populate ``project_default``
-    from :func:`project_runtime`.
+    ``DEFAULT_RUNTIME``. Detection includes the build123d fallback when no
+    runtime is referenced. Project conflicts are checked separately so even
+    rejected runs can report the authoritative runtime and its source.
     """
     if override:
         if override not in _VALID_RUNTIMES:
@@ -176,16 +215,39 @@ def resolve(
                 f"unknown --runtime '{override}'. Expected one of: {', '.join(_VALID_RUNTIMES)}"
             )
         name: RuntimeName = override  # type: ignore[assignment]
+        return name, "command"
+    if project_default is not None:
+        return project_default, "project"
+    return detect(source), "detection"
+
+
+def validate_project_source(source: str, runtime: RuntimeName) -> None:
+    """Reject references to another API without overriding the project pin."""
+    other: RuntimeName = "cadquery" if runtime == "build123d" else "build123d"
+    if other not in _referenced_runtimes(source):
+        return
+    message = (
+        f"runtime mismatch: project uses {runtime}, but the script references {other}. "
+        f"Remove the {other} imports and API usage, and use {runtime} throughout. "
+        f"See `agentcad docs preamble --runtime {runtime}`. "
+    )
+    if other == "cadquery" and not runtime_available(other):
+        message += f"If you intended to use {other}: {MISSING_CADQUERY_MESSAGE} Then "
     else:
-        declared = _declared_runtime(source)
-        if project_default is not None:
-            if declared is not None and declared != project_default:
-                raise ValueError(
-                    f"runtime mismatch: project uses {project_default}, but the "
-                    f"script uses {declared}. Pass --runtime {declared} for a "
-                    "one-off run, or update the runtime in agentcad.json."
-                )
-            name = project_default
-        else:
-            name = declared or DEFAULT_RUNTIME
+        message += f"If you intended to use {other}, "
+    message += (
+        f"pass --runtime {other} for a one-off run, or update the runtime in agentcad.json."
+    )
+    raise ValueError(message)
+
+
+def resolve(
+    source: str,
+    override: str | None = None,
+    project_default: RuntimeName | None = None,
+) -> tuple[RuntimeName, object]:
+    """Select and validate a runtime, then return ``(name, runner_module)``."""
+    name, runtime_source = select_runtime(source, override, project_default)
+    if runtime_source == "project":
+        validate_project_source(source, name)
     return name, get_runner(name)

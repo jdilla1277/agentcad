@@ -2,8 +2,10 @@ import ast
 import json
 import os
 import re
+import shlex
 import signal
 import shutil
+import tempfile
 import sys
 import threading
 import time
@@ -11,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from agentcad.project import ProjectError, get_project, project_options, validate_version_label
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -22,7 +25,7 @@ from agentcad.commands.export_cmd import (
     unsupported_export_formats,
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
-from agentcad.manifest import MANIFEST_FILE, load_manifest
+from agentcad.manifest import load_manifest
 
 
 _DEFAULT_RUN_TIMEOUT_S = 115.0
@@ -30,6 +33,12 @@ _RUN_TIMEOUT_ENV = "AGENTCAD_RUN_TIMEOUT_S"
 _ACTIVE_PHASE_TRACKER = None
 _PREVIOUS_ALARM_HANDLER = None
 _RUN_TIMEOUT_INSTALLED = False
+
+_OUTPUT_DEPRECATION = (
+    "--output is deprecated because it names a version, not a destination; "
+    "use --label LABEL instead. The generated STEP path is returned in "
+    "outputs.step."
+)
 
 _PHASE_ARTIFACTS = {
     "export_mesh": "mesh_exports",
@@ -49,6 +58,168 @@ _PHASE_ARTIFACTS = {
     "diff": "diff",
     "viewer": "viewer",
 }
+
+
+def _run_contract_payload(payload: dict) -> dict:
+    """Apply the stable label/artifact contract to one run response."""
+    ctx = click.get_current_context(silent=True)
+    contract = ctx.meta if ctx is not None else {}
+    for key in ("runtime", "runtime_source"):
+        if f"run_{key}" in contract:
+            payload.setdefault(key, contract[f"run_{key}"])
+    label = contract.get("run_label")
+    payload.setdefault("label", label)
+    script_output = contract.get("run_script_output")
+    if script_output:
+        payload.setdefault("script_output", script_output)
+
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, dict):
+        outputs = {}
+        payload["outputs"] = outputs
+    outputs.setdefault("step", None)
+    payload["artifact_created"] = outputs["step"] is not None
+
+    if (
+        not payload["artifact_created"]
+        and payload.get("status") in {
+            "validation_error",
+            "failed",
+            "invalid_geometry",
+        }
+    ):
+        script = contract.get("run_script")
+        if script:
+            recovery = (
+                f"agentcad run {shlex.quote(script)} --label "
+                f"{shlex.quote(str(label)) if label is not None else 'LABEL'}"
+            )
+            existing_message = payload.get("message")
+            inherited = (payload.get("validation") or {}).get("inherited_from_input")
+            if isinstance(inherited, dict) and inherited.get("path"):
+                # The loaded input already fails; rerunning the script cannot
+                # help, so the recovery points at the input instead.
+                input_path = str(inherited["path"])
+                no_artifact_message = (
+                    f"No STEP was created. The loaded input {input_path} already fails "
+                    "validation; repair or replace it, then rerun the command."
+                )
+                actions = [
+                    f"agentcad inspect {shlex.quote(input_path)} --ids",
+                    recovery,
+                ]
+            else:
+                no_artifact_message = (
+                    f"No STEP was created. Fix {script} and rerun the command."
+                )
+                actions = [recovery]
+            payload["message"] = (
+                f"{existing_message} {no_artifact_message}"
+                if existing_message
+                else no_artifact_message
+            )
+            payload.setdefault("next_actions", actions)
+
+    if contract.get("run_legacy_output"):
+        payload["deprecation"] = _OUTPUT_DEPRECATION
+    return payload
+
+
+_SCRIPT_OUTPUT_LIMIT = 4000
+
+
+def _bounded_script_output(text: str) -> str:
+    """Keep the tail of script prints; the lines before a failure matter most."""
+    if len(text) <= _SCRIPT_OUTPUT_LIMIT:
+        return text
+    tail = text[-_SCRIPT_OUTPUT_LIMIT:]
+    # Start at a whole line when one begins inside the kept tail.
+    newline = tail.find("\n")
+    if 0 <= newline < len(tail) - 1:
+        tail = tail[newline + 1:]
+    dropped = len(text) - len(tail)
+    return f"[{dropped} earlier characters omitted]\n" + tail
+
+
+def _emit_run(payload: dict) -> None:
+    click.echo(json.dumps(_run_contract_payload(payload)))
+
+
+def candidate_scripts(directory=None, limit=5):
+    """Python files in ``directory`` (default cwd) an agent probably meant to run."""
+    root = Path(directory) if directory is not None else Path.cwd()
+    try:
+        names = sorted(entry.name for entry in root.glob("*.py") if entry.is_file())
+    except OSError:
+        return []
+    return names[:limit]
+
+
+def _run_retry_command(ctx, *, script=None, omit=(), **overrides):
+    """Copy the invocation with only the rejected input removed/replaced."""
+    values = {**ctx.params, **overrides}
+    script = script if script is not None else values["script"]
+    if script.startswith("-"):
+        script = "./" + script
+    argv = ["agentcad", "run", script]
+    label = values.get("label") or values.get("legacy_output")
+    options = [
+        ("--label", label), ("--render", values.get("render")),
+        ("--export", values.get("export")),
+        ("--no-preview", values.get("preview") is False),
+        ("--no-diff", values.get("auto_diff") is False),
+        ("--no-view", values.get("open_view") is False),
+        ("--params", values.get("params")),
+        ("--dry-run", values.get("dry_run", False)),
+        ("--runtime", values.get("runtime")),
+        ("--validation-profile", values.get("validation_profile")
+         if values.get("validation_profile") != "deliverable" else None),
+        ("--no-daemon", values.get("no_daemon", False)),
+    ]
+    layout = get_project()
+    if layout.configured:
+        options.append(("--build-dir", str(layout.build_root)))
+    for option, value in options:
+        if option in omit or value is None or value is False:
+            continue
+        if value is True:
+            argv.append(option)
+        elif str(value).startswith("-"):
+            argv.append(f"{option}={value}")
+        else:
+            argv.extend([option, str(value)])
+    return shlex.join(argv)
+
+
+def _validate_run_input(ctx, script, *, cad_file):
+    """Reject missing/non-Python inputs without importing CAD or routing."""
+    path = Path(script)
+    if path.is_file() and (cad_file or path.suffix.lower() == ".py"):
+        return
+    if not path.exists():
+        kind, message = "script_not_found", f"Script file '{script}' not found."
+    elif not path.is_file():
+        kind, message = "invalid_script_path", f"Script path '{script}' is not a file."
+    else:
+        kind, message = "invalid_script_type", (
+            f"Expected a Python CAD script (.py), got '{script}'. "
+            "Shell scripts cannot be executed by agentcad run."
+        )
+    candidates = candidate_scripts() if not cad_file else []
+    if cad_file:
+        message += " Supply an existing CAD file to agentcad import."
+        actions = ["agentcad import --help"]
+    elif candidates:
+        message += f" Python scripts here: {', '.join(candidates)}."
+        actions = [_run_retry_command(ctx, script=name) for name in candidates[:3]]
+    else:
+        message += " No Python scripts in this directory; write one first."
+        actions = ["agentcad docs quickstart"]
+    _emit_run({
+        "command": "run", "status": "error", "error_kind": kind,
+        "message": message, "next_actions": actions,
+    })
+    sys.exit(1)
 
 
 class _RunTimeout(BaseException):
@@ -380,12 +551,314 @@ def _uncalled_part_topology_methods(source):
     })
 
 
-def _execution_error_guidance(msg, runtime, source):
-    """Return focused recovery fields for known build123d Part mistakes."""
-    if runtime != "build123d":
-        return {}
+def _same_topo_shape(left, right) -> bool:
+    """True when two raw OCP shapes are the same TopoDS entity."""
+    if left is right:
+        return True
+    try:
+        return bool(left.IsSame(right))
+    except AttributeError:
+        return False
 
-    suggestion = None
+
+def _apply_kernel_layer(part_metrics: dict, report: dict) -> dict:
+    """Fill a part's kernel-only verdict from a validation report's kernel layer."""
+    layer = (report.get("layers") or {}).get("brep_check") or {}
+    status = layer.get("status")
+    part_metrics["is_valid"] = True if status == "pass" else False if status == "fail" else None
+    errors = layer.get("errors") or []
+    if errors:
+        part_metrics["validity_errors"] = errors
+    else:
+        part_metrics.pop("validity_errors", None)
+    return part_metrics
+
+
+def _coordinate_error_suggestion(msg):
+    """Offer conditional advice: error text alone cannot establish the type."""
+    match = re.search(r"'(BoundBox|Vector)' object has no attribute '([^']+)'", msg)
+    if match is None:
+        return None
+    kind, attr = match.groups()
+    if kind == "Vector":
+        if attr in {"x", "y", "z"}:
+            return (
+                "If the receiver is a build123d Vector, coordinates are uppercase: "
+                f"use `vector.{attr.upper()}` "
+                f"instead of `vector.{attr}` (also for bbox.min, bbox.max, and bbox.size)."
+            )
+        return None
+
+    for axis in "xyz":
+        equivalents = {
+            f"{axis}min": f"bbox.min.{axis.upper()}",
+            f"lower_{axis}": f"bbox.min.{axis.upper()}",
+            f"{axis}max": f"bbox.max.{axis.upper()}",
+            f"upper_{axis}": f"bbox.max.{axis.upper()}",
+            f"{axis}center": f"bbox.center().{axis.upper()}",
+            f"{axis}len": f"bbox.size.{axis.upper()}",
+        }
+        if attr in equivalents:
+            return (
+                "If the receiver is a build123d BoundBox from "
+                f"`bbox = shape.bounding_box()`, replace `bbox.{attr}` with "
+                f"`{equivalents[attr]}`. For a Part or raw TopoDS shape, use "
+                "`bbox_point(shape, x='min', y='center', z='max')` for coordinates "
+                "or `bbox_size(shape)` for (xlen, ylen, zlen)."
+            )
+        if attr == axis:
+            return (
+                "If the receiver is a build123d BoundBox, "
+                f"`bbox.{axis}` is ambiguous. For `bbox = shape.bounding_box()`, "
+                f"choose `bbox.min.{axis.upper()}`, `bbox.center().{axis.upper()}`, "
+                f"`bbox.max.{axis.upper()}`, or `bbox.size.{axis.upper()}` "
+                "for the minimum, center, maximum, or length respectively. "
+                "For a Part or raw TopoDS shape, use `bbox_point(shape)` "
+                "(center by default) or `bbox_size(shape)` (lengths)."
+            )
+    return None
+
+
+_CAD_BASE_CLASSES = {
+    "build123d": ("Shape",),
+    "cadquery": ("Shape", "Workplane"),
+}
+
+
+def _is_cad_class(name, runtime, source):
+    """True when ``name`` is the runtime's own shape class, not a user class."""
+    import importlib
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+    if tree is not None and any(
+        isinstance(node, ast.ClassDef) and node.name == name
+        for node in ast.walk(tree)
+    ):
+        return False
+    try:
+        module = importlib.import_module(runtime)
+    except ImportError:
+        return False
+    cls = getattr(module, name, None)
+    bases = tuple(
+        getattr(module, base) for base in _CAD_BASE_CLASSES.get(runtime, ())
+        if isinstance(getattr(module, base, None), type)
+    )
+    return isinstance(cls, type) and bool(bases) and issubclass(cls, bases)
+
+
+def _transform_method_suggestion(msg, runtime, source):
+    """Point foreign translate method forms at the supported equivalents.
+
+    build123d and CadQuery shapes only offer ``.translate(vector)``;
+    ``.translated(...)`` and ``.translate(x, y, z)`` come from other CAD
+    libraries and fail with generic Python errors. ``Translate(...)`` is
+    covered by ``_undefined_name_guidance``. Method hints require the
+    receiver (or the method's owner) to be one of the runtime's own shape
+    classes, so user helpers and plain values that happen to use these
+    names are left alone. Native ``.translate`` returns a moved copy, so
+    the correction assigns it.
+    """
+    match = re.search(r"'(\w+)' object has no attribute 'translated'", msg)
+    if match and _is_cad_class(match.group(1), runtime, source):
+        return (
+            "`.translated(...)` is not a build123d or CadQuery method. Use "
+            "`moved = translate(shape, (x, y, z))`, or the native "
+            "`moved = shape.translate((x, y, z))`."
+        )
+    match = re.search(
+        r"\b(\w+)\.translate\(\) takes 2 positional arguments but \d+ were given",
+        msg,
+    )
+    if match and _is_cad_class(match.group(1), runtime, source):
+        return (
+            "Native `.translate()` takes one vector, not separate numbers, "
+            "and returns a moved copy: `moved = shape.translate((x, y, z))`, "
+            "or use `moved = translate(shape, (x, y, z))`."
+        )
+    return None
+
+
+def _helper_correction_suggestion(msg):
+    """Lift an injected helper's correction into the suggestion field.
+
+    Placement helpers end their errors with a copyable ``Use helper(...)``
+    sentence; agents that read only ``suggestion`` would otherwise miss it.
+    Only agentcad's exact sentences match, never arbitrary user errors.
+    """
+    from agentcad.helpers import HELPER_CORRECTIONS
+
+    return next((usage for usage in HELPER_CORRECTIONS if usage in msg), None)
+
+
+_COMMON_MATH_NAMES = {
+    "acos", "asin", "atan", "atan2", "ceil", "cos", "degrees", "e",
+    "exp", "floor", "hypot", "log", "log10", "pi", "radians", "sin",
+    "sqrt", "tan", "tau",
+}
+
+
+def _undefined_name(msg):
+    """Name from a genuine script NameError, or None for any other failure."""
+    match = re.fullmatch(
+        r"Script execution failed: NameError: name '([^']+)' is not defined",
+        msg,
+    )
+    return match.group(1) if match else None
+
+
+def _uses_unbound_name(source, name):
+    """True when the script reads ``name`` but never defines or imports it."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    loaded = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            loaded = True
+        elif isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ) and node.name == name:
+            return False
+        elif isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split(".")[0]) == name
+            for alias in node.names
+        ):
+            return False
+    return loaded
+
+
+def _cadquery_undefined_name_guidance(msg, source):
+    """CadQuery counterpart for the generated names both runtimes share.
+
+    The CadQuery runner reports ``Script execution failed: name 'X' is not
+    defined`` without the exception type, so require source evidence that
+    the script really reads an unbound ``Translate``.
+    """
+    match = re.fullmatch(
+        r"Script execution failed: (?:NameError: )?name '([^']+)' is not defined",
+        msg,
+    )
+    if match and match.group(1) == "Translate" and _uses_unbound_name(source, "Translate"):
+        return {
+            "suggestion": (
+                "The active CadQuery runtime has no `Translate` constructor. "
+                "Use the pre-injected `moved = translate(shape, (x, y, z))`, "
+                "or the native `moved = shape.translate((x, y, z))` (it "
+                "returns a moved copy)."
+            ),
+            "more_at": "agentcad docs helpers",
+        }
+    return None
+
+
+def _undefined_name_guidance(msg):
+    """Return build123d-specific recovery for common generated-code names.
+
+    These names come from adjacent CAD libraries or from Python's standard
+    math module.  Keep ambiguous modeling concepts as diagnostics instead of
+    aliases: silently choosing a Boolean or placement operation can produce a
+    valid but unintended model.
+    """
+    name = _undefined_name(msg)
+    if name is None:
+        return None
+
+    suggestions = {
+        "Vec": (
+            "The active build123d runtime has no `Vec` name. Use the "
+            "pre-injected `Vector(x, y, z)`, or explicitly import it with "
+            "`from build123d import Vector`."
+        ),
+        "V": (
+            "The active build123d runtime has no `V` name. If this value is a "
+            "3D vector, use `Vector(x, y, z)`; otherwise define or import the "
+            "intended name explicitly."
+        ),
+        "Pnt3D": (
+            "The active build123d runtime has no `Pnt3D` name. For a 3D point "
+            "or direction, use `Vector(x, y, z)` or an `(x, y, z)` tuple, "
+            "depending on the receiving API."
+        ),
+        "Translate": (
+            "The active build123d runtime has no `Translate` constructor. For "
+            "a build123d shape use `moved = shape.translate((x, y, z))` (it "
+            "returns a moved copy); for a raw or wrapped shape use the "
+            "pre-injected `moved = translate(shape, (x, y, z))`."
+        ),
+        "difference": (
+            "The active build123d runtime does not define a `difference()` "
+            "operation. For new build123d shapes use `left - right`; for raw "
+            "or imported shapes use the pre-injected `safe_cut(left, right)`."
+        ),
+        "cylinder": (
+            "The active build123d runtime is case-sensitive. Use "
+            "`Cylinder(radius=..., height=...)` instead of `cylinder(...)`."
+        ),
+        "Pocket": (
+            "The active build123d runtime has no `Pocket` constructor. For new "
+            "geometry subtract the tool shape with `base - tool`; for imported "
+            "geometry use the pre-injected `cut_pocket(...)` or `safe_cut(...)` "
+            "helper, depending on the intended edit."
+        ),
+        "Center": (
+            "The active build123d runtime has no standalone `Center` name. If "
+            "this is primitive alignment, use `Align.CENTER`; otherwise define "
+            "the intended point or operation explicitly."
+        ),
+        "Capsule": (
+            "The active build123d runtime has no `Capsule` primitive. Construct "
+            "the intended profile or solid explicitly from build123d primitives "
+            "so its dimensions and axis are unambiguous."
+        ),
+    }
+    if name in suggestions:
+        return {
+            "suggestion": suggestions[name],
+            "more_at": (
+                "agentcad docs quickstart"
+                if name == "difference"
+                else "agentcad docs preamble"
+            ),
+        }
+    if name in _COMMON_MATH_NAMES:
+        return {
+            "suggestion": (
+                f"The active build123d runtime does not pre-inject Python's "
+                f"`{name}` math name. Add `from math import {name}` to the script."
+            ),
+            "more_at": "agentcad docs preamble",
+        }
+    return None
+
+
+def _execution_error_guidance(msg, runtime, source):
+    """Return focused recovery fields for known script API mistakes."""
+    from agentcad.output_contract import step_export_guidance
+
+    export_guidance = step_export_guidance(msg, source)
+    if export_guidance:
+        return export_guidance
+    transform = (
+        _transform_method_suggestion(msg, runtime, source)
+        or _helper_correction_suggestion(msg)
+    )
+    if transform:
+        return {"suggestion": transform, "more_at": "agentcad docs helpers"}
+    if runtime != "build123d":
+        return _cadquery_undefined_name_guidance(msg, source) or {}
+
+    undefined_guidance = _undefined_name_guidance(msg)
+    if undefined_guidance is not None:
+        return undefined_guidance
+
+    suggestion = _coordinate_error_suggestion(msg)
     if "'Part' object has no attribute 'BoundingBox'" in msg:
         suggestion = (
             "`load_step()` returns a build123d `Part`. Get its bounds with "
@@ -521,6 +994,7 @@ def _record_failure(
     reservation,
     error_msg,
     runtime=None,
+    runtime_source=None,
     guidance=None,
 ):
     """Record a script failure on disk and in the manifest."""
@@ -545,6 +1019,8 @@ def _record_failure(
     }
     if runtime is not None:
         meta["runtime"] = runtime
+    if runtime_source is not None:
+        meta["runtime_source"] = runtime_source
     if guidance:
         meta.update(guidance)
     commit_version(reservation, meta, {
@@ -567,7 +1043,7 @@ def _record_failure(
         output_json["runtime"] = runtime
     if guidance:
         output_json.update(guidance)
-    click.echo(json.dumps(output_json))
+    _emit_run(output_json)
     sys.exit(1)
 
 
@@ -629,7 +1105,7 @@ def _record_invalid_geometry(
         output_json["groups"] = groups
     if warnings:
         output_json["warnings"] = warnings
-    click.echo(json.dumps(output_json))
+    _emit_run(output_json)
     sys.exit(1)
 
 
@@ -690,7 +1166,20 @@ def _assign_part_identity(raw_parts):
 
 @click.command()
 @click.argument("script")
-@click.option("--output", required=True, help="Label for this version.")
+@click.option(
+    "--label",
+    default=None,
+    help=(
+        "Label for this version. The STEP path is returned in outputs.step. "
+        "Required unless --dry-run."
+    ),
+)
+@click.option(
+    "--output",
+    "legacy_output",
+    default=None,
+    help="Deprecated compatibility alias for --label; never a destination path.",
+)
 @click.option(
     "--render",
     default=None,
@@ -699,7 +1188,7 @@ def _assign_part_identity(raw_parts):
         "azimuth:elevation angles, or a mix such as front,45:30."
     ),
 )
-@click.option("--export", default=None, help="Comma-separated mesh formats to export (stl, glb, obj).")
+@click.option("--export", default=None, help="Comma-separated mesh formats (stl, glb, obj). STEP is always produced; read outputs.step.")
 @click.option(
     "--preview/--no-preview",
     default=True,
@@ -720,9 +1209,9 @@ def _assign_part_identity(raw_parts):
         "`agentcad diff` remains available for later review."
     ),
 )
-@click.option("--view/--no-view", "open_view", default=True, help="Open the generated review viewer after a successful run (default on). From v2 onward it preloads previous/current A/B comparison.")
+@click.option("--view/--no-view", "open_view", default=True, help="Open or reuse the live project viewer after success (default on). Its stable URL follows completed builds; version snapshots retain previous/current A/B comparison.")
 @click.option("--params", default=None, help="Parameter overrides as key=value,key=value.")
-@click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts.")
+@click.option("--dry-run", is_flag=True, default=False, help="Compute metrics without creating a version or disk artifacts. --label is optional.")
 @click.option(
     "--runtime",
     default=None,
@@ -733,11 +1222,23 @@ def _assign_part_identity(raw_parts):
         "fall back to build123d."
     ),
 )
+@click.option(
+    "--validation-profile",
+    type=click.Choice(["deliverable", "kernel"]),
+    default="deliverable",
+    show_default=True,
+    help=(
+        "Which validation gates success. 'deliverable' requires the kernel check, "
+        "closed shells, and a manifold mesh; 'kernel' restores the kernel-only "
+        "check for intentional surfaces or sheet bodies."
+    ),
+)
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
+@project_options
 def run(
-    ctx, script, output, render, export, preview, auto_diff, open_view,
-    params, dry_run, runtime, no_daemon,
+    ctx, script, label, legacy_output, render, export, preview, auto_diff,
+    open_view, params, dry_run, runtime, validation_profile, no_daemon,
 ):
     """Execute the project's CAD script and produce a versioned STEP file.
 
@@ -749,6 +1250,31 @@ def run(
     `agentcad import` instead — agents who instinctively reach for `run`
     when handed a CAD file get the right behavior automatically.
     """
+    output = label or legacy_output
+    ctx.meta["run_script"] = script
+    ctx.meta["run_label"] = output
+    ctx.meta["run_legacy_output"] = legacy_output is not None
+    ctx.meta["viewer_dry_run"] = dry_run
+    if label is not None and legacy_output is not None:
+        raise click.UsageError(
+            "Use --label or the deprecated --output alias, not both.",
+            ctx=ctx,
+        )
+    # A dry run never allocates a version, so a label has nothing to name.
+    # Requiring one there only cost agents a retry (friction check on #207).
+    if output is None and not dry_run:
+        raise click.MissingParameter(
+            ctx=ctx,
+            param_hint="--label",
+            param_type="option",
+        )
+    if output is not None:
+        try:
+            validate_version_label(output)
+        except ProjectError as exc:
+            exc.next_actions = [_run_retry_command(ctx, label="first")]
+            raise
+
     # Reject unsupported --export formats before anything else — before the
     # CAD-file suffix dispatch below (which drops --export entirely), daemon
     # routing, version allocation, or any disk artifacts — so `run --export`
@@ -758,22 +1284,29 @@ def run(
         # Without this the run would execute the whole script and consume a
         # version number, then export nothing and still report success.
         if not parse_export_formats(export):
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": NO_FORMATS_MESSAGE,
-            }))
+                "next_actions": [_run_retry_command(ctx, omit=("--export",))],
+            })
             sys.exit(1)
         invalid = unsupported_export_formats(export)
         if invalid:
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": (
                     f"Unsupported format(s): {', '.join(invalid)}. "
-                    f"Supported: stl, glb, obj"
+                    "Supported: stl, glb, obj. STEP is always produced by a successful "
+                    "run; read outputs.step. --export is only for mesh formats."
                 ),
-            }))
+                "next_actions": [_run_retry_command(
+                    ctx, export=",".join(
+                        fmt for fmt in parse_export_formats(export) if fmt not in invalid
+                    ) or None,
+                )],
+            })
             sys.exit(1)
 
     # M60 Phase 2 (slice 2b): suffix-dispatch CAD files to `agentcad import`.
@@ -782,7 +1315,9 @@ def run(
     # files actually import; Tier 1+ files surface the polite-no responses
     # via the same dispatch (better than a Python parse error).
     from agentcad import file_detect as _fd
-    if _fd.is_recognized_cad_extension(script):
+    cad_file = _fd.is_recognized_cad_extension(script)
+    _validate_run_input(ctx, script, cad_file=cad_file)
+    if cad_file:
         from agentcad.commands.import_cmd import import_cmd
         ctx.invoke(
             import_cmd,
@@ -805,32 +1340,35 @@ def run(
         _run_impl(
             ctx, script, output, render, export,
             preview, auto_diff, open_view, params, dry_run, runtime, no_daemon,
+            validation_profile=validation_profile,
         )
     except SystemExit:
         # Explicit sys.exit() calls inside _run_impl are intentional —
         # they already emitted the proper JSON. Pass through.
         raise
+    except ProjectError:
+        raise
     except _RunTimeout as e:
         recovered = _recover_committed_core(e, timeout_payload=e.payload)
         if recovered is not None:
-            click.echo(json.dumps(recovered))
+            _emit_run(recovered)
             return
         _cleanup_uncommitted_reservation()
-        click.echo(json.dumps(e.payload))
+        _emit_run(e.payload)
         sys.exit(1)
     except Exception as e:
         recovered = _recover_committed_core(e)
         if recovered is not None:
-            click.echo(json.dumps(recovered))
+            _emit_run(recovered)
             return
         _cleanup_uncommitted_reservation()
         import traceback as _tb
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "message": f"Internal error: {type(e).__name__}: {e}",
             "traceback": _tb.format_exc(),
-        }))
+        })
         sys.exit(1)
     finally:
         _clear_run_timeout()
@@ -838,7 +1376,7 @@ def run(
 
 def _run_impl(
     ctx, script, output, render, export, preview, auto_diff, open_view,
-    params, dry_run, runtime, no_daemon,
+    params, dry_run, runtime, no_daemon, validation_profile="deliverable",
 ):
     _t_total_start = time.perf_counter()
     _timings = {}
@@ -866,12 +1404,17 @@ def _run_impl(
         # Stderr progress line so callers can distinguish "still working"
         # from "wedged" during long phases (preview render, GIF encode).
         # One line per phase, always-on, lightweight. Stays on stderr so
-        # the JSON on stdout remains parseable. Issue #164.
-        click.echo(f"[agentcad] {message}", err=True)
+        # the JSON on stdout remains parseable. Issue #164. The elapsed
+        # suffix lets a watcher tell a slow phase from a stalled one.
+        elapsed = time.perf_counter() - _t_total_start
+        click.echo(f"[agentcad] {message} (+{elapsed:.1f}s)", err=True)
 
 
     # Try routing through daemon. If reachable, this exits before returning.
-    argv = ["run", script, "--output", output]
+    label_option = "--output" if ctx.meta.get("run_legacy_output") else "--label"
+    argv = ["run", script]
+    if output is not None:
+        argv.extend([label_option, output])
     if render:
         argv.extend(["--render", render])
     if export:
@@ -888,15 +1431,34 @@ def _run_impl(
         argv.append("--dry-run")
     if runtime:
         argv.extend(["--runtime", runtime])
-    maybe_route_through_daemon(argv, no_daemon=no_daemon)
-
-    # Fallback: direct execution
+    if validation_profile != "deliverable":
+        argv.extend(["--validation-profile", validation_profile])
+    # Check syntax/capture locally before contacting a daemon or importing CAD.
     _t = _start_phase("validation")
+
+    # An explicit --runtime naming an engine that is not installed is the
+    # real blocker regardless of project state; report it before the
+    # manifest check so a fresh folder does not hide it behind "run init".
+    if runtime:
+        from agentcad.runners import dispatch as _dispatch
+        ctx.meta["run_runtime"] = runtime
+        ctx.meta["run_runtime_source"] = "command"
+        try:
+            _dispatch.require_runtime_available(runtime)
+        except ValueError as e:
+            _emit_run({
+                "command": "run",
+                "status": "error",
+                "message": str(e),
+                "suggestion": _dispatch.PORT_TO_BUILD123D_HINT,
+            })
+            sys.exit(1)
+
     manifest = load_manifest(command="run")
 
     # Python version check (before CadQuery imports)
     if sys.version_info >= (3, 13):
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "message": (
@@ -904,47 +1466,76 @@ def _run_impl(
                 f"(found {sys.version_info[0]}.{sys.version_info[1]}). "
                 f"CadQuery/OCP bindings are not available on newer Python versions."
             ),
-        }))
+        })
         sys.exit(1)
 
     script_path = Path(script)
-    if not script_path.exists():
-        click.echo(json.dumps({
-            "command": "run",
-            "status": "error",
-            "message": f"Script file '{script}' not found",
-        }))
-        sys.exit(1)
-
     # Dispatch to the right runner. Precedence:
     #   --runtime flag > project mode > legacy source detection > default
     from agentcad.runners import dispatch
 
-    raw_source = script_path.read_text()
+    try:
+        raw_source = script_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        _emit_run({
+            "command": "run", "status": "error", "error_kind": "script_unreadable",
+            "message": f"Cannot read Python script '{script}': {exc}",
+            "suggestion": f"Save {script} as a readable UTF-8 Python file, then rerun.",
+            "next_actions": [_run_retry_command(ctx)],
+        })
+        sys.exit(1)
     project_default = dispatch.project_runtime()
 
     try:
-        runtime_name, runner = dispatch.resolve(
+        runtime_name, runtime_source = dispatch.select_runtime(
             raw_source, override=runtime, project_default=project_default
         )
+        ctx.meta["run_runtime"] = runtime_name
+        ctx.meta["run_runtime_source"] = runtime_source
+        if runtime_source == "project":
+            dispatch.validate_project_source(raw_source, runtime_name)
+        runner = dispatch.get_runner(runtime_name)
     except ValueError as e:
-        # Ambiguous/mismatched source or unknown --runtime — surface cleanly.
-        click.echo(json.dumps({
+        # Ambiguous/mismatched source, unknown --runtime, or a runtime whose
+        # optional extra is not installed — surface cleanly.
+        payload = {
             "command": "run",
             "status": "error",
             "message": str(e),
-        }))
+            "runtime_source": ctx.meta.get("run_runtime_source", "detection"),
+        }
+        if dispatch.MISSING_CADQUERY_MESSAGE in str(e):
+            payload["suggestion"] = dispatch.PORT_TO_BUILD123D_HINT
+        _emit_run(payload)
         sys.exit(1)
 
-    # Pre-execution validation (before version allocation)
+    from agentcad.validate import validate_script
+
+    output_calls = (
+        ("show_object", "show_compound", "show_assembly")
+        if runtime_name == "build123d" else ("show_object",)
+    )
+    static_errors = validate_script(raw_source, output_calls, check_imports=False)
+    if static_errors:
+        _emit_run({
+            "command": "run",
+            "status": "validation_error",
+            "runtime": runtime_name,
+            "checks": static_errors,
+        })
+        sys.exit(1)
+
+    maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    # Pre-execution import/helper validation (before version allocation)
     validation_errors = runner.validate(raw_source)
     if validation_errors:
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "validation_error",
             "runtime": runtime_name,
             "checks": validation_errors,
-        }))
+        })
         sys.exit(1)
 
     # Parse --params before version allocation (errors should be cheap)
@@ -953,24 +1544,24 @@ def _run_impl(
         try:
             parsed_params = _parse_params(params)
         except ValueError as e:
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": str(e),
-            }))
+            })
             sys.exit(1)
 
     # Validate --render spec before version allocation (errors should be cheap)
     if render:
-        from agentcad.render import parse_view_spec as _parse_view_spec
+        from agentcad.view_spec import parse_view_spec as _parse_view_spec
         try:
             _parse_view_spec(render)
         except ValueError as e:
-            click.echo(json.dumps({
+            _emit_run({
                 "command": "run",
                 "status": "error",
                 "message": str(e),
-            }))
+            })
             sys.exit(1)
     _finish_phase("validation", _t, "validation_ms")
 
@@ -985,17 +1576,25 @@ def _run_impl(
     # Execute via the runner — returns a runtime-agnostic ExecutionResult.
     _heartbeat(f"running script ({runtime_name})…")
     _t = _start_phase("script_exec")
-    result = runner.execute(raw_source, parsed_params)
+    # stdout carries exactly one JSON document. Capture everything the script
+    # writes to stdout (print, raw fd 1, child processes, C extensions) and
+    # return it as script_output instead of letting it corrupt the JSON.
+    from agentcad.native_io import capture_stdout
+
+    with capture_stdout() as script_stdout:
+        result = runner.execute(raw_source, parsed_params)
+    if script_stdout.text:
+        ctx.meta["run_script_output"] = _bounded_script_output(script_stdout.text)
 
     # Param validation errors (unknown names, CQGI InvalidParameterError) —
     # surface them without consuming a version number.
     if result.status == "validation_error":
-        click.echo(json.dumps({
+        _emit_run({
             "command": "run",
             "status": "error",
             "runtime": runtime_name,
             "message": result.exception,
-        }))
+        })
         sys.exit(1)
 
     # Keep the current history snapshot for previous-version comparison. A
@@ -1006,19 +1605,28 @@ def _run_impl(
     if result.status == "execution_error":
         from agentcad.versioning import reserve_version
 
-        reservation = reserve_version(Path.cwd(), label, suffix="_failed")
         error_msg = _enrich_error(result.exception)
         guidance = _execution_error_guidance(
             error_msg,
             runtime=runtime_name,
             source=raw_source,
         )
+        if result.error_kind:
+            guidance["error_kind"] = result.error_kind
+        if dry_run:
+            _emit_run({
+                "command": "run", "status": "error", "runtime": runtime_name,
+                "message": error_msg, **guidance,
+            })
+            sys.exit(1)
+        reservation = reserve_version(get_project().build_root, label, suffix="_failed")
         _record_failure(
             script_path,
             label,
             reservation,
             error_msg,
             runtime=runtime_name,
+            runtime_source=runtime_source,
             guidance=guidance,
         )
 
@@ -1031,10 +1639,19 @@ def _run_impl(
     # Compute geometric metrics
     _heartbeat("computing metrics…")
     _t = _start_phase("metrics")
-    from agentcad.metrics import compute_metrics
+    from agentcad.core_build import (
+        apply_validation,
+        reliability_warning,
+        validate_delivered_step,
+        validation_warning,
+    )
+    from agentcad.metrics import compute_metrics  # per-part metrics stay kernel-only
 
     topo_shape_for_metrics = result.topo_shape
-    metrics = compute_metrics(topo_shape_for_metrics)
+    # The kernel check runs once, on the reloaded STEP (below); apply_validation
+    # folds that verdict in. Running BRepCheck here as well doubled the most
+    # expensive step of a run on imported parts.
+    metrics = compute_metrics(topo_shape_for_metrics, check_validity=False)
 
     # Per-part breakdown (feedback #190): one entry per show_object() call.
     # Metrics computed now so --dry-run also surfaces them; per-part previews
@@ -1076,6 +1693,11 @@ def _run_impl(
                 f"({existing_color!r} and {group_color!r}); using {existing_color!r}."
             )
 
+    # A single show_object() result is the whole shape; its per-part kernel
+    # verdict is the delivered STEP's kernel layer, filled in after export.
+    single_part_is_whole = len(raw_parts) == 1 and _same_topo_shape(
+        raw_parts[0]["topo_shape"], topo_shape_for_metrics
+    )
     for p, (part_id, id_source), (group_id, _group_name) in zip(
         raw_parts, part_id_sources, part_groups,
     ):
@@ -1091,8 +1713,16 @@ def _run_impl(
             entry["color"] = p["color"]
         elif group_id is not None and group_color is not None:
             entry["color"] = group_color
-        entry["metrics"] = compute_metrics(p["topo_shape"])
+        if single_part_is_whole:
+            # Same shape as the whole: reuse the metrics computed above.
+            entry["metrics"] = dict(metrics)
+        else:
+            entry["metrics"] = compute_metrics(p["topo_shape"])
+        if p.get("validation_options"):
+            entry["validation_options"] = p["validation_options"]
         parts_output.append(entry)
+    from agentcad.validation_guidance import part_connections, structure_checks, with_structure_checks
+    warnings.extend(part_connections(raw_parts, parts_output))
     _finish_phase("metrics", _t, "metrics_ms")
     groups_output = list(groups_by_id.values())
 
@@ -1104,12 +1734,113 @@ def _run_impl(
     if metrics.get("warnings"):
         warnings.extend(metrics["warnings"])
 
-    # Final geometry validity is part of core CAD success. Stop before STEP
-    # export and before every visual/post-processing phase when it fails.
+    # Export the deliverable to a staging file and validate what will ship.
+    # STEP export can change topology (a fused shared edge becomes two clean
+    # bodies), so the verdict is computed on the reloaded artifact, exactly
+    # as inspect, a slicer, or a grader will see it. On success the staged
+    # file is moved into the version directory instead of exported again.
+    _heartbeat("exporting and validating STEP…")
+    _t = _start_phase("export_step")
+    from agentcad.validation import (
+        ROUND_TRIP_SKIP_REASON,
+        round_trip_skip_layers,
+        validate_shape,
+    )
+    from agentcad.export_validation import compare_step_reports
+
+    # The in-memory source is validated only for the round-trip diagnostic.
+    # Above ROUND_TRIP_FULL_FACE_LIMIT faces the kernel check and the
+    # tessellation are left to the delivered STEP, which runs them anyway.
+    # export_step_ms stays the umbrella for this phase; the sub-timings
+    # below separate what the umbrella used to hide (source validation,
+    # the STEP write, the reload, and the delivered validation).
+    _sub = time.perf_counter()
+    source_validation = validate_shape(
+        topo_shape_for_metrics,
+        profile=validation_profile,
+        skip_layers=round_trip_skip_layers(topo_shape_for_metrics),
+        skip_reason=ROUND_TRIP_SKIP_REASON,
+    )
+    _timings["source_validation_ms"] = round((time.perf_counter() - _sub) * 1000)
+    staging_dir = Path(tempfile.mkdtemp(prefix="agentcad-stage-"))
+    staged_step = staging_dir / "output.step"
+    _heartbeat("writing STEP…")
+    _sub = time.perf_counter()
+    runner.export_step(shape, str(staged_step))
+    _timings["export_write_ms"] = round((time.perf_counter() - _sub) * 1000)
+    _heartbeat("validating the written STEP…")
+    validation = validate_delivered_step(
+        staged_step, profile=validation_profile, timings=_timings,
+        on_wait=lambda elapsed: _heartbeat(
+            f"validating the written STEP… worker still running ({elapsed:.0f}s)"
+        ),
+    )
+    step_round_trip = compare_step_reports(source_validation, validation)
+    if single_part_is_whole and parts_output:
+        _apply_kernel_layer(parts_output[0]["metrics"], validation)
+    # Expectations belong to each show_object result. Count the independently
+    # exported/reloaded part, since STEP serialization can change containers.
+    checks = []
+    for index, (raw, public) in enumerate(zip(raw_parts, parts_output)):
+        options = raw.get("validation_options", {})
+        if not any(key in options for key in ("expect_solids", "expect_shells")):
+            continue
+        if len(raw_parts) == 1:
+            structure = validation["layers"]["structure"]
+        else:
+            from agentcad.step_io import write_step_shape as export_topo_step
+            from agentcad.step_io import load_cad_shape
+            from agentcad.validation import _layer_structure
+            part_step = staging_dir / f"part_{index}.step"
+            try:
+                export_topo_step(raw["topo_shape"], part_step)
+                structure = _layer_structure(load_cad_shape(part_step))
+            except Exception as exc:
+                structure = {"status": "error", "message": f"Part structure could not be read: {exc}"}
+        part_checks = structure_checks(structure, options, part_id=public["id"])
+        part_status = ("fail" if any(c["passed"] is False for c in part_checks)
+                       else "error" if any(c["passed"] is None for c in part_checks) else "pass")
+        public["structure"] = {**structure, "status": part_status,
+                               "gates": True, "expectations": part_checks}
+        checks.extend(part_checks)
+    validation = with_structure_checks(validation, checks)
+    validation["step_round_trip"] = step_round_trip
+    if step_round_trip["matches"] is not True:
+        warnings.append(step_round_trip["message"])
+    # When the delivered file fails, say whether a loaded input already failed
+    # the same layer (inherited) or this run broke it (introduced), so the
+    # agent repairs the right thing. Only runs on a definite failure.
+    if validation.get("is_valid") is False and getattr(result, "loaded_files", None):
+        from agentcad.core_build import annotate_input_provenance
+
+        _sub = time.perf_counter()
+        annotate_input_provenance(
+            validation, result.loaded_files, profile=validation_profile,
+            # The injected loaders resolve relative paths from the process
+            # working directory, even when the script itself is elsewhere.
+            cwd=Path.cwd(),
+        )
+        _timings["input_validation_ms"] = round((time.perf_counter() - _sub) * 1000)
+    _finish_phase("export_step", _t, "export_step_ms")
+    apply_validation(metrics, validation)
+    undetermined = validation_warning(validation)
+    if undetermined:
+        warnings.append(undetermined)
+    unreliable = reliability_warning(metrics)
+    if unreliable:
+        warnings.append(unreliable)
+
+    def _discard_staged_step():
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+    # Final geometry validity is part of core CAD success. Stop before every
+    # visual/post-processing phase when it fails.
     from agentcad.core_build import invalid_geometry_payload
 
-    invalid_response = invalid_geometry_payload("run", metrics)
+    invalid_response = invalid_geometry_payload("run", metrics, validation)
     if invalid_response is not None:
+        invalid_response["runtime_source"] = runtime_source
+        _discard_staged_step()
         if dry_run:
             invalid_response.update({
                 "runtime": runtime_name,
@@ -1127,11 +1858,17 @@ def _run_impl(
             invalid_response["timings"] = _timings
             invalid_response["completed_phases"] = list(_phase_tracker.completed)
             invalid_response["phase_timings"] = dict(_timings)
-            click.echo(json.dumps(invalid_response))
+            _emit_run(invalid_response)
             sys.exit(1)
         from agentcad.versioning import reserve_version
 
-        reservation = reserve_version(Path.cwd(), label, suffix="_invalid")
+        # The invalid response is the run's final word; carry the timings so
+        # a slow failure can still be attributed to a phase.
+        _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
+        invalid_response["timings"] = dict(_timings)
+        invalid_response["completed_phases"] = list(_phase_tracker.completed)
+        invalid_response["phase_timings"] = dict(_timings)
+        reservation = reserve_version(get_project().build_root, label, suffix="_invalid")
         _record_invalid_geometry(
             script_path,
             label,
@@ -1147,12 +1884,15 @@ def _run_impl(
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:
+        _discard_staged_step()
         output_json = {
             "command": "run",
             "status": "success",
             "runtime": runtime_name,
             "output_type": output_type,
             "metrics": metrics,
+            "validation": validation,
+            "validation_profile": validation_profile,
         }
         if parts_output:
             output_json["parts"] = parts_output
@@ -1164,13 +1904,13 @@ def _run_impl(
         output_json["timings"] = _timings
         output_json["completed_phases"] = list(_phase_tracker.completed)
         output_json["phase_timings"] = dict(_timings)
-        click.echo(json.dumps(output_json))
+        _emit_run(output_json)
         return
 
     # Atomically reserve a unique version directory before writing core files.
     from agentcad.versioning import reserve_version
 
-    reservation = reserve_version(Path.cwd(), label)
+    reservation = reserve_version(get_project().build_root, label)
     _phase_tracker.reservation = reservation
     version_num = reservation.number
     dir_name = reservation.dir_name
@@ -1181,9 +1921,12 @@ def _run_impl(
 
     # Export STEP file via the runner (each engine has its own writer)
     _heartbeat("exporting STEP…")
-    _t = _start_phase("export_step")
-    runner.export_step(shape, str(version_dir / "output.step"))
-    _finish_phase("export_step", _t, "export_step_ms")
+    # The STEP was exported and validated before the version was reserved;
+    # move the staged artifact into place so the delivered bytes are the
+    # validated bytes.
+    shutil.move(str(staged_step), str(version_dir / "output.step"))
+    _discard_staged_step()
+    _phase_tracker.complete("export_step")
 
     # Core build boundary: commit the valid STEP and its metadata before any
     # optional export/render/diff/viewer work begins.
@@ -1193,7 +1936,7 @@ def _run_impl(
     previous = _find_prev_success(versions)
     has_previous_step = bool(
         previous
-        and (Path.cwd() / previous["path"] / "output.step").exists()
+        and (get_project().version_dir(previous) / "output.step").exists()
     )
     comparison_enabled = auto_diff and has_previous_step
     fast_path = not preview and not auto_diff and not open_view
@@ -1214,6 +1957,7 @@ def _run_impl(
         "version": version_num,
         "label": label,
         "runtime": runtime_name,
+        "runtime_source": runtime_source,
         "output_type": output_type,
         "created": created,
         "script": f"{dir_name}/script.py",
@@ -1222,6 +1966,8 @@ def _run_impl(
             "script": f"{dir_name}/script.py",
         },
         "metrics": metrics,
+        "validation": validation,
+        "validation_profile": validation_profile,
         "artifacts": {
             "mesh_exports": _artifact_state(
                 bool(export), "No optional mesh exports requested."
@@ -1302,7 +2048,10 @@ def _run_impl(
 
     # Export mesh formats if requested
     exports_meta = {}
+    mesh_validation = {}
     if export:
+        from agentcad.written_mesh import validate_written_mesh
+        from agentcad.export_validation import mesh_warnings
         _heartbeat("exporting requested mesh formats…")
         _t = _start_phase("export_mesh")
         formats = parse_export_formats(export)
@@ -1324,6 +2073,13 @@ def _run_impl(
                 obj_path = version_dir / "output.obj"
                 export_obj(topo_shape, str(obj_path))
                 exports_meta["obj"] = f"{dir_name}/output.obj"
+            mesh_validation[fmt] = validate_written_mesh(version_dir / f"output.{fmt}")
+            warnings.extend(mesh_warnings({fmt: mesh_validation[fmt]}))
+            lifecycle.meta["outputs"].update(exports_meta)
+            lifecycle.meta["mesh_validation"] = mesh_validation
+            if warnings:
+                lifecycle.meta["warnings"] = warnings
+            lifecycle.persist()
         lifecycle.meta["outputs"].update(exports_meta)
         _finish_phase("export_mesh", _t, "export_mesh_ms")
 
@@ -1441,11 +2197,11 @@ def _run_impl(
             render_diff_side_by_side,
             render_diff_overlay,
         )
-        prev_step_path = Path.cwd() / prev["path"] / "output.step"
+        prev_step_path = get_project().version_dir(prev) / "output.step"
         _heartbeat("loading prior comparison source…")
         try:
             with comparison_recorder.observe("source_loading"):
-                previous_meta_path = Path.cwd() / prev["path"] / "meta.json"
+                previous_meta_path = get_project().version_dir(prev) / "meta.json"
                 try:
                     previous_parts = json.loads(
                         previous_meta_path.read_text()
@@ -1600,11 +2356,11 @@ def _run_impl(
     # we still want the 3D comparison to work in the viewer.
     prev_glb_path = None
     if auto_diff and prev is not None:
-        candidate = Path.cwd() / prev["path"] / "output.glb"
+        candidate = get_project().version_dir(prev) / "output.glb"
         if candidate.exists():
             prev_glb_path = candidate
         else:
-            prev_step_path = Path.cwd() / prev["path"] / "output.step"
+            prev_step_path = get_project().version_dir(prev) / "output.step"
             if prev_step_path.exists():
                 try:
                     from agentcad.step_io import load_cad_shape as _load
@@ -1614,6 +2370,15 @@ def _run_impl(
                 except Exception:
                     prev_glb_path = None
 
+    lifecycle.meta["viewer_context"] = {
+        "version": version_num, "label": label,
+        "models": {
+            "a": {"version": prev["version"], "label": prev["label"]} if prev_glb_path else {
+                "version": version_num, "label": label,
+            },
+            **({"b": {"version": version_num, "label": label}} if prev_glb_path else {}),
+        },
+    }
     viewer_path = version_dir / "viewer.html"
     if not fast_path:
         _heartbeat("writing viewer.html…")
@@ -1645,20 +2410,8 @@ def _run_impl(
                 parts_model="b" if prev_glb_path else "a",
                 part_changes=part_changes,
                 groups=groups_output,
-                viewer_context={
-                    "version": version_num,
-                    "label": label,
-                    "models": {
-                        "a": {
-                            "version": prev.get("version"),
-                            "label": prev.get("label"),
-                        } if prev_glb_path else {
-                            "version": version_num,
-                            "label": label,
-                        },
-                        **({"b": {"version": version_num, "label": label}} if prev_glb_path else {}),
-                    },
-                },
+                viewer_context=lifecycle.meta["viewer_context"],
+                previous_parts=previous_parts,
             )
 
         if comparison_recorder is not None:
@@ -1676,17 +2429,21 @@ def _run_impl(
         lifecycle.meta["viewer_glb"] = viewer_glb_meta
         lifecycle.set_artifact("viewer", "success")
 
-    viewer_opened = False
+    project_viewer = None
+    if viewer_meta:
+        from agentcad.project_viewer import handoff
+        project_viewer = handoff(get_project().build_root, version_dir, open_view=open_view)
+
+    viewer_opened = bool(project_viewer and project_viewer.get("opened"))
     if open_view:
         try:
-            from agentcad.commands.view import _open_browser
-            from agentcad.review_server import viewer_url
-
-            viewer_opened = _open_browser(viewer_url(viewer_path)) is not False
+            reused = bool(project_viewer and project_viewer.get("reused"))
             lifecycle.set_artifact(
                 "browser",
-                "success" if viewer_opened else "unavailable",
-                message=None if viewer_opened else "Browser did not open.",
+                "success" if viewer_opened or reused else "unavailable",
+                message=None if viewer_opened or reused else (
+                    (project_viewer or {}).get("message", "Browser did not open.")
+                ),
             )
         except Exception as exc:
             warnings.append(f"Could not open the review viewer: {type(exc).__name__}: {exc}")
@@ -1746,6 +2503,10 @@ def _run_impl(
         },
     }
     output_json["metrics"] = metrics
+    output_json["validation"] = validation
+    output_json["validation_profile"] = validation_profile
+    if mesh_validation:
+        output_json["mesh_validation"] = mesh_validation
     if parts_output:
         output_json["parts"] = parts_output
     if groups_output:
@@ -1767,9 +2528,13 @@ def _run_impl(
     if renders_meta:
         output_json["renders"] = renders_meta
     if hint:
+        if project_viewer and project_viewer.get("url"):
+            hint = f"Live project: {project_viewer['url']} — updates automatically. Version snapshot: {hint}"
         output_json["hint"] = hint
+    if project_viewer:
+        output_json["project_viewer"] = project_viewer
     _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
     output_json["timings"] = _timings
     output_json["completed_phases"] = list(_phase_tracker.completed)
     output_json["phase_timings"] = dict(_timings)
-    click.echo(json.dumps(output_json))
+    _emit_run(output_json)

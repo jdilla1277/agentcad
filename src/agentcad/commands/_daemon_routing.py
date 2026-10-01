@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import get_project
 
 import agentcad
 from agentcad import daemon as _daemon
@@ -103,6 +104,9 @@ def maybe_route_through_daemon(argv: list[str], no_daemon: bool = False) -> None
     if not _daemon.daemon_supported() or os.environ.get("AGENTCAD_DAEMON") or no_daemon:
         return None
 
+    layout = get_project()
+    if layout.configured and "--build-dir" not in argv:
+        argv = [*argv, "--build-dir", str(layout.build_root)]
     result = _route_through_daemon(argv)
     if result is None:
         return None

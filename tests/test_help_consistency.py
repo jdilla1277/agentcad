@@ -99,3 +99,29 @@ class TestHelpConsistency:
             f"global default so an agent reading this section knows "
             f"what they'll get without configuration."
         )
+
+    def test_init_runtime_help_does_not_mislabel_default(self):
+        """`agentcad init --help` must not claim the non-default runtime is
+        the default. The `--runtime` option help used to say "Defaults to
+        cadquery" after #163 flipped the global default to build123d."""
+        result = CliRunner().invoke(cli, ["init", "--help"])
+        assert result.exit_code == 0
+        text = re.sub(r"\s+", " ", result.output)
+        default = dispatch.DEFAULT_RUNTIME
+        other = "build123d" if default == "cadquery" else "cadquery"
+        for phrase in [f"Defaults to {other}", f"default is {other}"]:
+            assert phrase not in text, (
+                f"`init --help` still says {phrase!r}; DEFAULT_RUNTIME is "
+                f"{default!r}, so this is stale and will mislead agents."
+            )
+
+    def test_init_runtime_help_names_current_global_default(self):
+        """The `--runtime` help must name the actual ``DEFAULT_RUNTIME`` so
+        it can't drift away from the dispatcher again."""
+        result = CliRunner().invoke(cli, ["init", "--help"])
+        assert result.exit_code == 0
+        text = re.sub(r"\s+", " ", result.output)
+        assert f"currently {dispatch.DEFAULT_RUNTIME}" in text, (
+            f"`init --help` should name {dispatch.DEFAULT_RUNTIME!r} as the "
+            f"current global default so the option help tracks dispatch."
+        )

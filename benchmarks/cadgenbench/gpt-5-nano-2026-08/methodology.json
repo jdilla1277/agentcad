@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "benchmark": {
+    "name": "CADGenBench",
+    "revision": "11babb1b974daac62e54f015a7cf21c8b8e72b5e",
+    "dataset_revision": "f76f965585817c621d6ea0d150d745adf670e66e",
+    "fixtures": {
+      "total": 81,
+      "generation": 49,
+      "editing": 32
+    }
+  },
+  "model": {
+    "provider": "openai",
+    "id": "gpt-5-nano",
+    "thinking_level": "low",
+    "snapshot": null,
+    "snapshot_note": "The provider alias was recorded; an immutable model snapshot was not exposed."
+  },
+  "shared_settings": {
+    "concurrency": 2,
+    "trial_timeout_seconds": 900,
+    "command_timeout_seconds": 120,
+    "max_idle_nudges": 2,
+    "fresh_session_per_fixture": true,
+    "fixed_evaluator": "agentcad==0.4.1",
+    "sleep_prevention": "macOS caffeinate active"
+  },
+  "conditions": {
+    "without_agentcad": {
+      "candidate": "build123d==0.10.0",
+      "candidate_interface": "direct Python and build123d",
+      "harness_revision": "88cc7b20258e98946abdd2e4b0041f79002ea0f3",
+      "started_at": "2026-08-26T18:59:04.783Z",
+      "finished_at": "2026-08-26T20:01:19.645Z",
+      "submission_zip_sha256": "cc3de311ae53ef2dee01e05caff8030d7ec289c28e06de4bb0975c9c21f3d83b"
+    },
+    "with_agentcad": {
+      "candidate": "agentcad==0.4.1",
+      "candidate_interface": "agentcad CLI with distributed agentcad skill loaded through Pi",
+      "skill_sha256": "37462397a75c309dd1106b51c9dfdf336a9c0dc92a300e2894f40ff8912bc561",
+      "harness_revision": "470860f1d3625f4ba1fe122892ded775f04f5f7f",
+      "started_at": "2026-08-27T19:26:12.865Z",
+      "finished_at": "2026-08-27T20:38:22.362Z",
+      "submission_zip_sha256": "afa5777b4880b3d4b23d3f89f4c48785008133738a3bf05e8974699d00180013"
+    }
+  },
+  "cost_rates_usd_per_million_tokens": {
+    "uncached_input": 0.05,
+    "cached_input": 0.005,
+    "output": 0.4
+  },
+  "limitations": [
+    "One full run was completed per condition; no confidence interval is claimed.",
+    "The conditions ran on consecutive days rather than contemporaneously or in randomized order.",
+    "The model provider alias was not pinned to an immutable snapshot.",
+    "The harness revisions differ because the experiment revision added skill-loading and isolated-environment support. Exact source snapshots are included.",
+    "Harness completion is not a CADGenBench quality judgment; hosted reports are authoritative for CAD Score and validity."
+  ]
+}

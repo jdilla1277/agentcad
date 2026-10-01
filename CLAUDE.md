@@ -16,6 +16,12 @@ If the user asks for internal planning, promotion work, or website work for
 Before creating any PR, run `git remote -v` and confirm whether the target repo
 is public or internal.
 
+To get a working tree for the internal repo without disturbing this checkout:
+
+    git -C ~/conductor/repos/agentcad-internal worktree add <path> -b <branch> origin/main
+
+The website lives at `agentcad-site/` in that repo.
+
 ## Development
 
 Use Python 3.10-3.12. CadQuery/OpenCascade does not support Python 3.13+.
@@ -34,6 +40,12 @@ pytest
 - `agentcad docs` and `agentcad --help` are part of the agent-facing API.
 - Keep error messages concise and actionable for coding agents.
 - Prefer local, deterministic workflows over hosted dependencies.
+- The command list and the `agentcad docs` section list are pinned by
+  `tests/test_public_surface.py`. Adding or removing either fails that test
+  until you regenerate the snapshot with
+  `AGENTCAD_UPDATE_SURFACE=1 pytest tests/test_public_surface.py` **and**
+  update the hand-written mirror at agentcad.dev/docs. The website is in a
+  different repo, so nothing else will catch that drift.
 
 ## Validation
 

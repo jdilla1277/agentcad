@@ -21,6 +21,7 @@ the internal ``RunResult`` to the runtime-agnostic ``ExecutionResult``.
 from __future__ import annotations
 
 import ast
+import builtins
 import traceback
 import warnings as _warnings
 from typing import Any
@@ -29,6 +30,10 @@ from agentcad.runners import ExecutionResult
 
 
 PREAMBLE = ""
+
+
+class DuplicateCaptureError(ValueError):
+    """One shape object was submitted as more than one output instance."""
 
 
 def with_preamble(user_source: str) -> str:
@@ -114,8 +119,36 @@ def execute(
 
     # List of (obj, explicit_id, name, color, part_of, group_color) tuples
     # in declaration order.
-    captured: list[tuple[Any, Any, Any, Any, Any, Any]] = []
+    captured: list[tuple] = []
+    # Keep strong references: assembly parenting can otherwise release nodes
+    # and allow Python to reuse their IDs during the same script execution.
+    captured_objects: dict[int, Any] = {}
     assembly_requested = False
+    loaded_files: list[str] = []
+
+    def register_objects(objects):
+        pending = {}
+        for obj in objects:
+            # Capturing a tree also captures its descendants. Retain that
+            # identity even if later script code reparents a child elsewhere.
+            nodes = (obj, *obj.descendants) if isinstance(obj, Shape) else (obj,)
+            for node in nodes:
+                identity = builtins.id(node)
+                if identity in captured_objects or identity in pending:
+                    raise DuplicateCaptureError(
+                        "Output capture received the same object more than once, "
+                        "either directly or as an assembly descendant. "
+                        "Capture each object once, including across show_object(), "
+                        "show_assembly(), and show_compound(). Different names or "
+                        "IDs do not create instances. For intentional repeats, use "
+                        "`from copy import deepcopy` and create a separate object "
+                        "with `instance = deepcopy(part)` before positioning and "
+                        "capturing it. See `agentcad docs parts`."
+                    )
+                pending[identity] = node
+        # Commit only after checking the entire call, so a caught duplicate
+        # error does not leave partially registered output behind.
+        captured_objects.update(pending)
 
     def show_object(
         obj,
@@ -156,6 +189,21 @@ def execute(
                 "edits, use `load_step_shape(path)`, build a raw TopoDS "
                 "feature/compound, and pass that to `show_object()`."
             )
+        if _wraps_bare_solid(obj):
+            # Issue #194: `Compound(raw_solid)` / `Part(raw_solid)` builds a
+            # wrapper whose own .volume is 0 and whose iteration yields
+            # shells, while the run JSON (computed on .wrapped) reports the
+            # real volume. Flag the mismatch instead of letting the script's
+            # own checks disagree with the output.
+            _warnings.warn(
+                f"show_object() received a {type(obj).__name__} wrapping a "
+                "bare solid rather than a compound; its .volume reads 0 and "
+                "iterating it yields shells. Pass the raw shape to "
+                "show_object() directly, wrap it with Solid(raw), or use the "
+                "pre-injected helpers, which return build123d shapes for "
+                "build123d input.",
+                UserWarning,
+            )
         color = None
         if isinstance(options, dict):
             if id is None:
@@ -167,7 +215,9 @@ def execute(
                 part_of = options.get("part_of") or options.get("group")
             if group_color is None:
                 group_color = options.get("group_color")
-        captured.append((obj, id, name, color, part_of, group_color))
+        from agentcad.validation_guidance import structure_options
+        register_objects([obj])
+        captured.append((obj, id, name, color, part_of, group_color, structure_options(options)))
 
     def show_assembly(
         shapes,
@@ -186,26 +236,31 @@ def execute(
         """
         nonlocal assembly_requested
 
-        if isinstance(shapes, Shape):
+        if isinstance(shapes, Shape) or _is_topods_shape(shapes):
             children = [shapes]
         else:
             try:
                 children = list(shapes)
             except TypeError as exc:
                 raise TypeError(
-                    "show_assembly() expects a build123d Shape or an iterable "
-                    f"of Shapes, got {type(shapes).__name__}"
+                    "show_assembly() expects a build123d Shape, a raw OCP "
+                    "TopoDS_Shape, or an iterable of them, got "
+                    f"{type(shapes).__name__}"
                 ) from exc
 
         if not children:
             raise TypeError("show_assembly() received no shapes.")
 
-        bad = [type(s).__name__ for s in children if not isinstance(s, Shape)]
+        bad = [
+            type(s).__name__ for s in children
+            if not isinstance(s, Shape) and not _is_topods_shape(s)
+        ]
         if bad:
             raise TypeError(
-                "show_assembly() expects only build123d Shape objects; "
-                f"got {', '.join(bad)}"
+                "show_assembly() expects build123d Shape objects or raw OCP "
+                f"TopoDS_Shape values; got {', '.join(bad)}"
             )
+        children = [_as_build123d(s) for s in children]
 
         color = None
         if isinstance(options, dict):
@@ -219,86 +274,45 @@ def execute(
             if group_color is None:
                 group_color = options.get("group_color")
 
+        from agentcad.validation_guidance import structure_options
+        register_objects(children)
+        assembly = Compound(children=children)
+        # Scripts can reach this generated node through a child's parent.
+        # Its descendants were registered before parenting; only the new
+        # assembly node remains to be recorded.
+        captured_objects[builtins.id(assembly)] = assembly
         captured.append(
-            (Compound(children=children), id, name, color, part_of, group_color)
+            (assembly, id, name, color, part_of, group_color, structure_options(options))
         )
         assembly_requested = True
 
     import build123d as _b3d
 
+    from agentcad import api as _api
+
     script_globals: dict[str, Any] = {
         "__name__": "__agentcad_script__",
         "__file__": filename,
-        "show_object": show_object,
-        "show_assembly": show_assembly,
-        "show_compound": show_assembly,
         "build123d": _b3d,
     }
     for attr in getattr(_b3d, "__all__", dir(_b3d)):
         if not attr.startswith("_"):
             script_globals[attr] = getattr(_b3d, attr)
 
-    try:
-        from agentcad import helpers as _helpers
-    except ImportError:
-        _helpers = None
-    if _helpers is not None:
-        for attr in (
-            "loft_sections", "tapered_sweep", "naca_wire", "mirror_fuse",
-            "copy_shape", "safe_cut", "safe_intersection", "safe_fuse",
-            "translate", "rotate", "bbox_point", "place_at",
-            "annular_boss", "raise_annulus",
-            "ellipse_wire", "spline_wire", "polygon_wire", "rounded_rect_wire",
-            "elliptical_sweep", "involute_gear_profile",
-        ):
-            if hasattr(_helpers, attr):
-                script_globals[attr] = getattr(_helpers, attr)
+    # Issues #192/#197: generated scripts call Cylinder(diameter=10, h=20),
+    # Box(..., center=(x, y, z)), align="center", and BuildPart("XY"). Swap
+    # in subclasses that normalize unambiguous constructor/placement forms
+    # and reject ambiguous ones with a copyable fix.
+    # Installed on the build123d package too, so an explicit
+    # `from build123d import *` in the script picks up the same classes.
+    from agentcad.runners.build123d_compat import install_compat_primitives
 
-    # agentcad.helpers.assemble() returns a cq.Workplane — wrong type for b3d
-    # scripts. Substitute a build123d-native version that accepts either
-    # build123d Shapes or raw OCP TopoDS_* and returns a Compound.
-    def _b3d_assemble(*shapes):
-        from build123d import Compound, Shape
+    script_globals.update(install_compat_primitives(_b3d))
 
-        wrapped = []
-        for s in shapes:
-            if isinstance(s, Shape):
-                wrapped.append(s)
-            else:
-                wrapped.append(Compound(s))
-        return Compound(children=wrapped)
-
-    script_globals["assemble"] = _b3d_assemble
-
-    # M60 Phase 2: edit-journey helpers for loading existing CAD files.
-    # `load_step` returns a build123d Part for the algebraic API; the
-    # `_shape` variant returns the raw TopoDS_Shape for use with helpers
-    # like mirror_fuse that operate on raw OCCT types.
-    script_globals["load_step"] = _load_step
-    script_globals["load_step_shape"] = _load_step_shape
-
-    # M60 Phase 3: addressability — agents read inspect --ids output to
-    # identify a face/edge by ID, then pick it here for use in edit ops.
-    # Returns build123d Face / Edge so the algebraic API works directly.
-    script_globals["pick_face"] = _pick_face
-    script_globals["pick_edge"] = _pick_edge
-
-    # M60 Phase 4a: edit helpers built on Phase 3's pick_*. Each takes
-    # an ID (or list of IDs) from `inspect --ids` and applies a
-    # high-level operation, returning a build123d Part.
-    script_globals["fillet_edges"] = _fillet_edges
-    script_globals["chamfer_edges"] = _chamfer_edges
-    script_globals["shell_faces"] = _shell_faces
-
-    # M60 Phase 4b: split a shape by an infinite plane. Returns both
-    # halves; agents can keep one or use both.
-    script_globals["split_by_plane"] = _split_by_plane
-
-    # M60 Phase 4c: feature ops — add NEW geometry by extruding a 2D
-    # profile from a picked face. cut_pocket goes into the solid;
-    # boss goes outward.
-    script_globals["cut_pocket"] = _cut_pocket
-    script_globals["boss"] = _boss
+    # The injected surface is the exact same set of callables users get from
+    # ``from agentcad.api import ...``. Keep this as the only injection list so
+    # the concise and explicit authoring styles cannot drift apart.
+    script_globals.update({name: getattr(_api, name) for name in _api.__all__})
 
     effective_params = dict(discovered)
     if params:
@@ -318,8 +332,21 @@ def execute(
         with _warnings.catch_warnings(record=True) as ws:
             _warnings.simplefilter("always", category=UserWarning)
             code = compile(source, filename, "exec")
-            exec(code, script_globals)
+            with _api._capture_output_with(
+                show_object,
+                show_assembly,
+                loaded_file_callback=loaded_files.append,
+            ):
+                exec(code, script_globals)
             captured_warnings = list(ws)
+    except DuplicateCaptureError as e:
+        return ExecutionResult(
+            status="execution_error",
+            discovered_parameters=discovered,
+            parameters=effective_params,
+            exception=str(e),
+            error_kind="duplicate_capture",
+        )
     except Exception as e:
         return ExecutionResult(
             status="execution_error",
@@ -330,14 +357,22 @@ def execute(
         )
 
     if not captured:
+        from agentcad.output_contract import missing_output_message
+        from build123d import BuildLine, BuildPart, BuildSketch
+
+        candidates = [
+            name for name, value in script_globals.items()
+            if isinstance(value, Shape) or _is_topods_shape(value)
+        ]
+        for name, value in script_globals.items():
+            for builder, attr in ((BuildPart, "part"), (BuildSketch, "sketch"), (BuildLine, "line")):
+                if isinstance(value, builder) and isinstance(getattr(value, attr), Shape):
+                    candidates.append(f"{name}.{attr}")
         return ExecutionResult(
             status="execution_error",
             discovered_parameters=discovered,
             parameters=effective_params,
-            exception=(
-                "Script produced no results. Did you call show_object() "
-                "or show_assembly()?"
-            ),
+            exception=missing_output_message(user_source, candidates),
         )
 
     warnings: list[str] = [
@@ -346,7 +381,7 @@ def execute(
         if issubclass(w.category, UserWarning)
         and not issubclass(w.category, DeprecationWarning)
     ]
-    shapes = [obj for obj, _id, _n, _c, _g, _gc in captured]
+    shapes = [item[0] for item in captured]
     if len(shapes) == 1:
         native_shape = shapes[0]
     elif any(_is_topods_shape(s) for s in shapes):
@@ -368,8 +403,9 @@ def execute(
             "part_of": part_of,
             "group_color": group_color,
             "topo_shape": _topods_shape(obj),
+            "validation_options": validation_options,
         }
-        for idx, (obj, explicit_id, name, color, part_of, group_color) in enumerate(captured)
+        for idx, (obj, explicit_id, name, color, part_of, group_color, validation_options) in enumerate(captured)
     ]
 
     return ExecutionResult(
@@ -381,6 +417,7 @@ def execute(
         warnings=warnings,
         output_type=output_type,
         parts=parts,
+        loaded_files=loaded_files,
     )
 
 
@@ -454,6 +491,7 @@ def _fillet_edges(shape, ids, r: float):
     `ids` may be a single int or a list of ints. `r` is the fillet radius.
     Returns a build123d Part. Out-of-range IDs raise ValueError.
     """
+    shape = _as_build123d(shape)
     edges = [_pick_edge(shape, i) for i in _coerce_id_list(ids)]
     return shape.fillet(radius=r, edge_list=edges)
 
@@ -464,6 +502,7 @@ def _chamfer_edges(shape, ids, d: float):
     `ids` may be a single int or a list of ints. `d` is the chamfer distance.
     Returns a build123d Part. Out-of-range IDs raise ValueError.
     """
+    shape = _as_build123d(shape)
     edges = [_pick_edge(shape, i) for i in _coerce_id_list(ids)]
     return shape.chamfer(length=d, length2=None, edge_list=edges)
 
@@ -481,7 +520,7 @@ def _shell_faces(shape, ids, thickness: float):
     parameter shape varies across versions; the low-level OCP path is
     stable and matches what every other commercial CAD shells to.
     """
-    from build123d import Part, Shape
+    from build123d import Shape
     from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
     from OCP.TopTools import TopTools_ListOfShape
 
@@ -515,7 +554,12 @@ def _shell_faces(shape, ids, thickness: float):
             "thickness, or the face selection may not produce a valid hollow. "
             "Try a smaller |thickness| or different opening face(s)."
         )
-    return Part(builder.Shape())
+    # MakeThickSolid returns a bare TopoDS_Solid. Part(raw_solid) would be
+    # the zero-volume wrapper issue #194 removes; build a compound-backed
+    # Part instead so .volume and .solids() agree with the run JSON.
+    from agentcad.helpers import _wrap_build123d
+
+    return _wrap_build123d(builder.Shape(), as_part=True)
 
 
 def _split_by_plane(shape, plane):
@@ -533,6 +577,7 @@ def _split_by_plane(shape, plane):
     """
     from build123d import Keep, split
 
+    shape = _as_build123d(shape)
     plane_obj = _resolve_plane(plane)
     above = split(shape, bisect_by=plane_obj, keep=Keep.TOP)
     below = split(shape, bisect_by=plane_obj, keep=Keep.BOTTOM)
@@ -556,6 +601,7 @@ def _cut_pocket(shape, face_id: int, profile, depth: float):
         raise ValueError(f"depth must be positive, got {depth}")
     from build123d import Plane, extrude
 
+    shape = _as_build123d(shape)
     face = _pick_face(shape, face_id)
     face_plane = Plane(face)
     positioned = face_plane * profile
@@ -575,6 +621,7 @@ def _boss(shape, face_id: int, profile, height: float):
         raise ValueError(f"height must be positive, got {height}")
     from build123d import Plane, extrude
 
+    shape = _as_build123d(shape)
     face = _pick_face(shape, face_id)
     face_plane = Plane(face)
     positioned = face_plane * profile
@@ -642,6 +689,45 @@ def _is_topods_shape(obj) -> bool:
     return isinstance(obj, TopoDS_Shape)
 
 
+def _wraps_bare_solid(obj) -> bool:
+    """True when a build123d Compound/Part wraps a non-compound TopoDS shape.
+
+    That happens when a script writes ``Compound(raw)`` or ``Part(raw)``
+    around a raw solid returned by a helper or ``load_step_shape``.
+    """
+    from build123d import Compound
+    from OCP.TopAbs import TopAbs_COMPOUND
+
+    if not isinstance(obj, Compound):
+        return False
+    wrapped = getattr(obj, "wrapped", None)
+    return (
+        _is_topods_shape(wrapped)
+        and not wrapped.IsNull()
+        and wrapped.ShapeType() != TopAbs_COMPOUND
+    )
+
+
+def _as_build123d(obj):
+    """Return ``obj`` as a build123d Shape, wrapping raw TopoDS values by type.
+
+    build123d Shapes pass through untouched. Raw ``TopoDS_Shape`` values are
+    wrapped in the class matching their topology (Solid, Part, Wire, ...)
+    so the edit helpers and assembly capture accept both representations.
+    """
+    from build123d import Shape
+
+    if isinstance(obj, Shape):
+        return obj
+    if _is_topods_shape(obj):
+        from agentcad.helpers import _wrap_build123d
+
+        return _wrap_build123d(obj)
+    raise TypeError(
+        f"Expected build123d Shape or TopoDS_Shape, got {type(obj).__name__}"
+    )
+
+
 def _topods_shape(obj):
     """Extract the raw TopoDS shape from either build123d or OCP objects."""
     from build123d import Shape
@@ -670,18 +756,9 @@ def _make_topods_compound(shapes):
 
 def _export_topods_step(shape, path: str) -> None:
     """Write a raw TopoDS shape through OCCT's STEP writer."""
-    from OCP.IFSelect import IFSelect_RetDone
-    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
-    from agentcad.native_io import silence_native_stdout
+    from agentcad.step_io import write_step_shape
 
-    with silence_native_stdout():
-        writer = STEPControl_Writer()
-        status = writer.Transfer(shape, STEPControl_AsIs)
-        if status != IFSelect_RetDone:
-            raise RuntimeError(f"OCCT STEP transfer failed with status {status}")
-        status = writer.Write(path)
-        if status != IFSelect_RetDone:
-            raise RuntimeError(f"OCCT STEP write failed with status {status}")
+    write_step_shape(shape, path)
 
 
 def export_step(native_shape: Any, path: str) -> None:

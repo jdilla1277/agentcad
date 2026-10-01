@@ -1,4 +1,8 @@
+# collect-on-default-profile
 import json
+
+import pytest
+import shlex
 
 from click.testing import CliRunner
 from agentcad.cli import cli
@@ -203,6 +207,38 @@ def test_docs_schema_documents_stdout_vs_stderr(runner):
     assert "2>&1" in content
 
 
+def test_docs_schema_scopes_next_actions_contract(runner, isolated_dir):
+    schema = runner.invoke(cli, ["docs", "schema"])
+    assert schema.exit_code == 0, schema.output
+    content = " ".join(json.loads(schema.stdout)["content"].split())
+    assert (
+        "For these CLI input-error recoveries, next_actions contains "
+        "commands or SCRIPT/LABEL templates; prose belongs in suggestion."
+    ) in content
+    assert (
+        "Successful init/context guidance may include explanations "
+        "after ' — '; execute only the command before that separator."
+    ) in content
+
+    initialized = runner.invoke(cli, ["init", "--no-agent-setup"])
+    context = runner.invoke(cli, ["context"])
+    for result in (initialized, context):
+        assert result.exit_code == 0, result.output
+        for action in json.loads(result.stdout)["next_actions"]:
+            command, separator, explanation = action.partition(" — ")
+            assert separator and explanation
+            followed = runner.invoke(cli, shlex.split(command)[1:])
+            assert followed.exit_code == 0, followed.output
+
+    # With no scripts to recommend, input-error recovery is a literal docs command.
+    failed = runner.invoke(cli, ["run", "missing.py", "--label", "first", "--no-daemon"])
+    assert failed.exit_code == 1, failed.output
+    for action in json.loads(failed.stdout)["next_actions"]:
+        assert " — " not in action
+        followed = runner.invoke(cli, shlex.split(action)[1:])
+        assert followed.exit_code == 0, followed.output
+
+
 def test_docs_schema_lists_current_inspect_measure_fields(runner):
     result = runner.invoke(cli, ["docs", "schema"])
     assert result.exit_code == 0
@@ -330,7 +366,7 @@ def test_docs_parts_mentions_review_viewers(runner):
     assert "temporary=true" in content
     assert "persisted=false" in content
     assert "saved-views catalog" in content
-    assert "part visibility changes are not saved" in content.lower()
+    assert "use agentcad viewer open for" in content.lower()
 
 
 def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):
@@ -611,6 +647,14 @@ def test_docs_patterns_angled_positioning_example(runner):
     assert "arm" in content.lower() or "angle" in content.lower()
 
 
+def test_docs_preamble_requires_explicit_math_imports(runner):
+    result = runner.invoke(cli, ["docs", "preamble"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "math names are not pre-injected" in content
+    assert "from math import cos, sin, sqrt, pi" in content
+
+
 # --- Daemon docs (auto-managed: minimal surface area) ---
 
 
@@ -772,8 +816,10 @@ def test_docs_build123d_mentions_annular_edit_helpers(runner):
     assert "annular_boss" in content
     assert "raise_annulus" in content
     assert "load_step_shape" in content
-    assert "Compound(result)" in content
-    assert "fragile boolean fuse" in content
+    # Issue #194: the Compound(raw) idiom is gone; helpers keep the input kind.
+    assert "Compound(result)" not in content
+    assert "same kind" in content
+    assert "fragile boolean" in content
     assert "loft_sections([lower, upper])" in content
     assert "copy_shape" in content
     assert "independent geometry copy" in content
@@ -818,6 +864,12 @@ def test_docs_build123d_editing_starts_with_imported_part_contract(runner):
     assert "base.faces()" in content
     assert "base.edges()" in content
     assert "base.bounding_box()" in content
+    assert "xmin, ymin, zmin = bbox_point(base, 'min', 'min', 'min')" in content
+    assert "xc, yc, zc = bbox_point(base)" in content
+    assert "xmax, ymax, zmax = bbox_point(base, 'max', 'max', 'max')" in content
+    assert "xlen, ylen, zlen = bbox_size(base)" in content
+    assert "from agentcad.api import bbox_point, bbox_size" in content
+    assert "bounds.center().X" in content
     assert content.index("Imported-part contract") < content.index("1. Import the file")
     assert "CadQuery" not in content
 
@@ -851,3 +903,48 @@ def test_docs_patterns_mixed_edge_wire(runner):
     content = json.loads(result.stdout)["content"]
     assert "BRepBuilderAPI_MakeWire" in content
     assert "BRepBuilderAPI_MakeEdge" in content
+
+
+def test_cadquery_editing_docs_teach_wrapper_preserving_helpers(runner):
+    """Issue #194 review: the CadQuery overlay must not send agents back to
+    the raw .val().wrapped bridge, which drops every object but the first on
+    a multi-object Workplane."""
+    result = runner.invoke(cli, ["docs", "editing", "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "operate on raw shapes" not in content
+    assert "Workplane in, Workplane out" in content
+    assert "every\n  stack object preserved" in content or "stack object preserved" in content
+    assert "show_object(assemble(result))" not in content
+    assert "importers.importStep" in content
+
+
+@pytest.mark.parametrize("section", ["helpers", "patterns", "editing", "preamble"])
+def test_cadquery_overlays_do_not_teach_val_wrapped_bridge(runner, section):
+    """Issue #194 review: every CadQuery overlay must show Workplane-in /
+    Workplane-out helper use; `.val().wrapped` drops all but the first
+    object of a multi-object Workplane."""
+    result = runner.invoke(cli, ["docs", section, "--runtime", "cadquery"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+    assert "= cq.Workplane('XY').box(10, 20, 5).val().wrapped" not in content
+    assert ".extrude(120).val().wrapped" not in content
+    assert ".box(5, 5, 80).val().wrapped" not in content
+
+
+def test_cadquery_helpers_docs_state_same_kind_contract(runner):
+    result = runner.invoke(cli, ["docs", "helpers", "--runtime", "cadquery"])
+    content = json.loads(result.stdout)["content"]
+    assert "cq.Workplane in, cq.Workplane out" in content
+    assert "every stack object preserved" in content
+    assert "combine=False" in content
+    assert "Combine cq.Workplane, cq.Shape, or raw TopoDS_Shape" in content
+    assert "STEP path, raw shape, cq.Shape, or" in content
+
+
+def test_cadquery_patterns_docs_use_workplanes_with_helpers(runner):
+    result = runner.invoke(cli, ["docs", "patterns", "--runtime", "cadquery"])
+    content = json.loads(result.stdout)["content"]
+    assert "placed = translate(part, 50, 0, 0)     # still a cq.Workplane" in content
+    assert "do\n    not pass .val().wrapped" in content
+    assert "base = cq.Workplane('XY').box(100, 100, 10)\n" in content

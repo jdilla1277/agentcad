@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import project_options
 
 from agentcad import file_detect
 from agentcad.commands._daemon_routing import (
@@ -25,6 +26,7 @@ from agentcad.commands.measure import measure_tier0_payload, validity_from_metri
     default=False,
     help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.",
 )
+@project_options
 def check_spec(file, spec_file, no_daemon):
     """Check a STEP/BREP file against a JSON feature spec.
 
@@ -126,7 +128,9 @@ def check_spec(file, spec_file, no_daemon):
         "format_detected": detection.get("format"),
         "extension": detection.get("extension"),
         "size_bytes": detection.get("size_bytes"),
-        "validity": validity_from_metrics(measurement["metrics"]),
+        "validity": validity_from_metrics(
+            measurement["metrics"], measurement.get("validation")
+        ),
         "metrics": measurement["metrics"],
         "next_actions": _next_actions(result["passed"], file_path, spec_path),
         "more_at": "agentcad docs check-spec",
@@ -136,12 +140,20 @@ def check_spec(file, spec_file, no_daemon):
 
 
 def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
+    from agentcad.validation_guidance import structure_checks, with_structure_checks
+    report = measurement.get("validation")
+    checks = structure_checks(report["layers"].get("structure", {}) if report else {}, spec)
+    if report and checks:
+        from agentcad.core_build import apply_validation
+        report = with_structure_checks(report, checks)
+        measurement["validation"] = report
+        apply_validation(measurement["metrics"], report)
     measured_cylinders = measurement.get("cylindrical_features", [])
     matched_features = []
     missing_features = []
     total_abs_count_error = 0
 
-    for feature in spec["features"]:
+    for feature in spec.get("features", []):
         target = _target_from_feature(feature, spec)
         match = _find_cylinder_bucket(measured_cylinders, target)
         if match is None:
@@ -174,9 +186,12 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
         })
         total_abs_count_error += abs(count_error)
 
-    passed = not missing_features and all(f["passed"] for f in matched_features)
+    passed = (not missing_features and all(f["passed"] for f in matched_features)
+              and all(c["passed"] is True for c in checks))
     return {
         "passed": passed,
+        **({"structure_checks": checks} if checks else {}),
+        **({"validation": report, "is_valid": report["is_valid"]} if report else {}),
         "matched_features": matched_features,
         "missing_features": missing_features,
         "total_abs_count_error": total_abs_count_error,
@@ -235,12 +250,16 @@ def _validate_spec(data) -> list[str]:
     if not isinstance(data, dict):
         return ["spec must be a JSON object"]
 
-    features = data.get("features")
+    for key in ("expect_solids", "expect_shells"):
+        if key in data and (type(data[key]) is not int or data[key] < 0):
+            errors.append(f"{key} must be a non-negative integer")
+    has_structure = any(key in data for key in ("expect_solids", "expect_shells"))
+    features = data.get("features", [] if has_structure else None)
     if not isinstance(features, list):
         errors.append("features must be an array")
         return errors
 
-    if not features:
+    if not features and not has_structure:
         errors.append("features must contain at least one feature")
         return errors
 

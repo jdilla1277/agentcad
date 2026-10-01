@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import traceback
 
 from click.testing import CliRunner
@@ -12,15 +13,36 @@ from agentcad.cli import cli
 mcp = FastMCP(name="agentcad")
 
 
-def _format_result(output: str, exit_code: int, exception: BaseException | None = None) -> dict:
-    """Build the MCP response dict from a Click invocation's output.
+def isolate_protocol_stdout() -> None:
+    """Move the stdio JSON-RPC stream off fd 1 before the transport starts.
 
-    Normal commands print JSON, which we pass through. When Click *catches*
-    an unexpected exception (``exception`` is non-None), the output is often
-    empty — previously this collapsed to ``{"message": "No output"}``, hiding
-    the traceback and leaving callers (notably on Windows) with no way to
-    diagnose the failure. We surface the exception type, message, and
-    traceback in that case instead.
+    CAD scripts, child processes, and OCCT can write to fd 1 directly, and
+    ``agentcad run`` briefly redirects fd 1 to capture script output. Neither
+    may touch the protocol stream, so the transport gets a private duplicate
+    of the original stdout (via ``sys.stdout``, which it wraps at startup)
+    and fd 1 is pointed at stderr for everything else.
+    """
+    sys.stdout.flush()
+    protocol_fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = open(protocol_fd, "w", encoding="utf-8", buffering=1)
+
+
+def _format_result(
+    output: str,
+    exit_code: int,
+    exception: BaseException | None = None,
+    stderr: str = "",
+) -> dict:
+    """Build the MCP response dict from a Click invocation's stdout.
+
+    Normal commands print JSON on stdout, which we pass through; progress
+    heartbeats live on stderr and must not be parsed with it. When Click
+    *catches* an unexpected exception (``exception`` is non-None), the output
+    is often empty — previously this collapsed to ``{"message": "No output"}``,
+    hiding the traceback and leaving callers (notably on Windows) with no way
+    to diagnose the failure. We surface the exception type, message, and
+    traceback in that case instead, falling back to stderr for context.
     """
     try:
         return {**json.loads(output), "_exit_code": exit_code}
@@ -28,6 +50,8 @@ def _format_result(output: str, exit_code: int, exception: BaseException | None 
         pass
 
     message = output.strip() if output else ""
+    if not message and stderr:
+        message = stderr.strip()
     if exception is not None:
         tb = "".join(traceback.format_exception(
             type(exception), exception, exception.__traceback__
@@ -40,6 +64,10 @@ def _format_result(output: str, exit_code: int, exception: BaseException | None 
         "exit_code": exit_code,
         "_exit_code": exit_code,
     }
+
+
+def _build_args(args: list[str], build_dir: str | None) -> list[str]:
+    return [*args, "--build-dir", build_dir] if build_dir is not None else args
 
 
 def _invoke(args: list[str], cwd: str | None = None) -> dict:
@@ -55,14 +83,18 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     finally:
         os.chdir(old_cwd)
 
-    return _format_result(result.output, result.exit_code, result.exception)
+    # result.output merges stdout and stderr heartbeats; the JSON contract
+    # is stdout only (the daemon reads it the same way).
+    return _format_result(
+        result.stdout, result.exit_code, result.exception, stderr=result.stderr,
+    )
 
 
 @mcp.tool()
 def run(
     script: str,
-    output: str,
     cwd: str,
+    output: str | None = None,
     render: str | None = None,
     export: str | None = None,
     preview: bool = True,
@@ -70,6 +102,7 @@ def run(
     dry_run: bool = False,
     diff: bool = True,
     view: bool = True,
+    build_dir: str | None = None,
 ) -> dict:
     """Execute a build123d script and produce a versioned STEP file with metrics.
 
@@ -78,8 +111,10 @@ def run(
 
     Args:
         script: Path to the Python CAD script.
-        output: Label for this version.
-        cwd: Project directory (must contain agentcad.json).
+        cwd: Source project directory (or a subdirectory).
+        output: Label for this version. Required unless dry_run is True.
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Initialize this root first.
         render: Comma-separated views to render (front,right,top,iso,all).
         export: Comma-separated mesh formats (stl, glb, obj).
         preview: Render a quick 256x256 iso preview. Default True — pass False to suppress.
@@ -87,11 +122,15 @@ def run(
         dry_run: Compute metrics without creating a version.
         diff: Compare automatically with the prior successful version. Pass
             False to skip it; explicit diff remains available.
-        view: Open the generated review viewer. Pass False with preview=False
+        view: Open or reuse the live project viewer. Share project_viewer.url
+            with the human for automatic updates; viewer is a fixed snapshot.
+            Pass False with preview=False
             and diff=False to also bypass viewer generation on the core-only
             fast path.
     """
-    args = ["run", script, "--output", output]
+    args = ["run", script]
+    if output is not None:
+        args.extend(["--label", output])
     if render:
         args.extend(["--render", render])
     if export:
@@ -106,7 +145,7 @@ def run(
         args.extend(["--params", params])
     if dry_run:
         args.append("--dry-run")
-    return _invoke(args, cwd=cwd)
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
@@ -118,19 +157,26 @@ def render(
     name: str | None = None,
     focus: str | None = None,
     no_fit: bool = False,
+    build_dir: str | None = None,
+    highlight: str | None = None,
 ) -> dict:
     """Render PNG views of an existing STEP file.
 
     Args:
         step_file: Path to the STEP file.
         view: View spec (front,right,iso,all or custom angle az:el).
-        cwd: Project directory.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
         zoom: Zoom factor.
         name: Output name label.
         focus: Camera focus point as x,y,z.
         no_fit: Skip FitAll (requires focus).
+        highlight: Use "validation" to mark failing edges/vertices in red and return the report.
     """
     args = ["render", step_file, "--view", view]
+    if highlight is not None:
+        args.extend(["--highlight", highlight])
     if zoom is not None:
         args.extend(["--zoom", str(zoom)])
     if name:
@@ -139,19 +185,25 @@ def render(
         args.extend(["--focus", focus])
     if no_fit:
         args.append("--no-fit")
-    return _invoke(args, cwd=cwd)
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
-def export(step_file: str, formats: str, cwd: str) -> dict:
+def export(step_file: str, formats: str, cwd: str, build_dir: str | None = None) -> dict:
     """Export a STEP file to mesh formats (stl, glb, obj).
+
+    Returns source CAD validation separately from mesh_validation per written
+    format. Success means files were written; require that mesh's is_valid is
+    true before handoff. Failed/unknown mesh checks retain files and warn.
 
     Args:
         step_file: Path to the STEP file.
         formats: Comma-separated formats (stl, glb, obj).
-        cwd: Project directory.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    return _invoke(["export", step_file, "--format", formats], cwd=cwd)
+    return _invoke(_build_args(["export", step_file, "--format", formats], build_dir), cwd=cwd)
 
 
 @mcp.tool()
@@ -165,12 +217,15 @@ def measure(
     axis: str | None = None,
     limit: int | None = None,
     no_limit: bool = False,
+    build_dir: str | None = None,
 ) -> dict:
     """Measure dimensions and feature sizes in a STEP/BREP file.
 
     Args:
         file: Path to the STEP/STP/BREP file.
-        cwd: Project directory.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
         features: Include full per-solid, per-face, and per-edge measurement lists.
         cylinders_only: Return only cylindrical feature buckets and core metrics.
         diameter: Optional cylindrical feature diameter filter.
@@ -194,7 +249,7 @@ def measure(
         args.extend(["--limit", str(limit)])
     if no_limit:
         args.append("--no-limit")
-    return _invoke(args, cwd=cwd)
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
@@ -205,12 +260,15 @@ def inspect(
     summary: bool = False,
     limit: int | None = None,
     no_limit: bool = False,
+    build_dir: str | None = None,
 ) -> dict:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
     Args:
         file: Path to the STEP file.
-        cwd: Project directory.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
         ids: Include per-feature ID lists.
         summary: Include compact face/edge clusters.
         limit: Optional maximum records per ID list and IDs per summary cluster.
@@ -225,11 +283,11 @@ def inspect(
         args.extend(["--limit", str(limit)])
     if no_limit:
         args.append("--no-limit")
-    return _invoke(args, cwd=cwd)
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
-def check_spec(file: str, spec_file: str, cwd: str) -> dict:
+def check_spec(file: str, spec_file: str, cwd: str, build_dir: str | None = None) -> dict:
     """Check a STEP/BREP file against a JSON cylindrical-feature spec.
 
     Returns the same structured result as `agentcad check-spec`, including
@@ -238,15 +296,19 @@ def check_spec(file: str, spec_file: str, cwd: str) -> dict:
     Args:
         file: Path to the STEP/STP/BREP file to check.
         spec_file: Path to the JSON spec (cylindrical feature checklist).
-        cwd: Project directory.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    return _invoke(["check-spec", file, spec_file], cwd=cwd)
+    return _invoke(_build_args(["check-spec", file, spec_file], build_dir), cwd=cwd)
 
 
 @mcp.tool()
 def docs(
     section: str | None = None,
     runtime: str | None = None,
+    cwd: str | None = None,
+    build_dir: str | None = None,
 ) -> dict:
     """Show build123d documentation, or explicit CadQuery compatibility docs.
 
@@ -254,58 +316,73 @@ def docs(
         section: Optional section name (quickstart, commands, helpers, patterns, etc).
         runtime: Optional runtime override. Pass ``cadquery`` to retrieve the
             same compatibility docs as ``agentcad docs --runtime cadquery``.
+        cwd: Optional source project directory for runtime-aware documentation.
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only.
     """
     args = ["docs"]
     if section:
         args.append(section)
     if runtime:
         args.extend(["--runtime", runtime])
-    return _invoke(args)
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
-def context(cwd: str) -> dict:
+def context(cwd: str, build_dir: str | None = None) -> dict:
     """Show project state, including interrupted-version recovery candidates.
 
     Args:
-        cwd: Project directory (must contain agentcad.json).
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Initialize this root first.
     """
-    return _invoke(["context"], cwd=cwd)
+    return _invoke(_build_args(["context"], build_dir), cwd=cwd)
 
 
 @mcp.tool()
-def recover(version_dir: str, cwd: str, make_current: bool = False) -> dict:
+def recover(version_dir: str, cwd: str, make_current: bool = False, build_dir: str | None = None) -> dict:
     """Validate and reconcile an interrupted version directory safely.
 
     Args:
         version_dir: Direct version directory name reported by context.
-        cwd: Project directory containing agentcad.json and the version directory.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
         make_current: Explicitly make the recovered successful version current.
     """
     args = ["recover", version_dir]
     if make_current:
         args.append("--make-current")
-    return _invoke(args, cwd=cwd)
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
-def diff(ref1: str, ref2: str, cwd: str) -> dict:
+def diff(ref1: str, ref2: str, cwd: str, build_dir: str | None = None) -> dict:
     """Compare two versions by number or label.
 
     Args:
         ref1: First version reference (number or label).
         ref2: Second version reference (number or label).
-        cwd: Project directory.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    return _invoke(["diff", ref1, ref2], cwd=cwd)
+    return _invoke(_build_args(["diff", ref1, ref2], build_dir), cwd=cwd)
 
 
 @mcp.tool()
-def view(file: str, cwd: str) -> dict:
+def view(file: str, cwd: str, build_dir: str | None = None, validation: bool = False) -> dict:
     """Open a GLB or STEP file in the browser via three.js.
 
     Args:
         file: Path to GLB or STEP file.
-        cwd: Project directory.
+        validation: Show failure markers and conditional repair guidance for a STEP file.
+        cwd: Source project directory (or a subdirectory).
+        build_dir: Optional artifact/history root, relative to the project root.
+            Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    return _invoke(["view", file], cwd=cwd)
+    args = ["view", file]
+    if validation:
+        args.append("--validation")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)

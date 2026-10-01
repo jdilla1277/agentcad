@@ -1,6 +1,60 @@
 """Focused tests for build123d execution-error recovery guidance."""
 
+import json
+
+import pytest
+
+from agentcad.cli import cli
 from agentcad.commands.run import _execution_error_guidance
+
+
+@pytest.mark.parametrize("runtime", ["build123d", "cadquery"])
+def test_step_writer_guidance_applies_to_both_runtimes(runtime):
+    guidance = _execution_error_guidance(
+        "Script execution failed: name 'save_step' is not defined",
+        runtime, "save_step(result, 'manual.step')\nshow_object(result)",
+    )
+    assert "show_object(result)" in guidance["suggestion"]
+    assert "outputs.step" in guidance["suggestion"]
+
+
+@pytest.mark.parametrize("message", [
+    "Script execution failed: AttributeError: 'Report' object has no attribute 'write'",
+    "Script execution failed: ValueError: invalid shape",
+    "Script execution failed: FileNotFoundError: No such file or directory: 'input.step'",
+])
+def test_unrelated_errors_do_not_get_step_writer_guidance(message):
+    assert _execution_error_guidance(message, "build123d", "show_object(result)") == {}
+
+
+@pytest.mark.parametrize("runtime", ["build123d", "cadquery"])
+@pytest.mark.parametrize("name", ["write", "export"])
+@pytest.mark.parametrize("source", [
+    "{name}(report)\nshow_object(result)",
+    "{name}(report, 'report.txt')\nshow_object(result)",
+    "{name}(report)\nother_writer(result, 'manual.step')\nshow_object(result)",
+    "{name}(report)\nshow_object(result)\nresult.{name}('manual.step')",
+    "",
+    "syntax error!",
+])
+def test_generic_writer_name_error_requires_step_evidence(runtime, name, source):
+    message = f"Script execution failed: NameError: name '{name}' is not defined"
+    assert _execution_error_guidance(message, runtime, source.format(name=name)) == {}
+
+
+@pytest.mark.parametrize("name", ["write", "export"])
+@pytest.mark.parametrize("call", [
+    "{name}(result)",
+    "{name}(shape=result)",
+    "{name}(report, 'manual.step')",
+    "{name}(report, filename='manual.STP')",
+])
+def test_generic_writer_name_error_with_step_evidence(name, call):
+    guidance = _execution_error_guidance(
+        f"NameError: name '{name}' is not defined", "build123d",
+        call.format(name=name) + "\nshow_object(result)",
+    )
+    assert "outputs.step" in guidance["suggestion"]
 
 
 def test_method_iterability_guidance_requires_an_uncalled_part_method():
@@ -49,3 +103,141 @@ def test_is_null_guidance_points_to_product_validity_surfaces():
     assert "agentcad inspect" in guidance["suggestion"]
     assert "run metrics" in guidance["suggestion"]
     assert guidance["more_at"] == "agentcad docs editing"
+
+
+@pytest.mark.parametrize(
+    ("name", "expected", "more_at"),
+    [
+        ("Vec", "Vector(x, y, z)", "agentcad docs preamble"),
+        ("Translate", "shape.translate((x, y, z))", "agentcad docs preamble"),
+        ("difference", "left - right", "agentcad docs quickstart"),
+        ("cos", "from math import cos", "agentcad docs preamble"),
+        ("pi", "from math import pi", "agentcad docs preamble"),
+    ],
+)
+def test_common_generated_names_get_build123d_guidance(name, expected, more_at):
+    guidance = _execution_error_guidance(
+        f"Script execution failed: NameError: name '{name}' is not defined",
+        runtime="build123d",
+        source="",
+    )
+
+    assert "active build123d runtime" in guidance["suggestion"]
+    assert expected in guidance["suggestion"]
+    assert guidance["more_at"] == more_at
+
+
+@pytest.mark.parametrize("name", ["Vec", "difference", "cos"])
+def test_generated_name_guidance_is_runtime_scoped(name):
+    assert _execution_error_guidance(
+        f"Script execution failed: NameError: name '{name}' is not defined",
+        runtime="cadquery",
+        source="",
+    ) == {}
+
+
+@pytest.mark.parametrize("message", [
+    # What the CadQuery runner actually reports (no exception type).
+    "Script execution failed: name 'Translate' is not defined",
+    "Script execution failed: NameError: name 'Translate' is not defined",
+])
+def test_translate_name_guidance_covers_cadquery(message):
+    # #203 requires Translate(...) to get a canonical repair on both runtimes;
+    # build123d's richer wording comes from the alias table above.
+    guidance = _execution_error_guidance(
+        message, runtime="cadquery", source="moved = Translate((1, 2, 3))",
+    )
+    assert "active CadQuery runtime" in guidance["suggestion"]
+    assert "moved = translate(shape, (x, y, z))" in guidance["suggestion"]
+    assert "moved = shape.translate((x, y, z))" in guidance["suggestion"]
+    assert guidance["more_at"] == "agentcad docs helpers"
+
+
+@pytest.mark.parametrize("message,source", [
+    ("Script execution failed: RuntimeError: NameError: name 'Translate' is not defined",
+     "moved = Translate((1, 2, 3))"),
+    ("Script execution failed: name 'Translation' is not defined",
+     "moved = Translation((1, 2, 3))"),
+    # Same text, but the script never reads Translate: not a NameError.
+    ("Script execution failed: name 'Translate' is not defined",
+     "raise RuntimeError(\"name 'Translate' is not defined\")"),
+    # Script binds Translate itself, so the error is not an undefined name.
+    ("Script execution failed: name 'Translate' is not defined",
+     "from mylib import Translate\nmoved = Translate((1, 2, 3))"),
+    ("Script execution failed: name 'Translate' is not defined",
+     "def Translate(v):\n    return v\nmoved = Translate((1, 2, 3))"),
+])
+def test_cadquery_translate_guidance_requires_an_unbound_translate(message, source):
+    assert _execution_error_guidance(message, "cadquery", source) == {}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Script execution failed: RuntimeError: name 'Vec' is not defined",
+        "Script execution failed: ValueError: name 'cos' is not defined",
+        (
+            "Script execution failed: RuntimeError: "
+            "NameError: name 'Translate' is not defined"
+        ),
+    ],
+)
+def test_undefined_name_guidance_requires_actual_name_error(message):
+    assert _execution_error_guidance(message, "build123d", "") == {}
+
+
+def test_cli_reports_common_generated_name_replacements(runner, isolated_dir):
+    assert runner.invoke(cli, ["init", "--name", "aliases"]).exit_code == 0
+    cases = {
+        "Vec": ("value = Vec(1, 2, 3)", "Vector(x, y, z)"),
+        "Translate": (
+            "value = Translate((1, 2, 3)) * Box(1, 1, 1)",
+            "shape.translate((x, y, z))",
+        ),
+        "difference": (
+            "value = difference(Box(2, 2, 2), Box(1, 1, 1))",
+            "left - right",
+        ),
+        "cos": ("value = cos(0)", "from math import cos"),
+    }
+
+    for name, (statement, expected) in cases.items():
+        script = isolated_dir / f"{name}.py"
+        script.write_text(f"{statement}\nshow_object(Box(1, 1, 1))\n")
+        result = runner.invoke(
+            cli,
+            ["run", str(script), "--dry-run", "--no-daemon"],
+        )
+        assert result.exit_code == 1, result.output
+        payload = json.loads(result.stdout)
+        assert payload["runtime"] == "build123d"
+        assert "active build123d runtime" in payload["suggestion"]
+        assert expected in payload["suggestion"]
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "name"),
+    [("RuntimeError", "Vec"), ("ValueError", "cos")],
+)
+def test_cli_does_not_misclassify_exception_message_as_name_error(
+    runner, isolated_dir, exception_type, name
+):
+    assert runner.invoke(cli, ["init", "--name", "ordinary-error"]).exit_code == 0
+    script = isolated_dir / f"{exception_type}.py"
+    script.write_text(
+        "show_object(Box(4, 4, 4))\n"
+        f"raise {exception_type}(\"name '{name}' is not defined\")\n"
+    )
+
+    result = runner.invoke(
+        cli,
+        ["run", str(script), "--dry-run", "--no-daemon"],
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["message"].startswith(
+        f"Script execution failed: {exception_type}:"
+    )
+    assert "suggestion" not in payload
+    assert "more_at" not in payload

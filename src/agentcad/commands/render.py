@@ -4,11 +4,14 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options, derived_dir
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
     maybe_spawn_daemon_for_next_run,
 )
+from agentcad.commands._input_recovery import missing_step_payload
+from agentcad.view_spec import parse_view_spec
 
 MAX_RENDER_DIMENSION = 8192
 MAX_RENDER_PIXELS = 32_000_000
@@ -78,8 +81,10 @@ def _parse_size(_ctx, _param, value):
 @click.option("--name", default=None, help="Custom filename for the rendered PNG (single view only).")
 @click.option("--focus", default=None, help="Camera target point 'x,y,z'.")
 @click.option("--no-fit", is_flag=True, default=False, help="Skip FitAll (requires --focus).")
+@click.option("--highlight", type=click.Choice(["validation"]), help="Highlight validation failures in red.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
+@project_options
+def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon, highlight=None):
     """Render PNG views of an existing STEP file."""
     if msaa and size[0] * size[1] > MAX_ANTIALIASED_PIXELS:
         raise click.BadParameter(
@@ -87,8 +92,38 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
             param_hint="--size",
         )
 
+    # Reject known-invalid options before even offering missing-path recovery.
+    # This parser is independent of the renderer and must not load CAD libraries.
+    try:
+        if no_fit and not focus:
+            raise ValueError("--no-fit requires --focus")
+        focus_point = _parse_focus(focus) if focus is not None else None
+        view_specs = parse_view_spec(view)
+        if name and len(view_specs) > 1:
+            raise ValueError("--name cannot be used with multiple views")
+    except ValueError as exc:
+        click.echo(json.dumps({
+            "command": "render", "status": "error", "message": str(exc),
+            "next_actions": ["agentcad render --help"],
+        }))
+        sys.exit(1)
+
+    fit = not no_fit
+    width, height = size
+
+    step_path = Path(step_file)
+    if not step_path.is_file():
+        click.echo(json.dumps(missing_step_payload("render", step_file, {
+            "--view": view, "--zoom": zoom, "--size": f"{size[0]}x{size[1]}",
+            "--msaa": msaa, "--name": name, "--focus": focus,
+            "--no-fit": no_fit, "--highlight": highlight, "--no-daemon": no_daemon,
+        })))
+        sys.exit(1)
+
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["render", step_file, "--view", view]
+    if highlight:
+        argv.extend(["--highlight", highlight])
     if zoom != 1.0:
         argv.extend(["--zoom", str(zoom)])
     if size != (800, 600):
@@ -103,66 +138,14 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         argv.append("--no-fit")
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
-    from cadquery import importers
-
-    from agentcad.render import parse_view_spec, render_shape, render_shape_custom
-
-    step_path = Path(step_file)
-    if not step_path.exists():
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": f"STEP file '{step_file}' not found",
-        }))
-        sys.exit(1)
-
-    # Validate --no-fit requires --focus
-    if no_fit and not focus:
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": "--no-fit requires --focus",
-        }))
-        sys.exit(1)
-
-    # Parse --focus
-    focus_point = None
-    if focus:
-        try:
-            focus_point = _parse_focus(focus)
-        except ValueError as e:
-            click.echo(json.dumps({
-                "command": "render",
-                "status": "error",
-                "message": str(e),
-            }))
-            sys.exit(1)
-
-    fit = not no_fit
-    width, height = size
-
-    # Parse view spec
-    try:
-        view_specs = parse_view_spec(view)
-    except ValueError as e:
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": str(e),
-        }))
-        sys.exit(1)
-
-    # Validate --name with multiple views
-    if name and len(view_specs) > 1:
-        click.echo(json.dumps({
-            "command": "render",
-            "status": "error",
-            "message": "--name cannot be used with multiple views",
-        }))
-        sys.exit(1)
+    from agentcad.render import (
+        RenderUnavailableError,
+        render_shape,
+        render_shape_custom,
+    )
 
     # Determine output directory
-    parent_dir = step_path.parent
+    parent_dir = derived_dir("render", step_path)
     if _is_version_dir(parent_dir):
         output_dir = parent_dir / "renders"
     else:
@@ -185,36 +168,64 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         }))
         sys.exit(1)
 
+    validation = None
+    render_options = {}
+    if highlight:
+        from agentcad.validation import validate_shape
+        from agentcad.validation_guidance import validation_markers
+        validation = validate_shape(shape)
+        render_options["validation_markers"] = validation_markers(shape, validation)
+        # Preserve ordinary renders when requesting an annotated variant.
+        output_dir = output_dir / "validation"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
     # Render each view
     renders = {}
-    for spec_type, spec_value in view_specs:
-        if spec_type == "named":
-            if name:
-                filename = f"{name}.png"
-                key = name
-            else:
-                filename = f"{spec_value}.png"
-                key = spec_value
-            out_path = output_dir / filename
-            render_shape(shape, spec_value, out_path, width=width, height=height,
-                         zoom=zoom, focus=focus_point, fit=fit, msaa=msaa)
-            renders[key] = str(out_path)
-        elif spec_type == "custom":
-            azimuth, elevation = spec_value
-            if name:
-                filename = f"{name}.png"
-                key = name
-            else:
-                key = _format_custom_angle_name(azimuth, elevation)
-                filename = f"{key}.png"
-            out_path = output_dir / filename
-            render_shape_custom(shape, azimuth, elevation, out_path,
-                                width=width, height=height, zoom=zoom,
-                                focus=focus_point, fit=fit, msaa=msaa)
-            renders[key] = str(out_path)
+    try:
+        for spec_type, spec_value in view_specs:
+            if spec_type == "named":
+                if name:
+                    filename = f"{name}.png"
+                    key = name
+                else:
+                    filename = f"{spec_value}.png"
+                    key = spec_value
+                out_path = output_dir / filename
+                if get_project().configured:
+                    out_path = get_project().artifact_path(out_path)
+                render_shape(shape, spec_value, out_path, width=width, height=height,
+                             zoom=zoom, focus=focus_point, fit=fit, msaa=msaa, **render_options)
+                renders[key] = str(out_path)
+            elif spec_type == "custom":
+                azimuth, elevation = spec_value
+                if name:
+                    filename = f"{name}.png"
+                    key = name
+                else:
+                    key = _format_custom_angle_name(azimuth, elevation)
+                    filename = f"{key}.png"
+                out_path = output_dir / filename
+                if get_project().configured:
+                    out_path = get_project().artifact_path(out_path)
+                render_shape_custom(shape, azimuth, elevation, out_path,
+                                    width=width, height=height, zoom=zoom,
+                                    focus=focus_point, fit=fit, msaa=msaa, **render_options)
+                renders[key] = str(out_path)
+    except RenderUnavailableError as exc:
+        click.echo(json.dumps({
+            "command": "render",
+            "status": "error",
+            "error_kind": "render_unavailable",
+            "message": str(exc),
+            "suggestion": (
+                "Use an X11/XWayland desktop session, or prefix the command "
+                "with `xvfb-run -a` when running headlessly."
+            ),
+        }))
+        sys.exit(1)
 
     # Update meta.json if in a version directory
-    if _is_version_dir(parent_dir):
+    if _is_version_dir(parent_dir) and not highlight:
         meta_path = parent_dir / "meta.json"
         meta = json.loads(meta_path.read_text())
         existing_renders = meta.get("renders", {})
@@ -229,6 +240,9 @@ def render(step_file, view, zoom, size, msaa, name, focus, no_fit, no_daemon):
         "command": "render",
         "status": "success",
         "renders": renders,
+        **({"validation": validation, "is_valid": validation["is_valid"],
+            "highlight": "validation", "highlight_count": len(render_options["validation_markers"])}
+           if validation else {}),
     }))
 
     # Fork off the warm process as the daemon so subsequent commands route

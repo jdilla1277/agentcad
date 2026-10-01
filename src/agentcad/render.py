@@ -1,4 +1,5 @@
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from OCP.V3d import (
 from OCP.gp import gp_Dir
 
 from agentcad.export import _GLB_PALETTE, _parse_color
+from agentcad.view_spec import ALL_VIEWS, NAMED_VIEWS, parse_view_spec
 
 VIEWS = {
     "front": V3d_TypeOfOrientation_Zup_Front,
@@ -39,61 +41,45 @@ VIEWS = {
     "iso": V3d_TypeOfOrientation_Zup_AxoRight,
 }
 
-ALL_VIEWS = ["front", "right", "top", "iso"]
 
-NAMED_VIEWS = set(VIEWS.keys())
+class RenderUnavailableError(RuntimeError):
+    """Raised when the platform graphics backend cannot initialize."""
 
 
-def parse_view_spec(spec):
-    """Parse a --view spec string into a list of (type, value) tuples.
-
-    Returns:
-        List of ("named", view_name) or ("custom", (azimuth, elevation)) tuples.
-
-    Raises:
-        ValueError: If the spec is invalid.
-    """
-    parts = [p.strip() for p in spec.split(",")]
-
-    # "all" shorthand
-    if parts == ["all"]:
-        return [("named", v) for v in ALL_VIEWS]
-
-    # All named views (fast path, backward compat)
-    if all(p in NAMED_VIEWS for p in parts):
-        return [("named", p) for p in parts]
-
-    # Check for colon-separated angles (mixed mode)
-    if any(":" in p for p in parts):
-        result = []
-        for p in parts:
-            if p in NAMED_VIEWS:
-                result.append(("named", p))
-            elif ":" in p:
-                az_s, el_s = p.split(":", 1)
-                try:
-                    result.append(("custom", (float(az_s), float(el_s))))
-                except ValueError:
-                    raise ValueError(f"Invalid angle spec '{p}'. Use 'azimuth:elevation'.")
-            else:
-                raise ValueError(
-                    f"Invalid view '{p}' in spec '{spec}'. "
-                    f"Named views: {', '.join(sorted(NAMED_VIEWS))}. "
-                    f"Custom angles: 'azimuth:elevation'."
-                )
-        return result
-
-    # Legacy: exactly 2 numeric parts → single custom angle
-    if len(parts) == 2:
-        try:
-            return [("custom", (float(parts[0]), float(parts[1])))]
-        except ValueError:
-            pass
-
-    raise ValueError(
-        f"Invalid view spec '{spec}'. Use named views "
-        f"({', '.join(sorted(NAMED_VIEWS))}), 'all', or 'azimuth:elevation'."
+def _linux_render_unavailable_error(exc):
+    return RenderUnavailableError(
+        "Linux PNG rendering requires an accessible X11/GLX display. "
+        "Run from an X11/XWayland session, or use "
+        "`xvfb-run -a agentcad ...` in a headless session. "
+        f"Graphics initialization failed: {type(exc).__name__}: {exc}"
     )
+
+
+def _create_render_window(display_connection, width, height):
+    """Create the platform window backing an otherwise offscreen render.
+
+    The CadQuery OCP wheels use GLX on Linux.  GLX requires a real X11
+    drawable even when the final image is read from a framebuffer, so a
+    size-only ``Aspect_NeutralWindow`` leaves OCCT querying window handle 0.
+    Keep the X11 window virtual so it is never mapped on the user's desktop.
+    """
+    if sys.platform.startswith("linux"):
+        from OCP.Xw import Xw_Window
+
+        window = Xw_Window(
+            display_connection,
+            "agentcad-render",
+            0,
+            0,
+            width,
+            height,
+        )
+        window.SetVirtual(True)
+        return window
+
+    window = Aspect_NeutralWindow()
+    window.SetSize(width, height)
+    return window
 
 
 def _setup_render(
@@ -104,10 +90,16 @@ def _setup_render(
     msaa=0,
     background_color=None,
     show_edges=False,
+    validation_markers=None,
 ):
     """Set up offscreen rendering pipeline, returning (view, context)."""
-    display_connection = Aspect_DisplayConnection()
-    driver = OpenGl_GraphicDriver(display_connection)
+    try:
+        display_connection = Aspect_DisplayConnection()
+        driver = OpenGl_GraphicDriver(display_connection)
+    except Exception as exc:
+        if sys.platform.startswith("linux"):
+            raise _linux_render_unavailable_error(exc) from exc
+        raise
     driver.ChangeOptions().contextNoAccel = True
     driver.ChangeOptions().buffersNoSwap = True
 
@@ -140,9 +132,13 @@ def _setup_render(
         view.SetBackgroundColor(
             Quantity_Color(*background_color, Quantity_TOC_RGB)
         )
-    window = Aspect_NeutralWindow()
-    window.SetSize(width, height)
-    view.SetWindow(window)
+    try:
+        window = _create_render_window(display_connection, width, height)
+        view.SetWindow(window)
+    except Exception as exc:
+        if sys.platform.startswith("linux"):
+            raise _linux_render_unavailable_error(exc) from exc
+        raise
 
     context = AIS_InteractiveContext(viewer)
 
@@ -178,6 +174,29 @@ def _setup_render(
         ais_shape.Attributes().SetFaceBoundaryDraw(show_edges)
         context.Display(ais_shape, 1, -1, True)
 
+    if validation_markers:
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+        from OCP.gp import gp_Pnt
+        from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
+        from agentcad.validation import deflection_for_shape
+        radius = max(deflection_for_shape(shape) * 3, 0.05)
+        for marker in validation_markers:
+            points = [gp_Pnt(p['x'], p['y'], p['z']) for p in marker['points']]
+            items = []
+            if len(points) == 1:
+                items.append(BRepPrimAPI_MakeSphere(points[0], radius).Shape())
+            else:
+                for a, b in zip(points, points[1:]):
+                    if a.Distance(b) > 1e-7:
+                        items.append(BRepBuilderAPI_MakeEdge(a, b).Shape())
+            for item in items:
+                overlay = AIS_Shape(item)
+                overlay.SetColor(Quantity_Color(1, 0.05, 0.03, Quantity_TOC_RGB))
+                overlay.SetWidth(4)
+                overlay.SetZLayer(Graphic3d_ZLayerId_Topmost)
+                context.Display(overlay, 1 if len(points) == 1 else 0, -1, False)
+        context.UpdateCurrentViewer()
     return view, context
 
 
@@ -212,10 +231,11 @@ def _apply_camera(view, zoom, focus, fit):
 
 
 def render_shape(shape, view_name, output_path, width=800, height=600,
-                 zoom=1.0, focus=None, fit=True, parts=None, msaa=0):
+                 zoom=1.0, focus=None, fit=True, parts=None, msaa=0, validation_markers=None):
     """Render a TopoDS_Shape to a PNG file from the given view."""
     orientation = VIEWS[view_name]
-    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
+    extra = {"validation_markers": validation_markers} if validation_markers is not None else {}
+    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa, **extra)
 
     view.SetProj(orientation)
     _apply_camera(view, zoom, focus, fit)
@@ -913,7 +933,7 @@ def render_diff_side_by_side(
 
 def render_shape_custom(shape, azimuth, elevation, output_path,
                         width=800, height=600, zoom=1.0, focus=None, fit=True,
-                        parts=None, msaa=0):
+                        parts=None, msaa=0, validation_markers=None):
     """Render a TopoDS_Shape to a PNG file from a custom azimuth/elevation angle."""
     az = math.radians(azimuth)
     el = math.radians(elevation)
@@ -922,7 +942,8 @@ def render_shape_custom(shape, azimuth, elevation, output_path,
     vy = math.cos(az) * math.cos(el)
     vz = -math.sin(el)
 
-    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa)
+    extra = {"validation_markers": validation_markers} if validation_markers is not None else {}
+    view, _ctx = _setup_render(shape, width, height, parts=parts, msaa=msaa, **extra)
 
     view.SetProj(vx, vy, vz)
     view.SetUp(0, 0, 1)

@@ -2,6 +2,8 @@
 
 from io import BytesIO
 import math
+import sys
+from numbers import Real
 import warnings
 from pathlib import Path
 
@@ -18,7 +20,6 @@ from OCP.BRep import BRep_Builder
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepTools import BRepTools
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
     BRepBuilderAPI_MakeEdge,
@@ -30,10 +31,19 @@ from OCP.GC import GC_MakeArcOfCircle
 from OCP.GeomAPI import GeomAPI_PointsToBSpline
 from OCP.GProp import GProp_GProps
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.TopAbs import TopAbs_COMPOUND, TopAbs_SOLID
+from OCP.TopAbs import (
+    TopAbs_COMPOUND,
+    TopAbs_COMPSOLID,
+    TopAbs_EDGE,
+    TopAbs_FACE,
+    TopAbs_SHELL,
+    TopAbs_SOLID,
+    TopAbs_VERTEX,
+    TopAbs_WIRE,
+)
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopTools import TopTools_ListOfShape
-from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Iterator
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Iterator, TopoDS_Shape
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Elips, gp_Pnt, gp_Trsf, gp_Vec
 
 
@@ -206,15 +216,196 @@ def naca_wire(y, le_x, te_x, thickness, profile="0012"):
     return wire
 
 
+# ---------------------------------------------------------------------------
+# Abstraction-level preservation (issue #194)
+#
+# Edit pipelines mix three shape representations: raw OCCT ``TopoDS_Shape``
+# values, build123d wrappers (``Part``, ``Solid``, ...), and CadQuery
+# wrappers (``cq.Shape``, ``cq.Workplane``). Every shape-in/shape-out helper
+# in this module computes on the raw topology and then hands the result back
+# at the caller's level: a build123d input gets a build123d result, a CadQuery
+# input gets a CadQuery result, and a raw input stays raw. That keeps
+# ``load_step() -> translate -> safe_cut -> show_object`` one object model
+# instead of silently switching to raw OCCT halfway through the script.
+# ---------------------------------------------------------------------------
+
+
+def _unwrap_shape(shape):
+    """Return the raw ``TopoDS_Shape`` behind a raw, build123d, or CadQuery value.
+
+    Returns ``None`` when ``shape`` carries no OCCT topology so callers can
+    raise their own context-specific error.
+    """
+    if isinstance(shape, TopoDS_Shape):
+        return shape
+    topo = getattr(shape, "wrapped", None)
+    if isinstance(topo, TopoDS_Shape):
+        return topo
+    objects = _workplane_topods(shape)
+    if not objects:
+        return None
+    if len(objects) == 1:
+        return objects[0]
+    # A multi-object Workplane (e.g. pushPoints(...).box(..., combine=False))
+    # is one container of geometry: operate on every object, not just the
+    # first one that ``.val()`` would return.
+    return _compound_topods(*objects)
+
+
+def _workplane_topods(obj):
+    """Return the TopoDS shapes on a CadQuery Workplane stack, or ``None``.
+
+    ``None`` means ``obj`` is not a Workplane-like value; an empty list means
+    a Workplane with no shape objects on its stack.
+    """
+    vals = getattr(obj, "vals", None)
+    if not callable(vals) or not callable(getattr(obj, "newObject", None)):
+        return None
+    try:
+        items = vals()
+    except Exception:
+        return None
+    shapes = []
+    for item in items:
+        topo = getattr(item, "wrapped", None)
+        if isinstance(topo, TopoDS_Shape) and not topo.IsNull():
+            shapes.append(topo)
+    return shapes
+
+
+def _is_build123d_shape(obj):
+    # Subclasses may live outside the build123d package (the runner's
+    # compat primitives such as Box are agentcad classes), so test the
+    # class hierarchy rather than the defining module.
+    try:
+        from build123d.topology import Shape
+    except ImportError:
+        return False
+    return isinstance(obj, Shape)
+
+
+def _cadquery_kind(obj):
+    """Return ``"shape"``, ``"workplane"``, or ``None`` for a CadQuery value."""
+    # A CadQuery object can only exist once cadquery has been imported, so
+    # consult sys.modules instead of paying for an import on the default
+    # build123d-only profile.
+    cq = sys.modules.get("cadquery")
+    if cq is None:
+        return None
+    if isinstance(obj, cq.Workplane):
+        return "workplane"
+    if isinstance(obj, cq.Shape):
+        return "shape"
+    return None
+
+
+def _top_level_children(shape):
+    children = []
+    iterator = TopoDS_Iterator(shape)
+    while iterator.More():
+        children.append(iterator.Value())
+        iterator.Next()
+    return children
+
+
+def _wrap_build123d(topo, template=None, *, as_part=False):
+    """Wrap a raw ``TopoDS_Shape`` in the build123d class matching its topology.
+
+    ``template`` is the caller's original input. When it is a compound-family
+    wrapper (``Part``/``Compound``, which is what ``load_step`` and the
+    primitives such as ``Box`` are), or ``as_part`` is set, the result comes
+    back as a ``Part`` wrapping a compound, so ``.volume`` and ``.solids()``
+    stay measurable.
+    Wrapping a bare ``TopoDS_Solid`` directly in ``Part(...)`` or
+    ``Compound(...)`` yields a shape that reports zero volume and iterates
+    over shells, which is the failure this helper exists to prevent.
+    """
+    from build123d import Compound, Edge, Face, Part, Shell, Solid, Vertex, Wire
+    from build123d.topology import downcast
+
+    shape = downcast(topo)
+    kind = shape.ShapeType()
+    compound_family = as_part or isinstance(template, Compound)
+    if kind == TopAbs_COMPOUND:
+        solids = _solid_members(shape)
+        children = _top_level_children(shape)
+        if (
+            not compound_family
+            and len(children) == 1
+            and children[0].ShapeType() == TopAbs_SOLID
+        ):
+            return Solid(downcast(children[0]))
+        return Part(shape) if solids else Compound(shape)
+    if kind == TopAbs_SOLID:
+        if compound_family:
+            return Part(_compound_topods(shape))
+        return Solid(shape)
+    if kind == TopAbs_COMPSOLID:
+        return Part(_compound_topods(shape))
+    simple = {
+        TopAbs_SHELL: Shell,
+        TopAbs_FACE: Face,
+        TopAbs_WIRE: Wire,
+        TopAbs_EDGE: Edge,
+        TopAbs_VERTEX: Vertex,
+    }
+    return simple[kind](shape)
+
+
+def _rewrap_like(topo, template, *, split_pieces=False):
+    """Return raw ``topo`` at ``template``'s abstraction level.
+
+    Raw or unknown templates (including ``None`` and file paths) return the
+    raw shape unchanged; build123d templates return build123d wrappers;
+    CadQuery ``Shape`` templates return ``cq.Shape``. A ``Workplane``
+    template returns a new Workplane chained from the original (same plane
+    and parent) holding the result; when the original stack held several
+    objects, or ``split_pieces`` is set, each top-level piece of a compound
+    result becomes its own stack object so nothing is silently dropped and
+    side-by-side pieces stay individually addressable.
+    """
+    if template is None or isinstance(template, TopoDS_Shape):
+        return topo
+    if _is_build123d_shape(template):
+        return _wrap_build123d(topo, template)
+    kind = _cadquery_kind(template)
+    if kind is not None:
+        import cadquery as cq
+
+        if kind == "workplane":
+            stack = _workplane_topods(template) or []
+            split = split_pieces or len(stack) > 1
+            if split and topo.ShapeType() == TopAbs_COMPOUND:
+                pieces = _top_level_children(topo)
+            else:
+                pieces = [topo]
+            return template.newObject([cq.Shape.cast(piece) for piece in pieces])
+        return cq.Shape.cast(topo)
+    return topo
+
+
+def _require_shape(shape, label):
+    topo = _unwrap_shape(shape)
+    if topo is None:
+        raise TypeError(
+            f"{label} must be a TopoDS_Shape or a build123d/CadQuery shape "
+            f"with wrapped topology, got {type(shape).__name__}"
+        )
+    if topo.IsNull():
+        raise ValueError(f"{label} is a null shape")
+    return topo
+
+
 def mirror_fuse(shape, plane="XZ"):
     """Mirror a shape about a coordinate plane and fuse with the original.
 
     Args:
-        shape: TopoDS_Shape to mirror.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape to mirror.
         plane: "XZ", "YZ", or "XY".
 
     Returns:
-        TopoDS_Shape (fused solid, or compound as fallback)
+        The fused solid (or a compound as fallback) at the same abstraction
+        level as ``shape``: raw in, raw out; build123d in, build123d out.
     """
     planes = {
         "XZ": gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)),  # normal = Y
@@ -227,12 +418,13 @@ def mirror_fuse(shape, plane="XZ"):
             f"Invalid plane '{plane}'. Must be one of: {', '.join(sorted(planes))}"
         )
 
+    topo = _require_shape(shape, "mirror_fuse shape")
     trsf = gp_Trsf()
     trsf.SetMirror(planes[plane])
-    mirrored = BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+    mirrored = BRepBuilderAPI_Transform(topo, trsf, True).Shape()
 
     try:
-        fuse = BRepAlgoAPI_Fuse(shape, mirrored)
+        fuse = BRepAlgoAPI_Fuse(topo, mirrored)
         if fuse.IsDone():
             result = fuse.Shape()
             # Unwrap compound if it contains a single solid
@@ -241,8 +433,8 @@ def mirror_fuse(shape, plane="XZ"):
                 solid = TopoDS.Solid_s(explorer.Current())
                 explorer.Next()
                 if not explorer.More():
-                    return solid
-            return result
+                    return _rewrap_like(solid, shape)
+            return _rewrap_like(result, shape)
     except Exception:
         pass
 
@@ -250,9 +442,9 @@ def mirror_fuse(shape, plane="XZ"):
     builder = BRep_Builder()
     compound = TopoDS_Compound()
     builder.MakeCompound(compound)
-    builder.Add(compound, shape)
+    builder.Add(compound, topo)
     builder.Add(compound, mirrored)
-    return compound
+    return _rewrap_like(compound, shape)
 
 
 def copy_shape(shape):
@@ -264,12 +456,13 @@ def copy_shape(shape):
     Boolean results incorrect without raising an error.
 
     ``shape`` may be a raw ``TopoDS_Shape`` or an object with a ``wrapped``
-    TopoDS shape (such as a build123d or CadQuery shape). The return value is
-    always a raw ``TopoDS_Shape``, matching the other helpers in this module.
+    TopoDS shape (such as a build123d or CadQuery shape). The copy comes back
+    at the same abstraction level as the input: a raw shape returns a raw
+    ``TopoDS_Shape``, a build123d ``Part`` returns a build123d ``Part``.
     Geometry is copied; cached triangulation is intentionally not copied.
     """
-    topo = getattr(shape, "wrapped", shape)
-    if not hasattr(topo, "IsNull"):
+    topo = _unwrap_shape(shape)
+    if topo is None:
         raise TypeError(
             "copy_shape expects a TopoDS_Shape or an object with a wrapped "
             f"TopoDS_Shape, got {type(shape).__name__}"
@@ -290,9 +483,9 @@ def copy_shape(shape):
         if topo.ShapeType() == TopAbs_COMPOUND and not children.More():
             empty = TopoDS_Compound()
             BRep_Builder().MakeCompound(empty)
-            return empty
+            return _rewrap_like(empty, shape)
         raise ValueError("copy_shape did not produce independent geometry")
-    return copied
+    return _rewrap_like(copied, shape)
 
 
 _SAFE_BOOLEAN_TOLERANCE_MM = 1e-7
@@ -366,8 +559,8 @@ def _physical_volume(shape, label, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
 
 
 def _boolean_input(shape, label, tolerance):
-    topo = getattr(shape, "wrapped", shape)
-    if not hasattr(topo, "IsNull"):
+    topo = _unwrap_shape(shape)
+    if topo is None:
         raise TypeError(
             f"{label} must be a TopoDS_Shape or an object with a wrapped "
             f"TopoDS_Shape, got {type(shape).__name__}"
@@ -476,11 +669,13 @@ def safe_cut(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
 
     Inputs are independently copied, all tools are applied in one
     non-destructive kernel operation, and the result must be valid with a
-    volume no greater than the source.
+    volume no greater than the source. The result comes back at the same
+    abstraction level as ``source`` (raw, build123d, or CadQuery).
     """
     if not tools:
         raise ValueError("safe_cut requires at least one cutting tool")
     tolerance = _boolean_tolerance(tolerance)
+    template = source
     source, source_volume = _boolean_input(source, "safe_cut source", tolerance)
     checked_tools = [
         _boolean_input(tool, f"safe_cut tool {index}", tolerance)[0]
@@ -501,12 +696,16 @@ def safe_cut(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
             "safe_cut rejected an impossible result: subtraction increased "
             f"volume from {source_volume} to {result_volume} mm^3"
         )
-    return result
+    return _rewrap_like(result, template)
 
 
 def safe_intersection(left, right, *, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
-    """Intersect two solids and reject invalid or oversized output."""
+    """Intersect two solids and reject invalid or oversized output.
+
+    The result comes back at the same abstraction level as ``left``.
+    """
     tolerance = _boolean_tolerance(tolerance)
+    template = left
     left, left_volume = _boolean_input(
         left, "safe_intersection left input", tolerance
     )
@@ -529,7 +728,7 @@ def safe_intersection(left, right, *, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
             "safe_intersection rejected an impossible result: intersection "
             f"volume {result_volume} mm^3 exceeds input volume {maximum} mm^3"
         )
-    return result
+    return _rewrap_like(result, template)
 
 
 def safe_fuse(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
@@ -537,11 +736,13 @@ def safe_fuse(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
 
     The result must be valid and its volume must remain between the largest
     input and the sum of all inputs. Disjoint inputs may produce a valid
-    multi-solid compound.
+    multi-solid compound. The result comes back at the same abstraction
+    level as ``source`` (raw, build123d, or CadQuery).
     """
     if not tools:
         raise ValueError("safe_fuse requires at least one tool")
     tolerance = _boolean_tolerance(tolerance)
+    template = source
     source, source_volume = _boolean_input(source, "safe_fuse source", tolerance)
     checked_tools = []
     input_volumes = [source_volume]
@@ -570,26 +771,155 @@ def safe_fuse(source, *tools, tolerance=_SAFE_BOOLEAN_TOLERANCE_MM):
             f"{result_volume} mm^3 is outside the physical range "
             f"{minimum}..{maximum} mm^3"
         )
+    return _rewrap_like(result, template)
+
+
+_TRANSFORM_MISSING = object()
+_TRANSLATE_USAGE = (
+    "Use translate(shape, (x, y, z)); translate(shape, x, y, z), "
+    "translate(shape, Vector(x, y, z)), and "
+    "translate(shape, dx=x, dy=y, dz=z) also work."
+)
+_ROTATE_USAGE = (
+    "Use rotate(shape, axis, angle_deg), e.g. rotate(shape, 'Z', 90); "
+    "shape, axis, and angle_deg are required."
+)
+_BBOX_POINT_USAGE = (
+    "Use bbox_point(shape, x='center', y='center', z='center'); each axis "
+    "must be 'min', 'center', or 'max'."
+)
+_PLACE_AT_USAGE = (
+    "Use place_at(shape, from_pt=(x, y, z), to_pt=(x, y, z))."
+)
+_BBOX_SIZE_USAGE = "Use bbox_size(shape) to get (xlen, ylen, zlen)."
+_TRANSLATE_SHAPE_FIRST = "Use translate(shape, (x, y, z))."
+# Exact correction sentences the run command lifts into its suggestion field.
+HELPER_CORRECTIONS = (
+    _TRANSLATE_USAGE, _TRANSLATE_SHAPE_FIRST, _ROTATE_USAGE,
+    _BBOX_POINT_USAGE, _PLACE_AT_USAGE, _BBOX_SIZE_USAGE,
+)
+
+
+def _transform_shape(shape, usage):
+    topo = _unwrap_shape(shape)
+    if topo is None:
+        raise TypeError(
+            "The first argument must be a TopoDS_Shape or a build123d/CadQuery "
+            f"shape with wrapped topology. {usage}"
+        )
+    if topo.IsNull():
+        raise ValueError(f"Cannot transform a null shape. {usage}")
+    return topo
+
+
+def _transform_number(value, name, usage):
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be a finite number. {usage}")
+    try:
+        result = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(f"{name} must be a finite number. {usage}") from None
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be a finite number. {usage}")
     return result
 
 
-def translate(shape, x, y, z):
+def _is_translation_vector(value):
+    return (
+        isinstance(value, (tuple, list))
+        or isinstance(getattr(value, "wrapped", value), gp_Vec)
+    )
+
+
+def _looks_like_offset(value):
+    def is_number(item):
+        return isinstance(item, Real) and not isinstance(item, bool)
+
+    if isinstance(value, (tuple, list)):
+        return bool(value) and all(is_number(item) for item in value)
+    return is_number(value) or isinstance(getattr(value, "wrapped", value), gp_Vec)
+
+
+def _missing_coordinates(names, values):
+    missing = [n for n, v in zip(names, values) if v is _TRANSFORM_MISSING]
+    if missing:
+        required = f"{', '.join(names[:-1])}, and {names[-1]}"
+        raise TypeError(
+            f"Missing translation coordinate(s) {', '.join(missing)}; "
+            f"{required} are all required. {_TRANSLATE_USAGE}"
+        )
+
+
+def translate(
+    shape=_TRANSFORM_MISSING, x=_TRANSFORM_MISSING,
+    y=_TRANSFORM_MISSING, z=_TRANSFORM_MISSING, *extra,
+    dx=_TRANSFORM_MISSING, dy=_TRANSFORM_MISSING, dz=_TRANSFORM_MISSING,
+    **kwargs,
+):
     """Translate a shape by (x, y, z).
 
     Args:
-        shape: TopoDS_Shape to translate.
-        x, y, z: Translation distances.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape to translate.
+        x, y, z: Translation distances, or pass a single three-coordinate
+            tuple/list or Vector as x (omitting y and z).
+        dx, dy, dz: Keyword aliases for x, y, z. All three are required and
+            cannot be mixed with x/y/z.
 
     Returns:
-        TopoDS_Shape at the new position.
+        An independently copied shape at the new position, at the same
+        abstraction level as the input: raw in, raw out; build123d ``Part``
+        in, build123d ``Part`` out; CadQuery shape in, CadQuery shape out.
     """
-    independent = copy_shape(shape)
+    if extra or kwargs:
+        raise TypeError(f"Unexpected translation arguments. {_TRANSLATE_USAGE}")
+    # Curried translate(x, y, z)(shape) and translate((x, y, z)) put the
+    # offset where the shape belongs. Name the shape-first form directly.
+    if _looks_like_offset(shape):
+        raise TypeError(
+            "translate() takes the shape first; translate(x, y, z)(shape) "
+            f"and translate((x, y, z)) are not supported. {_TRANSLATE_SHAPE_FIRST}"
+        )
+    topo = _transform_shape(shape, _TRANSLATE_USAGE)
+    deltas = (dx, dy, dz)
+    if any(value is not _TRANSFORM_MISSING for value in deltas):
+        if any(value is not _TRANSFORM_MISSING for value in (x, y, z)):
+            raise TypeError(
+                "Ambiguous translation: got both x/y/z (positional or keyword) "
+                "and dx/dy/dz; pass one set. "
+                f"{_TRANSLATE_USAGE}"
+            )
+        _missing_coordinates(("dx", "dy", "dz"), deltas)
+        names, coordinates = ("dx", "dy", "dz"), deltas
+    elif _is_translation_vector(x):
+        if y is not _TRANSFORM_MISSING or z is not _TRANSFORM_MISSING:
+            raise TypeError(
+                f"Pass either one vector or three coordinates. {_TRANSLATE_USAGE}"
+            )
+        vector = getattr(x, "wrapped", x)
+        coordinates = (
+            (vector.X(), vector.Y(), vector.Z())
+            if isinstance(vector, gp_Vec) else x
+        )
+        if len(coordinates) != 3:
+            raise ValueError(
+                f"Translation requires exactly three coordinates. {_TRANSLATE_USAGE}"
+            )
+        names = ("x", "y", "z")
+    else:
+        names, coordinates = ("x", "y", "z"), (x, y, z)
+        _missing_coordinates(names, coordinates)
+    x, y, z = (
+        _transform_number(value, name, _TRANSLATE_USAGE)
+        for name, value in zip(names, coordinates)
+    )
+    independent = copy_shape(topo)
     trsf = gp_Trsf()
     trsf.SetTranslation(gp_Vec(x, y, z))
-    return BRepBuilderAPI_Transform(independent, trsf, False).Shape()
+    moved = BRepBuilderAPI_Transform(independent, trsf, False).Shape()
+    return _rewrap_like(moved, shape)
 
 
-def rotate(shape, axis, angle_deg):
+def rotate(shape=None, axis=None, angle_deg=None, *extra, **kwargs):
     """Rotate a shape around a coordinate axis through the origin.
 
     Follows right-hand rule: positive angle = counterclockwise when
@@ -597,24 +927,32 @@ def rotate(shape, axis, angle_deg):
     E.g. positive Y rotation moves +Z toward +X.
 
     Args:
-        shape: TopoDS_Shape to rotate.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape to rotate.
         axis: "X", "Y", or "Z".
         angle_deg: Rotation angle in degrees.
 
     Returns:
-        TopoDS_Shape at the new orientation.
+        An independently copied shape at the new orientation, at the same
+        abstraction level as the input (raw, build123d, or CadQuery).
     """
+    if extra or kwargs:
+        raise TypeError(f"Unexpected rotation arguments. {_ROTATE_USAGE}")
+    topo = _transform_shape(shape, _ROTATE_USAGE)
+    if axis is None or angle_deg is None:
+        raise TypeError(f"Missing rotation arguments. {_ROTATE_USAGE}")
     axes = {
         "X": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)),
         "Y": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)),
         "Z": gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)),
     }
-    if axis not in axes:
-        raise ValueError(f"axis must be 'X', 'Y', or 'Z', got '{axis}'")
-    independent = copy_shape(shape)
+    if not isinstance(axis, str) or axis not in axes:
+        raise ValueError(f"axis must be 'X', 'Y', or 'Z', got {axis!r}. {_ROTATE_USAGE}")
+    angle_deg = _transform_number(angle_deg, "angle_deg", _ROTATE_USAGE)
+    independent = copy_shape(topo)
     trsf = gp_Trsf()
     trsf.SetRotation(axes[axis], math.radians(angle_deg))
-    return BRepBuilderAPI_Transform(independent, trsf, False).Shape()
+    rotated = BRepBuilderAPI_Transform(independent, trsf, False).Shape()
+    return _rewrap_like(rotated, shape)
 
 
 def bbox_point(shape, x="center", y="center", z="center"):
@@ -623,30 +961,21 @@ def bbox_point(shape, x="center", y="center", z="center"):
     Each axis takes "min", "center", or "max".
 
     Args:
-        shape: TopoDS_Shape.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape.
         x, y, z: One of "min", "center", "max".
 
     Returns:
         Tuple (x, y, z) of floats.
     """
+    topo = _transform_shape(shape, _BBOX_POINT_USAGE)
     valid = ("min", "center", "max")
     for name, val in [("x", x), ("y", y), ("z", z)]:
         if val not in valid:
             raise ValueError(
-                f"Invalid value '{val}' for {name}. Must be one of: {', '.join(valid)}"
+                f"Invalid value {val!r} for {name}. {_BBOX_POINT_USAGE}"
             )
 
-    # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
-    # control-point poles, which sit outside the trimmed geometry. For a
-    # placement helper that's a real footgun: bbox_point(shape, x="max")
-    # would return a point floating in space beyond the actual body, so
-    # place_at / assemble would mis-seat NURBS parts. AddOptimal_s gives a
-    # tight box on the same basis as `agentcad measure`. Clean_s first to
-    # drop cached triangulation (matches metrics.compute_metrics).
-    BRepTools.Clean_s(shape)
-    box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(shape, box)
-    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
 
     def _pick(lo, hi, spec):
         if spec == "min":
@@ -658,23 +987,64 @@ def bbox_point(shape, x="center", y="center", z="center"):
     return (_pick(xmin, xmax, x), _pick(ymin, ymax, y), _pick(zmin, zmax, z))
 
 
+def bbox_size(shape):
+    """Return axis-aligned bounding-box lengths as an (x, y, z) tuple.
+
+    Accepts raw TopoDS shapes and wrapped build123d/CadQuery shapes, just
+    like :func:`bbox_point`. Lengths are max minus min in model units.
+    """
+    topo = _transform_shape(shape, _BBOX_SIZE_USAGE)
+    xmin, ymin, zmin, xmax, ymax, zmax = _bbox_extents(topo)
+    return (xmax - xmin, ymax - ymin, zmax - zmin)
+
+
+def _bbox_extents(topo):
+    # AddOptimal_s, not Add_s — Add_s reads B-spline/NURBS bounds off the
+    # control-point poles, which sit outside the trimmed geometry. For a
+    # placement helper that's a real footgun: bbox_point(shape, x="max")
+    # would return a point floating in space beyond the actual body, so
+    # place_at / assemble would mis-seat NURBS parts. AddOptimal_s gives a
+    # tight box from the underlying geometry. Ignore cached triangulation
+    # without removing it: a bounds query must not force later exports or
+    # previews to remesh the caller's shape.
+    box = Bnd_Box()
+    BRepBndLib.AddOptimal_s(topo, box, False)
+    if box.IsVoid():
+        raise ValueError("Cannot query the bounding box of an empty shape.")
+    return box.Get()
+
+
 def place_at(shape, from_pt, to_pt):
     """Translate shape so from_pt moves to to_pt.
 
     Args:
-        shape: TopoDS_Shape.
-        from_pt: (x, y, z) source point.
-        to_pt: (x, y, z) target point.
+        shape: Raw TopoDS_Shape or build123d/CadQuery shape.
+        from_pt: (x, y, z) source point or three-coordinate Vector.
+        to_pt: (x, y, z) target point or three-coordinate Vector.
 
     Returns:
-        TopoDS_Shape at the new position.
+        The moved shape at the same abstraction level as the input.
     """
-    return translate(
-        shape,
-        to_pt[0] - from_pt[0],
-        to_pt[1] - from_pt[1],
-        to_pt[2] - from_pt[2],
-    )
+    # Validate up front with place_at's own usage text; translate() below
+    # unwraps the shape itself so the result keeps the caller's wrapper kind.
+    _transform_shape(shape, _PLACE_AT_USAGE)
+
+    def _point(value, name):
+        vector = getattr(value, "wrapped", value)
+        if isinstance(vector, gp_Vec):
+            coordinates = (vector.X(), vector.Y(), vector.Z())
+        elif isinstance(value, (tuple, list)) and len(value) == 3:
+            coordinates = value
+        else:
+            raise TypeError(f"{name} must contain three coordinates. {_PLACE_AT_USAGE}")
+        return tuple(
+            _transform_number(coordinate, f"{name}[{index}]", _PLACE_AT_USAGE)
+            for index, coordinate in enumerate(coordinates)
+        )
+
+    source = _point(from_pt, "from_pt")
+    target = _point(to_pt, "to_pt")
+    return translate(shape, *(end - start for start, end in zip(source, target)))
 
 
 def assemble(*shapes):
@@ -682,15 +1052,27 @@ def assemble(*shapes):
 
     Eliminates the cq.Shape.cast / makeCompound / newObject ceremony.
 
+    This is the CadQuery-runtime flavor: it returns a ``cq.Workplane`` and
+    needs the ``agentcad[cadquery]`` extra. build123d scripts get a
+    build123d-native ``assemble`` injected by their runner instead, so this
+    function is only reached from CadQuery-routed scripts.
+
     Args:
-        shapes: One or more TopoDS_Shape objects.
+        shapes: One or more raw TopoDS_Shape, cq.Shape, or cq.Workplane values.
 
     Returns:
         cq.Workplane containing the compound.
     """
-    import cadquery as cq
+    try:
+        import cadquery as cq
+    except ImportError as exc:
+        from agentcad.runners.dispatch import MISSING_CADQUERY_MESSAGE
+        raise RuntimeError(MISSING_CADQUERY_MESSAGE) from exc
 
-    wrapped = [cq.Shape.cast(s) for s in shapes]
+    wrapped = [
+        cq.Shape.cast(_require_shape(s, f"assemble shape {index}"))
+        for index, s in enumerate(shapes, start=1)
+    ]
     compound = cq.Compound.makeCompound(wrapped)
     return cq.Workplane("XY").newObject([compound])
 
@@ -748,15 +1130,25 @@ def annular_boss(
         z = z_min
     cx, cy, cz = _coerce_annulus_center(center, z)
 
-    import cadquery as cq
+    # Outer cylinder minus a coaxial inner cylinder, built straight on OCP so
+    # the STEP-edit path works on the default build123d-only installation.
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder
 
-    boss = (
-        cq.Workplane("XY", origin=(cx, cy, cz))
-        .circle(float(outer))
-        .circle(float(inner))
-        .extrude(float(height))
-    )
-    return boss.val().wrapped
+    axis = gp_Ax2(gp_Pnt(cx, cy, cz), gp_Dir(0, 0, 1))
+    outer_cyl = BRepPrimAPI_MakeCylinder(axis, float(outer), float(height)).Shape()
+    inner_cyl = BRepPrimAPI_MakeCylinder(axis, float(inner), float(height)).Shape()
+    cut = BRepAlgoAPI_Cut(outer_cyl, inner_cyl)
+    if not cut.IsDone():
+        raise RuntimeError("annular_boss: boolean cut of the bore failed")
+    result = cut.Shape()
+    # BRepAlgoAPI returns a compound around the single resulting solid;
+    # hand back the bare solid like the previous CadQuery-based extrude did.
+    if result.ShapeType() == TopAbs_COMPOUND:
+        explorer = TopExp_Explorer(result, TopAbs_SOLID)
+        if explorer.More():
+            return explorer.Current()
+    return result
 
 
 def raise_annulus(
@@ -781,7 +1173,9 @@ def raise_annulus(
 
     ``source`` may be a STEP/STP/BREP path, a raw TopoDS_Shape, or a wrapped
     build123d/CadQuery shape. Passing ``source=None`` returns only the annular
-    boss shape.
+    boss shape. A path or raw source returns a raw shape; a wrapped source
+    returns a wrapped result of the same kind (for example, a build123d
+    ``Part`` in gives a build123d ``Part`` out).
     """
     land = annular_boss(
         center=center,
@@ -796,19 +1190,40 @@ def raise_annulus(
     if source is None:
         return land
 
-    base = _coerce_topods_shape(source)
+    if isinstance(source, (str, Path)):
+        base, template = _coerce_topods_shape(source), None
+    else:
+        base, template = _require_shape(source, "raise_annulus source"), source
+    # Flatten a compound base so each existing piece and the land sit side
+    # by side in the result; a multi-object Workplane then gets one object
+    # per piece back instead of a nested compound plus the land.
+    pieces = (
+        _top_level_children(base)
+        if base.ShapeType() == TopAbs_COMPOUND else [base]
+    )
     if not fuse:
-        return _compound_topods(base, land)
+        # Non-fused output is "pieces side by side" by definition, so a
+        # Workplane source gets one stack object per piece even when its own
+        # stack held a single object.
+        return _rewrap_like(
+            _compound_topods(*pieces, land), template, split_pieces=True
+        )
 
     try:
         fused = BRepAlgoAPI_Fuse(base, land)
         if fused.IsDone():
-            return fused.Shape()
+            # The kernel returns a compound. When the land does not touch the
+            # base it holds two disconnected solids; split them into stack
+            # objects like the non-fused path. A real merge is a single
+            # solid either way.
+            return _rewrap_like(fused.Shape(), template, split_pieces=True)
     except Exception:
         pass
 
     warnings.warn("raise_annulus boolean fuse failed, returning compound instead")
-    return _compound_topods(base, land)
+    return _rewrap_like(
+        _compound_topods(*pieces, land), template, split_pieces=True
+    )
 
 
 def _compound_topods(*shapes):
@@ -821,14 +1236,17 @@ def _compound_topods(*shapes):
 
 
 def _coerce_topods_shape(shape):
+    """Return raw topology for a path, raw shape, or wrapped shape.
+
+    Wrapped values go through :func:`_unwrap_shape`, so a multi-object
+    CadQuery Workplane contributes every object on its stack rather than
+    only the first one ``.val()`` would return.
+    """
     if isinstance(shape, (str, Path)):
         from agentcad.step_io import load_cad_shape
         return load_cad_shape(shape)
-    if hasattr(shape, "wrapped"):
-        return shape.wrapped
-    if hasattr(shape, "val"):
-        return shape.val().wrapped
-    return shape
+    topo = _unwrap_shape(shape)
+    return shape if topo is None else topo
 
 
 def _coerce_radius(*, radius, diameter, radius_name, diameter_name):

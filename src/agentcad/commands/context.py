@@ -1,23 +1,71 @@
 import json
+import shlex
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad import __version__
+from agentcad.commands.instructions import instructions_status
+from agentcad.commands.skill import skill_status
+from agentcad.guide import guide_fingerprint
 from agentcad.manifest import load_manifest
 from agentcad.recovery import recovery_summary
 from agentcad.reviews import review_summary
+from agentcad.runners import dispatch
+
+
+def _agent_setup_report(cwd: Path, runtime: str) -> tuple[dict, list[str]]:
+    """Summarize installed agent-guide surfaces and suggest repairs.
+
+    Only advisory: context never mutates instruction files. A stale state is
+    normal right after upgrading agentcad and is fixed by re-running the
+    install commands, which replace only the marked block.
+    """
+    instructions = instructions_status(cwd, runtime)
+    skill = skill_status(cwd, runtime)
+    report = {
+        "guide_fingerprint": guide_fingerprint(runtime),
+        "instructions": instructions,
+        "skill": skill,
+    }
+    actions = []
+    if instructions["state"] != "current":
+        detail = (
+            "install the agent guide into AGENTS.md/CLAUDE.md"
+            if instructions["state"] == "missing"
+            else "refresh the outdated agent guide in AGENTS.md/CLAUDE.md"
+        )
+        actions.append(f"agentcad instructions install — {detail}")
+    if skill["state"] != "current":
+        detail = (
+            "install the Claude Code skill"
+            if skill["state"] == "missing"
+            else "refresh the outdated Claude Code skill"
+        )
+        actions.append(f"agentcad skill install — {detail}")
+    return report, actions
 
 
 @click.command()
+@project_options
 def context():
     """Show the current project context."""
     manifest = load_manifest(command="context")
 
     versions = manifest.get("versions", [])
     current = manifest.get("current", None)
-    recovery = recovery_summary(Path.cwd(), manifest)
-    reviews = review_summary(Path.cwd())
+    recovery = recovery_summary(get_project().build_root, manifest)
+    reviews = review_summary(get_project().build_root)
+    runtime = manifest.get("runtime") or dispatch.DEFAULT_RUNTIME
+    agent_setup, setup_actions = _agent_setup_report(get_project().project_root, runtime)
+    if get_project().configured:
+        root_arg = " --build-dir " + shlex.quote(str(get_project().build_root))
+        setup_actions = [
+            action.replace("agentcad instructions install", f"agentcad instructions{root_arg} install")
+                  .replace("agentcad skill install", f"agentcad skill{root_arg} install")
+            for action in setup_actions
+        ]
 
     versions_summary = [
         {
@@ -41,11 +89,14 @@ def context():
         "version_count": len(versions),
         "versions": versions_summary,
         "recovery": recovery,
-        "open_review_comments": reviews["open_review_comments"],
-        "addressed_review_comments": reviews["addressed_review_comments"],
+        "agent_setup": agent_setup,
+        **reviews,
     }
-    if reviews["pending_review_batch"]:
-        response["pending_review_batch"] = reviews["pending_review_batch"]
+    if setup_actions:
+        response["next_actions"] = setup_actions
     if reviews["open_review_comments"]:
-        response["review_next_action"] = "agentcad review list --status open"
+        prefix = "agentcad review"
+        if get_project().configured:
+            prefix += " --build-dir " + shlex.quote(str(get_project().build_root))
+        response["review_next_action"] = prefix + " list --status open"
     click.echo(json.dumps(response))

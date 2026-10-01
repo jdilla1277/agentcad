@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options
 
 from agentcad.manifest import load_manifest
 from agentcad.native_io import silence_native_stdout
@@ -45,6 +46,7 @@ def _infer_source(version_dir: Path) -> str:
     is_flag=True,
     help="Explicitly make the recovered successful version current.",
 )
+@project_options
 def recover(version_dir: str, make_current: bool) -> None:
     """Validate and register an interrupted VERSION_DIR without deleting it."""
     manifest = load_manifest(command="recover")
@@ -62,7 +64,7 @@ def recover(version_dir: str, make_current: bool) -> None:
         }, exit_code=1)
         return
 
-    project_dir = Path.cwd()
+    project_dir = get_project().build_root
     path = project_dir / requested.name
     if not path.is_dir() or path.is_symlink():
         _emit({
@@ -260,18 +262,20 @@ def recover(version_dir: str, make_current: bool) -> None:
         }, exit_code=1)
         return
 
-    from agentcad.metrics import compute_metrics
+    from agentcad.core_build import validated_metrics
 
     with silence_native_stdout():
-        metrics = compute_metrics(shape)
+        metrics, validation = validated_metrics(shape)
     if metrics.get("is_valid") is not True:
+        detail = validation.get("message") or "output.step is not deliverable"
         _emit({
             "command": "recover",
             "status": "invalid_geometry",
             "reason": "invalid_core_geometry",
             "path": relative_path,
             "metrics": metrics,
-            "message": "output.step is invalid; it was preserved but not registered.",
+            "validation": validation,
+            "message": f"{detail} It was preserved but not registered.",
             "recovery_performed": False,
         }, exit_code=1)
         return
@@ -295,6 +299,8 @@ def recover(version_dir: str, make_current: bool) -> None:
         "label": label,
         "source": source,
         "metrics": metrics,
+        "validation": validation,
+        "validation_profile": "deliverable",
     })
     meta.setdefault("created", datetime.fromtimestamp(
         step_path.stat().st_mtime, tz=timezone.utc

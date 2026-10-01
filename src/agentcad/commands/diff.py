@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options, derived_dir
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -11,7 +12,6 @@ from agentcad.commands._daemon_routing import (
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import load_manifest
-from agentcad.metrics import compute_metrics
 from agentcad.step_io import load_cad_shape
 
 _CAD_FILE_SUFFIXES = {".step", ".stp", ".brep"}
@@ -75,7 +75,7 @@ def _resolve_version(manifest, ref):
 
 def _load_version_meta(version_entry):
     """Load meta.json for a version entry."""
-    path = Path.cwd() / version_entry["path"] / "meta.json"
+    path = get_project().version_dir(version_entry) / "meta.json"
     return json.loads(path.read_text())
 
 
@@ -108,6 +108,10 @@ def _resolve_file_ref(ref):
 
 
 def _load_file_shape_and_metrics(path):
+    # CLI registration imports this module even for invalid `run` arguments.
+    # Load OpenCascade only when a file comparison actually needs metrics.
+    from agentcad.metrics import compute_metrics
+
     shape = load_cad_shape(path)
     return shape, compute_metrics(shape)
 
@@ -133,6 +137,7 @@ def _metric_changes(metrics_a, metrics_b):
 @click.option("--visual", is_flag=True, default=False, help="Open a visual side-by-side (or overlay) diff in the browser.")
 @click.option("--overlay", is_flag=True, default=False, help="With --visual, use tinted overlay mode instead of side-by-side.")
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@project_options
 def diff(ref1, ref2, visual, overlay, no_daemon):
     """Compare two versions or CAD files.
 
@@ -406,6 +411,8 @@ def diff(ref1, ref2, visual, overlay, no_daemon):
 
 
 def _relative_to_cwd(path):
+    if get_project().configured:
+        return str(path.resolve())
     return str(path.relative_to(Path.cwd())) if path.is_relative_to(Path.cwd()) else str(path)
 
 
@@ -436,6 +443,7 @@ def _add_visual_response(
         click.echo(json.dumps({"command": "diff", "status": "error", "message": err}))
         sys.exit(1)
 
+    out_dir = derived_dir("diff", step_a, step_b) if get_project().configured else Path.cwd()
     png_path = None
     overlay_png_path = None
     volume_glb_path = None
@@ -446,7 +454,7 @@ def _add_visual_response(
     if shape_a is not None and shape_b is not None:
         with phase_recorder.observe("comparison_rendering"):
             png_path, source_views = _render_diff_png(
-                shape_a, shape_b, glb_a, glb_b, Path.cwd()
+                shape_a, shape_b, glb_a, glb_b, out_dir
             )
         with phase_recorder.observe("projection_comparison"):
             overlay_png_path, projection_comparison = _render_diff_overlay_png(
@@ -454,7 +462,7 @@ def _add_visual_response(
                 shape_b,
                 glb_a,
                 glb_b,
-                Path.cwd(),
+                out_dir,
                 source_views=source_views,
             )
         if (
@@ -485,7 +493,7 @@ def _add_visual_response(
                         solid_comparison,
                         glb_a,
                         glb_b,
-                        Path.cwd(),
+                        out_dir,
                     )
                 )
                 if volume_glb_path is None and volume_png_path is None:
@@ -513,14 +521,11 @@ def _add_visual_response(
             glb_a,
             glb_b,
             overlay=overlay,
-            out_dir=Path.cwd(),
+            out_dir=out_dir,
             diff_side_png=png_path,
             diff_overlay_png=overlay_png_path,
             diff_volume_png=volume_png_path,
         )
-
-    from agentcad.review_server import viewer_url
-    url = viewer_url(html_path)
 
     visual_resp = {
         "mode": mode,
@@ -547,10 +552,10 @@ def _find_step_path(version_entry, meta):
     """Resolve the STEP file path for a version, preferring meta.outputs.step."""
     step_rel = meta.get("outputs", {}).get("step")
     if step_rel:
-        p = Path.cwd() / step_rel
+        p = get_project().artifact_path(step_rel)
         if p.exists():
             return p
     # Fallback: version_dir/output.step
-    version_dir = Path.cwd() / version_entry["path"]
+    version_dir = get_project().version_dir(version_entry)
     fallback = version_dir / "output.step"
     return fallback if fallback.exists() else None

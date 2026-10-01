@@ -5,6 +5,7 @@ import webbrowser
 from pathlib import Path
 
 import click
+from agentcad.project import get_project, project_options, derived_dir
 
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 
@@ -69,11 +70,16 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     position: absolute; top: 10px; color: #333;
     padding: 4px 10px; background: rgba(255,255,255,0.85);
     border-radius: 4px; font-size: 12px; user-select: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   #label-left { left: 16px; }
-  #label-right { left: calc(50% + 16px); }
+  #label-right { left: calc(var(--viewer-width, 100vw) / 2 + 16px); }
+  body.split-open .label {
+    top: 54px;
+    max-width: calc(var(--viewer-width, 100vw) / 2 - 32px);
+  }
   #divider {
-    position: fixed; top: 0; bottom: 0; left: 50%;
+    position: fixed; top: 0; bottom: 0; left: calc(var(--viewer-width, 100vw) / 2);
     width: 1px; background: rgba(0,0,0,0.2);
     pointer-events: none; display: none;
   }
@@ -499,7 +505,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   <div class="head">
     <div class="verdict">
       <span class="pill info" id="review-pill">review</span>
-      <h1>Spec check<small id="review-subtitle">measurement review</small></h1>
+      <h1><span id="review-heading">Spec check</span><small id="review-subtitle">measurement review</small></h1>
     </div>
     <div class="stats">
       <div class="stat"><span>Features</span><strong id="review-features">—</strong></div>
@@ -605,8 +611,10 @@ const GROUPS = __GROUPS_JSON__;
 const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
 const VIEWER_CONTEXT = __VIEWER_CONTEXT_JSON__;
+const COMMENT_PARTS = [...new Map([...__COMMENT_PARTS_JSON__, ...PARTS].map(p => [p.id, p])).values()];
 
 const hasB = MODEL_B_URL.length > 0;
+const liveProject = parent !== window && new URLSearchParams(location.search).get('live') === '1';
 const hasAgentImgs = PREVIEW_PNG_URL.length > 0 || DIFF_SIDE_PNG_URL.length > 0 || DIFF_OVERLAY_PNG_URL.length > 0 || DIFF_VOLUME_PNG_URL.length > 0;
 const hasAgentState = Boolean(PART_REVIEW);
 const hasAgentView = hasAgentImgs || hasAgentState;
@@ -630,8 +638,84 @@ let partState = {
 };
 window.agentcadViewer = {
   debugState: viewerDebugState,
+  captureState: captureLiveState,
+  restoreState: restoreLiveState,
   lastState: null,
 };
+
+// The project shell swaps complete snapshots only after the next model has
+// loaded. Standalone file viewers keep working without a parent or server.
+function captureLiveState() {
+  return {
+    commentsOpen: document.getElementById('comments-panel').classList.contains('open'),
+    selectedCommentId,
+    mode: currentMode, hasB,
+    position: camera.position.toArray(), target: controls.target.toArray(),
+    autoRotate: controls.autoRotate,
+    hidden: [...partState.hidden], isolated: [...partState.isolated],
+    selected: partState.selected, ghostRest: partState.ghostRest,
+    overlay: ['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].map(id => {
+      const el = document.getElementById(id);
+      return {id, value:el.value, checked:el.checked};
+    }),
+  };
+}
+function restoreLiveState(state) {
+  if (!state) return false;
+  let mode = state.mode;
+  // First-run A represents current. In a subsequent A/B snapshot current is B.
+  if (!state.hasB && hasB && mode === 'single-a') mode = 'single-b';
+  if (state.hasB && !hasB && mode === 'single-b') mode = 'single-a';
+  const button = [...document.querySelectorAll('#modes button')].find(b => b.dataset.mode === mode);
+  const fallback = !button || button.disabled;
+  setMode(fallback ? (hasB ? 'single-b' : 'single-a') : mode);
+  setAutoRotate(false);
+  const vector = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+  if (vector(state.position) && vector(state.target)) {
+    controls.enableDamping = false;
+    controls.update();
+    camera.position.fromArray(state.position);
+    controls.target.fromArray(state.target);
+    camera.lookAt(controls.target);
+    controls.update();
+    controls.enableDamping = true;
+  }
+  const ids = new Set(PARTS.map(p => p.id));
+  partState.hidden = new Set((state.hidden || []).filter(id => ids.has(id)));
+  partState.isolated = new Set((state.isolated || []).filter(id => ids.has(id)));
+  partState.selected = ids.has(state.selected) ? state.selected : null;
+  partState.ghostRest = Boolean(state.ghostRest);
+  applyPartState();
+  for (const item of state.overlay || []) {
+    if (!['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].includes(item.id)) continue;
+    const el = document.getElementById(item.id);
+    el.value = item.value; el.checked = item.checked;
+    el.dispatchEvent(new Event(item.id.startsWith('opacity') ? 'input' : 'change'));
+  }
+  setAutoRotate(Boolean(state.autoRotate));
+  selectedCommentId = state.selectedCommentId || null;
+  if (state.commentsOpen && !['parts', 'agent-view'].includes(currentMode)) setCommentPanel(true, { preserveCamera: true });
+  renderReviewComments();
+  publishViewerDebugState();
+  return fallback;
+}
+function tellProject(type, extra = {}) {
+  if (parent !== window && location.protocol !== 'file:') {
+    parent.postMessage({type, ...extra}, location.origin);
+  }
+}
+window.addEventListener('message', event => {
+  if (event.source !== parent || parent === window || event.origin !== location.origin || !viewerReady) return;
+  if (event.data?.type === 'agentcad:capture') {
+    const commentBusy = reviewBusy();
+    tellProject('agentcad:state', {state:captureLiveState(), busy:exportBtn.disabled || commentBusy,
+      busyReason: commentBusy ? 'Finish or save your comment to show the latest build' : 'Waiting for GIF export'});
+  } else if (event.data?.type === 'agentcad:restore') {
+    const fallback = restoreLiveState(event.data.state);
+    renderFrame();
+    tellProject('agentcad:restored', {fallback});
+  }
+});
 
 // Disable buttons that lack data
 function setupModeButtons() {
@@ -885,6 +969,16 @@ function makeStaticGroupRow(group) {
   return row;
 }
 
+function connectionSummary(part) {
+  const connection = part.connection;
+  if (!connection) return '';
+  if (connection.status === 'disconnected')
+    return `Warning: touches no other part; ${fmtNumber(connection.distance_mm)} mm from ${connection.nearest_part_id}`;
+  if (connection.status === 'floating') return 'Intentionally floating';
+  if (connection.status === 'unavailable') return 'Contact check unavailable';
+  return '';
+}
+
 function makeStaticPartRow(part) {
   const li = document.createElement('li');
   li.dataset.partId = part.id;
@@ -896,6 +990,13 @@ function makeStaticPartRow(part) {
     li.appendChild(swatch);
   }
   li.appendChild(document.createTextNode(partLabel(part)));
+  const connection = connectionSummary(part);
+  if (connection) {
+    const note = document.createElement('small');
+    note.textContent = ` · ${connection}`;
+    if (part.connection.status === 'disconnected') note.style.color = '#c2413f';
+    li.appendChild(note);
+  }
   if (part.part_of) {
     const tag = document.createElement('span');
     tag.className = 'part-group-tag';
@@ -935,7 +1036,7 @@ function setupPartControls() {
     rows.appendChild(makeControlRow({
       id: p.id,
       label: partLabel(p),
-      sub: p.part_of ? `${p.id} · ${p.part_of}` : p.id,
+      sub: [p.part_of ? `${p.id} · ${p.part_of}` : p.id, connectionSummary(p)].filter(Boolean).join(' · '),
       color: p.color,
       isGroup: false,
     }));
@@ -1020,20 +1121,20 @@ function partMatchesNameFuzzy(partId, name) {
   return value.includes(String(partId));
 }
 
-function detectPartId(mesh) {
+function detectPartId(mesh, parts=PARTS) {
   const names = [];
   let node = mesh;
   while (node) {
     if (node.name) names.push(node.name);
     node = node.parent;
   }
-  for (const p of PARTS) {
+  for (const p of parts) {
     if (names.some(name => partMatchesNameExact(p.id, name))) return p.id;
     if (p.name && names.some(name => partMatchesNameExact(p.name, name))) return p.id;
   }
   // Fallback for exporters that decorate node names. Longest IDs first avoids
   // assigning wheel_axle to wheel when both exist.
-  const longestFirst = [...PARTS].sort((a, b) => String(b.id).length - String(a.id).length);
+  const longestFirst = [...parts].sort((a, b) => String(b.id).length - String(a.id).length);
   for (const p of longestFirst) {
     if (names.some(name => partMatchesNameFuzzy(p.id, name))) return p.id;
     if (p.name && names.some(name => partMatchesNameFuzzy(p.name, name))) return p.id;
@@ -1076,7 +1177,7 @@ function indexCommentPartMeshes(model, role) {
   const index = partObjectsByRole[role];
   model.traverse(c => {
     if (!c.isMesh) return;
-    const partId = detectPartId(c);
+    const partId = detectPartId(c, COMMENT_PARTS);
     if (!partId) return;
     c.userData.partId = partId;
     if (!index.has(partId)) index.set(partId, []);
@@ -1111,6 +1212,7 @@ function meshIsGhosted(mesh) {
 function viewerDebugState() {
   return {
     ready: viewerReady,
+    validation_marker_count: viewerReady ? reviewMarkerGroup.children.length : 0,
     mode: currentMode,
     camera: viewerReady ? {
       position: camera.position.toArray(),
@@ -1156,11 +1258,12 @@ function publishViewerDebugState() {
 
 // ---- Human review comments ---------------------------------------------
 // Persistent comments are available only when this generated file is served
-// by the loopback review bridge. file:// remains a fully functional read-only
+// by the live project viewer. file:// remains a fully functional read-only
 // viewer for backwards compatibility and offline artifact inspection.
-const reviewQuery = new URLSearchParams(window.location.search);
-const reviewToken = reviewQuery.get('token') || '';
-const reviewEnabled = window.location.protocol.startsWith('http') && reviewToken.length > 0;
+const reviewProject = location.pathname.match(/^\/projects\/([a-f0-9]{64})\/artifacts\/\d+\/viewer\.html$/);
+const reviewToken = reviewProject?.[1] || '';
+const reviewBase = `/projects/${reviewToken}/review`;
+const reviewEnabled = location.protocol === 'http:' && Boolean(reviewToken);
 let reviewComments = [];
 let commentPlacement = null;
 let pendingCommentAnchor = null;
@@ -1168,6 +1271,12 @@ let selectedCommentId = null;
 let commentHoverPoint = null;
 let editingCommentId = null;
 let reviewCommentsFingerprint = '';
+let reviewWrites = 0;
+
+function reviewBusy() {
+  return reviewWrites > 0 || Boolean(commentPlacement || pendingCommentAnchor)
+    || [...document.querySelectorAll('.comment-reply-text')].some(el => el.value.trim());
+}
 
 function setCommentStatus(message) {
   document.getElementById('comment-status').textContent = message || '';
@@ -1176,10 +1285,16 @@ function setCommentStatus(message) {
 async function reviewFetch(path, options={}) {
   const headers = { ...(options.headers || {}), 'X-AgentCAD-Review-Token': reviewToken };
   if (options.body) headers['Content-Type'] = 'application/json';
-  const response = await fetch(path, { ...options, headers });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.message || `Review request failed (${response.status})`);
-  return payload;
+  const writing = options.method === 'POST';
+  if (writing) reviewWrites++;
+  try {
+    const response = await fetch(reviewBase + path, { ...options, headers });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || payload.error || `Review request failed (${response.status})`);
+    return payload;
+  } finally {
+    if (writing) reviewWrites--;
+  }
 }
 
 function currentModelRole() {
@@ -1236,7 +1351,7 @@ function partRelativeAtWorldPoint(partId, point, model=null) {
   if (model) {
     meshes = [];
     model.traverse(object => {
-      if (object.isMesh && detectPartId(object) === partId) meshes.push(object);
+      if (object.isMesh && detectPartId(object, COMMENT_PARTS) === partId) meshes.push(object);
     });
   }
   if (!meshes.length) return null;
@@ -1266,7 +1381,7 @@ function closestVisiblePartId(clientX, clientY, active) {
   const boxes = new Map();
   active.model.traverse(mesh => {
     if (!mesh.isMesh || !objectIsVisible(mesh)) return;
-    const partId = mesh.userData.partId || detectPartId(mesh);
+    const partId = mesh.userData.partId || detectPartId(mesh, COMMENT_PARTS);
     if (!partId) return;
     if (!boxes.has(partId)) boxes.set(partId, new THREE.Box3());
     boxes.get(partId).expandByObject(mesh);
@@ -1308,9 +1423,15 @@ function captureCommentScreenshot() {
   return probe.toDataURL('image/jpeg', 0.72);
 }
 
-function setCommentPanel(open) {
+function setCommentPanel(open, { preserveCamera=false }={}) {
+  const oldWidth = canvas.clientWidth;
   document.getElementById('comments-panel').classList.toggle('open', open);
   document.getElementById('comment-toggle-btn').classList.toggle('active', open);
+  resize();
+  if (!preserveCamera && oldWidth !== canvas.clientWidth) {
+    camera.position.sub(controls.target).multiplyScalar(oldWidth / canvas.clientWidth).add(controls.target);
+    controls.update();
+  }
   if (!open) cancelCommentPlacement();
 }
 
@@ -1343,19 +1464,21 @@ function cancelCommentPlacement() {
 }
 
 function commentScopeLabel(scope) {
+  if (scope === 'previous') return 'Previous';
   if (scope === 'both') return 'Both';
   if (!hasB) return 'Current';
   return scope === 'b' ? 'Current' : 'Previous';
 }
 
 function commentScopeDescription(scope) {
+  if (scope === 'previous') return 'Previous revision is not displayed in this viewer';
   if (scope === 'both') return `Both · ${LABEL_A} + ${LABEL_B}`;
   if (!hasB) return `Current · ${LABEL_A}`;
   return scope === 'b' ? `Current · ${LABEL_B}` : `Previous · ${LABEL_A}`;
 }
 
 function pendingAnchorLabel(anchor) {
-  const part = partById(anchor.part_id);
+  const part = COMMENT_PARTS.find(p => p.id === anchor.part_id);
   const partSuffix = part ? ` · ${partLabel(part)}` : '';
   return `Pinned comment${partSuffix} · ${commentScopeLabel(anchor.scope || anchor.role)}`;
 }
@@ -1406,17 +1529,17 @@ function setupCommentPartSelector(anchor) {
   const field = document.getElementById('comment-part-field');
   const select = document.getElementById('comment-part-select');
   select.innerHTML = '';
-  if (!hasParts) {
+  if (!COMMENT_PARTS.length) {
     field.classList.remove('visible');
     return;
   }
-  for (const part of PARTS) {
+  for (const part of COMMENT_PARTS) {
     const option = document.createElement('option');
     option.value = part.id;
     option.textContent = `${partLabel(part)} · ${part.id}`;
     select.appendChild(option);
   }
-  const suggested = PARTS.some(part => part.id === anchor.part_id) ? anchor.part_id : PARTS[0].id;
+  const suggested = COMMENT_PARTS.some(part => part.id === anchor.part_id) ? anchor.part_id : COMMENT_PARTS[0].id;
   select.value = suggested;
   field.classList.add('visible');
   setPendingCommentPart(suggested);
@@ -1450,7 +1573,8 @@ function surfaceCommentHit(event) {
   );
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(pointer, camera);
-  const hit = raycaster.intersectObject(active.model, true).find(entry => entry.object.isMesh);
+  const hit = raycaster.intersectObject(active.model, true)
+    .find(entry => entry.object.isMesh && objectIsVisible(entry.object));
   return { active, hit };
 }
 
@@ -1482,7 +1606,7 @@ function onSurfaceCommentClick(event) {
   const worldNormal = hit.face
     ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
     : new THREE.Vector3(0, 1, 0);
-  const partId = hit.object.userData.partId || detectPartId(hit.object)
+  const partId = hit.object.userData.partId || detectPartId(hit.object, COMMENT_PARTS)
     || closestVisiblePartId(event.clientX, event.clientY, active);
   openCommentComposer({
     kind: 'surface',
@@ -1513,6 +1637,8 @@ function pendingCommentPayload() {
     source_label: source.label ?? null,
     target: {
       model: pendingCommentAnchor.scope || pendingCommentAnchor.role,
+      scope: (pendingCommentAnchor.scope === 'both') ? 'both'
+        : (hasB && (pendingCommentAnchor.scope || pendingCommentAnchor.role) === 'a' ? 'previous' : 'current'),
       source_model: pendingCommentAnchor.role,
       part_id: pendingCommentAnchor.part_id || null,
     },
@@ -1523,18 +1649,20 @@ function pendingCommentPayload() {
 }
 
 async function savePendingComment({ send=false }={}) {
+  if (reviewWrites) return;
   const payload = pendingCommentPayload();
   if (!payload) return;
+  reviewWrites++;
   let persisted = null;
   try {
     const result = editingCommentId
-      ? await reviewFetch(`/api/comments/${encodeURIComponent(editingCommentId)}/update`, {
+      ? await reviewFetch(`/comments/${encodeURIComponent(editingCommentId)}/update`, {
           method: 'POST', body: JSON.stringify(payload),
         })
-      : await reviewFetch('/api/comments', { method: 'POST', body: JSON.stringify(payload) });
+      : await reviewFetch('/comments', { method: 'POST', body: JSON.stringify({ ...payload, send }) });
     persisted = result.comment;
-    if (send) {
-      await reviewFetch('/api/reviews/submit', {
+    if (send && editingCommentId) {
+      await reviewFetch('/submit', {
         method: 'POST', body: JSON.stringify({ comment_ids: [persisted.id] }),
       });
     }
@@ -1549,12 +1677,15 @@ async function savePendingComment({ send=false }={}) {
       return;
     }
     setCommentStatus(error.message);
+  } finally {
+    reviewWrites--;
   }
 }
 
 async function sendDraftComment(commentId) {
+  if (reviewWrites) return;
   try {
-    await reviewFetch('/api/reviews/submit', {
+    await reviewFetch('/submit', {
       method: 'POST', body: JSON.stringify({ comment_ids: [commentId] }),
     });
     await loadReviewComments();
@@ -1581,9 +1712,10 @@ function editDraftComment(comment) {
 }
 
 async function deleteDraftComment(commentId) {
+  if (reviewWrites) return;
   if (!window.confirm(`Delete unsent draft ${commentId}?`)) return;
   try {
-    await reviewFetch(`/api/comments/${encodeURIComponent(commentId)}/delete`, {
+    await reviewFetch(`/comments/${encodeURIComponent(commentId)}/delete`, {
       method: 'POST', body: '{}',
     });
     await loadReviewComments();
@@ -1594,10 +1726,11 @@ async function deleteDraftComment(commentId) {
 }
 
 async function submitReviewDrafts() {
+  if (reviewWrites) return;
   const ids = reviewComments.filter(comment => comment.status === 'draft').map(comment => comment.id);
   if (!ids.length) return;
   try {
-    const result = await reviewFetch('/api/reviews/submit', {
+    const result = await reviewFetch('/submit', {
       method: 'POST', body: JSON.stringify({ comment_ids: ids }),
     });
     setCommentStatus(`Sent ${result.comments.length} draft${result.comments.length === 1 ? '' : 's'} to the agent.`);
@@ -1608,13 +1741,14 @@ async function submitReviewDrafts() {
 }
 
 async function humanReply(commentId, message) {
+  if (reviewWrites) return;
   const text = String(message || '').trim();
   if (!text) {
     setCommentStatus('Write a reply before sending.');
     return;
   }
   try {
-    await reviewFetch(`/api/comments/${encodeURIComponent(commentId)}/reply`, {
+    await reviewFetch(`/comments/${encodeURIComponent(commentId)}/reply`, {
       method: 'POST', body: JSON.stringify({ message: text }),
     });
     await loadReviewComments();
@@ -1625,8 +1759,9 @@ async function humanReply(commentId, message) {
 }
 
 async function humanTransition(commentId, action, message='') {
+  if (reviewWrites) return;
   try {
-    await reviewFetch(`/api/comments/${encodeURIComponent(commentId)}/${action}`, {
+    await reviewFetch(`/comments/${encodeURIComponent(commentId)}/${action}`, {
       method: 'POST', body: JSON.stringify({ message: String(message || '').trim() }),
     });
     await loadReviewComments();
@@ -1642,6 +1777,10 @@ function sameViewerVersion(comment) {
 }
 
 function commentScope(comment) {
+  const scope = (comment.target || {}).scope;
+  if (scope === 'current') return hasB ? 'b' : 'a';
+  if (scope === 'previous') return hasB ? 'a' : 'previous';
+  if (scope === 'both') return 'both';
   const value = (comment.target || {}).model || PARTS_MODEL;
   return ['a', 'b', 'both'].includes(value) ? value : PARTS_MODEL;
 }
@@ -1653,6 +1792,7 @@ function commentSourceRole(comment) {
 }
 
 function commentPinRoles(comment) {
+  if (!hasB && commentScope(comment) === 'previous') return [];
   if (!hasB) return ['a'];
   const scope = commentScope(comment);
   if (scope === 'both') return ['a', 'b'];
@@ -1709,6 +1849,8 @@ function commentWorldPoint(comment, requestedRole=null) {
   const sameVersion = sameViewerVersion(comment);
   const scope = commentScope(comment);
   const role = requestedRole || (scope === 'both' ? commentSourceRole(comment) : scope);
+  if (role === 'previous') return null;
+  if (partId && !commentPartMeshes(partId, role).length) return null;
   if (!sameVersion && !partId) return null;
   if (anchor.kind === 'part' && partId) {
     const meshes = commentPartMeshes(partId, role);
@@ -1718,11 +1860,11 @@ function commentWorldPoint(comment, requestedRole=null) {
     return box.getCenter(new THREE.Vector3());
   }
   if (anchor.kind !== 'surface' || !Array.isArray(anchor.point_mm)) return null;
-  const sourceRole = commentSourceRole(comment);
-  if (!sameVersion || role !== sourceRole) {
+  const sameModelVersion = String(sourceForRole(role).version) === String(comment.source_version);
+  if (!sameModelVersion) {
     const mapped = pointFromPartRelative(anchor, partId, role);
     if (mapped) return mapped;
-    if (!sameVersion) return null;
+    return null;
   }
   const model = modelForRole(role);
   if (!model) return null;
@@ -1735,7 +1877,9 @@ function restoreCommentView(comment) {
   const scope = commentScope(comment);
   const carriedMode = hasB && scope === 'a' ? 'single-a'
     : (hasB && scope === 'b' ? 'single-b' : (PARTS_MODEL === 'b' && hasB ? 'single-b' : 'single-a'));
-  const mode = sameViewerVersion(comment) ? view.mode : carriedMode;
+  const mode = comment.target?.scope
+    ? (scope === 'both' && hasB ? 'side-by-side' : carriedMode)
+    : (sameViewerVersion(comment) ? view.mode : carriedMode);
   if (mode && !['agent-view', 'parts'].includes(mode)) setMode(mode);
   if (Array.isArray(view.position) && Array.isArray(view.target)) {
     camera.position.fromArray(view.position);
@@ -1840,7 +1984,7 @@ function makeCommentRow(comment) {
   id.appendChild(scope);
   const status = document.createElement('span');
   const latestReply = (comment.replies || []).at(-1);
-  const latestActor = latestReply?.actor || comment.author || 'human';
+  const latestActor = (comment.events || []).at(-1)?.actor || latestReply?.actor || comment.author || 'human';
   status.textContent = comment.status === 'draft'
     ? 'Draft · Not sent'
     : comment.status === 'resolved'
@@ -1852,15 +1996,23 @@ function makeCommentRow(comment) {
   const author = document.createElement('div');
   author.className = 'author';
   author.textContent = comment.author === 'agent' ? 'Agent' : 'Human';
+  author.title = `Created on revision ${comment.source_version ?? '?'} · ${comment.source_label || ''}`;
   const text = document.createElement('p'); text.textContent = comment.text;
   const target = document.createElement('div');
   target.className = 'target';
   const partId = (comment.target || {}).part_id;
-  const part = partById(partId);
+  const part = COMMENT_PARTS.find(p => p.id === partId);
   target.textContent = part
     ? `Part · ${partLabel(part)} (${part.id})`
     : `${(comment.anchor || {}).kind || 'comment'} · ${comment.source_label || 'saved view'}`;
   row.append(meta, author, text, target);
+  if (viewerReady && (comment.anchor || {}).kind !== 'view'
+      && !commentPinRoles(comment).some(role => commentWorldPoint(comment, role))) {
+    const unplaced = document.createElement('div');
+    unplaced.className = 'comment-unplaced';
+    unplaced.textContent = 'Unplaced · part or revision is not present in this view';
+    row.appendChild(unplaced);
+  }
   if (comment.status === 'draft') {
     const note = document.createElement('div');
     note.className = 'draft-note';
@@ -2049,7 +2201,8 @@ function updateCommentTargetPreview() {
 async function loadReviewComments({ onlyIfChanged=false }={}) {
   if (!reviewEnabled) return;
   try {
-    const result = await reviewFetch('/api/comments');
+    const result = await reviewFetch('/comments');
+    if (onlyIfChanged && reviewBusy()) return;
     const fingerprint = JSON.stringify(result.comments || []);
     if (onlyIfChanged && fingerprint === reviewCommentsFingerprint) return;
     reviewComments = result.comments || [];
@@ -2064,7 +2217,7 @@ function setupReviewComments() {
   const toggle = document.getElementById('comment-toggle-btn');
   if (!reviewEnabled) {
     toggle.disabled = true;
-    toggle.title = 'Open with `agentcad review open current` to add persistent comments.';
+    toggle.title = 'Open the live project with `agentcad viewer open` to add comments.';
     return;
   }
   toggle.addEventListener('click', () => setCommentPanel(!document.getElementById('comments-panel').classList.contains('open')));
@@ -2094,10 +2247,10 @@ function setupReviewComments() {
   });
   loadReviewComments();
   window.setInterval(() => {
+    if (reviewBusy()) return;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
     loadReviewComments({ onlyIfChanged: true });
   }, 3_000);
-  window.setInterval(() => reviewFetch('/api/ping').catch(() => {}), 60_000);
 }
 
 window.agentcadViewer.reviewDebugState = () => ({
@@ -2333,7 +2486,7 @@ function setupReviewPanel() {
     ? `${matched.length} / ${matched.length + missing.length}`
     : `${(measure.cylindrical_features || []).length}`;
   document.getElementById("review-error").textContent = spec ? fmtNumber(spec.total_abs_count_error) : "—";
-  document.getElementById("review-validity").textContent = valid.is_valid === false ? "Invalid" : "Valid";
+  document.getElementById("review-validity").textContent = valid.is_valid === true ? "Valid" : valid.is_valid === false ? "Invalid" : "Undetermined";
 
   const dimGrid = document.getElementById("review-dimensions");
   for (const axis of ["x", "y", "z"]) {
@@ -2347,6 +2500,14 @@ function setupReviewPanel() {
   if (!spec) {
     document.getElementById("review-spec-section").style.display = "none";
   } else {
+    for (const check of spec.structure_checks || []) {
+      specRows.appendChild(makeReviewRow({
+        label: check.expectation,
+        status: check.passed === true ? 'pass' : check.passed === false ? 'fail' : 'info',
+        badge: check.passed === true ? 'pass' : check.passed === false ? 'fail' : 'undetermined',
+        summary: `expected ${check.expected}, got ${check.actual === null ? 'unknown' : check.actual}`,
+      }));
+    }
     for (const feature of matched) {
       const bucket = findMeasuredBucket(feature);
       specRows.appendChild(makeReviewRow({
@@ -2369,7 +2530,53 @@ function setupReviewPanel() {
   }
 
   const measureRows = document.getElementById("review-measure-rows");
-  for (const bucket of measure.cylindrical_features || []) {
+  if (REVIEW.validation) {
+    const report = REVIEW.validation;
+    document.getElementById('review-heading').textContent = 'Validation';
+    document.getElementById('btn-spec').textContent = 'Validation';
+    document.querySelector('#review-measure-section h2').textContent = 'Findings and next checks';
+    pill.textContent = report.is_valid === true ? 'pass' : report.is_valid === false ? 'fail' : 'undetermined';
+    pill.className = 'pill ' + (report.is_valid === true ? 'pass' : report.is_valid === false ? 'fail' : 'info');
+    document.getElementById('review-subtitle').textContent = report.message;
+    const row = makeReviewRow({label: report.first_failure ? 'What we found' : 'Validation',
+      status: report.is_valid === false ? 'fail' : 'info', badge: pill.textContent,
+      summary: report.message + ((REVIEW.validation_markers || []).length
+        ? ' Red markers locate the reported failures. IDs refer to this file only.' : '')});
+    row._validationMarkers = REVIEW.validation_markers || [];
+    measureRows.appendChild(row);
+    if (report.guidance) {
+      measureRows.appendChild(makeReviewRow({label: "What we don't know", status: 'info',
+        badge: 'unknown', summary: report.guidance.unknown}));
+      for (const check of report.guidance.next_checks || []) {
+        measureRows.appendChild(makeReviewRow({label: 'Check next', status: 'info',
+          badge: 'inspect', summary: check}));
+      }
+    }
+    if ((report.repairs || []).length) {
+      const possible = document.createElement('details');
+      possible.id = 'validation-possible-repairs';
+      const heading = document.createElement('summary');
+      heading.textContent = 'Possible repairs (unverified)';
+      possible.appendChild(heading);
+      const disclaimer = document.createElement('p');
+      disclaimer.textContent = 'These are conditional options, not diagnosed causes or verified fixes. '
+        + 'Confirm the conditions before editing; no repair has been applied. Revalidate after any change.';
+      possible.appendChild(disclaimer);
+      for (const repair of report.repairs) {
+        const label = repair.kind.replaceAll('_', ' ');
+        const entry = makeReviewRow({label: label.charAt(0).toUpperCase() + label.slice(1), status: 'info',
+          badge: 'unverified',
+          summary: [repair.evidence && ('Related finding (not proof of cause): ' + repair.evidence.message),
+            'Possible explanation: ' + repair.why,
+            'Only consider if: ' + (repair.precondition || 'Applicability must be established by inspection.'),
+            repair.changes_intent ? 'Changes the design.' : 'Intended to preserve geometry only under these conditions; not verified.',
+            'If confirmed: ' + repair.how].filter(Boolean).join(' ')});
+        possible.appendChild(entry);
+      }
+      measureRows.appendChild(possible);
+    }
+  }
+  for (const bucket of (REVIEW.validation ? [] : measure.cylindrical_features || [])) {
     measureRows.appendChild(makeReviewRow({
       label: `Ø${fmtNumber(bucket.diameter_mm)} cylinders`,
       status: "pass",
@@ -2381,6 +2588,10 @@ function setupReviewPanel() {
 }
 
 function clearReviewMarkers() {
+  reviewMarkerGroup.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) child.material.dispose();
+  });
   reviewMarkerGroup.clear();
 }
 
@@ -2550,6 +2761,9 @@ function addRingMarker(center, diameter, axis, color, missing=false) {
 
 function reviewCentersForRow(row) {
   const points = [];
+  for (const marker of row._validationMarkers || []) {
+    for (const center of marker.points) points.push({center, diameter: 1});
+  }
   const bucket = row._reviewBucket;
   if (bucket && bucket.representative_centers) {
     for (const center of bucket.representative_centers) {
@@ -2591,6 +2805,22 @@ function focusReviewRow(row) {
 function selectReviewRow(row, options={}) {
   document.querySelectorAll("#spec-panel .review-row").forEach(r => r.classList.toggle("active", r === row));
   clearReviewMarkers();
+  for (const marker of row._validationMarkers || []) {
+    const points = marker.points.map(cadPointToViewer);
+    if (points.length === 1) {
+      const dims = reviewMetrics().dimensions || {};
+      const radius = Math.max(...Object.values(dims).filter(v => typeof v === 'number'), 1) * 0.006;
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8),
+        new THREE.MeshBasicMaterial({color: 0xff3020, depthTest: false, depthWrite: false}));
+      dot.position.copy(points[0]); dot.renderOrder = 1000;
+      reviewMarkerGroup.add(dot);
+    } else if (points.length > 1) {
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.LineBasicMaterial({color: 0xff3020, depthTest: false, depthWrite: false}));
+      line.renderOrder = 1000;
+      reviewMarkerGroup.add(line);
+    }
+  }
   const bucket = row._reviewBucket;
   if (bucket && bucket.representative_centers) {
     const color = row._reviewStatus === "fail" ? 0xc24a43 : 0x3f8b62;
@@ -2632,7 +2862,13 @@ function resize() {
   // previous size and the canvas ends up 2x the viewport on high-DPR displays,
   // pushing the model off-screen.
   const specWidth = currentMode === "spec" && hasReview ? 396 : 0;
-  renderer.setSize(Math.max(1, window.innerWidth - specWidth), window.innerHeight);
+  const panel = document.getElementById('comments-panel');
+  const commentWidth = panel.classList.contains('open') ? panel.offsetWidth : 0;
+  const width = Math.max(1, window.innerWidth - specWidth - commentWidth);
+  panel.style.right = `${specWidth}px`;
+  document.body.style.setProperty('--viewer-width', `${width}px`);
+  document.getElementById('modes').style.right = `${specWidth + commentWidth + 10}px`;
+  renderer.setSize(width, window.innerHeight);
 }
 window.addEventListener('resize', resize);
 
@@ -2687,7 +2923,7 @@ const combinedBox = new THREE.Box3();
 const loader = new GLTFLoader();
 
 function attach(scene, url, { material, onMesh, alignToCenter=false }) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     if (!url) { resolve(null); return; }
     loader.load(url, gltf => {
       const model = gltf.scene;
@@ -2718,7 +2954,7 @@ function attach(scene, url, { material, onMesh, alignToCenter=false }) {
 
       if (onMesh) onMesh(model);
       resolve(model);
-    });
+    }, undefined, reject);
   });
 }
 
@@ -2738,7 +2974,10 @@ function fitCamera() {
 // Load all scenes in parallel, then fit camera
 Promise.all([
   attach(sceneA_single, MODEL_A_URL, {
-    alignToCenter: hasB,
+    // Use one frame of reference throughout a live session, including v1.
+    // Otherwise the first A/B update centers geometry underneath an unchanged
+    // camera and visibly moves the model. Standalone snapshots keep their pose.
+    alignToCenter: hasB || liveProject,
     onMesh: m => {
       reviewModelA = m;
       indexCommentPartMeshes(m, 'a');
@@ -2780,7 +3019,11 @@ Promise.all([
   refreshActiveReviewMarkers();
   if (partState.focus) focusPart(partState.focus);
   viewerReady = true;
+  renderReviewComments();
   publishViewerDebugState();
+  tellProject('agentcad:ready');
+}).catch(() => {
+  tellProject('agentcad:load-error');
 });
 
 // ---- Mode switching ----
@@ -2806,6 +3049,7 @@ function setMode(mode) {
     for (const pin of document.querySelectorAll('.comment-pin')) pin.style.display = 'none';
   }
   document.body.classList.toggle('spec-open', mode === 'spec');
+  document.body.classList.toggle('split-open', mode === 'side-by-side');
   document.querySelectorAll('#modes button').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === mode);
   });
@@ -3097,7 +3341,7 @@ def _resolve_to_glb(file_str):
 def _resolve_to_glb_and_shape(file_str):
     """Resolve a file path to (glb_path, topods_shape_or_none, error).
 
-    TopoDS_Shape is returned only for STEP inputs. GLB inputs get None for the
+    TopoDS_Shape is returned for STEP/BREP inputs. GLB inputs get None for the
     shape — callers that need a shape (e.g. for PNG rendering) handle that.
     """
     file_path = Path(file_str).resolve()
@@ -3105,10 +3349,10 @@ def _resolve_to_glb_and_shape(file_str):
         return None, None, f"File '{file_str}' not found"
 
     suffix = file_path.suffix.lower()
-    if suffix not in (".glb", ".step", ".stp"):
-        return None, None, f"Unsupported format '{suffix}'. Use .glb or .step"
+    if suffix not in (".glb", ".step", ".stp", ".brep"):
+        return None, None, f"Unsupported format '{suffix}'. Use .glb, .step, or .brep"
 
-    if suffix in (".step", ".stp"):
+    if suffix in (".step", ".stp", ".brep"):
         from agentcad.export import export_glb
         from agentcad.step_io import load_cad_shape
 
@@ -3119,7 +3363,9 @@ def _resolve_to_glb_and_shape(file_str):
             # it as a clean error string so the command's JSON envelope picks
             # it up instead of a Python traceback escaping to stderr.
             return None, None, str(exc)
-        glb_path = file_path.with_suffix(".glb")
+        glb_path = derived_dir("view", file_path) / (file_path.stem + ".glb")
+        if get_project().configured:
+            glb_path = get_project().artifact_path(glb_path)
         export_glb(shape, str(glb_path))
         return glb_path, shape, None
 
@@ -3173,6 +3419,7 @@ def _render_unified(
     review=None,
     part_review=None,
     viewer_context=None,
+    previous_parts=None,
 ):
     """Write a unified viewer HTML embedding the given artifacts.
 
@@ -3180,7 +3427,7 @@ def _render_unified(
     mode toggle will grey out the buttons that depend on missing data.
     """
     parts_payload = [
-        {k: p[k] for k in ("id", "id_source", "name", "color", "part_of") if k in p}
+        {k: p[k] for k in ("id", "id_source", "name", "color", "part_of", "connection") if k in p}
         for p in (parts or [])
     ]
     groups_payload = [
@@ -3204,6 +3451,9 @@ def _render_unified(
         "__REVIEW_JSON__": json.dumps(review) if review else "null",
         "__PART_REVIEW_JSON__": json.dumps(part_review) if part_review else "null",
         "__VIEWER_CONTEXT_JSON__": json.dumps(viewer_context or {}),
+        "__COMMENT_PARTS_JSON__": json.dumps([
+            {k: p[k] for k in ("id", "name") if k in p} for p in (previous_parts or [])
+        ]),
     }
     html = _HTML_UNIFIED
     for k, v in replacements.items():
@@ -3213,7 +3463,7 @@ def _render_unified(
 
 def _render_single(glb_path, *, review=None):
     """Write single-model viewer HTML. Returns (html_path, url)."""
-    html_path = glb_path.parent / f"{glb_path.stem}_viewer.html"
+    html_path = derived_dir("view", glb_path) / f"{glb_path.stem}_viewer.html"
     _render_unified(
         html_path,
         glb_a=glb_path,
@@ -3330,7 +3580,7 @@ def _render_solid_comparison_artifacts(
 
 def _review_error(message):
     return (
-        f"{message} Review mode requires a STEP/STP source model so "
+        f"{message} Review mode requires a STEP/STP source model (or BREP) so "
         "agentcad can measure B-rep geometry."
     )
 
@@ -3351,14 +3601,14 @@ def _load_spec_json(spec_file):
     return data, None
 
 
-def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
-    if not include_measure and spec_file is None:
+def _build_review_payload(file_str, *, include_measure=False, spec_file=None, include_validation=False):
+    if not include_measure and spec_file is None and not include_validation:
         return None, None
 
     file_path = Path(file_str).resolve()
     if not file_path.exists():
         return None, f"File '{file_str}' not found"
-    if file_path.suffix.lower() not in (".step", ".stp"):
+    if file_path.suffix.lower() not in (".step", ".stp", ".brep"):
         return None, _review_error(f"Unsupported review input '{file_path.suffix}'.")
 
     from agentcad import file_detect
@@ -3380,6 +3630,11 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
         return None, f"Could not measure '{file_str}' for viewer review: {exc}"
 
     review = {"measure": measurement}
+    if include_validation:
+        from agentcad.step_io import load_cad_shape
+        from agentcad.validation_guidance import validation_markers
+        review["validation"] = measurement["validation"]
+        review["validation_markers"] = validation_markers(load_cad_shape(file_path), measurement["validation"])
 
     if spec_file is not None:
         spec, err = _load_spec_json(spec_file)
@@ -3389,6 +3644,8 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
         from agentcad.commands.check_spec import check_measurement_against_spec
 
         check = check_measurement_against_spec(measurement, spec)
+        if include_validation:
+            review["validation"] = measurement["validation"]
         check.update({
             "command": "check-spec",
             "status": "success",
@@ -3413,6 +3670,8 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
 @click.argument("file")
 @click.argument("file_b", required=False)
 @click.option("--overlay", is_flag=True, default=False, help="Tinted overlay mode (single viewport, red/green).")
+@click.option("--validation", "with_validation", is_flag=True,
+              help="Show validation failures in red with repair guidance (one STEP/BREP file).")
 @click.option(
     "--measure",
     "with_measure",
@@ -3425,16 +3684,20 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None):
     "spec_file",
     help="Run check-spec with this JSON spec and open the viewer in Spec check mode.",
 )
-def view(file, file_b, overlay, with_measure, spec_file):
+@project_options
+def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
     """Open a GLB or STEP file in the browser.
 
     With one file: single-model viewer.
     With two files: diff view (side-by-side by default, or --overlay for tinted overlay).
     """
+    if with_validation and file_b is not None:
+        _error("--validation accepts one STEP/BREP file; omit the second file.")
     review, err = _build_review_payload(
         file,
         include_measure=with_measure,
         spec_file=spec_file,
+        include_validation=with_validation,
     )
     if err:
         _error(err)
@@ -3446,8 +3709,6 @@ def view(file, file_b, overlay, with_measure, spec_file):
         if overlay:
             _error("--overlay requires two files")
         html_path, url = _render_single(glb_a, review=review)
-        from agentcad.review_server import viewer_url
-        url = viewer_url(html_path)
         _open_browser(url)
         response = {
             "command": "view",
@@ -3456,8 +3717,11 @@ def view(file, file_b, overlay, with_measure, spec_file):
             "model": str(glb_a),
         }
         if review:
-            response["mode"] = "spec"
+            response["mode"] = "validation" if with_validation else "spec"
             response["review"] = True
+            if with_validation:
+                response["validation"] = review["validation"]
+                response["is_valid"] = review["validation"]["is_valid"]
         click.echo(json.dumps(response))
         return
 
@@ -3470,7 +3734,8 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if err:
         _error(err)
 
-    out_dir = glb_a.parent
+    out_dir = (derived_dir("view", Path(file), Path(file_b))
+               if get_project().configured else glb_a.parent)
     png_path = None
     overlay_png_path = None
     volume_glb_path = None
@@ -3544,6 +3809,7 @@ def view(file, file_b, overlay, with_measure, spec_file):
             glb_b,
             overlay=overlay,
             review=review,
+            out_dir=out_dir,
             diff_side_png=png_path,
             diff_overlay_png=overlay_png_path,
             diff_volume_png=volume_png_path,
@@ -3574,8 +3840,6 @@ def view(file, file_b, overlay, with_measure, spec_file):
     if volume_png_path is not None:
         response["volume_png"] = str(volume_png_path)
 
-    from agentcad.review_server import viewer_url
-    url = viewer_url(html_path)
     response["url"] = url
     _open_browser(url)
     click.echo(json.dumps(response))

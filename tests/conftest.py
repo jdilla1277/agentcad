@@ -38,12 +38,6 @@ def _no_daemon(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_review_server(monkeypatch):
-    """Unit tests keep legacy file:// URLs unless they explicitly test the server."""
-    monkeypatch.setenv("AGENTCAD_REVIEW_SERVER", "0")
-
-
-@pytest.fixture(autouse=True)
 def _no_remote_feedback(monkeypatch):
     """Stub the feedback remote POST so pytest never hits the production endpoint."""
     from agentcad.commands import feedback as feedback_mod

@@ -221,17 +221,12 @@ def test_recover_refuses_invalid_geometry_without_writing_history(
     orphan = isolated_dir / "v1_invalid"
     orphan.mkdir()
     _write_box_step(orphan / "output.step")
-    from agentcad import metrics
+    from agentcad import validation
 
-    real_compute = metrics.compute_metrics
+    def failing_brep_check(shape, **_):
+        return {"status": "fail", "errors": ["BRepCheck_InvalidToleranceValue"]}
 
-    def invalid_metrics(shape):
-        result = real_compute(shape)
-        result["is_valid"] = False
-        result["validity_errors"] = ["BRepCheck_InvalidToleranceValue"]
-        return result
-
-    monkeypatch.setattr("agentcad.metrics.compute_metrics", invalid_metrics)
+    monkeypatch.setitem(validation._RUNNERS, "brep_check", failing_brep_check)
 
     result = runner.invoke(cli, ["recover", "v1_invalid"])
 

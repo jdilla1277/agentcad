@@ -185,6 +185,7 @@ def test_export_routes_through_daemon_when_available(runner, isolated_dir, monke
         "agentcad.daemon.send_request",
         lambda *a, **kw: {"type": "result", "exit_code": 0, "output": daemon_output},
     )
+    (isolated_dir / "any.step").write_text("daemon reads this file")
     result = runner.invoke(cli, ["export", "any.step", "--format", "stl"])
     assert result.exit_code == 0, result.stdout
     parsed = json.loads(result.stdout)

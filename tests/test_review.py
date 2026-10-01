@@ -1,15 +1,12 @@
 import json
-import os
-import signal
 import threading
 import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
 
 import pytest
 
 from agentcad.cli import cli
-from agentcad.review_server import ReviewHandler
+from agentcad import project_viewer as live
 from agentcad.commands.view import _render_unified
 from agentcad.reviews import (
     create_comment,
@@ -198,6 +195,19 @@ def test_review_cli_and_context_discovery(runner, isolated_dir):
     assert listed["comments"][0]["text"] == "Increase the clearance"
 
 
+def test_cli_default_list_omits_unsent_drafts(runner, isolated_dir):
+    assert runner.invoke(cli, ["init", "--name", "drafts"]).exit_code == 0
+    draft = create_comment(isolated_dir, _surface_payload())
+    result = runner.invoke(cli, ["review", "list"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["comments"] == []
+    explicit = runner.invoke(cli, ["review", "list", "--status", "draft"])
+    assert json.loads(explicit.stdout)["comments"][0]["id"] == draft["id"]
+    submit_drafts(isolated_dir)
+    sent = runner.invoke(cli, ["review", "list"])
+    assert json.loads(sent.stdout)["comments"][0]["id"] == draft["id"]
+
+
 def test_review_mark_addressed_requires_saved_version(runner, isolated_dir):
     init = runner.invoke(cli, ["init", "--name", "reviewed"])
     assert init.exit_code == 0
@@ -287,11 +297,11 @@ def test_agent_cli_can_initiate_part_comments(runner, isolated_dir):
     assert current["author"] == "agent"
     assert current["source_version"] == 2
     assert current["target"] == {
-        "model": "b", "source_model": "b", "part_id": "support_rib",
+        "model": "b", "scope": "current", "source_model": "b", "part_id": "support_rib",
     }
     assert current["anchor"] == {
         "kind": "surface", "point_mm": [5.0, 2.0, 1.0],
-        "part_relative": [0.25, 0.2, 0.2],
+        "part_relative": [0.25, 0.2, 0.8],
     }
 
     both_result = runner.invoke(cli, [
@@ -315,6 +325,9 @@ def test_agent_comment_previous_scope_requires_a_predecessor(runner, isolated_di
     manifest["current"] = "first"
     manifest_path.write_text(json.dumps(manifest))
 
+    version_dir = isolated_dir / "v1_first"
+    version_dir.mkdir()
+    (version_dir / "meta.json").write_text(json.dumps({"parts": []}))
     result = runner.invoke(cli, [
         "review", "comment", "--message", "Compare it.", "--part", "rib",
         "--scope", "previous",
@@ -323,82 +336,100 @@ def test_agent_comment_previous_scope_requires_a_predecessor(runner, isolated_di
     assert "no previous successful revision" in result.output
 
 
-def test_loopback_review_api_persists_comment(isolated_dir):
-    token = "test-token"
-    server = ThreadingHTTPServer(("127.0.0.1", 0), ReviewHandler)
-    server.project_dir = isolated_dir
-    server.review_token = token
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    base = f"http://127.0.0.1:{server.server_port}"
-    try:
-        body = json.dumps(_surface_payload()).encode()
-        request = urllib.request.Request(
-            base + "/api/comments",
-            method="POST",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-AgentCAD-Review-Token": token,
-            },
-        )
-        with urllib.request.urlopen(request) as response:
-            created = json.loads(response.read())
-        assert created["comment"]["id"] == "C1"
-        assert list_comments(isolated_dir)[0]["target"]["part_id"] == "plate"
-        assert (isolated_dir / created["comment"]["screenshot"]).read_bytes() == b"abc"
-
-        unauthorized = urllib.request.Request(base + "/api/comments")
-        try:
-            urllib.request.urlopen(unauthorized)
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 403
-        else:
-            raise AssertionError("review API accepted a request without its token")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def test_review_open_starts_loopback_server(runner, isolated_dir, monkeypatch):
-    assert runner.invoke(cli, ["init", "--name", "served"]).exit_code == 0
-    version_dir = isolated_dir / "v1_first"
-    version_dir.mkdir()
-    (version_dir / "viewer.html").write_text("<!doctype html><title>served</title>")
-    (version_dir / "meta.json").write_text(json.dumps({
-        "version": 1,
-        "label": "first",
-        "status": "success",
-        "viewer": "v1_first/viewer.html",
+def _registered_project(root):
+    root.mkdir(exist_ok=True)
+    version = root / "v1_first"
+    version.mkdir(exist_ok=True)
+    (version / "viewer.html").write_text("<!doctype html><title>served</title>")
+    (version / "output.glb").write_bytes(b"glTF")
+    (version / "meta.json").write_text(json.dumps({
+        "version": 1, "label": "first", "status": "success",
+        "artifacts": {"viewer": {"status": "success"}},
     }))
-    manifest_path = isolated_dir / "agentcad.json"
-    manifest = json.loads(manifest_path.read_text())
-    manifest["versions"] = [{
-        "version": 1, "label": "first", "status": "success", "path": "v1_first/"
-    }]
-    manifest["current"] = "first"
-    manifest_path.write_text(json.dumps(manifest))
-    monkeypatch.delenv("AGENTCAD_REVIEW_SERVER", raising=False)
-    monkeypatch.setattr(
-        "agentcad.review_server.secrets.token_urlsafe", lambda _length: "-leading-token"
-    )
+    assert live.publish(root, version, started_ns=1)
+    url = live.open_project(root, lambda _: True)["url"]
+    token = url.rstrip("/").split("/")[-1]
+    return url, token
 
-    state_path = isolated_dir / ".agentcad" / "review-server.json"
-    state = None
-    try:
-        result = runner.invoke(cli, ["review", "open", "current", "--no-open"])
-        assert result.exit_code == 0, result.output
-        payload = json.loads(result.stdout)
-        assert payload["url"].startswith("http://127.0.0.1:")
-        assert "/viewer?" in payload["url"]
-        state = json.loads(state_path.read_text())
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{state['port']}/api/ping",
-            headers={"X-AgentCAD-Review-Token": state["token"]},
-        )
-        with urllib.request.urlopen(request) as response:
-            assert json.loads(response.read())["status"] == "ok"
-    finally:
-        if state:
-            os.kill(int(state["pid"]), signal.SIGTERM)
+
+def _review_request(url, token, route="comments", payload=None, **headers):
+    request = urllib.request.Request(
+        url + "review/" + route,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"X-AgentCAD-Review-Token": token, "Content-Type": "application/json", **headers},
+    )
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.load(response)
+
+
+def test_live_service_review_threads_and_project_isolation(isolated_dir):
+    one = isolated_dir / "one"
+    two = isolated_dir / "two"
+    url, token = _registered_project(one)
+    other_url, other_token = _registered_project(two)
+    created = _review_request(url, token, payload={**_surface_payload(), "send": True})
+    assert created["comment"]["status"] == "open"
+    assert created["comment"]["author"] == "human"
+    assert (one / created["comment"]["screenshot"]).read_bytes() == b"abc"
+    assert _review_request(other_url, other_token)["comments"] == []
+    with pytest.raises(urllib.error.HTTPError) as error:
+        _review_request(other_url, token, payload=_surface_payload())
+    assert error.value.code == 403
+    replied = _review_request(url, token, "comments/C1/reply", {"message": "Details"})
+    assert replied["comment"]["replies"][-1]["actor"] == "human"
+    for action, status in [("resolve", "resolved"), ("reopen", "open")]:
+        result = _review_request(url, token, f"comments/C1/{action}", {"message": action})
+        assert result["comment"]["status"] == status
+    live.stop_service()
+    assert live.open_project(one, lambda _: True)["url"] == url
+    assert len(_review_request(url, token)["comments"][0]["replies"]) == 3
+    assert live.service_status()["cad_loaded"] is False
+
+
+@pytest.mark.parametrize("headers", [
+    {"Origin": "https://example.com"}, {"Host": "example.com"},
+    {"Sec-Fetch-Site": "cross-site"}, {"X-AgentCAD-Review-Token": ""},
+])
+def test_review_service_rejects_untrusted_writes(isolated_dir, headers):
+    url, token = _registered_project(isolated_dir)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        _review_request(url, token, payload=_surface_payload(), **headers)
+    assert error.value.code == 403
+    assert list_comments(isolated_dir) == []
+
+
+@pytest.mark.parametrize("payload", [
+    [], {"text": "broken"}, {**_surface_payload(), "target": ["bad"]},
+    {**_surface_payload(), "anchor": {"kind": "surface", "point_mm": [1, 2, float("nan")]}},
+])
+def test_review_service_rejects_invalid_payloads(isolated_dir, payload):
+    url, token = _registered_project(isolated_dir)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        _review_request(url, token, payload=payload)
+    assert error.value.code == 400
+    assert list_comments(isolated_dir) == []
+
+
+def test_reviews_follow_build_directory_from_nested_source(runner, isolated_dir, monkeypatch):
+    (isolated_dir / "agentcad.toml").write_text('build_dir = "./build"\n')
+    assert runner.invoke(cli, ["init", "--name", "configured"]).exit_code == 0
+    build = isolated_dir / "build"
+    create_comment(build, _surface_payload(), actor="agent")
+    nested = isolated_dir / "src"
+    nested.mkdir()
+    monkeypatch.chdir(nested)
+    listed = runner.invoke(cli, ["review", "list", "--status", "open"])
+    assert listed.exit_code == 0, listed.output
+    assert json.loads(listed.stdout)["count"] == 1
+    context = json.loads(runner.invoke(cli, ["context"]).stdout)
+    assert context["open_review_comments"] == 1
+    assert "--build-dir" in context["review_next_action"]
+    replied = runner.invoke(cli, ["review", "reply", "C1", "--message", "Recorded"])
+    assert replied.exit_code == 0, replied.output
+    assert len(get_comment(build, "C1")["replies"]) == 1
+    assert not (nested / ".agentcad/reviews").exists()
+    other = isolated_dir / "other"
+    assert runner.invoke(cli, ["init", "--build-dir", str(other)]).exit_code == 0
+    result = runner.invoke(cli, ["review", "--build-dir", str(other), "list"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["count"] == 0
