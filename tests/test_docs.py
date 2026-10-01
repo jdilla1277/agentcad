@@ -117,6 +117,7 @@ def test_docs_lists_sections(runner):
     assert "daemon" in sections
     assert "inspect" in sections
     assert "parts" in sections
+    assert "review" in sections
     assert "feedback" in sections
     assert "recovery" in sections
 
@@ -128,7 +129,7 @@ def test_docs_commands_section(runner):
     content = data["content"]
     for cmd in [
         "init", "run", "render", "measure", "check-spec", "parts",
-        "context", "recover", "docs", "diff", "feedback",
+        "context", "recover", "review", "docs", "diff", "feedback",
     ]:
         assert cmd in content
     assert "part review viewers" in content
@@ -329,7 +330,7 @@ def test_docs_parts_mentions_review_viewers(runner):
     assert "temporary=true" in content
     assert "persisted=false" in content
     assert "saved-views catalog" in content
-    assert "browser changes are not saved" in content.lower()
+    assert "part visibility changes are not saved" in content.lower()
 
 
 def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):

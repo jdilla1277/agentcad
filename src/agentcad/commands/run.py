@@ -1645,6 +1645,20 @@ def _run_impl(
                 parts_model="b" if prev_glb_path else "a",
                 part_changes=part_changes,
                 groups=groups_output,
+                viewer_context={
+                    "version": version_num,
+                    "label": label,
+                    "models": {
+                        "a": {
+                            "version": prev.get("version"),
+                            "label": prev.get("label"),
+                        } if prev_glb_path else {
+                            "version": version_num,
+                            "label": label,
+                        },
+                        **({"b": {"version": version_num, "label": label}} if prev_glb_path else {}),
+                    },
+                },
             )
 
         if comparison_recorder is not None:
@@ -1666,8 +1680,9 @@ def _run_impl(
     if open_view:
         try:
             from agentcad.commands.view import _open_browser
+            from agentcad.review_server import viewer_url
 
-            viewer_opened = _open_browser(viewer_path.resolve().as_uri()) is not False
+            viewer_opened = _open_browser(viewer_url(viewer_path)) is not False
             lifecycle.set_artifact(
                 "browser",
                 "success" if viewer_opened else "unavailable",

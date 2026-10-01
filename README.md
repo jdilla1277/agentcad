@@ -48,8 +48,10 @@ to keep the phone from sliding. Show me a preview when you're done.
 
 - **`agentcad run script.py --output label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
 - **Automatic review viewer** — successful runs open `viewer.html`; from v2,
-  A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
+  previous and current revisions are preloaded for side-by-side, overlay, and
   Parts-tab change review (`--no-view` opts out)
+- **Spatial review comments** — pin human feedback to a surface and named part;
+  comments persist locally for the agent's next revision
 - **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
@@ -59,9 +61,36 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad parts list REF`** — list named/captured parts for a version
 - **`agentcad parts show REF ID`** — show one versioned part by stable id
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
+- **`agentcad review list --status open`** — read shared review threads; humans
+  and agents can reply, resolve, and reopen with an auditable history
 - **`agentcad diff 1 2`** — compare versions, including actual shared/reference-only/candidate-only source-frame volume for valid closed solids
 - **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
+
+## Spatial review comments
+
+Viewers opened automatically after a run use a token-protected service bound to
+`127.0.0.1`. Press `C`, click the model, confirm the inferred named part and
+revision scope, then choose **Send comment**. To hold feedback back, choose
+**Save draft** instead; unsent drafts can be edited, deleted, sent individually,
+or submitted together with **Send all drafts**.
+
+Comments are plain local JSON under `.agentcad/reviews`—there is no database or
+hosted account. On its next turn, an agent can discover and reply to the review:
+
+```bash
+agentcad context
+agentcad review list --status open
+agentcad review comment --message "Could this rib be thinner?" --part support_rib --version current
+agentcad review reply C1 --message "Increased the clearance to 4 mm." --version current
+agentcad review resolve C1 --message "Implemented in the current revision." --version current
+```
+
+Agents can also initiate an immediately-open thread on a named part. Add
+`--scope previous|both` to target comparison sides or `--point-mm X,Y,Z` to
+place its pin more precisely. Humans and agents can both reply, resolve, or reopen. Every action records its
+actor, timestamp, optional message, and associated revision. The older
+`mark-addressed` command remains available for compatibility.
 
 ## No boilerplate
 

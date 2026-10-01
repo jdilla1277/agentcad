@@ -94,7 +94,7 @@ def test_help_documents_all_commands(runner):
     guide = output.split("QUICK START", 1)[1]
     for cmd in ["init", "run", "import", "render", "export", "measure",
                 "check-spec", "inspect", "parts", "diff", "context", "recover", "view",
-                "docs", "skill", "feedback", "subscribe"]:
+                "review", "docs", "skill", "feedback", "subscribe"]:
         assert f"agentcad {cmd}" in guide
     assert "parts view" in output
     assert "--spec spec.json" in output
@@ -126,7 +126,7 @@ def test_help_mentions_part_review_views(runner):
     assert "--note TEXT" in output
     assert "--ghost-rest" in output
     assert "temporary part review handoff viewer" in output
-    assert "Browser changes are not saved" in output
+    assert "Browser changes to part visibility are not saved; submitted comments are" in output
 
 
 def test_help_preserves_docs_page_layout(runner):

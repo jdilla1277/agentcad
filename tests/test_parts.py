@@ -249,7 +249,7 @@ def test_parts_view_writes_reproducible_review_viewer(runner, isolated_dir):
     assert data["handoff"]["url"] == data["url"]
     assert data["handoff"]["temporary"] is True
     assert data["handoff"]["persisted"] is False
-    assert "Browser changes are not saved" in data["handoff"]["message"]
+    assert "part visibility are not saved; submitted comments are" in data["handoff"]["message"]
     assert data["part_review"] == {
         "mode": "part-review",
         "source": "agentcad parts view",
@@ -311,7 +311,7 @@ def test_parts_view_label_and_note_are_temporary_handoff_metadata(runner, isolat
     assert data["handoff"]["note"] == "Check the axle clearance before approving."
     assert data["handoff"]["message"] == (
         "Open this temporary Axle handoff viewer to inspect assembly. "
-        "Browser changes are not saved."
+        "Browser changes to part visibility are not saved; submitted comments are."
     )
 
     html = (isolated_dir / data["review_viewer"]).read_text()

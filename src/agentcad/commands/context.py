@@ -6,6 +6,7 @@ import click
 from agentcad import __version__
 from agentcad.manifest import load_manifest
 from agentcad.recovery import recovery_summary
+from agentcad.reviews import review_summary
 
 
 @click.command()
@@ -16,6 +17,7 @@ def context():
     versions = manifest.get("versions", [])
     current = manifest.get("current", None)
     recovery = recovery_summary(Path.cwd(), manifest)
+    reviews = review_summary(Path.cwd())
 
     versions_summary = [
         {
@@ -30,7 +32,7 @@ def context():
         for v in versions
     ]
 
-    click.echo(json.dumps({
+    response = {
         "command": "context",
         "status": "success",
         "project": manifest["name"],
@@ -39,4 +41,11 @@ def context():
         "version_count": len(versions),
         "versions": versions_summary,
         "recovery": recovery,
-    }))
+        "open_review_comments": reviews["open_review_comments"],
+        "addressed_review_comments": reviews["addressed_review_comments"],
+    }
+    if reviews["pending_review_batch"]:
+        response["pending_review_batch"] = reviews["pending_review_batch"]
+    if reviews["open_review_comments"]:
+        response["review_next_action"] = "agentcad review list --status open"
+    click.echo(json.dumps(response))

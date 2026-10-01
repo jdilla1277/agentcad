@@ -519,6 +519,9 @@ def _add_visual_response(
             diff_volume_png=volume_png_path,
         )
 
+    from agentcad.review_server import viewer_url
+    url = viewer_url(html_path)
+
     visual_resp = {
         "mode": mode,
         "html": _relative_to_cwd(html_path),

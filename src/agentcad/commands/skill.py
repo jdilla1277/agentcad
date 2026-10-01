@@ -33,6 +33,13 @@ agentcad --help   # Read the built-in how-to guide and command reference
 
 ## Core workflow
 
+Before changing an existing project, run `agentcad context`. If it reports
+`open_review_comments`, read `agentcad review list --status open` and treat each
+comment's part ID, CAD-space point, saved camera, and screenshot as revision
+requirements. After producing the requested revision, use
+`agentcad review mark-addressed ID --version REF`; the human decides whether to
+resolve or reopen it.
+
 1. **Write a script.** No imports needed — build123d primitives,
    `show_object`, and agentcad edit helpers are pre-injected by default.
    `show_object(result)` is required.
@@ -200,6 +207,8 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state and interrupted-version recovery candidates |
+| `agentcad review list --status open` | Read pending human spatial feedback before revising |
+| `agentcad review mark-addressed ID --version REF` | Record the revision that addresses a comment; the human resolves it |
 | `agentcad recover VERSION_DIR` | Validate and reconcile interrupted history without deleting files |
 | `agentcad docs [SECTION]` | Runtime-aware built-in documentation |
 | `agentcad instructions install` | Record a short project note so future agents read `agentcad --help` |
