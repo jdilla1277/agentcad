@@ -25,6 +25,7 @@ from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.recover import recover
+from agentcad.commands.review import review_cmd
 from agentcad.commands.run import _OUTPUT_DEPRECATION, candidate_scripts, run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
@@ -218,7 +219,21 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     Create a temporary part review handoff viewer. Repeat --isolate/--hide for parts,
     or --isolate-group/--hide-group for groups; use --ghost-rest, --focus,
     --focus-group, --label, --note, and --no-open as needed.
-    Browser changes are not saved; generate another viewer to change the state.
+    Browser changes are not saved. Use `agentcad viewer open` for comments.
+
+  agentcad review list [--status open]
+  agentcad review show COMMENT_ID
+  agentcad review comment --message TEXT --part PART_ID [--version REF]
+                          [--scope current|previous|both] [--point-mm X,Y,Z]
+  agentcad review reply COMMENT_ID --message TEXT [--version REF]
+  agentcad review resolve COMMENT_ID [--message TEXT] [--version REF]
+  agentcad review reopen COMMENT_ID [--message TEXT]
+    Read and participate in spatial review threads. Agents may initiate an open
+    thread on a named part; humans and agents may both
+    reply, resolve, and reopen; actor, message, timestamp, and revision history
+    are retained. `mark-addressed` remains available for compatibility.
+    Use `agentcad viewer open` for comments in the live project viewer.
+    `agentcad review --build-dir PATH ...` selects an independent build history.
 
 COMMAND REFERENCE: VERIFY AND DEBUG
   agentcad measure FILE [OPTIONS]
@@ -247,8 +262,8 @@ COMMAND REFERENCE: VERIFY AND DEBUG
 
 COMMAND REFERENCE: PROJECT AND INTEGRATIONS
   agentcad context
-    Return project name, current version, version history, tool version, and any
-    interrupted version directories that need explicit recovery.
+    Return project name, current version, version history, pending review
+    feedback, tool version, and interrupted versions needing recovery.
 
   agentcad recover VERSION_DIR [--make-current]
     Validate an interrupted directory's output.step and safely restore its
@@ -869,6 +884,7 @@ cli.add_command(measure)
 cli.add_command(parts_cmd)
 cli.add_command(render)
 cli.add_command(recover)
+cli.add_command(review_cmd)
 cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)

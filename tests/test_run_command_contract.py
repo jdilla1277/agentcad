@@ -90,8 +90,8 @@ def test_run_execution_failure_has_explicit_null_step(runner, isolated_dir):
     _init(runner)
     _write_script(isolated_dir, """\
 import cadquery as cq
-raise RuntimeError("boom")
 show_object(cq.Workplane("XY").box(1, 1, 1))
+raise RuntimeError("boom")
 """)
 
     result = runner.invoke(

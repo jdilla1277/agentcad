@@ -439,6 +439,14 @@ def view_parts(
         parts=parts,
         groups=groups,
         part_review=review_state,
+        viewer_context={
+            "version": meta.get("version", version_entry.get("version")),
+            "label": version_label,
+            "models": {"a": {
+                "version": meta.get("version", version_entry.get("version")),
+                "label": version_label,
+            }},
+        },
     )
 
     url = html_path.as_uri()
@@ -449,7 +457,8 @@ def view_parts(
     handoff_label = review_label or "part review"
     handoff_message = (
         f"Open this temporary {handoff_label} viewer to inspect "
-        f"{version_label}. Browser changes are not saved."
+        f"{version_label}. Browser changes are not saved. "
+        "Use agentcad viewer open for persistent comments."
     )
     response = {
         "command": "parts view",

@@ -20,7 +20,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from agentcad.versioning import atomic_write_json
 
-PROTOCOL = 1
+PROTOCOL = 2
 
 
 class ViewerUnavailable(RuntimeError):
