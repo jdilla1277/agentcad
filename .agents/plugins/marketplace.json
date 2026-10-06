@@ -1,0 +1,21 @@
+{
+  "name": "agentcad-local",
+  "description": "Local development marketplace for the AgentCAD plugin.",
+  "interface": {
+    "displayName": "AgentCAD Development"
+  },
+  "plugins": [
+    {
+      "name": "agentcad",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agentcad"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

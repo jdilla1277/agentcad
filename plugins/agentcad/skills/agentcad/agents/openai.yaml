@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentCAD"
+  short_description: "Design and validate parametric 3D CAD"
+  default_prompt: "Use $agentcad to design a dimensioned 3D part, validate it, and return preview and CAD files."

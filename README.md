@@ -57,6 +57,48 @@ the project root, not the caller's working directory. Existing projects keep
 their current layout unless configured. `--output` remains a deprecated version
 label, never a destination. See `agentcad docs artifacts` for the full contract.
 
+### ChatGPT and Codex plugin (skills-only)
+
+This repository includes a skills-only AgentCAD plugin under
+`plugins/agentcad`. It lets ChatGPT Work and Codex use the open-source CLI in a
+shell-capable connected computer or Codex Cloud environment. It does not need
+an AgentCAD cloud service or hosted MCP server.
+
+For local development, add this repository's marketplace and install the
+plugin in Codex CLI:
+
+```bash
+codex plugin marketplace add .
+codex plugin add agentcad@agentcad-local
+```
+
+For ChatGPT desktop, restart the app, open the Plugins Directory, select the
+**AgentCAD Development** marketplace, and install **AgentCAD**. Start a new chat
+after installing on either surface.
+
+For a Codex Cloud environment using this repository, a minimal setup script is:
+
+```bash
+python3.12 -m venv .venv-agentcad
+.venv-agentcad/bin/python -m pip install --upgrade pip
+.venv-agentcad/bin/python -m pip install -e .
+sudo apt-get update
+sudo apt-get install -y xvfb
+```
+
+Add `.venv-agentcad/bin` to the environment `PATH`, run the setup successfully,
+and publish the environment snapshot. In another repository, replace
+`pip install -e .` with `pip install agentcad`. AgentCAD supports Python
+3.10–3.12.
+
+Try: `Use $agentcad to design a 60 mm square mounting plate, add four 4 mm
+corner holes, validate every requested dimension, and return STEP, STL, and
+isometric preview files.`
+
+The plugin remains portable because it declares no MCP server. Its cloud setup
+and headless-rendering guidance lives in
+`plugins/agentcad/skills/agentcad/references/cloud-environment.md`.
+
 ## What it does
 
 - **`agentcad run script.py --label label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)

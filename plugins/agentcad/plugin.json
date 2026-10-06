@@ -1,0 +1,41 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agentcad",
+  "version": "0.1.0",
+  "description": "Design, validate, inspect, and export parametric 3D CAD models with the open-source AgentCAD CLI.",
+  "author": {
+    "name": "James Dillard",
+    "url": "https://agentcad.dev"
+  },
+  "homepage": "https://agentcad.dev",
+  "repository": "https://github.com/jdilla1277/agentcad",
+  "license": "Apache-2.0",
+  "keywords": [
+    "cad",
+    "3d-modeling",
+    "build123d",
+    "engineering",
+    "3d-printing"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "AgentCAD",
+        "shortDescription": "Design and validate parametric 3D CAD",
+        "longDescription": "Use the open-source AgentCAD CLI in a shell-capable local or Codex Cloud environment to design, validate, inspect, render, and export parametric 3D parts and assemblies.",
+        "developerName": "James Dillard",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Create parametric CAD",
+          "Validate and measure geometry",
+          "Export STEP and mesh files"
+        ],
+        "websiteURL": "https://agentcad.dev",
+        "supportURL": "https://github.com/jdilla1277/agentcad/issues",
+        "defaultPrompt": [
+          "Use AgentCAD to design a dimensioned 3D part, validate it, and return preview and CAD files."
+        ]
+      }
+    }
+  }
+}
