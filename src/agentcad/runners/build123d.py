@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import re
 import traceback
 import warnings as _warnings
 from typing import Any
@@ -50,12 +51,16 @@ def validate(user_source: str) -> list:
     ``status: validation_error`` (no version consumed, no disk artifacts)
     on either runtime instead of falling through to ``execution_error``.
     """
-    from agentcad.validate import validate_script
+    from agentcad.validate import validate_script_allowing_regions
 
-    return list(validate_script(
-        with_preamble(user_source),
-        output_calls=("show_object", "show_assembly", "show_compound"),
+    # A script that only calls show_regions() is a sketch-only run.
+    return list(validate_script_allowing_regions(
+        with_preamble(user_source), OUTPUT_CALLS,
     ))
+
+
+OUTPUT_CALLS = ("show_object", "show_assembly", "show_compound")
+_REGION_MAP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 _SIMPLE_LITERALS = (ast.Constant,)
@@ -286,6 +291,30 @@ def execute(
         )
         assembly_requested = True
 
+    region_maps: list[dict[str, Any]] = []
+
+    def show_regions(regions, *_args, name="regions", window=None, **_kwargs):
+        """Record a labeled region map (annotation only, never output geometry)."""
+        from agentcad.sketch_regions import coerce_region_faces, parse_window
+
+        if not isinstance(name, str) or not _REGION_MAP_NAME.match(name):
+            raise ValueError(
+                f"show_regions() name {name!r} is not usable as a file name; use "
+                "1-64 letters, digits, '_' or '-' (e.g. name=\"lid\"). It names "
+                "regions/<name>.png."
+            )
+        if any(entry["name"] == name for entry in region_maps):
+            raise ValueError(
+                f"show_regions() name {name!r} was already used in this script; "
+                "give each map a distinct name, e.g. show_regions(regions, "
+                "name=\"lid\")."
+            )
+        faces, plane = coerce_region_faces(regions)
+        region_maps.append({
+            "name": name, "faces": faces, "plane": plane,
+            "window": parse_window(window, faces, plane),
+        })
+
     import build123d as _b3d
 
     from agentcad import api as _api
@@ -336,6 +365,7 @@ def execute(
                 show_object,
                 show_assembly,
                 loaded_file_callback=loaded_files.append,
+                regions_callback=show_regions,
             ):
                 exec(code, script_globals)
             captured_warnings = list(ws)
@@ -354,6 +384,25 @@ def execute(
             parameters=effective_params,
             exception=f"Script execution failed: {type(e).__name__}: {e}",
             traceback=traceback.format_exc(),
+        )
+
+    warnings: list[str] = [
+        str(w.message)
+        for w in captured_warnings
+        if issubclass(w.category, UserWarning)
+        and not issubclass(w.category, DeprecationWarning)
+    ]
+
+    if not captured and region_maps:
+        # Sketch-only run: region maps, no deliverable geometry.
+        return ExecutionResult(
+            status="success",
+            parameters=effective_params,
+            discovered_parameters=discovered,
+            warnings=warnings,
+            output_type="sketch",
+            loaded_files=loaded_files,
+            region_maps=region_maps,
         )
 
     if not captured:
@@ -375,12 +424,6 @@ def execute(
             exception=missing_output_message(user_source, candidates),
         )
 
-    warnings: list[str] = [
-        str(w.message)
-        for w in captured_warnings
-        if issubclass(w.category, UserWarning)
-        and not issubclass(w.category, DeprecationWarning)
-    ]
     shapes = [item[0] for item in captured]
     if len(shapes) == 1:
         native_shape = shapes[0]
@@ -418,6 +461,7 @@ def execute(
         output_type=output_type,
         parts=parts,
         loaded_files=loaded_files,
+        region_maps=region_maps,
     )
 
 

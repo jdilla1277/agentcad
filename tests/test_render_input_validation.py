@@ -38,6 +38,10 @@ def recorded_step(isolated_dir):
     (["--view", "all", "--name", "detail"], "--name cannot be used with multiple views"),
     (["--view", "front,top", "--name", "detail"], "--name cannot be used with multiple views"),
     (["--view", "front,45:30", "--name", "detail"], "--name cannot be used with multiple views"),
+    (["--view", "iso", "--highlight-faces", "3,x"], "Invalid --highlight-faces"),
+    (["--view", "iso", "--highlight-faces", "0"], "Invalid --highlight-faces"),
+    (["--view", "iso", "--highlight-faces", "3", "--highlight", "validation"],
+     "cannot be combined with --highlight-faces"),
 ])
 @pytest.mark.parametrize("missing", [False, True], ids=["existing-step", "missing-step"])
 @pytest.mark.parametrize("no_daemon", [False, True], ids=["daemon-allowed", "no-daemon"])

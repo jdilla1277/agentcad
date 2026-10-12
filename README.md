@@ -70,9 +70,11 @@ label, never a destination. See `agentcad docs artifacts` for the full contract.
 - **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
+- **`sketch_regions(...)` + `show_regions(...)`** — sketch profile picking: overlapping 2D shapes and lines become numbered enclosed regions on a labeled PNG map; extrude the ones you pick with `extrude([regions[0], regions[2]], amount=5)`, or select by a point inside with `regions.at((x, y))` so parameter changes don't renumber your picks
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
 - **`agentcad inspect output.step`** — bounded topology deep-dive with observable loading, validity, and extraction phases
+- **`agentcad render output.step --view iso --highlight-faces 3,7`** — paint face IDs from `inspect --ids` in distinct colors with number labels, to confirm which face an ID is before editing it
 - **`agentcad parts list REF`** — list named/captured parts for a version
 - **`agentcad parts show REF ID`** — show one versioned part by stable id
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer

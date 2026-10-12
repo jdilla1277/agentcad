@@ -15,8 +15,8 @@ from agentcad.output_contract import (
 # or daemon routing begins. ``agentcad.api.__all__`` is covered against this
 # list in tests so the targeted guidance cannot silently drift.
 _AGENTCAD_API_NAMES = frozenset({
-    "show_object", "show_assembly", "show_compound",
-    "load_step", "load_step_shape", "pick_face", "pick_edge",
+    "show_object", "show_assembly", "show_compound", "show_regions",
+    "sketch_regions", "merge_regions", "load_step", "load_step_shape", "pick_face", "pick_edge",
     "fillet_edges", "chamfer_edges", "shell_faces", "split_by_plane",
     "cut_pocket", "boss", "loft_sections", "tapered_sweep", "naca_wire",
     "mirror_fuse", "copy_shape", "safe_cut", "safe_intersection", "safe_fuse",
@@ -100,6 +100,23 @@ def validate_script(source, output_calls=None, *, check_imports=True):
                 if error:
                     errors.append(error)
 
+    return errors
+
+
+def validate_script_allowing_regions(source, output_calls, *, check_imports=True):
+    """``validate_script`` where a show_regions() call also satisfies capture.
+
+    build123d scripts may call only show_regions() (a sketch-only run). A
+    script with neither an output call nor show_regions() gets exactly the
+    error ``validate_script`` reports for ``output_calls``.
+    """
+    errors = validate_script(source, output_calls, check_imports=check_imports)
+    if errors and errors[0]["check"] == "show_object_missing":
+        retry = validate_script(
+            source, tuple(output_calls) + ("show_regions",), check_imports=check_imports
+        )
+        if not retry or retry[0]["check"] != "show_object_missing":
+            return retry
     return errors
 
 

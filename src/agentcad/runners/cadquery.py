@@ -42,6 +42,7 @@ _B3D_ONLY_HELPERS = (
     "fillet_edges", "chamfer_edges", "shell_faces",
     "split_by_plane",
     "cut_pocket", "boss",
+    "sketch_regions", "show_regions", "merge_regions",
 )
 
 

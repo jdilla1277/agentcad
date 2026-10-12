@@ -1015,6 +1015,54 @@ class TestRunRouting:
         send_request({"type": "shutdown"}, socket_path=sock_path)
         t.join(timeout=5)
 
+    def test_sketch_only_run_via_daemon_matches_direct_run(self, isolated_dir, daemon_paths):
+        """A show_regions()-only script behaves the same through the daemon.
+
+        Uses a separately started daemon process: forking this test process
+        after earlier in-process OCCT work can hang the child.
+        """
+        from agentcad.cli import cli
+        from agentcad.daemon import send_request, start_daemon, stop_daemon
+
+        runner = CliRunner()
+        runner.invoke(cli, ["init", "--name", "test", "--runtime", "build123d"])
+        script = isolated_dir / "sketch.py"
+        script.write_text(
+            "regions = sketch_regions(Circle(10), Pos(8, 0) * Circle(10))\n"
+            "show_regions(regions)\n"
+        )
+
+        sock_path, pid_path = daemon_paths
+        assert start_daemon(socket_path=sock_path, pid_path=pid_path)["started"] is True
+        try:
+            for _ in range(100):
+                if send_request({"type": "ping"}, socket_path=sock_path) is not None:
+                    break
+                time.sleep(0.1)
+            resp = send_request({
+                "type": "run",
+                "cwd": str(isolated_dir),
+                "argv": ["run", str(script), "--label", "viad", "--no-view"],
+            }, socket_path=sock_path)
+        finally:
+            stop_daemon(socket_path=sock_path, pid_path=pid_path)
+
+        assert resp is not None and resp["exit_code"] == 0, resp
+        daemon_json = json.loads(resp["output"])
+        direct = runner.invoke(
+            cli, ["run", str(script), "--label", "direct", "--no-view", "--no-daemon"]
+        )
+        assert direct.exit_code == 0, direct.output
+        direct_json = json.loads(direct.stdout)
+        for key in ("status", "sketch_only", "artifact_created", "current_advanced",
+                    "output_type", "artifacts"):
+            assert daemon_json[key] == direct_json[key]
+        assert daemon_json["regions"]["regions"]["items"] == direct_json["regions"]["regions"]["items"]
+        assert (isolated_dir / daemon_json["regions"]["regions"]["png"]).is_file()
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert [v["status"] for v in manifest["versions"]] == ["sketch", "sketch"]
+        assert manifest.get("current") is None
+
     def test_run_fallback_when_daemon_not_running(
         self, runner, isolated_dir, monkeypatch
     ):
