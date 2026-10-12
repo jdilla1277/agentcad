@@ -109,6 +109,10 @@ def run(
     New projects use build123d. Existing CadQuery compatibility projects follow
     the runtime pinned in their agentcad.json.
 
+    show_regions(sketch_regions(...)) in the script adds labeled region map
+    PNGs under `regions`; a script with only show_regions() is a sketch-only
+    run (sketch_only: true, no STEP, current unchanged).
+
     Args:
         script: Path to the Python CAD script.
         cwd: Source project directory (or a subdirectory).
@@ -159,6 +163,7 @@ def render(
     no_fit: bool = False,
     build_dir: str | None = None,
     highlight: str | None = None,
+    highlight_faces: str | None = None,
 ) -> dict:
     """Render PNG views of an existing STEP file.
 
@@ -173,10 +178,16 @@ def render(
         focus: Camera focus point as x,y,z.
         no_fit: Skip FitAll (requires focus).
         highlight: Use "validation" to mark failing edges/vertices in red and return the report.
+        highlight_faces: Comma-separated face IDs from inspect --ids (e.g. "3,7") to
+            color and label, to confirm which face an ID is. Per-view label status
+            (labeled / too_small / hidden / out_of_frame) is returned in
+            highlighted_faces.
     """
     args = ["render", step_file, "--view", view]
     if highlight is not None:
         args.extend(["--highlight", highlight])
+    if highlight_faces is not None:
+        args.extend(["--highlight-faces", highlight_faces])
     if zoom is not None:
         args.extend(["--zoom", str(zoom)])
     if name:

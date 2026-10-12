@@ -195,6 +195,11 @@ identifies the tracked deliverable.
 - `show_object(result)` is required — at least one call.
 - The same `show_object(result)` call accepts a build123d `Part`, `Compound`,
   or raw OCP `TopoDS_Shape`; no manual conversion or STEP writer is needed.
+- To pick sketch profiles by number, call `show_regions(sketch_regions(...))`
+  first (a sketch-only run writes a labeled region map, no STEP), then
+  extrude the picked regions. In parametric scripts select them with
+  `regions.at((x, y))` (a point inside), since index numbers shift when the
+  sketch changes; see `agentcad docs patterns`.
 - These are pre-injected by default (no import needed):
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,

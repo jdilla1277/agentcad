@@ -48,6 +48,9 @@ _output_callbacks: ContextVar[tuple[_OutputCallback, _OutputCallback] | None] = 
 _loaded_file_callback: ContextVar[Callable[[str], object] | None] = ContextVar(
     "agentcad_loaded_file_callback", default=None
 )
+_regions_callback: ContextVar[_OutputCallback | None] = ContextVar(
+    "agentcad_regions_callback", default=None
+)
 
 
 def _active_output_callback(kind: str) -> _OutputCallback:
@@ -76,18 +79,58 @@ def show_assembly(shapes, *args, **kwargs):
 show_compound = show_assembly
 
 
+def sketch_regions(*items, plane=None, min_area=None):
+    """Every enclosed region of a 2D sketch as a numbered list of Faces.
+
+    ``regions[i]`` is the region labeled ``i`` on ``show_regions(regions)``.
+    See :func:`agentcad.sketch_regions.sketch_regions`.
+    """
+    from agentcad.sketch_regions import sketch_regions as _sketch_regions
+
+    return _sketch_regions(*items, plane=plane, min_area=min_area)
+
+
+def merge_regions(*faces, plane=None):
+    """Fuse chosen sketch regions into one Face (one solid when extruded or
+    revolved). Same as ``regions.merged(...)`` on the sketch_regions list.
+    See :func:`agentcad.sketch_regions.merge_regions`.
+    """
+    from agentcad.sketch_regions import merge_regions as _merge_regions
+
+    return _merge_regions(*faces, plane=plane)
+
+
+def show_regions(regions, name="regions", window=None):
+    """Write a labeled region map (PNG + JSON) for the active run.
+
+    Annotation output only: the regions are not part of the STEP, metrics,
+    or validation. A script may call only show_regions (a sketch-only run).
+    ``window=((xmin, ymin), (xmax, ymax))`` draws only that plane-local area.
+    """
+    callback = _regions_callback.get()
+    if callback is None:
+        raise RuntimeError(
+            "show_regions() writes a region map only while a script is running "
+            "under `agentcad run`. Put the call in the script passed to AgentCAD."
+        )
+    return callback(regions, name=name, window=window)
+
+
 @contextmanager
 def _capture_output_with(
     object_callback: _OutputCallback,
     assembly_callback: _OutputCallback,
     loaded_file_callback: Callable[[str], object] | None = None,
+    regions_callback: _OutputCallback | None = None,
 ) -> Iterator[None]:
     """Bind capture/provenance callbacks for one runner execution (internal)."""
     output_token = _output_callbacks.set((object_callback, assembly_callback))
     loaded_file_token = _loaded_file_callback.set(loaded_file_callback)
+    regions_token = _regions_callback.set(regions_callback)
     try:
         yield
     finally:
+        _regions_callback.reset(regions_token)
         _loaded_file_callback.reset(loaded_file_token)
         _output_callbacks.reset(output_token)
 
@@ -191,6 +234,9 @@ __all__ = [
     "show_object",
     "show_assembly",
     "show_compound",
+    "show_regions",
+    "sketch_regions",
+    "merge_regions",
     "load_step",
     "load_step_shape",
     "pick_face",

@@ -282,7 +282,9 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
 JSON RESPONSE CONTRACT
   Agent-facing command results are JSON with "command" and "status" keys.
   Successful `run` results also include "runtime". Run-specific statuses:
-    "success"          primary command work completed; inspect artifact statuses
+    "success"          primary command work completed; inspect artifact statuses.
+                       sketch_only=true: the script called only show_regions();
+                       region maps written, no STEP, current unchanged
     "failed"           script execution failed; consumes a version and creates
                        v{N}_{label}_failed/ with the script and metadata
     "error"            CLI/input error; no version or artifacts
@@ -362,6 +364,9 @@ _BUILD123D_AUTHORING_GUIDE = """BUILD123D AUTHORING
     $ agentcad docs quickstart   # first-script walkthrough
     $ agentcad docs examples     # worked build123d examples
     $ agentcad docs patterns     # idioms + footguns
+
+  Pick sketch profiles by number: show_regions(sketch_regions(...)) writes a
+  numbered region map, then extrude the picked regions. See `docs patterns`.
 
   CadQuery compatibility remains available for existing projects and scripts
   via the optional extra: pip install "agentcad[cadquery]". It is not part of
@@ -807,7 +812,10 @@ class _LoggingGroup(click.Group):
         failed = result.get("status") in {"error", "failed", "validation_error", "invalid_geometry", "timeout"}
         if not result and exception is not None:
             failed = not isinstance(exception, SystemExit) or exception.code not in (0, None)
-        unavailable = result.get("status") == "success" and result.get("version") and not result.get("viewer")
+        unavailable = (
+            result.get("status") == "success" and result.get("version")
+            and not result.get("viewer") and not result.get("sketch_only")
+        )
         if failed or unavailable:
             try:
                 from agentcad.project_viewer import record_failure

@@ -273,3 +273,19 @@ def test_run_mcp_dry_run_without_output_omits_label(monkeypatch):
         ],
         "/tmp/project",
     )]
+
+
+def test_render_mcp_forwards_highlight_faces(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, cwd=None):
+        calls.append((args, cwd))
+        return {"status": "success"}
+
+    monkeypatch.setattr(server, "_invoke", fake_invoke)
+    server.render("part.step", "iso,top", cwd="/tmp/project", highlight_faces="3,7")
+
+    assert calls == [(
+        ["render", "part.step", "--view", "iso,top", "--highlight-faces", "3,7"],
+        "/tmp/project",
+    )]

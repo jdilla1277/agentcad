@@ -93,6 +93,17 @@ def _setup_render(
     validation_markers=None,
 ):
     """Set up offscreen rendering pipeline, returning (view, context)."""
+    view, context = _create_view(
+        width, height, msaa=msaa, background_color=background_color
+    )
+    _display_shape(context, shape, parts=parts, show_edges=show_edges)
+    if validation_markers:
+        _display_validation_markers(context, shape, validation_markers)
+    return view, context
+
+
+def _create_view(width, height, msaa=0, background_color=None):
+    """Create the lit offscreen viewer, returning an empty (view, context)."""
     try:
         display_connection = Aspect_DisplayConnection()
         driver = OpenGl_GraphicDriver(display_connection)
@@ -140,8 +151,10 @@ def _setup_render(
             raise _linux_render_unavailable_error(exc) from exc
         raise
 
-    context = AIS_InteractiveContext(viewer)
+    return view, AIS_InteractiveContext(viewer)
 
+
+def _display_shape(context, shape, parts=None, show_edges=False):
     part_items = []
     for idx, part in enumerate(parts or []):
         part_shape = part.get("topo_shape")
@@ -174,30 +187,30 @@ def _setup_render(
         ais_shape.Attributes().SetFaceBoundaryDraw(show_edges)
         context.Display(ais_shape, 1, -1, True)
 
-    if validation_markers:
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
-        from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
-        from OCP.gp import gp_Pnt
-        from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
-        from agentcad.validation import deflection_for_shape
-        radius = max(deflection_for_shape(shape) * 3, 0.05)
-        for marker in validation_markers:
-            points = [gp_Pnt(p['x'], p['y'], p['z']) for p in marker['points']]
-            items = []
-            if len(points) == 1:
-                items.append(BRepPrimAPI_MakeSphere(points[0], radius).Shape())
-            else:
-                for a, b in zip(points, points[1:]):
-                    if a.Distance(b) > 1e-7:
-                        items.append(BRepBuilderAPI_MakeEdge(a, b).Shape())
-            for item in items:
-                overlay = AIS_Shape(item)
-                overlay.SetColor(Quantity_Color(1, 0.05, 0.03, Quantity_TOC_RGB))
-                overlay.SetWidth(4)
-                overlay.SetZLayer(Graphic3d_ZLayerId_Topmost)
-                context.Display(overlay, 1 if len(points) == 1 else 0, -1, False)
-        context.UpdateCurrentViewer()
-    return view, context
+
+def _display_validation_markers(context, shape, validation_markers):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+    from OCP.gp import gp_Pnt
+    from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
+    from agentcad.validation import deflection_for_shape
+    radius = max(deflection_for_shape(shape) * 3, 0.05)
+    for marker in validation_markers:
+        points = [gp_Pnt(p['x'], p['y'], p['z']) for p in marker['points']]
+        items = []
+        if len(points) == 1:
+            items.append(BRepPrimAPI_MakeSphere(points[0], radius).Shape())
+        else:
+            for a, b in zip(points, points[1:]):
+                if a.Distance(b) > 1e-7:
+                    items.append(BRepBuilderAPI_MakeEdge(a, b).Shape())
+        for item in items:
+            overlay = AIS_Shape(item)
+            overlay.SetColor(Quantity_Color(1, 0.05, 0.03, Quantity_TOC_RGB))
+            overlay.SetWidth(4)
+            overlay.SetZLayer(Graphic3d_ZLayerId_Topmost)
+            context.Display(overlay, 1 if len(points) == 1 else 0, -1, False)
+    context.UpdateCurrentViewer()
 
 
 def _capture(view, output_path, width=800, height=600, msaa=0):
@@ -228,6 +241,21 @@ def _apply_camera(view, zoom, focus, fit):
     if zoom != 1.0:
         view.SetZoom(zoom)
     view.Redraw()
+
+
+def _orient_view(view, spec):
+    """Point the camera along a named view or an (azimuth, elevation) pair."""
+    if isinstance(spec, str):
+        view.SetProj(VIEWS[spec])
+        return
+    az_r = math.radians(spec[0])
+    el_r = math.radians(spec[1])
+    view.SetProj(
+        -math.sin(az_r) * math.cos(el_r),
+        math.cos(az_r) * math.cos(el_r),
+        -math.sin(el_r),
+    )
+    view.SetUp(0, 0, 1)
 
 
 def render_shape(shape, view_name, output_path, width=800, height=600,
@@ -279,17 +307,7 @@ def render_shape_batch(
         show_edges=show_edges,
     )
     for spec, out_path in zip(view_specs, output_paths):
-        if isinstance(spec, str):
-            view.SetProj(VIEWS[spec])
-        else:
-            az, el = spec
-            az_r = math.radians(az)
-            el_r = math.radians(el)
-            vx = -math.sin(az_r) * math.cos(el_r)
-            vy = math.cos(az_r) * math.cos(el_r)
-            vz = -math.sin(el_r)
-            view.SetProj(vx, vy, vz)
-            view.SetUp(0, 0, 1)
+        _orient_view(view, spec)
         view.FitAll()
         view.Redraw()
         _capture(view, out_path, width, height, msaa=msaa)
@@ -950,6 +968,154 @@ def render_shape_custom(shape, azimuth, elevation, output_path,
     _apply_camera(view, zoom, focus, fit)
 
     _capture(view, output_path, width, height, msaa=msaa)
+
+
+def _srgb_color(rgb):
+    """Quantity_Color from 0-255 sRGB, which unlit rendering reproduces exactly."""
+    from OCP.Quantity import Quantity_TOC_sRGB
+
+    return Quantity_Color(*(channel / 255 for channel in rgb), Quantity_TOC_sRGB)
+
+
+def _highlight_material():
+    """Matte material that keeps highlight hues recognizable on every face.
+
+    The default Silver material's specular highlight washes upward-facing
+    colored faces out to near-white. A matte material with full ambient
+    response keeps every face at roughly 70-95% of its palette color while
+    preserving enough diffuse shading to read curvature.
+    """
+    material = Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Plastered)
+    material.SetAmbientColor(Quantity_Color(1.0, 1.0, 1.0, Quantity_TOC_RGB))
+    material.SetDiffuseColor(Quantity_Color(0.7, 0.7, 0.7, Quantity_TOC_RGB))
+    return material
+
+
+def render_face_highlight(shape, view_spec, output_path, face_ids, width=800,
+                          height=600, zoom=1.0, focus=None, fit=True, msaa=0):
+    """Render ``face_ids`` in palette colors and label each with its ID.
+
+    A face's label is drawn only where the whole label box fits inside that
+    face's visible pixels in this view. Returns one dict per face, in
+    ``face_ids`` order, with ``status`` (labeled / too_small / hidden /
+    out_of_frame).
+    """
+    import tempfile
+
+    import numpy as np
+    from OCP.AIS import AIS_ColoredShape
+    from OCP.Aspect import Aspect_TOL_SOLID
+    from OCP.Graphic3d import Graphic3d_TypeOfShadingModel
+    from OCP.Prs3d import Prs3d_LineAspect
+    from PIL import Image
+
+    from agentcad import face_labels
+    from agentcad.topo_ids import pick_face_topods
+
+    faces = [pick_face_topods(shape, face_id) for face_id in face_ids]
+    view, context = _create_view(width, height, msaa=msaa)
+
+    # Visible pass: the normal Silver model, face boundaries for extents,
+    # and matte palette colors on the requested faces only.
+    shown = AIS_ColoredShape(shape)
+    shown.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
+    shown.Attributes().SetFaceBoundaryDraw(True)
+    shown.Attributes().SetFaceBoundaryAspect(Prs3d_LineAspect(
+        Quantity_Color(0.12, 0.12, 0.12, Quantity_TOC_RGB), Aspect_TOL_SOLID, 1.0,
+    ))
+    for index, face in enumerate(faces):
+        color = _srgb_color(face_labels.highlight_color(index))
+        shown.SetCustomColor(face, color)
+        shading = shown.CustomAspects(face).ShadingAspect()
+        shading.SetMaterial(_highlight_material())
+        shading.SetColor(color)
+    context.Display(shown, 1, -1, True)
+    _orient_view(view, view_spec)
+    _apply_camera(view, zoom, focus, fit)
+    _capture(view, output_path, width, height, msaa=msaa)
+
+    # Hidden ID pass with the same camera: flat unlit colors, no antialiasing
+    # or boundary lines, so each pixel names exactly one requested face.
+    context.Remove(shown, False)
+    ids = AIS_ColoredShape(shape)
+    ids.SetColor(_srgb_color(face_labels.ID_BASE_RGB))
+    ids.Attributes().SetFaceBoundaryDraw(False)
+    for index, face in enumerate(faces):
+        ids.SetCustomColor(face, _srgb_color(face_labels.id_pass_color(index)))
+    view.SetShadingModel(Graphic3d_TypeOfShadingModel.Graphic3d_TypeOfShadingModel_Unlit)
+    view.ChangeRenderingParams().NbMsaaSamples = 0
+    view.SetBackgroundColor(_srgb_color(face_labels.ID_BACKGROUND_RGB))
+    context.Display(ids, 1, -1, False)
+    view.Redraw()
+    with tempfile.TemporaryDirectory() as tmp:
+        id_path = Path(tmp) / "ids.png"
+        pixmap = Image_AlienPixMap()
+        view.ToPixMap(pixmap, width, height)
+        pixmap.Save(TCollection_AsciiString(str(id_path)))
+        with Image.open(id_path) as id_image:
+            id_rgb = np.asarray(id_image.convert("RGB"))
+    labels = face_labels.decode_id_image(id_rgb, len(faces))
+
+    style = face_labels.LabelStyle(width, height)
+    texts = [str(face_id) for face_id in face_ids]
+    placements = face_labels.fit_labels(
+        labels,
+        [style.box_size(text) for text in texts],
+        max_clearance=3 * style.font_size,
+    )
+    # A face with no visible pixel is either cropped out of the image
+    # (--focus/--zoom close-ups) or inside the frame behind other faces.
+    for face, placement in zip(faces, placements):
+        if placement["status"] == face_labels.HIDDEN and not _face_in_frame(
+            view, face, width, height
+        ):
+            placement["status"] = face_labels.OUT_OF_FRAME
+    if any(p["status"] == face_labels.LABELED for p in placements):
+        with Image.open(output_path) as rendered:
+            image = rendered.convert("RGB")
+        for text, placement in zip(texts, placements):
+            if placement["status"] == face_labels.LABELED:
+                style.draw(image, text, placement["position"])
+        image.save(output_path)
+    return placements
+
+
+def _face_in_frame(view, face, width, height):
+    """True when any part of ``face``'s projection lands inside the image.
+
+    Projects the face's triangulation with the view's camera and rasterizes
+    it at the output size, so an occluded face inside the frame is told
+    apart from one the camera framing leaves out entirely.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.TopLoc import TopLoc_Location
+    from PIL import Image, ImageDraw
+
+    location = TopLoc_Location()
+    triangulation = BRep_Tool.Triangulation_s(face, location)
+    if triangulation is None:
+        BRepMesh_IncrementalMesh(face, 0.1, False, 0.5, True)
+        triangulation = BRep_Tool.Triangulation_s(face, location)
+    camera = view.Camera()
+    transform = location.Transformation()
+    limit = 16.0 * max(width, height)
+
+    def to_pixel(node):
+        projected = camera.Project(node.Transformed(transform))
+        x = (projected.X() + 1) / 2 * width
+        y = (1 - projected.Y()) / 2 * height
+        return (min(max(x, -limit), limit), min(max(y, -limit), limit))
+
+    if triangulation is None:
+        return True  # cannot tell: keep the conservative "hidden"
+    pixels = [to_pixel(triangulation.Node(i)) for i in range(1, triangulation.NbNodes() + 1)]
+    mask = Image.new("1", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    for i in range(1, triangulation.NbTriangles() + 1):
+        a, b, c = triangulation.Triangle(i).Get()
+        draw.polygon([pixels[a - 1], pixels[b - 1], pixels[c - 1]], fill=1, outline=1)
+    return mask.getbbox() is not None
 
 
 def render_views(shape, view_names, output_dir):
