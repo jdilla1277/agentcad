@@ -1,6 +1,8 @@
 # Product requirements: Agent CAD workflow and editing reliability
 
-**Status:** Ready for parallel delivery
+**Status:** Reliability foundation delivered. The current benchmark evidence,
+release decision, and stage-aligned roadmap are maintained in
+[AgentCAD performance: release decision and next steps](agentcad-performance-next-steps.md).
 
 **Evidence base:** September 12, 2026 GPT-5 Nano CADGenBench run, 81 fixtures
 
