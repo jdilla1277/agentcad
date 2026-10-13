@@ -7,7 +7,12 @@ captured in the issue backlog
 
 **Decision:** Release the accumulated product fixes together with the
 five-stage agent workflow: **Inspect -> Specify -> Build -> Validate ->
-Deliver**
+Deliver**. Publish Candidate L as the release result; Candidate K is the
+intermediate product-only waypoint.
+
+The reproducibility details, behavioral counts, per-fixture findings, costs,
+limitations, and package hashes are preserved in the
+[evidence appendix](./agentcad-performance-evidence.md).
 
 ## Why we did this
 
@@ -131,7 +136,9 @@ the workflow provides a smaller, directionally repeated lift:
 Every unresolved **bug** below has a developer-ready GitHub issue with evidence,
 scope, acceptance criteria, and regression expectations. **Features** are
 understood directions that need product scoping. **Future ideas** require
-validation before implementation.
+validation before implementation. Evaluate is the outer product-development
+loop that improves the evidence and feeds the other five stages; it is not a
+sixth task step every CAD agent must perform.
 
 | Stage | Bugs | Features | Future ideas |
 |---|---|---|---|
@@ -140,21 +147,118 @@ validation before implementation.
 | **Build** | [#230](https://github.com/jdilla1277/agentcad/issues/230): build-root recovery recommends initializing a guessed alternate root instead of using the current project. | [#231](https://github.com/jdilla1277/agentcad/issues/231): cheap script preflight distinct from full STEP validation; more bounded editing operations. | Adaptive model and strategy routing based on inspection uncertainty and repeated failure. |
 | **Validate** | [#238](https://github.com/jdilla1277/agentcad/issues/238): failed `check-spec` evidence is command-local and can be ignored. | [#229](https://github.com/jdilla1277/agentcad/issues/229): automatic source/output comparison for direct `load_step` edits. [#232](https://github.com/jdilla1277/agentcad/issues/232): separate artifact, intent, and preservation verdicts. | Independent verification and bounded repair that can reject the builder's conclusion. |
 | **Deliver** | [#237](https://github.com/jdilla1277/agentcad/issues/237): reduced-profile artifacts can look delivery-ready even when required layers were skipped. | A delivery receipt bound to artifact/spec hashes, validation profile, checks, preservation evidence, and overrides. | Verifiable CAD provenance that downstream agents and humans can consume as a trust contract. |
+| **Evaluate** | [Internal #346](https://github.com/jdilla1277/agentcad-internal/issues/346): geometry-aware edit classification. [#347](https://github.com/jdilla1277/agentcad-internal/issues/347): disk admission. [#348](https://github.com/jdilla1277/agentcad-internal/issues/348): canonical retries. [#349](https://github.com/jdilla1277/agentcad-internal/issues/349): honest no-artifact outcomes. | [Internal #350](https://github.com/jdilla1277/agentcad-internal/issues/350): interleaved conditions and phase timing. [#351](https://github.com/jdilla1277/agentcad-internal/issues/351): observable stage evidence and gates. A versioned run manifest and automatic evidence bundle. | A continuous regression system that maps score changes to workflow stages, behavioral causes, model/cost tiers, and release gates. |
 
 ## Evaluation handoff
 
-### Next evaluations
+### 1. Publish Candidate L
 
-1. Run Luna with AgentCAD and directly with build123d to measure generic lift
-   at a cost-effective model tier.
-2. Run an eight-edit Opus 5.5 gate with direct build123d, standard AgentCAD,
-   and five-stage AgentCAD; expand only if the small panel is decision-relevant.
-3. Study high-signal workflow wins (`209`, `224`, `225`, `238`), regressions
-   (`212`, `230`), source-preservation failure (`202`), and validity rescue
-   (`250`).
-4. Measure stage adoption directly: target found, contract present, bounded
-   build, intent evidence, preservation evidence, failed-check repair, and
-   exact checked artifact delivered.
+Candidate L—not K—is the release configuration and the next result to publish.
+K is still important because it shows the accumulated product improvements
+before staged help; L measures the experience users will receive. Publish the
+K-to-L decomposition alongside L so the workflow is not credited for fixes
+that were already present in K. Treat the result as a directional one-run
+comparison, and report generation, editing, validity, cost, and latency rather
+than only the aggregate score.
+
+### 2. Run a publishable Opus 5.5 head-to-head
+
+Candidate P proves that Opus 5.5 performs strongly with AgentCAD, but it cannot
+measure AgentCAD's lift: it used standard AgentCAD help and has no matched
+direct-build123d control. The external xhigh result is also not a control
+because its reasoning effort and harness differ.
+
+For a marketing-quality comparison, freeze two primary arms:
+
+- **Control:** Claude Opus 5.5 standard effort, Pi, Python/build123d, and the
+  filesystem, with no AgentCAD or workflow help.
+- **Treatment:** the same model, effort, prompts, and Pi harness, with the
+  release-candidate AgentCAD CLI and Candidate L's five-stage help.
+
+An optional third diagnostic arm—standard AgentCAD help as used by P—would
+separate product lift from workflow lift, but is not required for the headline
+direct-versus-AgentCAD claim.
+
+Use the same pinned 81-fixture dataset, timeouts, concurrency, evaluator, and
+submission rules in every arm. Give the control the real tools an unaided agent
+would have, and the treatment AgentCAD's real public surface; neither arm gets
+harness-only geometry facts, call repair, or evaluator feedback. Interleave
+conditions fixture-by-fixture with a seeded balanced order, freeze each answer
+before evaluation, and retry infrastructure/evaluation without rerunning the
+model.
+
+First run the eight high-signal editing fixtures below as an infrastructure and
+method gate. If there is no systematic failure, run all 81 fixtures in both
+primary arms. Repeat at least the high-signal and discordant fixtures to
+estimate sampling noise. Predeclare overall CAD Score as the primary endpoint,
+with generation, editing, validity, cost, tokens, and wall time as secondary
+outcomes. Publish the exact model/effort identifier, dataset, harness, wheel,
+skill, and evaluator hashes plus per-fixture results. A defensible claim would
+be: “In this matched CADGenBench run, AgentCAD plus its staged workflow changed
+Opus 5.5 performance from X to Y,” not a universal model claim.
+
+### 3. Explain where the workflow helps and hurts
+
+Use fixtures `209`, `224`, `225`, and `238` as workflow wins; `212` and `230`
+as regressions; `202` as the source-preservation hard case; and `250` as the
+validity-rescue case. For each fixture and condition, retain the prompt,
+transcript/tool trace, generated script and spec, source and result geometry,
+previews/diffs, validator evidence, final answer, score, cost, tokens, and
+timing. Then score every workflow stage `0` (absent), `1` (claimed), or `2`
+(evidence-backed):
+
+1. **Inspect:** Did the agent identify the correct source, target, orientation,
+   dimensions, and relevant uncertainty before building?
+2. **Specify:** Did it state the intended delta, invariants, assumptions, and
+   checks precisely enough to reject a wrong result?
+3. **Build:** Was the operation local and bounded, or did it reconstruct,
+   globally transform, approximate, or leave the model unchanged?
+4. **Validate:** Is there separate evidence for artifact health, requested
+   intent, and preservation—not just a claim that the command succeeded?
+5. **Deliver:** Is the submitted file the exact validated artifact, with no
+   stale result, ignored failed check, or reduced-profile override?
+6. **Evaluate:** What official paired score delta resulted, what behavioral
+   cause explains it, and what cost, time, tool failure, or infrastructure
+   effect could confound that explanation?
+
+Classify the outcome as correct bounded edit, plausible partial edit,
+unchanged/no-op, destructive or mistargeted edit, invalid artifact, or no
+artifact. The deliverable from this study is not another average: it is one
+causal account per fixture, the product affordance that would make the good
+behavior repeatable, and a regression fixture/test for it. Specifically test
+whether `209`/`224`/`225`/`238` improved through target identification and
+preservation, whether `212`/`230` regressed because extra process caused
+over-caution or abandonment of a correct direct path, whether `202` requires a
+new preservation primitive, and whether `250` improved validity without
+achieving semantic intent.
+
+### 4. Instrument the workflow, not just the result
+
+Measure stage adoption directly: target found, contract present, bounded
+build, intent evidence, preservation evidence, failed-check repair, and exact
+checked artifact delivered. Save these observations in a machine-readable
+evidence bundle tied to run, fixture, artifact, and configuration hashes. This
+turns Evaluate into a product feedback loop rather than a one-off transcript
+review.
+
+### 5. Additional value still on the table
+
+- Promote the eight high-signal fixtures into a fast regression suite that runs
+  before an 81-fixture benchmark.
+- Add repeat runs or paired bootstrap intervals before presenting small score
+  differences as model or workflow effects.
+- Preserve best/worst previews and concise fixture narratives for the release;
+  aggregate scores alone hide the difference between a valid no-op and a
+  correct bounded edit.
+- Investigate the workflow's latency and token cost, especially generation,
+  and shorten instructions that add procedure without evidence.
+- Use the Nano/Luna/Opus cost-quality curve to explore routing: inexpensive
+  models for straightforward builds, stronger models or independent validation
+  for ambiguous edits.
+- Make every future benchmark emit its run manifest, stage evidence, artifact
+  hashes, costs, timings, and infrastructure incidents automatically. The
+  accompanying evidence appendix preserves these facts for the current effort
+  because its raw logs may disappear.
 
 ### Evaluation bugs and infrastructure
 
