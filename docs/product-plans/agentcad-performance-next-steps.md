@@ -149,88 +149,74 @@ sixth task step every CAD agent must perform.
 | **Deliver** | [#237](https://github.com/jdilla1277/agentcad/issues/237): reduced-profile artifacts can look delivery-ready even when required layers were skipped. | A delivery receipt bound to artifact/spec hashes, validation profile, checks, preservation evidence, and overrides. | Verifiable CAD provenance that downstream agents and humans can consume as a trust contract. |
 | **Evaluate** | [Internal #346](https://github.com/jdilla1277/agentcad-internal/issues/346): geometry-aware edit classification. [#347](https://github.com/jdilla1277/agentcad-internal/issues/347): disk admission. [#348](https://github.com/jdilla1277/agentcad-internal/issues/348): canonical retries. [#349](https://github.com/jdilla1277/agentcad-internal/issues/349): honest no-artifact outcomes. | [Internal #350](https://github.com/jdilla1277/agentcad-internal/issues/350): interleaved conditions and phase timing. [#351](https://github.com/jdilla1277/agentcad-internal/issues/351): observable stage evidence and gates. A versioned run manifest and automatic evidence bundle. | A continuous regression system that maps score changes to workflow stages, behavioral causes, model/cost tiers, and release gates. |
 
-## Evaluation handoff
+## Next steps: Evaluation handoff
 
-### 1. Publish Candidate L
+### 1. Release Candidate L and update the benchmark
 
-Candidate L—not K—is the release configuration and the next result to publish.
-K is still important because it shows the accumulated product improvements
-before staged help; L measures the experience users will receive. Publish the
-K-to-L decomposition alongside L so the workflow is not credited for fixes
-that were already present in K. Treat the result as a directional one-run
-comparison, and report generation, editing, validity, cost, and latency rather
-than only the aggregate score.
+Candidate L is the configuration to release and publish. As of this closeout,
+that does **not** mean publishing `main` unchanged: `main` has the accumulated
+product fixes, but not L's five-stage help. Land the staged help on the latest
+`main`, run the release checks, and publish that resulting AgentCAD version.
 
-### 2. Run a publishable Opus 5.5 head-to-head
+Then update the public
+[benchmark article](https://agentcad.dev/measuring-agentcad-effectiveness) from
+its source at
+`agentcad-internal/agentcad-site/app/measuring-agentcad-effectiveness/page.tsx`.
+Make L the current AgentCAD result: `.245` overall, `.175` generation, `.353`
+editing, and 80/81 valid. K can appear briefly as evidence that the improvement
+came from both product fixes and workflow help; it should not be the headline.
 
-Candidate P proves that Opus 5.5 performs strongly with AgentCAD, but it cannot
-measure AgentCAD's lift: it used standard AgentCAD help and has no matched
-direct-build123d control. The external xhigh result is also not a control
-because its reasoning effort and harness differ.
+### 2. Run the additional benchmarks
 
-For a marketing-quality comparison, freeze two primary arms:
+We have AgentCAD runs for Luna and Opus 5.5, but not the direct-build123d
+controls needed to measure AgentCAD's lift at those model tiers.
 
-- **Control:** Claude Opus 5.5 standard effort, Pi, Python/build123d, and the
-  filesystem, with no AgentCAD or workflow help.
-- **Treatment:** the same model, effort, prompts, and Pi harness, with the
-  release-candidate AgentCAD CLI and Candidate L's five-stage help.
+| Question | Next run |
+|---|---|
+| Does AgentCAD help Luna? | Run GPT-6 Luna low directly with build123d and compare it with Candidate N. |
+| Does AgentCAD help Opus 5.5 standard/low? | Run Opus 5.5 directly with build123d. For the cleanest comparison, also rerun Opus with Candidate L's help because Candidate P used the older standard help. |
+| How does AgentCAD compare with the published top Opus result? | Run AgentCAD plus Candidate L's help with the exact Opus 5.5 xhigh configuration used by the existing official CADGenBench result, then compare them. |
 
-An optional third diagnostic arm—standard AgentCAD help as used by P—would
-separate product lift from workflow lift, but is not required for the headline
-direct-versus-AgentCAD claim.
+The first two are the cleanest product-lift experiments because we control both
+sides. The third is a useful marketing comparison if model, effort, dataset,
+and evaluator match exactly. Start with the eight editing fixtures below; if
+the harness is sound, run all 81. Interleave matched conditions and never rerun
+the model merely to recover an evaluator or packaging failure.
 
-Use the same pinned 81-fixture dataset, timeouts, concurrency, evaluator, and
-submission rules in every arm. Give the control the real tools an unaided agent
-would have, and the treatment AgentCAD's real public surface; neither arm gets
-harness-only geometry facts, call repair, or evaluator feedback. Interleave
-conditions fixture-by-fixture with a seeded balanced order, freeze each answer
-before evaluation, and retry infrastructure/evaluation without rerunning the
-model.
+### 3. Study the eight workflow fixtures
 
-First run the eight high-signal editing fixtures below as an infrastructure and
-method gate. If there is no systematic failure, run all 81 fixtures in both
-primary arms. Repeat at least the high-signal and discordant fixtures to
-estimate sampling noise. Predeclare overall CAD Score as the primary endpoint,
-with generation, editing, validity, cost, tokens, and wall time as secondary
-outcomes. Publish the exact model/effort identifier, dataset, harness, wheel,
-skill, and evaluator hashes plus per-fixture results. A defensible claim would
-be: “In this matched CADGenBench run, AgentCAD plus its staged workflow changed
-Opus 5.5 performance from X to Y,” not a universal model claim.
+| Fixtures | What to determine |
+|---|---|
+| `209`, `224`, `225`, `238` | What made target selection and bounded editing work? |
+| `212`, `230` | Did the workflow cause a no-op or distract from a correct direct approach? |
+| `202` | What source-preservation capability is missing? |
+| `250` | Why did the workflow rescue validity without fully satisfying intent? |
 
-### 3. Explain where the workflow helps and hurts
+For each fixture, compare the standard and staged runs and record: correct
+target, explicit contract, bounded operation, intent evidence, preservation
+evidence, delivered artifact, score, cost, and failures. Classify the result as
+correct, partial, unchanged, mistargeted/destructive, invalid, or missing. End
+with one concrete product change and one regression test per fixture.
 
-Use fixtures `209`, `224`, `225`, and `238` as workflow wins; `212` and `230`
-as regressions; `202` as the source-preservation hard case; and `250` as the
-validity-rescue case. For each fixture and condition, retain the prompt,
-transcript/tool trace, generated script and spec, source and result geometry,
-previews/diffs, validator evidence, final answer, score, cost, tokens, and
-timing. Then score every workflow stage `0` (absent), `1` (claimed), or `2`
-(evidence-backed):
+The durable handoff does not depend on this workspace:
 
-1. **Inspect:** Did the agent identify the correct source, target, orientation,
-   dimensions, and relevant uncertainty before building?
-2. **Specify:** Did it state the intended delta, invariants, assumptions, and
-   checks precisely enough to reject a wrong result?
-3. **Build:** Was the operation local and bounded, or did it reconstruct,
-   globally transform, approximate, or leave the model unchanged?
-4. **Validate:** Is there separate evidence for artifact health, requested
-   intent, and preservation—not just a claim that the command succeeded?
-5. **Deliver:** Is the submitted file the exact validated artifact, with no
-   stale result, ignored failed check, or reduced-profile override?
-6. **Evaluate:** What official paired score delta resulted, what behavioral
-   cause explains it, and what cost, time, tool failure, or infrastructure
-   effect could confound that explanation?
+- The public `agentcad` repository contains this closeout and the
+  [evidence appendix](./agentcad-performance-evidence.md), including run hashes,
+  scores, behavioral counts, fixture findings, costs, limitations, report
+  links, and package checksums.
+- The private `agentcad-internal` repository contains the benchmark page source
+  above and evaluation-pipeline issues
+  [#346–#351](https://github.com/jdilla1277/agentcad-internal/issues/346).
+- `.context` logs and Desktop ZIPs are transient and are not required source
+  material. Their non-recoverable findings and hashes are in the evidence
+  appendix.
 
-Classify the outcome as correct bounded edit, plausible partial edit,
-unchanged/no-op, destructive or mistargeted edit, invalid artifact, or no
-artifact. The deliverable from this study is not another average: it is one
-causal account per fixture, the product affordance that would make the good
-behavior repeatable, and a regression fixture/test for it. Specifically test
-whether `209`/`224`/`225`/`238` improved through target identification and
-preservation, whether `212`/`230` regressed because extra process caused
-over-caution or abandonment of a correct direct path, whether `202` requires a
-new preservation primitive, and whether `250` improved validity without
-achieving semantic intent.
+To resume next week: check out both repositories, read these two Markdown
+files, review issues #346–#351, and run the eight-fixture panel with transcript
+and artifact capture enabled. Put new run manifests in
+`agentcad-internal/benchmarks/history/experiments/` and fixture reviews in
+`agentcad-internal/benchmarks/comparisons/`; link the resulting report from the
+evidence appendix.
 
 ### 4. Instrument the workflow, not just the result
 
