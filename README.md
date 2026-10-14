@@ -22,6 +22,13 @@ A coding agent designing in agentcad, live. See more at [agentcad.dev](https://a
 
 In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
 
+The v0.7.0 release brings the five-stage workflow below to the installed guide
+and built-in help. In its [Candidate L CADGenBench run](https://huggingai4engineering-cadgenbench.hf.space/reports/james-dillard_gpt-5-nano-candidate-l-pi-harness-five-s_20261001-001100.html),
+GPT-5 Nano scored .245 overall (.175 generation, .353 editing) with 80 of 81
+valid outputs. That is a single run, not a new matched direct-build123d
+comparison; see the [experiment closeout](docs/product-plans/agentcad-performance-next-steps.md)
+for the baseline, caveats, and next evaluations.
+
 ## Quick start
 
 Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
@@ -36,6 +43,12 @@ Design me a phone stand: a simple angled cradle that holds a phone
 at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
 to keep the phone from sliding. Show me a preview when you're done.
 ```
+
+To install the reusable agent skill separately, use
+[`npx skills add jdilla1277/agentcad-skill`](https://skills.sh/jdilla1277/agentcad-skill/agentcad)
+or [`clawhub install agentcad`](https://clawhub.ai/jdilla1277/skills/agentcad).
+Both install guidance, not the CAD executable; install `agentcad` with pip as
+shown above. For a project-local guide, run `agentcad skill install` instead.
 
 ### Keep generated files in a build directory
 
@@ -57,9 +70,58 @@ the project root, not the caller's working directory. Existing projects keep
 their current layout unless configured. `--output` remains a deprecated version
 label, never a destination. See `agentcad docs artifacts` for the full contract.
 
-## What it does
+## Required agent workflow
 
-- **`agentcad run script.py --label label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+`agentcad init` installs a guide that requires the same workflow for new models
+and edits:
+
+> **Inspect → Specify → Build → Validate → Deliver**
+
+- **Inspect:** understand drawings, requirements, orientation, dimensions, and
+  any source geometry before writing a model.
+- **Specify:** record measurable requirements and assumptions. For edits, also
+  identify the target, expected change, and geometry that must remain stable.
+- **Build:** create the simplest geometry that can satisfy the specification;
+  use the smallest bounded operation for an edit.
+- **Validate:** inspect visual, dimensional, difference, and structural evidence.
+  If a check fails, return to the earliest incorrect stage and iterate.
+- **Deliver:** hand off only the exact STEP and requested exports that passed.
+
+## Capabilities by workflow stage
+
+### Inspect
+
+- **`agentcad inspect output.step`** — bounded topology, orientation, addressable
+  IDs, edit risk, and structural evidence
+- **`agentcad measure output.step`** — dimensions, edge lengths, face areas, and
+  circular/cylindrical feature measurements
+- **`agentcad render output.step --view top,front,right,iso`** — visual evidence
+  for orientation and feature location
+- **`agentcad parts list REF` / `parts show REF ID`** — inspect named parts and
+  isolate one versioned part
+
+### Specify
+
+- **`spec.json`** — records supported cylindrical-feature and structure
+  requirements before modeling
+- **`agentcad check-spec output.step spec.json`** — evaluates that contract
+  during validation
+
+### Build
+
+- **`agentcad run script.py --label label`** — execute a build123d script,
+  producing a versioned STEP file and geometric metrics
+- **Pre-injected helpers** — build primitives, import existing STEP geometry,
+  select features, and perform bounded or validated editing operations
+
+### Validate
+
+- **`agentcad run ... --preview`** — four-view PNG for visual verification; the
+  browser viewer can export an on-demand turntable GIF
+- **`agentcad diff 1 2`** — compare versions, including actual
+  shared/reference-only/candidate-only source-frame volume for valid closed solids
+- **`agentcad view old.step new.step`** — open a synchronized A/B comparison
+  with separate centered projection and source-frame 3D volume artifacts
 - **Live project viewer** — successful runs open one stable local project URL
   and refresh it after subsequent completed builds. Leave the tab open while
   iterating; camera and compatible review settings survive updates. Failed
@@ -69,19 +131,14 @@ label, never a destination. See `agentcad docs artifacts` for the full contract.
   Parts-tab change review (`--no-view` opts out)
 - **Spatial review comments** — pin human feedback to a surface and named part;
   comments persist locally for the agent's next revision
-- **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
-- **`agentcad run ... --render iso,front`** — high-quality PNG views
-- **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
-- **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
-- **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
-- **`agentcad inspect output.step`** — bounded topology deep-dive with observable loading, validity, and extraction phases
-- **`agentcad parts list REF`** — list named/captured parts for a version
-- **`agentcad parts show REF ID`** — show one versioned part by stable id
-- **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
 - **`agentcad review list --status open`** — read shared review threads; humans
   and agents can reply, resolve, and reopen with an auditable history
-- **`agentcad diff 1 2`** — compare versions, including actual shared/reference-only/candidate-only source-frame volume for valid closed solids
-- **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
+- **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
+
+### Deliver
+
+- **`agentcad run ... --export stl,glb`** or **`agentcad export`** — write mesh
+  deliverables and report validation for each written format
 - **`agentcad viewer [open|status|stop]`** — open the live project or manage its
   lightweight local service; `open` is the default
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples

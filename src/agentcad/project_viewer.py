@@ -156,7 +156,11 @@ def request(config, route, payload=None, timeout=0.5):
 
 
 def service_status():
-    config = read_json(runtime_dir() / "config.json")
+    # The service replaces config.json while holding this lock. Windows can
+    # deny a concurrent read during that replacement, so read under the same
+    # lock instead of racing the child process at startup.
+    with locked():
+        config = read_json(runtime_dir() / "config.json")
     if config and config.get("port"):
         try:
             state = request(config, "health")
@@ -184,7 +188,9 @@ def ensure_service():
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                 cwd=runtime_dir(), env=env, start_new_session=True,
             )
-        deadline = time.monotonic() + 5
+        # The child may first wait up to eight seconds for the previous
+        # service's process lock before it can bind the saved port.
+        deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             if service_status()["running"]:
                 return configuration()
