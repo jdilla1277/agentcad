@@ -22,6 +22,13 @@ A coding agent designing in agentcad, live. See more at [agentcad.dev](https://a
 
 In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
 
+The v0.7.0 release brings the five-stage workflow below to the installed guide
+and built-in help. In its [Candidate L CADGenBench run](https://huggingai4engineering-cadgenbench.hf.space/reports/james-dillard_gpt-5-nano-candidate-l-pi-harness-five-s_20261001-001100.html),
+GPT-5 Nano scored .245 overall (.175 generation, .353 editing) with 80 of 81
+valid outputs. That is a single run, not a new matched direct-build123d
+comparison; see the [experiment closeout](docs/product-plans/agentcad-performance-next-steps.md)
+for the baseline, caveats, and next evaluations.
+
 ## Quick start
 
 Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
@@ -36,6 +43,12 @@ Design me a phone stand: a simple angled cradle that holds a phone
 at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
 to keep the phone from sliding. Show me a preview when you're done.
 ```
+
+To install the reusable agent skill separately, use
+[`npx skills add jdilla1277/agentcad-skill`](https://skills.sh/jdilla1277/agentcad-skill/agentcad)
+or [`clawhub install agentcad`](https://clawhub.ai/jdilla1277/skills/agentcad).
+Both install guidance, not the CAD executable; install `agentcad` with pip as
+shown above. For a project-local guide, run `agentcad skill install` instead.
 
 ### Keep generated files in a build directory
 
