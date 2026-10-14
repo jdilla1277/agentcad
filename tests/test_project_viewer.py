@@ -198,6 +198,22 @@ def test_lock_contender_waits_without_reading_owned_bytes(service):
         assert future.result(timeout=2)
 
 
+def test_service_status_waits_for_config_write(service):
+    attempted = Event()
+
+    def read_status():
+        attempted.set()
+        return live.service_status()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with live.locked():
+            future = executor.submit(read_status)
+            assert attempted.wait(timeout=2)
+            time.sleep(.1)
+            assert not future.done()
+        assert future.result(timeout=2)["running"] is False
+
+
 def test_service_crash_releases_ownership_and_keeps_url(service, tmp_path):
     root = tmp_path / "model"
     live.publish(root, version(root, 1), started_ns=1)
