@@ -340,8 +340,8 @@ def test_run_runtime_error_creates_failed_version(runner, isolated_dir):
     script = """\
 import cadquery as cq
 result = cq.Workplane("XY").box(10, 10, 10)
-raise ValueError("something went wrong")
 show_object(result)
+raise ValueError("something went wrong")
 """
     _write_script(isolated_dir, content=script)
     result = runner.invoke(cli, ["run", "script.py", "--output", "broken"])
@@ -2493,7 +2493,8 @@ def test_run_viewer_parts_panel_includes_named_parts(runner, isolated_dir):
     assert "partMatchesNameExact" in viewer_html
     assert "Longest IDs first avoids" in viewer_html
     assert "&& !partState.ghostRest" in viewer_html
-    assert "attach(sceneA_split, MODEL_A_URL, { alignToCenter: true })" in viewer_html
+    assert "attach(sceneA_split, MODEL_A_URL, {" in viewer_html
+    assert "onMesh: m => reviewSplitModelA = m" in viewer_html
 
     from PIL import Image
     preview_img = Image.open(isolated_dir / "v1" / "preview.png").convert("RGB")

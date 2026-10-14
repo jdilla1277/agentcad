@@ -554,6 +554,15 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         cand = get_project().version_dir(prev) / "output.glb"
         if cand.exists():
             prev_glb = cand
+    lifecycle.meta["viewer_context"] = {
+        "version": version_num, "label": label,
+        "models": {
+            "a": {"version": prev["version"], "label": prev["label"]} if prev_glb else {
+                "version": version_num, "label": label,
+            },
+            **({"b": {"version": version_num, "label": label}} if prev_glb else {}),
+        },
+    }
     viewer_path = version_dir / "viewer.html"
     viewer_ok = False
     if glb_ok:
@@ -582,6 +591,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
                         if diff_meta and diff_meta.get("volume_png")
                         else None
                     ),
+                    viewer_context=lifecycle.meta["viewer_context"],
                 )
 
             if comparison_recorder is not None:

@@ -2370,6 +2370,15 @@ def _run_impl(
                 except Exception:
                     prev_glb_path = None
 
+    lifecycle.meta["viewer_context"] = {
+        "version": version_num, "label": label,
+        "models": {
+            "a": {"version": prev["version"], "label": prev["label"]} if prev_glb_path else {
+                "version": version_num, "label": label,
+            },
+            **({"b": {"version": version_num, "label": label}} if prev_glb_path else {}),
+        },
+    }
     viewer_path = version_dir / "viewer.html"
     if not fast_path:
         _heartbeat("writing viewer.html…")
@@ -2401,6 +2410,8 @@ def _run_impl(
                 parts_model="b" if prev_glb_path else "a",
                 part_changes=part_changes,
                 groups=groups_output,
+                viewer_context=lifecycle.meta["viewer_context"],
+                previous_parts=previous_parts,
             )
 
         if comparison_recorder is not None:

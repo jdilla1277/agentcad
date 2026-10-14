@@ -11,6 +11,7 @@ from agentcad.commands.skill import skill_status
 from agentcad.guide import guide_fingerprint
 from agentcad.manifest import load_manifest
 from agentcad.recovery import recovery_summary
+from agentcad.reviews import review_summary
 from agentcad.runners import dispatch
 
 
@@ -55,6 +56,7 @@ def context():
     versions = manifest.get("versions", [])
     current = manifest.get("current", None)
     recovery = recovery_summary(get_project().build_root, manifest)
+    reviews = review_summary(get_project().build_root)
     runtime = manifest.get("runtime") or dispatch.DEFAULT_RUNTIME
     agent_setup, setup_actions = _agent_setup_report(get_project().project_root, runtime)
     if get_project().configured:
@@ -88,7 +90,13 @@ def context():
         "versions": versions_summary,
         "recovery": recovery,
         "agent_setup": agent_setup,
+        **reviews,
     }
     if setup_actions:
         response["next_actions"] = setup_actions
+    if reviews["open_review_comments"]:
+        prefix = "agentcad review"
+        if get_project().configured:
+            prefix += " --build-dir " + shlex.quote(str(get_project().build_root))
+        response["review_next_action"] = prefix + " list --status open"
     click.echo(json.dumps(response))

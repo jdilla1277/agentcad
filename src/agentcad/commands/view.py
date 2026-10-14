@@ -36,10 +36,12 @@ from agentcad.comparison_phases import ComparisonPhaseRecorder
 #   __GROUPS_JSON__          part groups payload
 #   __REVIEW_JSON__          measure/check-spec review payload, or null
 #   __PART_REVIEW_JSON__     part visibility/focus state, or null
+#   __VIEWER_CONTEXT_JSON__  source version/label metadata for review comments
 _HTML_UNIFIED = r"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
 <title>agentcad viewer</title>
 <style>
   body { margin: 0; overflow: hidden; background: #efefef; font-family: monospace; }
@@ -71,13 +73,13 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   #label-left { left: 16px; }
-  #label-right { left: calc(50% + 16px); }
+  #label-right { left: calc(var(--viewer-width, 100vw) / 2 + 16px); }
   body.split-open .label {
     top: 54px;
-    max-width: calc(50% - 32px);
+    max-width: calc(var(--viewer-width, 100vw) / 2 - 32px);
   }
   #divider {
-    position: fixed; top: 0; bottom: 0; left: 50%;
+    position: fixed; top: 0; bottom: 0; left: calc(var(--viewer-width, 100vw) / 2);
     width: 1px; background: rgba(0,0,0,0.2);
     pointer-events: none; display: none;
   }
@@ -282,6 +284,143 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     font-family: monospace; font-size: 11px;
     padding: 6px 10px; border-radius: 4px; user-select: none;
   }
+  #comment-toggle-btn {
+    position: absolute; top: 10px; left: 12px; z-index: 42;
+    height: 34px; padding: 0 12px; border: 1px solid rgba(0,0,0,.14);
+    border-radius: 17px; background: rgba(255,255,255,.94); color: #27313f;
+    font: 12px monospace; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+  }
+  #comment-toggle-btn.active { background: #1b75bb; border-color: #1b75bb; color: #fff; }
+  #comment-toggle-btn[disabled] { opacity: .5; cursor: not-allowed; }
+  body.placing-comment #canvas {
+    cursor: crosshair;
+    outline: 4px solid rgba(27,117,187,.8);
+    outline-offset: -4px;
+  }
+  #comment-placement-hud {
+    position: fixed; top: 14px; left: 50%; z-index: 44;
+    display: none; transform: translateX(-50%); align-items: center; gap: 10px;
+    max-width: calc(100vw - 420px); padding: 10px 14px; border-radius: 8px;
+    background: #172b3d; color: #fff; box-shadow: 0 5px 18px rgba(0,0,0,.28);
+    font: 12px monospace; pointer-events: none;
+  }
+  body.placing-comment #comment-placement-hud { display: flex; }
+  #comment-placement-hud strong { color: #78c8ff; text-transform: uppercase; }
+  #comment-placement-hud kbd {
+    padding: 2px 5px; border: 1px solid rgba(255,255,255,.4); border-radius: 4px;
+    background: rgba(255,255,255,.1); color: #fff; font: 10px monospace;
+  }
+  #comment-target-preview {
+    position: fixed; z-index: 43; display: none; width: 28px; height: 28px;
+    transform: translate(-50%, -50%); box-sizing: border-box; border: 3px solid #fff;
+    border-radius: 50%; background: rgba(27,117,187,.3);
+    box-shadow: 0 0 0 3px #1b75bb, 0 3px 12px rgba(0,0,0,.35);
+    pointer-events: none;
+  }
+  #comment-target-preview::before {
+    content: ''; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
+    transform: translate(-50%, -50%); border-radius: 50%; background: #fff;
+  }
+  #comment-target-preview.locked {
+    width: 34px; height: 34px; background: #1b75bb;
+    box-shadow: 0 0 0 4px rgba(27,117,187,.28), 0 3px 12px rgba(0,0,0,.35);
+  }
+  #comment-target-preview.locked::after {
+    content: 'Comment here'; position: absolute; top: 39px; left: 50%;
+    transform: translateX(-50%); width: max-content; padding: 4px 7px; border-radius: 4px;
+    background: #172b3d; color: #fff; font: 10px monospace;
+  }
+  #comment-pins { position: fixed; inset: 0; z-index: 34; pointer-events: none; }
+  .comment-pin {
+    position: absolute; transform: translate(-50%, -50%); pointer-events: auto;
+    min-width: 26px; height: 26px; padding: 0 6px; border: 2px solid #fff;
+    border-radius: 14px; background: #1b75bb; color: #fff; font: 700 11px monospace;
+    box-shadow: 0 2px 7px rgba(0,0,0,.32); cursor: pointer;
+  }
+  .comment-pin.addressed { background: #d97706; }
+  .comment-pin.resolved { background: #667085; }
+  .comment-pin.draft { background: #b54708; border-style: dashed; }
+  body.placing-comment .comment-pin { pointer-events: none; opacity: .35; }
+  #comments-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 45; width: 360px;
+    display: none; grid-template-rows: auto auto minmax(0,1fr) auto;
+    box-sizing: border-box; background: #fff; border-left: 1px solid #d9dee7;
+    box-shadow: -4px 0 18px rgba(0,0,0,.10); color: #1d2430;
+  }
+  #comments-panel.open { display: grid; }
+  #comments-panel .head { display: flex; justify-content: space-between; align-items: center; padding: 14px; border-bottom: 1px solid #e3e6eb; }
+  #comments-panel h2 { margin: 0; font-size: 14px; }
+  #comments-panel button {
+    border: 1px solid #d5dae2; border-radius: 5px; background: #fff; color: #27313f;
+    padding: 6px 8px; font: 11px monospace; cursor: pointer;
+  }
+  #comments-panel button:hover { background: #f2f5f8; }
+  #comments-panel button.primary { background: #1b75bb; border-color: #1b75bb; color: #fff; }
+  #comments-panel button.active { background: #27313f; border-color: #27313f; color: #fff; }
+  #comment-tools { display: grid; gap: 8px; padding: 12px; border-bottom: 1px solid #e3e6eb; }
+  #comments-panel #new-comment-btn {
+    width: 100%; padding: 10px 12px; font-size: 12px; font-weight: 700;
+  }
+  #comment-status { min-height: 15px; color: #667085; font-size: 10px; line-height: 1.4; }
+  body.placing-comment #comment-status {
+    margin: 0 -4px; padding: 7px 8px; border-radius: 5px;
+    background: #eaf5fc; color: #125987; font-weight: 700;
+  }
+  #comments-list { min-height: 0; overflow: auto; padding: 10px; display: grid; align-content: start; gap: 8px; }
+  .comment-row { border: 1px solid #d9dee7; border-left: 3px solid #1b75bb; border-radius: 6px; padding: 9px; cursor: pointer; }
+  .comment-row.draft { border-color: #f0c36d; border-left-color: #b54708; background: #fff8e7; }
+  .comment-row.addressed { border-left-color: #d97706; }
+  .comment-row.resolved { border-left-color: #667085; opacity: .7; }
+  .comment-row.selected { box-shadow: 0 0 0 3px rgba(27,117,187,.12); }
+  .comment-row .meta { display: flex; justify-content: space-between; gap: 8px; color: #667085; font-size: 10px; text-transform: uppercase; }
+  .comment-row p { margin: 7px 0; font-size: 12px; line-height: 1.4; white-space: pre-wrap; }
+  .comment-row .target { color: #667085; font-size: 10px; }
+  .comment-row .author { margin-top: 7px; color: #344054; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .comment-row .actions { display: flex; gap: 5px; margin-top: 8px; }
+  .comment-row .draft-note { margin-top: 6px; color: #8a3b0a; font-size: 10px; font-weight: 700; }
+  .comment-thread { display: grid; gap: 7px; margin-top: 9px; padding-top: 8px; border-top: 1px solid #e3e6eb; }
+  .comment-reply { padding-left: 9px; border-left: 2px solid #b8c2cf; }
+  .comment-reply.agent { border-left-color: #1b75bb; }
+  .comment-reply .byline { color: #667085; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+  .comment-reply p { margin: 3px 0 0; font-size: 11px; }
+  .thread-composer { display: grid; gap: 6px; margin-top: 9px; }
+  .thread-composer textarea {
+    width: 100%; min-height: 52px; resize: vertical; box-sizing: border-box;
+    border: 1px solid #b8c2cf; border-radius: 6px; padding: 7px; font: 11px monospace;
+  }
+  .thread-composer .actions { justify-content: flex-end; margin-top: 0; }
+  #comments-panel button.danger { color: #b42318; }
+  #comment-composer { display: none; padding: 12px; border-top: 1px solid #d9dee7; background: #fbfcfd; }
+  #comment-composer.open { display: block; }
+  #comment-anchor-summary { margin-bottom: 7px; color: #667085; font-size: 10px; }
+  #comment-part-field { display: none; margin: 0 0 9px; }
+  #comment-part-field.visible { display: grid; gap: 4px; }
+  #comment-part-field span { color: #344054; font-size: 10px; font-weight: 700; }
+  #comment-part-select {
+    width: 100%; box-sizing: border-box; border: 1px solid #b8c2cf; border-radius: 6px;
+    background: #fff; color: #1d2430; padding: 7px 8px; font: 11px monospace;
+  }
+  #comment-part-hint { color: #667085; font-size: 9px; line-height: 1.35; }
+  #comment-scope-field { display: none; margin: 0 0 9px; padding: 0; border: 0; }
+  #comment-scope-field.visible { display: grid; gap: 5px; }
+  #comment-scope-field legend { padding: 0; color: #344054; font-size: 10px; font-weight: 700; }
+  #comment-scope-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+  #comments-panel #comment-scope-options button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #comment-scope-options button.active { background: #1b75bb; border-color: #1b75bb; color: #fff; }
+  #comment-scope-hint { color: #667085; font-size: 9px; line-height: 1.35; }
+  .comment-scope-badge {
+    display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 5px;
+    border-radius: 999px; background: #eaf5fc; color: #125987; font: 700 9px monospace;
+  }
+  #parts-view .part-comment-badge {
+    margin-left: 9px; padding: 3px 7px; border: 0; border-radius: 999px;
+    background: #1b75bb; color: #fff; font: 700 10px monospace; cursor: pointer;
+  }
+  #part-controls .part-comment-badge { margin-left: 5px; color: #1b75bb; font-size: 9px; font-weight: 700; }
+  #comment-text { width: 100%; min-height: 72px; resize: vertical; box-sizing: border-box; border: 1px solid #cfd5de; border-radius: 6px; padding: 8px; font: 12px monospace; }
+  #comment-composer .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 7px; }
+  #submit-review-btn { margin: 10px 12px 12px; }
+  #comments-empty { color: #667085; padding: 18px 8px; font-size: 12px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -292,12 +431,12 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
 <div id="overlay-controls">
   <div class="row">
     <span class="swatch" style="background:#4caf50;"></span>
-    <label><input type="checkbox" id="visible-a" checked> A · <span id="ov-label-a"></span></label>
+    <label><input type="checkbox" id="visible-a" checked> Previous · <span id="ov-label-a"></span></label>
   </div>
   <div class="row"><span style="width:12px;"></span>opacity <input type="range" id="opacity-a" min="0" max="100" value="70"></div>
   <div class="row">
     <span class="swatch" style="background:#e53935;"></span>
-    <label><input type="checkbox" id="visible-b" checked> B · <span id="ov-label-b"></span></label>
+    <label><input type="checkbox" id="visible-b" checked> Current · <span id="ov-label-b"></span></label>
   </div>
   <div class="row"><span style="width:12px;"></span>opacity <input type="range" id="opacity-b" min="0" max="100" value="70"></div>
 </div>
@@ -318,7 +457,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     <img id="img-preview">
   </div>
   <div class="panel" id="panel-diff-side" style="display:none;">
-    <h3>diff_side.png — four matched views of A (previous) and B (this run)</h3>
+    <h3>diff_side.png — four matched views of the previous and current revisions</h3>
     <img id="img-diff-side">
   </div>
   <div class="panel" id="panel-diff-overlay" style="display:none;">
@@ -402,6 +541,44 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
 <button id="pause-btn" title="Pause / play rotation">&#9646;&#9646;</button>
 <button id="export-gif-btn" title="Export current view as animated GIF">Export GIF</button>
 <div id="export-progress" style="display:none;">Encoding GIF… <span id="export-progress-pct">0%</span></div>
+<button id="comment-toggle-btn" title="Open spatial comments (C)">Comments</button>
+<div id="comment-placement-hud"><strong>Place comment</strong><span>Click the surface you mean</span><kbd>Esc</kbd><span>cancel</span></div>
+<div id="comment-target-preview"></div>
+<div id="comment-pins"></div>
+<aside id="comments-panel">
+  <div class="head"><h2>Review comments</h2><button id="close-comments-btn" title="Close">Close</button></div>
+  <div id="comment-tools">
+    <button class="primary" id="new-comment-btn">+ New comment</button>
+    <div id="comment-status"></div>
+  </div>
+  <div id="comments-list"><div id="comments-empty">No comments yet. Choose <strong>New comment</strong>, then click the model where you want to leave feedback.</div></div>
+  <div>
+    <div id="comment-composer">
+      <div id="comment-anchor-summary"></div>
+      <label id="comment-part-field">
+        <span>Refers to part</span>
+        <select id="comment-part-select"></select>
+        <small id="comment-part-hint">Suggested from where you clicked. You can choose any named part.</small>
+      </label>
+      <fieldset id="comment-scope-field">
+        <legend>Applies to</legend>
+        <div id="comment-scope-options">
+          <button type="button" data-comment-scope="a">Previous</button>
+          <button type="button" data-comment-scope="b">Current</button>
+          <button type="button" data-comment-scope="both">Both</button>
+        </div>
+        <small id="comment-scope-hint"></small>
+      </fieldset>
+      <textarea id="comment-text" placeholder="What should change?"></textarea>
+      <div class="actions">
+        <button id="cancel-comment-btn">Cancel</button>
+        <button id="save-comment-btn">Save draft</button>
+        <button class="primary" id="send-comment-btn">Send comment</button>
+      </div>
+    </div>
+    <button class="primary" id="submit-review-btn" style="display:none;">Send all drafts</button>
+  </div>
+</aside>
 
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
 <script type="importmap">
@@ -433,6 +610,8 @@ const PART_CHANGES = __PART_CHANGES_JSON__;
 const GROUPS = __GROUPS_JSON__;
 const REVIEW = __REVIEW_JSON__;
 const PART_REVIEW = __PART_REVIEW_JSON__;
+const VIEWER_CONTEXT = __VIEWER_CONTEXT_JSON__;
+const COMMENT_PARTS = [...new Map([...__COMMENT_PARTS_JSON__, ...PARTS].map(p => [p.id, p])).values()];
 
 const hasB = MODEL_B_URL.length > 0;
 const liveProject = parent !== window && new URLSearchParams(location.search).get('live') === '1';
@@ -445,6 +624,7 @@ const hasPartsView = hasParts || hasPartChanges;
 const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
 const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 const partObjects = new Map();
+const partObjectsByRole = { a: new Map(), b: new Map() };
 const partRows = new Map();
 const groupRows = new Map();
 let currentMode = null;
@@ -467,6 +647,8 @@ window.agentcadViewer = {
 // loaded. Standalone file viewers keep working without a parent or server.
 function captureLiveState() {
   return {
+    commentsOpen: document.getElementById('comments-panel').classList.contains('open'),
+    selectedCommentId,
     mode: currentMode, hasB,
     position: camera.position.toArray(), target: controls.target.toArray(),
     autoRotate: controls.autoRotate,
@@ -511,6 +693,9 @@ function restoreLiveState(state) {
     el.dispatchEvent(new Event(item.id.startsWith('opacity') ? 'input' : 'change'));
   }
   setAutoRotate(Boolean(state.autoRotate));
+  selectedCommentId = state.selectedCommentId || null;
+  if (state.commentsOpen && !['parts', 'agent-view'].includes(currentMode)) setCommentPanel(true, { preserveCamera: true });
+  renderReviewComments();
   publishViewerDebugState();
   return fallback;
 }
@@ -522,7 +707,9 @@ function tellProject(type, extra = {}) {
 window.addEventListener('message', event => {
   if (event.source !== parent || parent === window || event.origin !== location.origin || !viewerReady) return;
   if (event.data?.type === 'agentcad:capture') {
-    tellProject('agentcad:state', {state:captureLiveState(), busy:exportBtn.disabled});
+    const commentBusy = reviewBusy();
+    tellProject('agentcad:state', {state:captureLiveState(), busy:exportBtn.disabled || commentBusy,
+      busyReason: commentBusy ? 'Finish or save your comment to show the latest build' : 'Waiting for GIF export'});
   } else if (event.data?.type === 'agentcad:restore') {
     const fallback = restoreLiveState(event.data.state);
     renderFrame();
@@ -543,6 +730,10 @@ function setupModeButtons() {
     disable('btn-side', 'Open two models to use side-by-side comparison.');
     disable('btn-overlay', 'Open two models to use overlay comparison.');
   }
+  document.getElementById('btn-single-a').textContent = hasB ? 'Previous' : 'Current';
+  document.getElementById('btn-single-a').title = hasB ? LABEL_A : `Current · ${LABEL_A}`;
+  document.getElementById('btn-single-b').textContent = 'Current';
+  document.getElementById('btn-single-b').title = `Current · ${LABEL_B}`;
   if (!hasAgentView) {
     disable('btn-agent', 'Agent view is available when preview images, diff images, or handoff state are embedded.');
   }
@@ -659,7 +850,7 @@ function setupAgentHandoffPanel() {
 
   document.getElementById('agent-handoff-heading').textContent = PART_REVIEW.review_label || 'Agent handoff';
   document.getElementById('agent-handoff-note').textContent = (
-    PART_REVIEW.note || 'Temporary review viewer. Browser changes are not saved.'
+    PART_REVIEW.note || 'Part visibility is temporary; submitted review comments are saved.'
   );
 
   const details = document.getElementById('agent-handoff-details');
@@ -687,7 +878,7 @@ function setupPartHandoff() {
   const title = document.getElementById('part-handoff-title');
   const note = document.getElementById('part-handoff-note');
   title.textContent = PART_REVIEW.review_label || 'Review note';
-  note.textContent = PART_REVIEW.note || 'Temporary review viewer. Browser changes are not saved.';
+  note.textContent = PART_REVIEW.note || 'Part visibility is temporary; submitted review comments are saved.';
   handoff.style.display = 'block';
 }
 
@@ -930,20 +1121,20 @@ function partMatchesNameFuzzy(partId, name) {
   return value.includes(String(partId));
 }
 
-function detectPartId(mesh) {
+function detectPartId(mesh, parts=PARTS) {
   const names = [];
   let node = mesh;
   while (node) {
     if (node.name) names.push(node.name);
     node = node.parent;
   }
-  for (const p of PARTS) {
+  for (const p of parts) {
     if (names.some(name => partMatchesNameExact(p.id, name))) return p.id;
     if (p.name && names.some(name => partMatchesNameExact(p.name, name))) return p.id;
   }
   // Fallback for exporters that decorate node names. Longest IDs first avoids
   // assigning wheel_axle to wheel when both exist.
-  const longestFirst = [...PARTS].sort((a, b) => String(b.id).length - String(a.id).length);
+  const longestFirst = [...parts].sort((a, b) => String(b.id).length - String(a.id).length);
   for (const p of longestFirst) {
     if (names.some(name => partMatchesNameFuzzy(p.id, name))) return p.id;
     if (p.name && names.some(name => partMatchesNameFuzzy(p.name, name))) return p.id;
@@ -979,6 +1170,18 @@ function registerPartMeshes(model) {
     cloneMaterialForPart(c);
     if (!partObjects.has(partId)) partObjects.set(partId, []);
     partObjects.get(partId).push(c);
+  });
+}
+
+function indexCommentPartMeshes(model, role) {
+  const index = partObjectsByRole[role];
+  model.traverse(c => {
+    if (!c.isMesh) return;
+    const partId = detectPartId(c, COMMENT_PARTS);
+    if (!partId) return;
+    c.userData.partId = partId;
+    if (!index.has(partId)) index.set(partId, []);
+    index.get(partId).push(c);
   });
 }
 
@@ -1052,6 +1255,1022 @@ function publishViewerDebugState() {
     detail: window.agentcadViewer.lastState,
   }));
 }
+
+// ---- Human review comments ---------------------------------------------
+// Persistent comments are available only when this generated file is served
+// by the live project viewer. file:// remains a fully functional read-only
+// viewer for backwards compatibility and offline artifact inspection.
+const reviewProject = location.pathname.match(/^\/projects\/([a-f0-9]{64})\/artifacts\/\d+\/viewer\.html$/);
+const reviewToken = reviewProject?.[1] || '';
+const reviewBase = `/projects/${reviewToken}/review`;
+const reviewEnabled = location.protocol === 'http:' && Boolean(reviewToken);
+let reviewComments = [];
+let commentPlacement = null;
+let pendingCommentAnchor = null;
+let selectedCommentId = null;
+let commentHoverPoint = null;
+let editingCommentId = null;
+let reviewCommentsFingerprint = '';
+let reviewWrites = 0;
+
+function reviewBusy() {
+  return reviewWrites > 0 || Boolean(commentPlacement || pendingCommentAnchor)
+    || [...document.querySelectorAll('.comment-reply-text')].some(el => el.value.trim());
+}
+
+function setCommentStatus(message) {
+  document.getElementById('comment-status').textContent = message || '';
+}
+
+async function reviewFetch(path, options={}) {
+  const headers = { ...(options.headers || {}), 'X-AgentCAD-Review-Token': reviewToken };
+  if (options.body) headers['Content-Type'] = 'application/json';
+  const writing = options.method === 'POST';
+  if (writing) reviewWrites++;
+  try {
+    const response = await fetch(reviewBase + path, { ...options, headers });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || payload.error || `Review request failed (${response.status})`);
+    return payload;
+  } finally {
+    if (writing) reviewWrites--;
+  }
+}
+
+function currentModelRole() {
+  if (currentMode === 'single-b') return 'b';
+  if (currentMode === 'side-by-side' || currentMode === 'overlay') return PARTS_MODEL;
+  return 'a';
+}
+
+function sourceForRole(role) {
+  const models = VIEWER_CONTEXT.models || {};
+  return models[role] || { version: VIEWER_CONTEXT.version, label: VIEWER_CONTEXT.label };
+}
+
+function modelForRole(role) {
+  return role === 'b' ? reviewModelB : reviewModelA;
+}
+
+function commentableModel(event=null) {
+  if (currentMode === 'single-a' || currentMode === 'spec') return { model: reviewModelA, role: 'a' };
+  if (currentMode === 'single-b') return { model: reviewModelB, role: 'b' };
+  if (currentMode === 'side-by-side' && event) {
+    const rect = canvas.getBoundingClientRect();
+    const halfWidth = rect.width / 2;
+    const isRight = event.clientX >= rect.left + halfWidth;
+    return {
+      model: isRight ? reviewSplitModelB : reviewSplitModelA,
+      role: isRight ? 'b' : 'a',
+      viewport: {
+        left: rect.left + (isRight ? halfWidth : 0),
+        top: rect.top,
+        width: halfWidth,
+        height: rect.height,
+      },
+    };
+  }
+  return { model: null, role: null };
+}
+
+function placementModelForRole(role) {
+  if (currentMode === 'side-by-side') return role === 'b' ? reviewSplitModelB : reviewSplitModelA;
+  return modelForRole(role);
+}
+
+function yUpToCad(point) {
+  return [point.x, -point.z, point.y];
+}
+
+function cadToYUp(point) {
+  return new THREE.Vector3(Number(point[0]), Number(point[2]), -Number(point[1]));
+}
+
+function partRelativeAtWorldPoint(partId, point, model=null) {
+  let meshes = partId ? (partObjects.get(partId) || []) : [];
+  if (model) {
+    meshes = [];
+    model.traverse(object => {
+      if (object.isMesh && detectPartId(object, COMMENT_PARTS) === partId) meshes.push(object);
+    });
+  }
+  if (!meshes.length) return null;
+  const box = new THREE.Box3();
+  for (const mesh of meshes) box.expandByObject(mesh);
+  const size = box.getSize(new THREE.Vector3());
+  return [
+    size.x > 1e-9 ? (point.x - box.min.x) / size.x : 0.5,
+    size.y > 1e-9 ? (point.y - box.min.y) / size.y : 0.5,
+    size.z > 1e-9 ? (point.z - box.min.z) / size.z : 0.5,
+  ];
+}
+
+function objectIsVisible(object) {
+  let current = object;
+  while (current) {
+    if (!current.visible) return false;
+    current = current.parent;
+  }
+  return true;
+}
+
+function closestVisiblePartId(clientX, clientY, active) {
+  if (!active?.model) return null;
+  const rect = canvas.getBoundingClientRect();
+  const viewport = active.viewport || { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+  const boxes = new Map();
+  active.model.traverse(mesh => {
+    if (!mesh.isMesh || !objectIsVisible(mesh)) return;
+    const partId = mesh.userData.partId || detectPartId(mesh, COMMENT_PARTS);
+    if (!partId) return;
+    if (!boxes.has(partId)) boxes.set(partId, new THREE.Box3());
+    boxes.get(partId).expandByObject(mesh);
+  });
+  let closest = null;
+  let closestDistance = Infinity;
+  for (const [partId, box] of boxes) {
+    if (box.isEmpty()) continue;
+    const projected = box.getCenter(new THREE.Vector3()).project(camera);
+    if (projected.z < -1 || projected.z > 1) continue;
+    const x = viewport.left + (projected.x + 1) * viewport.width / 2;
+    const y = viewport.top + (-projected.y + 1) * viewport.height / 2;
+    const distance = Math.hypot(x - clientX, y - clientY);
+    if (distance < closestDistance) {
+      closest = partId;
+      closestDistance = distance;
+    }
+  }
+  return closest;
+}
+
+function cameraSnapshot() {
+  return {
+    mode: currentMode,
+    position: camera.position.toArray(),
+    target: controls.target.toArray(),
+  };
+}
+
+function captureCommentScreenshot() {
+  if (canvas.style.display === 'none') return null;
+  renderFrame();
+  const maxWidth = 360;
+  const scale = Math.min(1, maxWidth / Math.max(1, canvas.width));
+  const probe = document.createElement('canvas');
+  probe.width = Math.max(1, Math.round(canvas.width * scale));
+  probe.height = Math.max(1, Math.round(canvas.height * scale));
+  probe.getContext('2d').drawImage(canvas, 0, 0, probe.width, probe.height);
+  return probe.toDataURL('image/jpeg', 0.72);
+}
+
+function setCommentPanel(open, { preserveCamera=false }={}) {
+  const oldWidth = canvas.clientWidth;
+  document.getElementById('comments-panel').classList.toggle('open', open);
+  document.getElementById('comment-toggle-btn').classList.toggle('active', open);
+  resize();
+  if (!preserveCamera && oldWidth !== canvas.clientWidth) {
+    camera.position.sub(controls.target).multiplyScalar(oldWidth / canvas.clientWidth).add(controls.target);
+    controls.update();
+  }
+  if (!open) cancelCommentPlacement();
+}
+
+function beginCommentPlacement() {
+  if (!reviewEnabled) return;
+  if (['agent-view', 'parts'].includes(currentMode)) return;
+  setCommentPanel(true);
+  pendingCommentAnchor = null;
+  editingCommentId = null;
+  commentHoverPoint = null;
+  commentPlacement = 'surface';
+  document.body.classList.add('placing-comment');
+  setAutoRotate(false);
+  setCommentStatus('Click the exact place you mean. The nearest visible part will be selected.');
+  updateCommentTargetPreview();
+}
+
+function cancelCommentPlacement() {
+  commentPlacement = null;
+  pendingCommentAnchor = null;
+  editingCommentId = null;
+  commentHoverPoint = null;
+  document.body.classList.remove('placing-comment');
+  document.getElementById('comment-composer').classList.remove('open');
+  document.getElementById('comment-part-field').classList.remove('visible');
+  document.getElementById('comment-scope-field').classList.remove('visible');
+  document.getElementById('comment-text').value = '';
+  updateCommentTargetPreview();
+  setCommentStatus('');
+}
+
+function commentScopeLabel(scope) {
+  if (scope === 'previous') return 'Previous';
+  if (scope === 'both') return 'Both';
+  if (!hasB) return 'Current';
+  return scope === 'b' ? 'Current' : 'Previous';
+}
+
+function commentScopeDescription(scope) {
+  if (scope === 'previous') return 'Previous revision is not displayed in this viewer';
+  if (scope === 'both') return `Both · ${LABEL_A} + ${LABEL_B}`;
+  if (!hasB) return `Current · ${LABEL_A}`;
+  return scope === 'b' ? `Current · ${LABEL_B}` : `Previous · ${LABEL_A}`;
+}
+
+function pendingAnchorLabel(anchor) {
+  const part = COMMENT_PARTS.find(p => p.id === anchor.part_id);
+  const partSuffix = part ? ` · ${partLabel(part)}` : '';
+  return `Pinned comment${partSuffix} · ${commentScopeLabel(anchor.scope || anchor.role)}`;
+}
+
+function setPendingCommentPart(partId) {
+  if (!pendingCommentAnchor) return;
+  pendingCommentAnchor.part_id = partId || null;
+  if (pendingCommentAnchor.kind === 'surface' && pendingCommentAnchor.display_point) {
+    const model = placementModelForRole(pendingCommentAnchor.role);
+    pendingCommentAnchor.part_relative = partId
+      ? partRelativeAtWorldPoint(partId, new THREE.Vector3(...pendingCommentAnchor.display_point), model)
+      : null;
+  }
+  document.getElementById('comment-anchor-summary').textContent = pendingAnchorLabel(pendingCommentAnchor);
+}
+
+function setPendingCommentScope(scope) {
+  if (!pendingCommentAnchor) return;
+  pendingCommentAnchor.scope = scope;
+  for (const button of document.querySelectorAll('[data-comment-scope]')) {
+    button.classList.toggle('active', button.dataset.commentScope === scope);
+  }
+  document.getElementById('comment-anchor-summary').textContent = pendingAnchorLabel(pendingCommentAnchor);
+}
+
+function setupCommentScopeSelector(anchor) {
+  const field = document.getElementById('comment-scope-field');
+  if (!hasB) {
+    field.classList.remove('visible');
+    setPendingCommentScope(anchor.role || 'a');
+    return;
+  }
+  field.classList.add('visible');
+  setPendingCommentScope(anchor.scope || anchor.role || PARTS_MODEL);
+  const labels = {
+    a: `Previous · ${LABEL_A}`,
+    b: `Current · ${LABEL_B}`,
+    both: `Both · ${LABEL_A} + ${LABEL_B}`,
+  };
+  for (const button of document.querySelectorAll('[data-comment-scope]')) {
+    button.textContent = commentScopeLabel(button.dataset.commentScope);
+    button.title = labels[button.dataset.commentScope] || '';
+  }
+  document.getElementById('comment-scope-hint').textContent = `Previous = ${LABEL_A} · Current = ${LABEL_B}`;
+}
+
+function setupCommentPartSelector(anchor) {
+  const field = document.getElementById('comment-part-field');
+  const select = document.getElementById('comment-part-select');
+  select.innerHTML = '';
+  if (!COMMENT_PARTS.length) {
+    field.classList.remove('visible');
+    return;
+  }
+  for (const part of COMMENT_PARTS) {
+    const option = document.createElement('option');
+    option.value = part.id;
+    option.textContent = `${partLabel(part)} · ${part.id}`;
+    select.appendChild(option);
+  }
+  const suggested = COMMENT_PARTS.some(part => part.id === anchor.part_id) ? anchor.part_id : COMMENT_PARTS[0].id;
+  select.value = suggested;
+  field.classList.add('visible');
+  setPendingCommentPart(suggested);
+}
+
+function openCommentComposer(anchor) {
+  pendingCommentAnchor = anchor;
+  commentPlacement = null;
+  commentHoverPoint = null;
+  document.body.classList.remove('placing-comment');
+  document.getElementById('comment-anchor-summary').textContent = pendingAnchorLabel(anchor);
+  setupCommentPartSelector(anchor);
+  setupCommentScopeSelector(anchor);
+  document.getElementById('comment-composer').classList.add('open');
+  document.getElementById('save-comment-btn').textContent = editingCommentId ? 'Save changes' : 'Save draft';
+  document.getElementById('comment-text').focus();
+  updateCommentTargetPreview();
+  setCommentStatus('');
+}
+
+function surfaceCommentHit(event) {
+  const active = commentableModel(event);
+  if (!active.model) {
+    return { active, hit: null };
+  }
+  const rect = canvas.getBoundingClientRect();
+  const viewport = active.viewport || { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+  const pointer = new THREE.Vector2(
+    ((event.clientX - viewport.left) / viewport.width) * 2 - 1,
+    -((event.clientY - viewport.top) / viewport.height) * 2 + 1,
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(active.model, true)
+    .find(entry => entry.object.isMesh && objectIsVisible(entry.object));
+  return { active, hit };
+}
+
+function onSurfaceCommentMove(event) {
+  if (commentPlacement !== 'surface') return;
+  const { active, hit } = surfaceCommentHit(event);
+  commentHoverPoint = hit ? { point: hit.point.clone(), role: active.role } : null;
+  updateCommentTargetPreview();
+}
+
+function onSurfaceCommentLeave() {
+  if (commentPlacement !== 'surface') return;
+  commentHoverPoint = null;
+  updateCommentTargetPreview();
+}
+
+function onSurfaceCommentClick(event) {
+  if (commentPlacement !== 'surface') return;
+  const { active, hit } = surfaceCommentHit(event);
+  if (!active.model) {
+    setCommentStatus('Switch to A or B mode to place a surface pin.');
+    return;
+  }
+  if (!hit) {
+    setCommentStatus('No surface found there. Click directly on the model.');
+    return;
+  }
+  const local = active.model.worldToLocal(hit.point.clone());
+  const worldNormal = hit.face
+    ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
+    : new THREE.Vector3(0, 1, 0);
+  const partId = hit.object.userData.partId || detectPartId(hit.object, COMMENT_PARTS)
+    || closestVisiblePartId(event.clientX, event.clientY, active);
+  openCommentComposer({
+    kind: 'surface',
+    point_mm: yUpToCad(local),
+    normal: yUpToCad(worldNormal),
+    part_relative: partRelativeAtWorldPoint(partId, hit.point, active.model),
+    display_point: hit.point.toArray(),
+    role: active.role,
+    part_id: partId,
+  });
+}
+
+function pendingCommentPayload() {
+  const text = document.getElementById('comment-text').value.trim();
+  if (!text || !pendingCommentAnchor) {
+    setCommentStatus('Write a comment before saving.');
+    return null;
+  }
+  const anchor = { ...pendingCommentAnchor };
+  delete anchor.role;
+  delete anchor.scope;
+  delete anchor.part_id;
+  delete anchor.display_point;
+  const source = sourceForRole(pendingCommentAnchor.role);
+  return {
+    text,
+    source_version: source.version ?? null,
+    source_label: source.label ?? null,
+    target: {
+      model: pendingCommentAnchor.scope || pendingCommentAnchor.role,
+      scope: (pendingCommentAnchor.scope === 'both') ? 'both'
+        : (hasB && (pendingCommentAnchor.scope || pendingCommentAnchor.role) === 'a' ? 'previous' : 'current'),
+      source_model: pendingCommentAnchor.role,
+      part_id: pendingCommentAnchor.part_id || null,
+    },
+    anchor,
+    view: cameraSnapshot(),
+    screenshot: captureCommentScreenshot(),
+  };
+}
+
+async function savePendingComment({ send=false }={}) {
+  if (reviewWrites) return;
+  const payload = pendingCommentPayload();
+  if (!payload) return;
+  reviewWrites++;
+  let persisted = null;
+  try {
+    const result = editingCommentId
+      ? await reviewFetch(`/comments/${encodeURIComponent(editingCommentId)}/update`, {
+          method: 'POST', body: JSON.stringify(payload),
+        })
+      : await reviewFetch('/comments', { method: 'POST', body: JSON.stringify({ ...payload, send }) });
+    persisted = result.comment;
+    if (send && editingCommentId) {
+      await reviewFetch('/submit', {
+        method: 'POST', body: JSON.stringify({ comment_ids: [persisted.id] }),
+      });
+    }
+    cancelCommentPlacement();
+    await loadReviewComments();
+    setCommentStatus(send ? `Sent ${persisted.id} to the agent.` : `Saved ${persisted.id} as a draft. It has not been sent.`);
+  } catch (error) {
+    if (persisted && send) {
+      cancelCommentPlacement();
+      await loadReviewComments();
+      setCommentStatus(`${persisted.id} was saved as a draft but could not be sent: ${error.message}`);
+      return;
+    }
+    setCommentStatus(error.message);
+  } finally {
+    reviewWrites--;
+  }
+}
+
+async function sendDraftComment(commentId) {
+  if (reviewWrites) return;
+  try {
+    await reviewFetch('/submit', {
+      method: 'POST', body: JSON.stringify({ comment_ids: [commentId] }),
+    });
+    await loadReviewComments();
+    setCommentStatus(`Sent ${commentId} to the agent.`);
+  } catch (error) {
+    setCommentStatus(error.message);
+  }
+}
+
+function editDraftComment(comment) {
+  if (comment.status !== 'draft') return;
+  editingCommentId = comment.id;
+  const role = commentSourceRole(comment);
+  const world = commentWorldPoint(comment, role);
+  openCommentComposer({
+    ...(comment.anchor || {}),
+    role,
+    scope: commentScope(comment),
+    part_id: (comment.target || {}).part_id || null,
+    display_point: world ? world.toArray() : null,
+  });
+  document.getElementById('comment-text').value = comment.text || '';
+  document.getElementById('comment-text').focus();
+}
+
+async function deleteDraftComment(commentId) {
+  if (reviewWrites) return;
+  if (!window.confirm(`Delete unsent draft ${commentId}?`)) return;
+  try {
+    await reviewFetch(`/comments/${encodeURIComponent(commentId)}/delete`, {
+      method: 'POST', body: '{}',
+    });
+    await loadReviewComments();
+    setCommentStatus(`Deleted draft ${commentId}.`);
+  } catch (error) {
+    setCommentStatus(error.message);
+  }
+}
+
+async function submitReviewDrafts() {
+  if (reviewWrites) return;
+  const ids = reviewComments.filter(comment => comment.status === 'draft').map(comment => comment.id);
+  if (!ids.length) return;
+  try {
+    const result = await reviewFetch('/submit', {
+      method: 'POST', body: JSON.stringify({ comment_ids: ids }),
+    });
+    setCommentStatus(`Sent ${result.comments.length} draft${result.comments.length === 1 ? '' : 's'} to the agent.`);
+    await loadReviewComments();
+  } catch (error) {
+    setCommentStatus(error.message);
+  }
+}
+
+async function humanReply(commentId, message) {
+  if (reviewWrites) return;
+  const text = String(message || '').trim();
+  if (!text) {
+    setCommentStatus('Write a reply before sending.');
+    return;
+  }
+  try {
+    await reviewFetch(`/comments/${encodeURIComponent(commentId)}/reply`, {
+      method: 'POST', body: JSON.stringify({ message: text }),
+    });
+    await loadReviewComments();
+    setCommentStatus(`Reply added to ${commentId}.`);
+  } catch (error) {
+    setCommentStatus(error.message);
+  }
+}
+
+async function humanTransition(commentId, action, message='') {
+  if (reviewWrites) return;
+  try {
+    await reviewFetch(`/comments/${encodeURIComponent(commentId)}/${action}`, {
+      method: 'POST', body: JSON.stringify({ message: String(message || '').trim() }),
+    });
+    await loadReviewComments();
+  } catch (error) {
+    setCommentStatus(error.message);
+  }
+}
+
+function sameViewerVersion(comment) {
+  const versions = Object.values(VIEWER_CONTEXT.models || {}).map(model => String(model.version));
+  if (VIEWER_CONTEXT.version !== undefined) versions.push(String(VIEWER_CONTEXT.version));
+  return versions.includes(String(comment.source_version));
+}
+
+function commentScope(comment) {
+  const scope = (comment.target || {}).scope;
+  if (scope === 'current') return hasB ? 'b' : 'a';
+  if (scope === 'previous') return hasB ? 'a' : 'previous';
+  if (scope === 'both') return 'both';
+  const value = (comment.target || {}).model || PARTS_MODEL;
+  return ['a', 'b', 'both'].includes(value) ? value : PARTS_MODEL;
+}
+
+function commentSourceRole(comment) {
+  const target = comment.target || {};
+  const scope = commentScope(comment);
+  return target.source_model || (scope === 'both' ? PARTS_MODEL : scope);
+}
+
+function commentPinRoles(comment) {
+  if (!hasB && commentScope(comment) === 'previous') return [];
+  if (!hasB) return ['a'];
+  const scope = commentScope(comment);
+  if (scope === 'both') return ['a', 'b'];
+  return [scope];
+}
+
+function commentRoleVisible(role, comment) {
+  if (['agent-view', 'parts'].includes(currentMode)) return false;
+  if (currentMode === 'single-a' || currentMode === 'spec') return role === 'a';
+  if (currentMode === 'single-b') return role === 'b';
+  if (currentMode === 'side-by-side') return true;
+  if (currentMode === 'overlay') {
+    return commentScope(comment) !== 'both' || role === commentSourceRole(comment);
+  }
+  return false;
+}
+
+function commentPartMeshes(partId, role, useCurrentParts=false) {
+  if (useCurrentParts) return partObjects.get(partId) || [];
+  const roleIndex = partObjectsByRole[role] || partObjectsByRole[PARTS_MODEL];
+  return roleIndex.get(partId) || [];
+}
+
+function pointFromPartRelative(anchor, partId, role, useCurrentParts=false) {
+  if (!partId || !Array.isArray(anchor.part_relative)) return null;
+  const meshes = commentPartMeshes(partId, role, useCurrentParts);
+  if (!meshes.length) return null;
+  const box = new THREE.Box3();
+  for (const mesh of meshes) box.expandByObject(mesh);
+  const relative = anchor.part_relative;
+  const candidate = new THREE.Vector3(
+    THREE.MathUtils.lerp(box.min.x, box.max.x, relative[0]),
+    THREE.MathUtils.lerp(box.min.y, box.max.y, relative[1]),
+    THREE.MathUtils.lerp(box.min.z, box.max.z, relative[2]),
+  );
+  if (Array.isArray(anchor.normal)) {
+    const normal = cadToYUp(anchor.normal).normalize();
+    const distance = Math.max(box.getSize(new THREE.Vector3()).length() * 2, 1);
+    const raycaster = new THREE.Raycaster(
+      candidate.clone().add(normal.clone().multiplyScalar(distance)),
+      normal.clone().negate(),
+      0,
+      distance * 3,
+    );
+    const hit = raycaster.intersectObjects(meshes, false)[0];
+    if (hit) return hit.point;
+  }
+  return candidate;
+}
+
+function commentWorldPoint(comment, requestedRole=null) {
+  const anchor = comment.anchor || {};
+  const partId = (comment.target || {}).part_id;
+  const sameVersion = sameViewerVersion(comment);
+  const scope = commentScope(comment);
+  const role = requestedRole || (scope === 'both' ? commentSourceRole(comment) : scope);
+  if (role === 'previous') return null;
+  if (partId && !commentPartMeshes(partId, role).length) return null;
+  if (!sameVersion && !partId) return null;
+  if (anchor.kind === 'part' && partId) {
+    const meshes = commentPartMeshes(partId, role);
+    if (!meshes.length) return null;
+    const box = new THREE.Box3();
+    for (const mesh of meshes) box.expandByObject(mesh);
+    return box.getCenter(new THREE.Vector3());
+  }
+  if (anchor.kind !== 'surface' || !Array.isArray(anchor.point_mm)) return null;
+  const sameModelVersion = String(sourceForRole(role).version) === String(comment.source_version);
+  if (!sameModelVersion) {
+    const mapped = pointFromPartRelative(anchor, partId, role);
+    if (mapped) return mapped;
+    return null;
+  }
+  const model = modelForRole(role);
+  if (!model) return null;
+  return model.localToWorld(cadToYUp(anchor.point_mm));
+}
+
+function restoreCommentView(comment) {
+  selectedCommentId = comment.id;
+  const view = comment.view || {};
+  const scope = commentScope(comment);
+  const carriedMode = hasB && scope === 'a' ? 'single-a'
+    : (hasB && scope === 'b' ? 'single-b' : (PARTS_MODEL === 'b' && hasB ? 'single-b' : 'single-a'));
+  const mode = comment.target?.scope
+    ? (scope === 'both' && hasB ? 'side-by-side' : carriedMode)
+    : (sameViewerVersion(comment) ? view.mode : carriedMode);
+  if (mode && !['agent-view', 'parts'].includes(mode)) setMode(mode);
+  if (Array.isArray(view.position) && Array.isArray(view.target)) {
+    camera.position.fromArray(view.position);
+    controls.target.fromArray(view.target);
+    camera.lookAt(controls.target);
+    controls.update();
+  }
+  const partId = (comment.target || {}).part_id;
+  if (partId && partObjects.has(partId)) selectPart(partId, { focus: false });
+  renderReviewComments();
+}
+
+function makeCommentThread(comment) {
+  const thread = document.createElement('div');
+  thread.className = 'comment-thread';
+  for (const reply of (comment.replies || [])) {
+    const item = document.createElement('div');
+    item.className = `comment-reply ${reply.actor === 'agent' ? 'agent' : 'human'}`;
+    const byline = document.createElement('div');
+    byline.className = 'byline';
+    const actor = reply.actor === 'agent' ? 'Agent' : 'Human';
+    const action = reply.action ? ` · ${reply.action}` : '';
+    const version = reply.version !== undefined ? ` · Revision ${reply.version}` : '';
+    byline.textContent = `${actor}${action}${version}`;
+    const text = document.createElement('p');
+    text.textContent = reply.text;
+    item.append(byline, text);
+    thread.appendChild(item);
+  }
+  return thread;
+}
+
+function makeThreadComposer(comment) {
+  const composer = document.createElement('div');
+  composer.className = 'thread-composer';
+  const textarea = document.createElement('textarea');
+  textarea.className = 'comment-reply-text';
+  textarea.placeholder = comment.status === 'resolved'
+    ? 'Why are you reopening this comment?'
+    : 'Reply to this thread…';
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', event => {
+    event.stopPropagation();
+    selectedCommentId = null;
+    renderReviewComments();
+  });
+  actions.appendChild(cancel);
+  if (comment.status === 'resolved') {
+    const reopen = document.createElement('button');
+    reopen.className = 'primary';
+    reopen.textContent = 'Reopen';
+    reopen.addEventListener('click', event => {
+      event.stopPropagation();
+      humanTransition(comment.id, 'reopen', textarea.value);
+    });
+    actions.appendChild(reopen);
+  } else {
+    const reply = document.createElement('button');
+    reply.className = 'primary';
+    reply.textContent = 'Send reply';
+    reply.addEventListener('click', event => {
+      event.stopPropagation();
+      humanReply(comment.id, textarea.value);
+    });
+    const resolve = document.createElement('button');
+    resolve.textContent = 'Resolve';
+    resolve.title = 'Resolve now, optionally adding the text above as a closing reply.';
+    resolve.addEventListener('click', event => {
+      event.stopPropagation();
+      humanTransition(comment.id, 'resolve', textarea.value);
+    });
+    actions.append(reply, resolve);
+  }
+  composer.addEventListener('click', event => event.stopPropagation());
+  composer.append(textarea, actions);
+  return composer;
+}
+
+function openCommentThread(comment) {
+  selectedCommentId = comment.id;
+  renderReviewComments();
+  document.querySelector(
+    `.comment-row[data-comment-id="${comment.id}"] .comment-reply-text`
+  )?.focus();
+}
+
+function makeCommentRow(comment) {
+  const row = document.createElement('article');
+  row.className = `comment-row ${comment.status}${selectedCommentId === comment.id ? ' selected' : ''}`;
+  row.dataset.commentId = comment.id;
+  row.addEventListener('click', () => restoreCommentView(comment));
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const id = document.createElement('span'); id.textContent = comment.id;
+  const scope = document.createElement('span');
+  scope.className = 'comment-scope-badge';
+  scope.textContent = commentScopeLabel(commentScope(comment));
+  scope.title = commentScopeDescription(commentScope(comment));
+  id.appendChild(scope);
+  const status = document.createElement('span');
+  const latestReply = (comment.replies || []).at(-1);
+  const latestActor = (comment.events || []).at(-1)?.actor || latestReply?.actor || comment.author || 'human';
+  status.textContent = comment.status === 'draft'
+    ? 'Draft · Not sent'
+    : comment.status === 'resolved'
+      ? 'Resolved'
+      : latestActor === 'agent' || comment.status === 'addressed'
+        ? 'Open · Human response needed'
+        : 'Open · Agent response needed';
+  meta.append(id, status);
+  const author = document.createElement('div');
+  author.className = 'author';
+  author.textContent = comment.author === 'agent' ? 'Agent' : 'Human';
+  author.title = `Created on revision ${comment.source_version ?? '?'} · ${comment.source_label || ''}`;
+  const text = document.createElement('p'); text.textContent = comment.text;
+  const target = document.createElement('div');
+  target.className = 'target';
+  const partId = (comment.target || {}).part_id;
+  const part = COMMENT_PARTS.find(p => p.id === partId);
+  target.textContent = part
+    ? `Part · ${partLabel(part)} (${part.id})`
+    : `${(comment.anchor || {}).kind || 'comment'} · ${comment.source_label || 'saved view'}`;
+  row.append(meta, author, text, target);
+  if (viewerReady && (comment.anchor || {}).kind !== 'view'
+      && !commentPinRoles(comment).some(role => commentWorldPoint(comment, role))) {
+    const unplaced = document.createElement('div');
+    unplaced.className = 'comment-unplaced';
+    unplaced.textContent = 'Unplaced · part or revision is not present in this view';
+    row.appendChild(unplaced);
+  }
+  if (comment.status === 'draft') {
+    const note = document.createElement('div');
+    note.className = 'draft-note';
+    note.textContent = 'Not visible to the agent yet';
+    row.appendChild(note);
+  }
+  if ((comment.replies || []).length) row.appendChild(makeCommentThread(comment));
+  const actions = document.createElement('div'); actions.className = 'actions';
+  if (comment.status === 'draft') {
+    const send = document.createElement('button'); send.className = 'primary'; send.textContent = 'Send';
+    send.addEventListener('click', event => { event.stopPropagation(); sendDraftComment(comment.id); });
+    const edit = document.createElement('button'); edit.textContent = 'Edit';
+    edit.addEventListener('click', event => { event.stopPropagation(); editDraftComment(comment); });
+    const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = 'Delete';
+    remove.addEventListener('click', event => { event.stopPropagation(); deleteDraftComment(comment.id); });
+    actions.append(send, edit, remove);
+  } else if (selectedCommentId !== comment.id) {
+    const reply = document.createElement('button');
+    reply.textContent = comment.status === 'resolved' ? 'Reopen…' : 'Reply…';
+    reply.addEventListener('click', event => { event.stopPropagation(); openCommentThread(comment); });
+    actions.appendChild(reply);
+    if (comment.status !== 'resolved') {
+      const resolve = document.createElement('button'); resolve.textContent = 'Resolve';
+      resolve.addEventListener('click', event => {
+        event.stopPropagation(); humanTransition(comment.id, 'resolve');
+      });
+      actions.appendChild(resolve);
+    }
+  }
+  if (actions.children.length) row.appendChild(actions);
+  if (selectedCommentId === comment.id && comment.status !== 'draft') {
+    row.appendChild(makeThreadComposer(comment));
+  }
+  return row;
+}
+
+function renderPartCommentBadges() {
+  for (const badge of document.querySelectorAll('.part-comment-badge')) badge.remove();
+  const byPart = new Map();
+  for (const comment of reviewComments) {
+    const partId = (comment.target || {}).part_id;
+    if (!partId || comment.status === 'resolved') continue;
+    if (!byPart.has(partId)) byPart.set(partId, []);
+    byPart.get(partId).push(comment);
+  }
+  for (const [partId, comments] of byPart) {
+    const label = comments.map(comment => `${comment.id} ${commentScopeLabel(commentScope(comment))}`).join(' · ');
+    for (const row of document.querySelectorAll('#parts-list [data-part-id]')) {
+      if (row.dataset.partId !== partId) continue;
+      const badge = document.createElement('button');
+      badge.type = 'button';
+      badge.className = 'part-comment-badge';
+      badge.textContent = label;
+      badge.title = `${comments.length} comment${comments.length === 1 ? '' : 's'} on this part`;
+      badge.addEventListener('click', () => {
+        restoreCommentView(comments[0]);
+        setCommentPanel(true);
+      });
+      row.appendChild(badge);
+    }
+    for (const row of document.querySelectorAll('#part-control-rows [data-part-id]')) {
+      if (row.dataset.partId !== partId) continue;
+      const badge = document.createElement('span');
+      badge.className = 'part-comment-badge';
+      badge.textContent = label;
+      badge.title = `${comments.length} comment${comments.length === 1 ? '' : 's'} on this part`;
+      row.querySelector('.name')?.appendChild(badge);
+    }
+  }
+}
+
+function renderReviewComments() {
+  const list = document.getElementById('comments-list');
+  list.innerHTML = '';
+  if (!reviewComments.length) {
+    const empty = document.createElement('div'); empty.id = 'comments-empty';
+    empty.textContent = 'No comments yet. Choose New comment, then click the model where you want to leave feedback.';
+    list.appendChild(empty);
+  } else {
+    for (const comment of reviewComments) list.appendChild(makeCommentRow(comment));
+  }
+  const drafts = reviewComments.filter(comment => comment.status === 'draft').length;
+  const activeCount = reviewComments.filter(comment => comment.status !== 'resolved').length;
+  document.getElementById('comment-toggle-btn').textContent = activeCount ? `Comments (${activeCount})` : 'Comments';
+  const submit = document.getElementById('submit-review-btn');
+  submit.style.display = drafts ? 'block' : 'none';
+  submit.textContent = `Send all drafts${drafts ? ` (${drafts})` : ''}`;
+
+  const pins = document.getElementById('comment-pins');
+  pins.innerHTML = '';
+  for (const comment of reviewComments) {
+    if (comment.status === 'resolved') continue;
+    for (const role of commentPinRoles(comment)) {
+      const pin = document.createElement('button');
+      pin.className = `comment-pin ${comment.status}`;
+      pin.dataset.commentId = comment.id;
+      pin.dataset.role = role;
+      pin.textContent = `${comment.id} · ${commentScopeLabel(commentScope(comment))}`;
+      pin.title = `${commentScopeDescription(commentScope(comment))}: ${comment.text}`;
+      pin.addEventListener('click', () => { setCommentPanel(true); restoreCommentView(comment); });
+      pins.appendChild(pin);
+    }
+  }
+  renderPartCommentBadges();
+  updateCommentPins();
+}
+
+function updateCommentPins() {
+  updateCommentTargetPreview();
+  const rect = canvas.getBoundingClientRect();
+  for (const pin of document.querySelectorAll('.comment-pin')) {
+    const comment = reviewComments.find(entry => entry.id === pin.dataset.commentId);
+    if (!comment || canvas.style.display === 'none') { pin.style.display = 'none'; continue; }
+    const role = pin.dataset.role || commentSourceRole(comment);
+    if (!commentRoleVisible(role, comment)) { pin.style.display = 'none'; continue; }
+    const anchor = comment.anchor || {};
+    if (anchor.kind === 'view') {
+      if (!sameViewerVersion(comment) || (comment.view || {}).mode !== currentMode) {
+        pin.style.display = 'none';
+        continue;
+      }
+      const screen = anchor.screen || [0.5, 0.5];
+      pin.style.left = `${rect.left + rect.width * screen[0]}px`;
+      pin.style.top = `${rect.top + rect.height * screen[1]}px`;
+      pin.style.display = 'block';
+      continue;
+    }
+    const world = commentWorldPoint(comment, role);
+    if (!world) { pin.style.display = 'none'; continue; }
+    const position = projectCommentPoint(world, role, rect);
+    if (!position) { pin.style.display = 'none'; continue; }
+    pin.style.left = `${position.x}px`;
+    pin.style.top = `${position.y}px`;
+    pin.style.display = 'block';
+  }
+}
+
+function projectCommentPoint(world, role, rect=canvas.getBoundingClientRect()) {
+  const projected = world.clone().project(camera);
+  if (projected.z < -1 || projected.z > 1) return null;
+  if (currentMode === 'side-by-side') {
+    const halfWidth = rect.width / 2;
+    const left = rect.left + (role === 'b' ? halfWidth : 0);
+    return {
+      x: left + (projected.x + 1) * halfWidth / 2,
+      y: rect.top + (-projected.y + 1) * rect.height / 2,
+    };
+  }
+  return {
+    x: rect.left + (projected.x + 1) * rect.width / 2,
+    y: rect.top + (-projected.y + 1) * rect.height / 2,
+  };
+}
+
+function updateCommentTargetPreview() {
+  const marker = document.getElementById('comment-target-preview');
+  marker.classList.toggle('locked', Boolean(pendingCommentAnchor));
+  if (canvas.style.display === 'none') {
+    marker.style.display = 'none';
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  if (pendingCommentAnchor?.kind === 'view') {
+    const screen = pendingCommentAnchor.screen || [0.5, 0.5];
+    marker.style.left = `${rect.left + rect.width * screen[0]}px`;
+    marker.style.top = `${rect.top + rect.height * screen[1]}px`;
+    marker.style.display = 'block';
+    return;
+  }
+  const rawPoint = pendingCommentAnchor?.display_point || (commentHoverPoint && commentHoverPoint.point.toArray());
+  if (!rawPoint) {
+    marker.style.display = 'none';
+    return;
+  }
+  const role = pendingCommentAnchor?.role || commentHoverPoint?.role || PARTS_MODEL;
+  const position = projectCommentPoint(new THREE.Vector3(...rawPoint), role, rect);
+  if (!position) {
+    marker.style.display = 'none';
+    return;
+  }
+  marker.style.left = `${position.x}px`;
+  marker.style.top = `${position.y}px`;
+  marker.style.display = 'block';
+}
+
+async function loadReviewComments({ onlyIfChanged=false }={}) {
+  if (!reviewEnabled) return;
+  try {
+    const result = await reviewFetch('/comments');
+    if (onlyIfChanged && reviewBusy()) return;
+    const fingerprint = JSON.stringify(result.comments || []);
+    if (onlyIfChanged && fingerprint === reviewCommentsFingerprint) return;
+    reviewComments = result.comments || [];
+    reviewCommentsFingerprint = fingerprint;
+    renderReviewComments();
+  } catch (error) {
+    setCommentStatus(error.message);
+  }
+}
+
+function setupReviewComments() {
+  const toggle = document.getElementById('comment-toggle-btn');
+  if (!reviewEnabled) {
+    toggle.disabled = true;
+    toggle.title = 'Open the live project with `agentcad viewer open` to add comments.';
+    return;
+  }
+  toggle.addEventListener('click', () => setCommentPanel(!document.getElementById('comments-panel').classList.contains('open')));
+  document.getElementById('close-comments-btn').addEventListener('click', () => setCommentPanel(false));
+  document.getElementById('new-comment-btn').addEventListener('click', beginCommentPlacement);
+  document.getElementById('cancel-comment-btn').addEventListener('click', cancelCommentPlacement);
+  document.getElementById('save-comment-btn').addEventListener('click', () => savePendingComment());
+  document.getElementById('send-comment-btn').addEventListener('click', () => savePendingComment({ send: true }));
+  document.getElementById('comment-part-select').addEventListener('change', event => {
+    setPendingCommentPart(event.target.value);
+  });
+  for (const button of document.querySelectorAll('[data-comment-scope]')) {
+    button.addEventListener('click', () => setPendingCommentScope(button.dataset.commentScope));
+  }
+  document.getElementById('submit-review-btn').addEventListener('click', submitReviewDrafts);
+  canvas.addEventListener('click', onSurfaceCommentClick);
+  canvas.addEventListener('pointermove', onSurfaceCommentMove);
+  canvas.addEventListener('pointerleave', onSurfaceCommentLeave);
+  window.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && (commentPlacement || pendingCommentAnchor)) {
+      cancelCommentPlacement();
+      return;
+    }
+    if (event.key.toLowerCase() === 'c' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) {
+      beginCommentPlacement();
+    }
+  });
+  loadReviewComments();
+  window.setInterval(() => {
+    if (reviewBusy()) return;
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+    loadReviewComments({ onlyIfChanged: true });
+  }, 3_000);
+}
+
+window.agentcadViewer.reviewDebugState = () => ({
+  enabled: reviewEnabled,
+  comments: reviewComments,
+  placement: commentPlacement,
+  pending_anchor: pendingCommentAnchor,
+});
+window.agentcadViewer.selectedPartScreenPoint = () => {
+  const meshes = partState.selected ? (partObjects.get(partState.selected) || []) : [];
+  if (!meshes.length) return null;
+  const box = new THREE.Box3();
+  for (const mesh of meshes) box.expandByObject(mesh);
+  const projected = box.getCenter(new THREE.Vector3()).project(camera);
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: rect.left + (projected.x + 1) * rect.width / 2,
+    y: rect.top + (-projected.y + 1) * rect.height / 2,
+  };
+};
 
 function applyPartState() {
   if (!hasParts) return;
@@ -1643,7 +2862,13 @@ function resize() {
   // previous size and the canvas ends up 2x the viewport on high-DPR displays,
   // pushing the model off-screen.
   const specWidth = currentMode === "spec" && hasReview ? 396 : 0;
-  renderer.setSize(Math.max(1, window.innerWidth - specWidth), window.innerHeight);
+  const panel = document.getElementById('comments-panel');
+  const commentWidth = panel.classList.contains('open') ? panel.offsetWidth : 0;
+  const width = Math.max(1, window.innerWidth - specWidth - commentWidth);
+  panel.style.right = `${specWidth}px`;
+  document.body.style.setProperty('--viewer-width', `${width}px`);
+  document.getElementById('modes').style.right = `${specWidth + commentWidth + 10}px`;
+  renderer.setSize(width, window.innerHeight);
 }
 window.addEventListener('resize', resize);
 
@@ -1688,6 +2913,9 @@ sceneA_single.add(reviewMarkerGroup);
 let overlayModelA = null;
 let overlayModelB = null;
 let reviewModelA = null;
+let reviewModelB = null;
+let reviewSplitModelA = null;
+let reviewSplitModelB = null;
 
 // Combined bounding box used to fit the camera globally
 const combinedBox = new THREE.Box3();
@@ -1752,6 +2980,7 @@ Promise.all([
     alignToCenter: hasB || liveProject,
     onMesh: m => {
       reviewModelA = m;
+      indexCommentPartMeshes(m, 'a');
       if (PARTS_MODEL === 'a') {
         registerPartMeshes(m);
         applyPartState();
@@ -1760,10 +2989,20 @@ Promise.all([
   }),
   hasB ? attach(sceneB_single, MODEL_B_URL, {
     alignToCenter: true,
-    onMesh: PARTS_MODEL === 'b' ? m => { registerPartMeshes(m); applyPartState(); } : null,
+    onMesh: m => {
+      reviewModelB = m;
+      indexCommentPartMeshes(m, 'b');
+      if (PARTS_MODEL === 'b') { registerPartMeshes(m); applyPartState(); }
+    },
   }) : null,
-  hasB ? attach(sceneA_split, MODEL_A_URL, { alignToCenter: true }) : null,
-  hasB ? attach(sceneB_split, MODEL_B_URL, { alignToCenter: true }) : null,
+  hasB ? attach(sceneA_split, MODEL_A_URL, {
+    alignToCenter: true,
+    onMesh: m => reviewSplitModelA = m,
+  }) : null,
+  hasB ? attach(sceneB_split, MODEL_B_URL, {
+    alignToCenter: true,
+    onMesh: m => reviewSplitModelB = m,
+  }) : null,
   hasB ? attach(sceneOverlay, MODEL_A_URL, {
     material: tintA,
     alignToCenter: true,
@@ -1780,6 +3019,7 @@ Promise.all([
   refreshActiveReviewMarkers();
   if (partState.focus) focusPart(partState.focus);
   viewerReady = true;
+  renderReviewComments();
   publishViewerDebugState();
   tellProject('agentcad:ready');
 }).catch(() => {
@@ -1799,6 +3039,15 @@ function setMode(mode) {
   if (!hasReview && mode === 'spec') return;
 
   currentMode = mode;
+  const spatialCommentsAvailable = !['agent-view', 'parts'].includes(mode);
+  const commentToggle = document.getElementById('comment-toggle-btn');
+  commentToggle.style.display = spatialCommentsAvailable ? '' : 'none';
+  if (!spatialCommentsAvailable) {
+    document.getElementById('comments-panel').classList.remove('open');
+    commentToggle.classList.remove('active');
+    cancelCommentPlacement();
+    for (const pin of document.querySelectorAll('.comment-pin')) pin.style.display = 'none';
+  }
   document.body.classList.toggle('spec-open', mode === 'spec');
   document.body.classList.toggle('split-open', mode === 'side-by-side');
   document.querySelectorAll('#modes button').forEach(b => {
@@ -1860,21 +3109,21 @@ function setMode(mode) {
   if (mode === 'single-a') {
     clearReviewMarkers();
     currentScene = sceneA_single;
-    labelL.textContent = LABEL_A;
+    labelL.textContent = `${hasB ? 'Previous' : 'Current'} · ${LABEL_A}`;
     labelL.style.display = 'block';
     if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
   } else if (mode === 'single-b') {
     clearReviewMarkers();
     currentScene = sceneB_single;
-    labelL.textContent = LABEL_B;
+    labelL.textContent = `Current · ${LABEL_B}`;
     labelL.style.display = 'block';
     if (hasParts && PARTS_MODEL === 'b') partControls.style.display = 'block';
   } else if (mode === 'side-by-side') {
     clearReviewMarkers();
     splitMode = true;
     divider.style.display = 'block';
-    labelL.textContent = 'A · ' + LABEL_A; labelL.style.display = 'block';
-    labelR.textContent = 'B · ' + LABEL_B; labelR.style.display = 'block';
+    labelL.textContent = 'Previous · ' + LABEL_A; labelL.style.display = 'block';
+    labelR.textContent = 'Current · ' + LABEL_B; labelR.style.display = 'block';
   } else if (mode === 'overlay') {
     clearReviewMarkers();
     currentScene = sceneOverlay;
@@ -1883,7 +3132,7 @@ function setMode(mode) {
     currentScene = sceneA_single;
     if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
     specPanel.style.display = 'grid';
-    labelL.textContent = LABEL_A;
+    labelL.textContent = `${hasB ? 'Previous' : 'Current'} · ${LABEL_A}`;
     labelL.style.display = 'block';
     selectFirstReviewRow();
   }
@@ -1949,6 +3198,7 @@ function animate() {
   if (currentMode === 'agent-view' || currentMode === 'parts') { return; }  // nothing to render
 
   renderFrame();
+  updateCommentPins();
 }
 
 // Export current 3D view as a GIF. Captures whatever mode is active —
@@ -2060,6 +3310,7 @@ animate();
 
 // Start in the default mode
 setMode(DEFAULT_MODE);
+setupReviewComments();
 </script>
 </body>
 </html>
@@ -2167,6 +3418,8 @@ def _render_unified(
     groups=None,
     review=None,
     part_review=None,
+    viewer_context=None,
+    previous_parts=None,
 ):
     """Write a unified viewer HTML embedding the given artifacts.
 
@@ -2197,6 +3450,10 @@ def _render_unified(
         "__GROUPS_JSON__": json.dumps(groups_payload),
         "__REVIEW_JSON__": json.dumps(review) if review else "null",
         "__PART_REVIEW_JSON__": json.dumps(part_review) if part_review else "null",
+        "__VIEWER_CONTEXT_JSON__": json.dumps(viewer_context or {}),
+        "__COMMENT_PARTS_JSON__": json.dumps([
+            {k: p[k] for k in ("id", "name") if k in p} for p in (previous_parts or [])
+        ]),
     }
     html = _HTML_UNIFIED
     for k, v in replacements.items():
@@ -2583,5 +3840,6 @@ def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
     if volume_png_path is not None:
         response["volume_png"] = str(volume_png_path)
 
+    response["url"] = url
     _open_browser(url)
     click.echo(json.dumps(response))

@@ -57,10 +57,15 @@ window.addEventListener('message', event => {
   const fromPending = event.source === pending.element.contentWindow;
   const fromCurrent = current && event.source === current.element.contentWindow;
   if (fromPending && data.type === 'agentcad:ready') {
+    pending.ready = true;
+    clearTimeout(pending.timer);
     if (current) send(current, 'agentcad:capture');
     else send(pending, 'agentcad:restore', {state:null});
   } else if (fromCurrent && data.type === 'agentcad:state') {
-    if (data.busy) { discardPending(' — Waiting for GIF export'); return; }
+    if (data.busy) {
+      restoreWarning = ' — ' + (data.busyReason || 'Waiting for GIF export');
+      showStatus(); return;
+    }
     send(pending, 'agentcad:restore', {state:data.state});
   } else if (fromPending && data.type === 'agentcad:restored') {
     const old = current;
@@ -81,7 +86,9 @@ async function poll() {
     if (!response.ok) throw new Error('unavailable');
     latestState = await response.json(); reconnecting = false;
     const latest = latestState.latest;
+    if (pending && latest && pending.version !== latest.version) discardPending('');
     if (latest && latest.version !== current?.version && !pending) load(latest);
+    else if (pending?.ready && current) send(current, 'agentcad:capture');
   } catch (_) { reconnecting = true; }
   showStatus();
   setTimeout(poll, document.hidden ? 10000 : 1000);

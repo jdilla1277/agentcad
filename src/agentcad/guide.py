@@ -38,6 +38,16 @@ root by default), this project is already initialized — skip `init` and go
 straight to the required workflow. Use `agentcad context` to check configured
 state.
 
+Before revising, read `agentcad review list --status open` when context reports
+`open_review_comments`. Comments include the source revision, part id, CAD
+point, saved camera, and screenshot path. Reply with
+`agentcad review reply C1 --message "What changed" --version current`.
+Either the human or agent can resolve or reopen a thread, optionally with a
+message. Agents can start a thread with
+`agentcad review comment --part PART_ID --message "Question for the reviewer"`.
+See `agentcad docs review`. Feedback is discovered on the agent's next turn;
+leaving a comment does not automatically start an agent run.
+
 ## Required workflow
 
 Use this workflow for every CAD task, whether generating a new model or editing
