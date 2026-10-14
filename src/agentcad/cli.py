@@ -1,3 +1,5 @@
+import contextvars
+import functools
 import json
 import os
 import shlex
@@ -450,6 +452,65 @@ def _build_guide(runtime: str = "build123d") -> str:
     )
 
 
+class _InvocationOutput:
+    """Output state owned by one ``agentcad`` command invocation.
+
+    It records everything the command echoes (for the session log and live
+    viewer) and rewrites JSON responses for the invocation's project layout.
+    """
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.captured = []
+
+    def process(self, message, err):
+        if message is not None and not err:
+            layout = self.ctx.meta.get("project_layout")
+            if layout is not None:
+                try:
+                    payload = json.loads(message)
+                    if isinstance(payload, dict) and "command" in payload:
+                        message = json.dumps(format_response(payload, layout))
+                except (TypeError, json.JSONDecodeError):
+                    pass
+        if message is not None:
+            self.captured.append(str(message))
+        return message
+
+
+# The invocation currently producing output. A context variable, not a
+# per-command swap of ``click.echo``: the daemon is forked from inside a
+# running command, and a swapped-in echo closure would follow it there and
+# reformat every later project's output with the spawning project's layout.
+# ``contextvars.Context().run`` gives daemon requests a clean slate.
+#
+# Context variables do not propagate into new threads on Python 3.10-3.12: a
+# ``threading.Thread`` starts with an empty context. Anything a command echoes
+# from a worker thread would skip the project formatting and session capture,
+# so commands must echo from the thread that runs the command.
+_INVOCATION_OUTPUT = contextvars.ContextVar("agentcad_invocation_output", default=None)
+# If this module is imported a second time (``python -m agentcad.cli`` runs it
+# as ``__main__`` and the daemon later imports ``agentcad.cli``), wrap the
+# real echo rather than the first copy's wrapper. Only agentcad's own wrapper
+# is unwrapped; any other ``click.echo`` replacement is kept as is.
+_CLICK_ECHO = getattr(click.echo, "_agentcad_click_echo", click.echo)
+
+
+@functools.wraps(_CLICK_ECHO)
+def _echo(message=None, file=None, nl=True, err=False, color=None):
+    output = _INVOCATION_OUTPUT.get()
+    if output is not None:
+        message = output.process(message, err)
+    return _CLICK_ECHO(message, file=file, nl=nl, err=err, color=color)
+
+
+_echo._agentcad_click_echo = _CLICK_ECHO
+
+# Installed once per process. Commands keep calling ``click.echo``; the
+# per-invocation behavior lives in ``_INVOCATION_OUTPUT``.
+click.echo = _echo
+
+
 class _LoggingGroup(click.Group):
     """Click Group that auto-logs every command invocation to session.jsonl."""
 
@@ -774,26 +835,12 @@ class _LoggingGroup(click.Group):
         formatter.write("\n")
 
     def invoke(self, ctx):
-        captured = []
-        original_echo = click.echo
+        output = _InvocationOutput(ctx)
+        captured = output.captured
         project_root = Path.cwd()
         ctx.meta["viewer_started_ns"] = time.time_ns()
 
-        def _capturing_echo(message=None, **kwargs):
-            if message is not None and not kwargs.get("err"):
-                layout = ctx.meta.get("project_layout")
-                if layout is not None:
-                    try:
-                        payload = json.loads(message)
-                        if isinstance(payload, dict) and "command" in payload:
-                            message = json.dumps(format_response(payload, layout))
-                    except (TypeError, json.JSONDecodeError):
-                        pass
-            if message is not None:
-                captured.append(str(message))
-            original_echo(message, **kwargs)
-
-        click.echo = _capturing_echo
+        token = _INVOCATION_OUTPUT.set(output)
         try:
             return super().invoke(ctx)
         except ProjectError as exc:
@@ -805,7 +852,7 @@ class _LoggingGroup(click.Group):
             click.echo(json.dumps(payload))
             sys.exit(1)
         finally:
-            click.echo = original_echo
+            _INVOCATION_OUTPUT.reset(token)
             self._log_session(ctx, captured)
             self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
 
@@ -843,6 +890,12 @@ class _LoggingGroup(click.Group):
 
     def _log_session(self, ctx, captured):
         if os.environ.get("AGENTCAD_NO_LOG") or ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
+            return
+        if os.environ.get("_AGENTCAD_DAEMON_CHILD") == "1":
+            # A daemon-routed command. The client that sent it logs the
+            # command once, with its own argv and the final ``via: daemon``
+            # result. The daemon's ``sys.argv`` belongs to whatever started
+            # the daemon, not to this request.
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
