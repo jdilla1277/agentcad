@@ -52,15 +52,24 @@ _SCRIPT_EDIT_HELPERS = {
 _GUIDE_TEMPLATE = """\
 __AUTHORING_GUIDE__
 
-QUICK START WORKFLOW
-  1. Write script.py using the authoring API above and surface geometry with
+REQUIRED WORKFLOW: INSPECT -> SPECIFY -> BUILD -> VALIDATE -> DELIVER
+  1. Inspect every drawing, image, requirement, unit, view, or source CAD file.
+     For edits, start with `agentcad inspect FILE --summary` and
+     `agentcad measure FILE`; request --ids only when topology IDs are needed.
+  2. Specify features, dimensions, counts, relationships, body expectations,
+     assumptions, and deliverables before modeling. For edits, also specify the
+     exact target, expected delta, and geometry that must stay unchanged.
+  3. Build script.py using the authoring API above and surface geometry with
      show_object(). Check metrics without consuming a version:
        $ agentcad run script.py --label test --dry-run
-  2. Run for real. The live project viewer opens automatically:
+     Then run for real. The live project viewer opens automatically:
        $ agentcad run script.py --label first --render iso
-  3. Verify dimensions and feature sizes from the generated STEP:
-       $ agentcad measure v1_first/output.step
-  4. Iterate with a new label and review the automatic previous/current diff.
+  4. Validate the returned outputs.step: read preview.png, measure dimensions
+     and features, run check-spec when specified, and require top-level
+     metrics.is_valid=true. For edits, prove the requested change and preserved
+     geometry with the automatic previous/current comparison and numeric diff.
+  5. Deliver only outputs.step and requested exports that passed validation.
+     If a check fails, return to the earliest incorrect stage and iterate.
 
 NAMED PARTS AND GROUPS
   Named outputs become stable reviewable parts:
@@ -73,7 +82,7 @@ EXAMPLE SESSION
   $ agentcad init --name myproject__INIT_RUNTIME__
   {"command": "init", "status": "success", "project": "myproject",
    "runtime": "__RUNTIME__"}
-  # Write script.py (see `agentcad docs quickstart`), then:
+  # Follow Inspect -> Specify -> Build (see `agentcad docs workflow`), then:
   $ agentcad run script.py --label first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
    "output_type": "single_part", "version": 1, "label": "first",

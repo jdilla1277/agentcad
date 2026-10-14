@@ -102,7 +102,7 @@ def test_help_documents_all_commands(runner):
     `test_help_does_not_advertise_daemon` below."""
     result = runner.invoke(cli, ["--help"])
     output = result.output
-    guide = output.split("QUICK START", 1)[1]
+    guide = output.split("REQUIRED WORKFLOW", 1)[1]
     for cmd in ["init", "run", "import", "render", "export", "measure",
                 "check-spec", "inspect", "parts", "diff", "context", "recover", "view",
                 "docs", "skill", "feedback", "subscribe"]:
@@ -125,6 +125,11 @@ def test_help_shows_run_example(runner):
     output = result.output
     assert "--output" in output
     assert "--render" in output
+
+
+def test_help_requires_five_stage_workflow(runner):
+    output = runner.invoke(cli, ["--help"]).output
+    assert "REQUIRED WORKFLOW: INSPECT -> SPECIFY -> BUILD -> VALIDATE -> DELIVER" in output
 
 
 def test_help_mentions_part_review_views(runner):
