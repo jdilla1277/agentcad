@@ -14,7 +14,7 @@ from pathlib import Path
 import click
 from agentcad.project import get_project, project_options
 
-from agentcad.guide import effective_runtime, guide_body, guide_fingerprint
+from agentcad.guide import effective_runtime, guide_body, guide_fingerprint, read_text_file
 
 
 START_MARKER = "<!-- agentcad:start -->"
@@ -74,8 +74,8 @@ def install_instructions(cwd: Path, target: str, runtime: str) -> dict:
     block = instructions_block(runtime)
     written = []
     for path in _target_paths(target, cwd):
-        original = path.read_text() if path.exists() else ""
-        path.write_text(_replace_or_append(original, block))
+        original = read_text_file(path) if path.exists() else ""
+        path.write_text(_replace_or_append(original, block), encoding="utf-8")
         written.append(str(path))
     return {
         "runtime": runtime,
@@ -93,7 +93,7 @@ def instructions_status(cwd: Path, runtime: str) -> dict:
         if not path.exists():
             continue
         try:
-            content = path.read_text()
+            content = read_text_file(path)
         except OSError:
             continue
         if START_MARKER not in content:
