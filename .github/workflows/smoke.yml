@@ -124,7 +124,7 @@ jobs:
         run: pytest --collect-only -q
 
       - name: Run Windows-relevant guardrails
-        run: pytest tests/test_daemon_platform.py tests/test_package_positioning.py tests/test_project_viewer.py -q
+        run: pytest tests/test_daemon_platform.py tests/test_package_positioning.py tests/test_project_viewer.py tests/test_text_encoding.py -q
 
   browser-smoke:
     runs-on: ubuntu-22.04

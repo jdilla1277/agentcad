@@ -3458,7 +3458,7 @@ def _render_unified(
     html = _HTML_UNIFIED
     for k, v in replacements.items():
         html = html.replace(k, v)
-    Path(out_html_path).write_text(html)
+    Path(out_html_path).write_text(html, encoding="utf-8")
 
 
 def _render_single(glb_path, *, review=None):

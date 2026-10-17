@@ -92,13 +92,13 @@ def test_init_installs_instructions_and_skill(runner, isolated_dir):
     # uniform schema: every target lists its files under "paths"
     assert all(isinstance(t["paths"], list) for t in setup["targets"])
 
-    agents = (isolated_dir / "AGENTS.md").read_text()
+    agents = (isolated_dir / "AGENTS.md").read_text(encoding="utf-8")
     assert START_MARKER in agents
     assert guide_fingerprint("build123d") in agents
     assert guide_body("build123d").rstrip() in agents
 
     skill_file = isolated_dir / ".claude" / "skills" / "agentcad" / "SKILL.md"
-    assert skill_file.read_text().endswith(guide_body("build123d"))
+    assert skill_file.read_text(encoding="utf-8").endswith(guide_body("build123d"))
 
 
 def test_init_no_agent_setup_installs_nothing(runner, isolated_dir):
@@ -115,7 +115,7 @@ def test_init_preserves_user_authored_instructions(runner, isolated_dir):
 
     _invoke(runner, ["init"])
 
-    content = claude.read_text()
+    content = claude.read_text(encoding="utf-8")
     assert "Use tabs, not spaces." in content
     assert content.count(START_MARKER) == 1
     assert content.count(END_MARKER) == 1
@@ -126,12 +126,12 @@ def test_init_preserves_user_authored_instructions(runner, isolated_dir):
 def test_init_cadquery_project_installs_cadquery_guide(runner, isolated_dir):
     _invoke(runner, ["init", "--runtime", "cadquery"])
 
-    agents = (isolated_dir / "AGENTS.md").read_text()
+    agents = (isolated_dir / "AGENTS.md").read_text(encoding="utf-8")
     assert "cq.Workplane" in agents
     assert "build123d primitives" not in agents
 
     skill_file = isolated_dir / ".claude" / "skills" / "agentcad" / "SKILL.md"
-    assert "cq.Workplane" in skill_file.read_text()
+    assert "cq.Workplane" in skill_file.read_text(encoding="utf-8")
 
 
 def test_import_bootstrap_installs_guide(runner, isolated_dir, monkeypatch):
@@ -179,10 +179,13 @@ def test_context_reports_stale_setup_after_content_change(
     # Simulate a pre-upgrade install: old fingerprint, old skill content.
     agents = isolated_dir / "AGENTS.md"
     agents.write_text(
-        agents.read_text().replace(guide_fingerprint("build123d"), "0" * 12)
+        agents.read_text(encoding="utf-8").replace(guide_fingerprint("build123d"), "0" * 12),
+        encoding="utf-8",
     )
     skill_file = isolated_dir / ".claude" / "skills" / "agentcad" / "SKILL.md"
-    skill_file.write_text(skill_file.read_text() + "\nlocal edit\n")
+    skill_file.write_text(
+        skill_file.read_text(encoding="utf-8") + "\nlocal edit\n", encoding="utf-8"
+    )
 
     payload = _invoke(runner, ["context"])
     setup = payload["agent_setup"]
@@ -212,7 +215,7 @@ def test_repeated_install_keeps_block_at_top_without_blank_lines(
     _invoke(runner, ["instructions", "install"])
     _invoke(runner, ["instructions", "install"])
 
-    content = (isolated_dir / "AGENTS.md").read_text()
+    content = (isolated_dir / "AGENTS.md").read_text(encoding="utf-8")
     assert content.startswith(START_MARKER)
     assert content.count(START_MARKER) == 1
 
@@ -227,7 +230,7 @@ def test_instructions_install_replaces_stale_block_only(runner, isolated_dir):
 
     _invoke(runner, ["instructions", "install"])
 
-    content = agents.read_text()
+    content = agents.read_text(encoding="utf-8")
     assert "old pointer block" not in content
     assert "Keep this." in content
     assert guide_body("build123d").rstrip() in content
