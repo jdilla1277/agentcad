@@ -62,8 +62,10 @@ feature** is a geometric grouping inferred from one or more entities, such as a
 cylindrical region; it is not a recovered parametric feature-tree operation.
 
 Part and topology IDs are scoped to the normalized geometry of one version.
-They may change after an edit. Candidate-feature and search-result group IDs
-also name their member topology IDs and have no cross-version stability claim.
+Their version component changes after an edit; the entity number is retained
+when correspondence is unambiguous. Candidate-feature groups also name their
+member topology IDs. Cross-version correspondence is best effort, and temporary
+search-result groups have no continuity guarantee.
 
 The source file is retained for provenance. Measurements, IDs, renders, search
 results, and `edit.py` selectors must derive from the same normalized version
@@ -111,6 +113,24 @@ geometry that the edit script loads.
   exactly the entity named in the machine-readable record and code selector.
 - Candidate-feature groups expose their member IDs and the evidence for the
   grouping. An unrecognized region remains accessible as faces and edges.
+
+### I2a. Object IDs and continuity between versions
+
+- Public IDs encode object type, version, and an entity number: `part_v1_1`,
+  `face_v1_55`, `edge_v1_17`, and `feature_v1_3`. Compact aliases such as `F55`
+  may appear in images when the version is also labeled. Records include the
+  canonical version identifier and baseline hash to disambiguate versions
+  from different projects.
+- Keep each ID stable within its version, including after geometry reload.
+  Try to retain the entity number in the next version when there is
+  unambiguous evidence that it is the corresponding entity: `face_v1_55` can
+  become `face_v2_55`. Use operation history when available, then conservative
+  geometric matching. Record the correspondence and its evidence.
+- Ambiguous matches, splits, and merges receive new numbers with explicit
+  lineage where known. Retaining a number does not promise that geometry or
+  dimensions are unchanged. Public numbers resolve through the version's ID
+  map and need not equal the kernel's traversal indices. References from the
+  wrong version are rejected rather than silently remapped.
 
 ### I3. Default response and images
 
@@ -231,12 +251,12 @@ machine-readable request should support the following shape:
 {
   "baseline": "v1_cadgenbench_101_agentcad/output.step",
   "filters": {
-    "part_id": "P1",
+    "part_id": "part_v1_1",
     "kind": "cylindrical_face",
     "diameter_mm": {"value": 12, "tolerance": 0.1},
     "axis": "Z"
   },
-  "sort": {"by": "similarity", "reference_id": "F55"},
+  "sort": {"by": "similarity", "reference_id": "face_v1_55"},
   "limit": 10,
   "images": 10
 }
@@ -255,7 +275,7 @@ can be shown together or inspected separately.
 - Reconstruction of a STEP or BREP file into editable parametric feature-tree
   source code. Editing begins by loading the imported finished geometry.
 - Guaranteed persistent face or feature identity across edited versions.
-  Best-effort correspondence is proposed below and must expose ambiguity.
+  Best-effort correspondence is required and must expose ambiguity.
 - Automatic proof that an edit changed only the intended region. Expected
   change and source-preservation checks belong to Specify and Validate.
 - A mesh-specific import and search experience for STL, OBJ, or 3MF. Those
@@ -266,6 +286,14 @@ can be shown together or inspected separately.
   within the selected project version is in scope.
 - Interactive search controls in the human-facing viewer. The viewer may
   display the report and highlights; the new query interface is for agents.
+
+## Future ideas
+
+- Compare any object ID with any other object ID, including objects from
+  different versions or unrelated regions. Return meaningful dimension,
+  geometry, and placement differences plus visual comparisons where supported.
+  An arbitrary comparison must not imply that the objects share lineage.
+  This extends the shared ID contract; it is outside this release's scope.
 
 ## Implementation boundaries
 
@@ -295,6 +323,9 @@ can be shown together or inspected separately.
 3. For sampled face and edge IDs, the inspection record, highlighted image,
    search result, and code selector identify the same geometry. This is
    checked after normalized STEP reload, not only in the initial parser shape.
+   IDs include type and version; unambiguous version correspondences retain
+   their entity numbers, while splits, merges, and ambiguous matches expose
+   new numbers. Using an ID against the wrong baseline returns an error.
 4. Exact filter queries return the expected set and count under stated
    tolerances. Plane and relationship queries state the applied relation.
    A query without a part filter can return matches from multiple parts in
@@ -333,24 +364,6 @@ can be shown together or inspected separately.
 
 The recommendations below are proposals for product discussion, not finalized
 requirements.
-
-### Object IDs and continuity between versions
-
-Proposed public IDs encode object type, version, and a short entity token:
-`part_v1_1`, `face_v1_55`, `edge_v1_17`, and `feature_v1_3`. Compact aliases such
-as `F55` may appear in images when the version is also labeled. Records include
-the canonical version identifier and baseline hash so a `v1` from another
-project cannot be mistaken for the current one.
-
-Try to retain the entity token in the next version when there is unambiguous
-evidence that it is the same entity: `face_v1_55` could become `face_v2_55`.
-Use operation history when available, then conservative geometric matching.
-Record the correspondence and its evidence. Ambiguous matches, splits, and
-merges receive new tokens with explicit lineage where known. Reusing a token
-never promises that its geometry or dimensions are unchanged. Public tokens
-resolve through the version's ID map and need not equal the kernel's traversal
-indices. A reference from the wrong version must be rejected rather than
-silently remapped.
 
 ### Feature grouping
 
