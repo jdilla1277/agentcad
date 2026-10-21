@@ -19,6 +19,12 @@ IDs, and code selectors that all refer to the same geometry. CLI and MCP expose
 the same product contract when AgentCAD runs locally, in the cloud, or through
 remote mode.
 
+This effort includes a required milestone for recognizing named design
+features such as holes, slots, pockets, bosses, and fillets. Geometric grouping
+is an intermediate deliverable. Completion means delivering the strongest
+Inspect experience that available technology can support and that we can
+demonstrate reliably on imported geometry.
+
 Built-in natural-language search is outside this PRD. A calling agent can turn a
 user's words into structured filters and a similarity reference.
 
@@ -51,15 +57,21 @@ and code selector identify it.
 6. Give equivalent capabilities and response fields through CLI and MCP.
 7. Support local, cloud, and remote execution, including retrieval of every
    reported manifest, image, inspection record, and edit baseline.
+8. Recognize meaningful design features, connect them to measured geometry and
+   editable IDs, and establish the achievable recognition quality through
+   evaluation of available technology and real imported models.
 
 ## Scope and terms
 
-The first release targets STEP/STP and BREP solid geometry supported by the
+This effort targets STEP/STP and BREP solid geometry supported by the
 existing import path. A **part** is a source assembly component when source
 structure is available, or an explicitly labeled derived solid when it is not.
 A **topology entity** is an addressable solid, face, or edge. A **candidate
 feature** is a geometric grouping inferred from one or more entities, such as a
 cylindrical region; it is not a recovered parametric feature-tree operation.
+A **recognized feature** assigns a supported design-feature type to a measured
+region, such as a counterbored hole, with its dimensions, member entities,
+and recognition evidence.
 
 Part and topology IDs are scoped to the normalized geometry of one version.
 Their version component changes after an edit; the entity number is retained
@@ -77,7 +89,8 @@ geometry that the edit script loads.
    validates the geometry, and prepares the inspection bundle.
 2. The default response says whether the import is usable, gives whole-model
    dimensions and an overall four-view image, lists the parts and geometry
-   inventory, and shows selected part and feature images.
+   inventory, identifies recognized design features with their measurements
+   and evidence, and shows selected part and feature images.
 3. The agent follows an ID from the image into an inspection record. It can ask
    for the isolated four-view image and measurements of any other ID.
 4. The agent filters a part or region, or asks for geometry similar to a
@@ -113,11 +126,13 @@ geometry that the edit script loads.
   exactly the entity named in the machine-readable record and code selector.
 - Candidate-feature groups expose their member IDs and the evidence for the
   grouping. An unrecognized region remains accessible as faces and edges.
-- The first release uses conservative geometric grouping alongside the raw
+- The foundation milestone uses conservative geometric grouping alongside raw
   entities. Group adjacent faces only when an explicit geometric rule
   establishes their relationship, such as contiguous patches of the same
   cylindrical surface. Report the rule and member IDs. Sharing a diameter or
   axis alone does not establish that two regions are one feature.
+- The named-feature recognition milestone builds on this inventory and must
+  be delivered before this effort is considered complete.
 
 ### I2a. Object IDs and continuity between versions
 
@@ -176,6 +191,37 @@ geometry that the edit script loads.
   the scaffold. After a new version is created, the agent is told to inspect
   that version before reusing topology IDs.
 
+### I5. Recognize named design features
+
+- Recognize through and blind holes, counterbores and countersinks, slots,
+  pockets, bosses, and fillets. Evaluate additional feature types and
+  recognition approaches to deliver the strongest reliable inspection that
+  available technology supports within this effort's format and deployment
+  scope. The milestone begins with a capability assessment, not an assumption
+  that conservative grouping is the limit of recognition.
+- Compare available geometric, connectivity-based, and learned recognition
+  approaches against the same annotated imported models. Select methods using
+  measured recognition quality, coverage, usefulness to an editing agent,
+  latency, and resource cost. Record which approaches were evaluated and
+  why the selected implementation provides the strongest demonstrated result.
+- Build each recognized feature from measured geometry and its relationships.
+  For example, a counterbored hole combines the bore, larger recess, and
+  connecting surfaces into one inspectable feature.
+- Each recognized feature has a typed, versioned ID; its member face and edge
+  IDs; dimensions such as diameter and depth; orientation and extent; and
+  highlighted views and retrieval actions. State the evidence for the label
+  and distinguish imported source labels from inferred classifications.
+- Expose recognized feature types and measurements in the default report,
+  structured search filters, similarity ranking, and inspection records.
+  Underlying faces and edges remain available for verification and selection.
+- Report recognition coverage and uncertainty. Preserve measured geometric
+  groups when a design-feature label cannot be established reliably. Track
+  missed and unrecognized regions explicitly; an unknown label does not imply
+  the absence of a feature.
+- Completion requires demonstrated recognition on real imported models,
+  integration into the agent workflow, and documented technical limits.
+  Recognition does not claim to recover the original source feature tree.
+
 ## Requirements: geometry search
 
 ### S1. Structured filters
@@ -202,9 +248,14 @@ geometry that the edit script loads.
 - An agent can supply a reference part, face, or candidate-feature ID and
   request similar results from the same version. Filters can narrow the
   candidate set before similarity ranking.
-- Part and feature similarity use measurable geometric evidence, including
-  dimensions, shape type, aspect ratio, and neighboring geometry where
-  relevant. The result explains the main matching and differing properties.
+- Part and feature similarity combine measured properties with actual shape
+  comparison. Use dimensions, surface types, aspect ratios, and neighboring
+  geometry to find candidates, then align candidates and compare their actual
+  geometry to refine the ranking. Shape comparison is required, including
+  cases where different shapes share the same measured properties.
+- Explain the main matching and differing properties and the shape-comparison
+  evidence for each ranked result. Evaluate candidate selection and final
+  ranking together so early filtering does not hide the useful shape matches.
 - The default comparison is sensitive to size and invariant to position and
   rotation. Alternative scale-invariant or location-sensitive behavior, if
   offered, must be an explicit query option.
@@ -275,8 +326,9 @@ can be shown together or inspected separately.
 
 ## Non-goals for this PRD
 
-- Built-in natural-language search or an LLM service inside AgentCAD. The
-  calling agent may translate user intent into structured query fields.
+- Built-in natural-language query interpretation. The calling agent may
+  translate user intent into structured query fields. This exclusion does
+  not constrain the recognition technologies evaluated for milestone I5.
 - Reconstruction of a STEP or BREP file into editable parametric feature-tree
   source code. Editing begins by loading the imported finished geometry.
 - Guaranteed persistent face or feature identity across edited versions.
@@ -291,32 +343,6 @@ can be shown together or inspected separately.
   within the selected project version is in scope.
 - Interactive search controls in the human-facing viewer. The viewer may
   display the report and highlights; the new query interface is for agents.
-- Recognition of complete named design features such as holes, slots, pockets,
-  bosses, and fillets. This is the planned follow-on effort described below.
-
-## Planned follow-on: recognize named design features
-
-The target Inspect experience identifies meaningful design features and their
-dimensions, including through and blind holes, counterbores and countersinks,
-slots, pockets, bosses, and fillets. Plan this as the next inspection effort
-after the geometric inventory, conservative grouping, and search foundation.
-
-- Build recognized features from measured geometry, connectivity, and spatial
-  relationships. For example, a recognized counterbored hole combines the
-  bore, larger recess, and connecting surfaces into one inspectable feature.
-- Each recognized feature has a typed, versioned ID; its member face and edge
-  IDs; dimensions such as diameter and depth; orientation and extent; and
-  highlighted views and retrieval actions. State the evidence for the label
-  and distinguish imported source labels from inferred classifications.
-- Expose recognized feature types and measurements through the same structured
-  search filters, similarity, and inspection records. Keep underlying faces
-  and edges available so an agent can verify or select a subset.
-- Report recognition coverage and uncertainty. Preserve the geometric
-  grouping when the system cannot reliably identify a design feature.
-- Validate each supported feature type against annotated real imported
-  geometry, checking missed features, false classifications, dimensions,
-  and complete membership. Recognizing geometry does not claim to recover
-  the original authoring operation or source feature tree.
 
 ## Future ideas
 
@@ -363,9 +389,11 @@ after the geometric inventory, conservative grouping, and search foundation.
    the selected project version; a part filter narrows those results. No query
    retrieves candidates from another project.
 5. Similarity tests include translated and rotated copies, different sizes,
-   near matches, and unrelated geometry. Ranking explanations identify the
-   measured similarities and differences. Establish a top-10 relevance target
-   from a curated fixture set before release.
+   near matches, unrelated geometry, and different shapes with matching
+   dimensions or volume. Both measured properties and aligned geometry
+   comparison contribute to the ranking. Ranking explanations identify the
+   measured similarities and actual shape differences. Establish a top-10
+   relevance target from a curated fixture set before release.
 6. A search with more than 10 matches returns 10 records and images by
    default, plus the complete manifest and a working way to retrieve the next
    page. Image-free mode returns the same geometry matches.
@@ -378,8 +406,20 @@ after the geometric inventory, conservative grouping, and search foundation.
 9. Run the same import, image retrieval, filtered search, and similarity
    requests locally and through cloud/remote execution. Every returned artifact
    is accessible to the caller without access to the worker's local filesystem.
+10. Validate recognized feature types on annotated real imports, including
+    split surfaces, intersecting or combined features, and similar-looking
+    regions that do not satisfy the feature definition. Measure false
+    classifications, missed features, dimensional accuracy, and completeness
+    of face/edge membership separately for each type. Set per-type acceptance
+    targets before evaluating the implementation; document unsupported cases
+    and the technical evidence for those limits.
+11. In an agent workflow, a recognized feature can be identified in the default
+    report, retrieved by its ID, filtered and ranked in search, rendered with
+    every member highlighted, and selected in the edit scaffold. The complete
+    effort must meet this criterion; finishing geometric grouping alone is an
+    intermediate milestone.
 
-## Delivery sequence
+## Delivery milestones
 
 1. Preserve source part metadata and create the shared per-version geometry
    index and ID-to-image mapping.
@@ -388,26 +428,23 @@ after the geometric inventory, conservative grouping, and search foundation.
 3. Add exact structured filters, relationships, complete result manifests,
    and CLI/MCP parity across local, cloud, and remote execution.
 4. Add part and feature similarity ranking with query-specific evidence.
-5. Run the acceptance fixtures and context/latency evaluation; refine sample
+   Deliver both measured-property retrieval and aligned shape comparison.
+5. Deliver named design-feature recognition: assess available technology,
+   implement the strongest validated approach, and integrate recognized
+   features into reports, IDs, images, search, and edit selection. Geometric
+   grouping establishes the foundation for this required milestone.
+6. Run all acceptance fixtures and context/latency evaluation; refine sample
    selection, ranking, and budgets from observed agent behavior.
+
+Earlier milestones may ship incrementally. This effort is complete after the
+named-feature recognition milestone and the full agent workflow evaluation
+pass, with demonstrated coverage and documented technology limits for the
+supported input formats.
 
 ## Review questions and proposed defaults
 
 The recommendations below are proposals for product discussion, not finalized
 requirements.
-
-### Similarity ranking
-
-Options are an explainable comparison of measured properties, a comparison of
-actual shape after alignment, or learned shape embeddings. Recommend measured
-properties for candidate retrieval, then actual geometry comparison for the
-most promising candidates where those properties cannot distinguish shape.
-For faces and groups, use surface type, dimensions, extent, boundary shape,
-and nearby topology. For parts, use dimensions, volume, and surface composition
-to retrieve candidates, then compare their shape. Explain why an item ranked
-high and how it differs; matching bounding dimensions alone is insufficient.
-Confirm this default with a small set of agent selection tasks before choosing
-weights or promising a particular similarity score.
 
 ### Image resolution and delivery
 
