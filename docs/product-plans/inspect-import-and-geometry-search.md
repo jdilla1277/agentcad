@@ -12,11 +12,12 @@ exist, and how to inspect or edit a specific region. The default response is a
 compact manifest plus selected four-view images. The full inventory and further
 images remain available by ID.
 
-The agent can then search that imported version using explicit filters or find
-geometry similar to a selected part or feature. Results carry measured evidence,
-highlighted images, version-local IDs, and code selectors that all refer to the
-same geometry. CLI and MCP expose the same product contract when AgentCAD runs
-locally, in the cloud, or through remote mode.
+The agent can then search across parts in a selected version of the current
+project using explicit filters or find geometry similar to a selected part or
+feature. Results carry measured evidence, highlighted images, version-local
+IDs, and code selectors that all refer to the same geometry. CLI and MCP expose
+the same product contract when AgentCAD runs locally, in the cloud, or through
+remote mode.
 
 Built-in natural-language search is outside this PRD. A calling agent can turn a
 user's words into structured filters and a similarity reference.
@@ -154,7 +155,9 @@ geometry that the edit script loads.
 
 ### S1. Structured filters
 
-- Search is scoped to one imported version and accepts composable filters for
+- Search is scoped to a single project and an explicitly selected version.
+  All parts in that version are eligible by default; an optional part filter
+  narrows the candidate set. Search accepts composable filters for
   part, selected face or edge, spatial region, explicitly defined plane,
   entity kind, surface or curve type, orientation, axis, dimensions with units
   and tolerances, area, length, bounds, and placement.
@@ -259,7 +262,8 @@ can be shown together or inspected separately.
   need component and region semantics suited to tessellated geometry.
 - A 2D drawing/sketch inspection experience. Preserve it as a future product
   idea, including links from drawing dimensions to 3D geometry where possible.
-- Search across a library of projects or a shared server database.
+- Search across projects or a library of projects. Searching across parts
+  within the selected project version is in scope.
 - Interactive search controls in the human-facing viewer. The viewer may
   display the report and highlights; the new query interface is for agents.
 
@@ -293,6 +297,9 @@ can be shown together or inspected separately.
    checked after normalized STEP reload, not only in the initial parser shape.
 4. Exact filter queries return the expected set and count under stated
    tolerances. Plane and relationship queries state the applied relation.
+   A query without a part filter can return matches from multiple parts in
+   the selected project version; a part filter narrows those results. No query
+   retrieves candidates from another project.
 5. Similarity tests include translated and rotated copies, different sizes,
    near matches, and unrelated geometry. Ranking explanations identify the
    measured similarities and differences. Establish a top-10 relevance target
@@ -344,13 +351,6 @@ never promises that its geometry or dimensions are unchanged. Public tokens
 resolve through the version's ID map and need not equal the kernel's traversal
 indices. A reference from the wrong version must be rejected rather than
 silently remapped.
-
-### Search scope
-
-Open decision: does v1 exclude searching features across multiple parts,
-comparing whole parts, or only searching other imported models? Existing
-requirements allow part similarity and filters within one imported version;
-revise them together once this boundary is agreed.
 
 ### Feature grouping
 
