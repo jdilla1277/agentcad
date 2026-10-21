@@ -113,6 +113,11 @@ geometry that the edit script loads.
   exactly the entity named in the machine-readable record and code selector.
 - Candidate-feature groups expose their member IDs and the evidence for the
   grouping. An unrecognized region remains accessible as faces and edges.
+- The first release uses conservative geometric grouping alongside the raw
+  entities. Group adjacent faces only when an explicit geometric rule
+  establishes their relationship, such as contiguous patches of the same
+  cylindrical surface. Report the rule and member IDs. Sharing a diameter or
+  axis alone does not establish that two regions are one feature.
 
 ### I2a. Object IDs and continuity between versions
 
@@ -286,6 +291,32 @@ can be shown together or inspected separately.
   within the selected project version is in scope.
 - Interactive search controls in the human-facing viewer. The viewer may
   display the report and highlights; the new query interface is for agents.
+- Recognition of complete named design features such as holes, slots, pockets,
+  bosses, and fillets. This is the planned follow-on effort described below.
+
+## Planned follow-on: recognize named design features
+
+The target Inspect experience identifies meaningful design features and their
+dimensions, including through and blind holes, counterbores and countersinks,
+slots, pockets, bosses, and fillets. Plan this as the next inspection effort
+after the geometric inventory, conservative grouping, and search foundation.
+
+- Build recognized features from measured geometry, connectivity, and spatial
+  relationships. For example, a recognized counterbored hole combines the
+  bore, larger recess, and connecting surfaces into one inspectable feature.
+- Each recognized feature has a typed, versioned ID; its member face and edge
+  IDs; dimensions such as diameter and depth; orientation and extent; and
+  highlighted views and retrieval actions. State the evidence for the label
+  and distinguish imported source labels from inferred classifications.
+- Expose recognized feature types and measurements through the same structured
+  search filters, similarity, and inspection records. Keep underlying faces
+  and edges available so an agent can verify or select a subset.
+- Report recognition coverage and uncertainty. Preserve the geometric
+  grouping when the system cannot reliably identify a design feature.
+- Validate each supported feature type against annotated real imported
+  geometry, checking missed features, false classifications, dimensions,
+  and complete membership. Recognizing geometry does not claim to recover
+  the original authoring operation or source feature tree.
 
 ## Future ideas
 
@@ -364,16 +395,6 @@ can be shown together or inspected separately.
 
 The recommendations below are proposals for product discussion, not finalized
 requirements.
-
-### Feature grouping
-
-Options range from reporting individual faces and edges only, to conservative
-geometric groups, to recognizing named design features such as holes, slots,
-and pockets. Recommend conservative groups alongside the raw entities: group
-adjacent faces only when a stated geometric rule proves their relationship,
-such as contiguous patches of the same cylindrical surface. Report the rule
-and member IDs. Sharing a diameter or axis alone does not prove two regions
-are one feature. Broader manufacturing-feature recognition can be added later.
 
 ### Similarity ranking
 
