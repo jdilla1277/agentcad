@@ -15,7 +15,8 @@ images remain available by ID.
 The agent can then search that imported version using explicit filters or find
 geometry similar to a selected part or feature. Results carry measured evidence,
 highlighted images, version-local IDs, and code selectors that all refer to the
-same geometry. CLI and MCP expose the same product contract.
+same geometry. CLI and MCP expose the same product contract when AgentCAD runs
+locally, in the cloud, or through remote mode.
 
 Built-in natural-language search is outside this PRD. A calling agent can turn a
 user's words into structured filters and a similarity reference.
@@ -47,6 +48,8 @@ and code selector identify it.
 5. Let an agent provide a part or feature as an example and retrieve similar
    results, optionally narrowed by filters.
 6. Give equivalent capabilities and response fields through CLI and MCP.
+7. Support local, cloud, and remote execution, including retrieval of every
+   reported manifest, image, inspection record, and edit baseline.
 
 ## Scope and terms
 
@@ -110,8 +113,9 @@ geometry that the edit script loads.
 
 ### I3. Default response and images
 
-- The import report is on by default and can be suppressed by the calling
-  agent in CLI or MCP without suppressing the import or its saved bundle.
+- Show the import report by default. Provide an explicit option to turn it off
+  in CLI and MCP. The imported version and inspection bundle remain available
+  when the report is turned off.
 - The initial agent response includes quality, provenance, units, whole-model
   hard dimensions, part and feature counts, a compact ID/name list of parts,
   a geometry inventory summary, selected IDs, and paths to the complete lists
@@ -119,14 +123,17 @@ geometry that the edit script loads.
   report the count, explicit truncation, and path to the complete list.
 - Deliver one overall four-view image, up to four sample part four-view images,
   and up to four sample feature four-view images in the initial response.
-  Choose representative samples by size, geometric variety, and likely
-  usefulness. Reuse the overall image when a one-part model has identical
+  Rank samples by importance: favor prominent geometry, repeated geometry,
+  and geometric variety rather than topology traversal order. Make the
+  selection deterministic and explain the main reasons for each sample.
+  Reuse the overall image when a one-part model has identical
   whole-model and part geometry.
-- Every part has an available isolated four-view image. Prepare highlighted
-  four-view images for the first 100 indexed faces and the default sampled
-  candidate features; additional face, edge, and group images are retrievable
-  by ID. Each four-view includes isometric, top, front, and right views with a
-  common coordinate frame and visible ID labels.
+- Prepare the default samples during import. Overall + four parts + four
+  features delivers at most nine distinct images, within a default ceiling
+  of 10 images. Every other part, face, edge, and candidate feature has
+  an image retrieval action that renders its isolated or highlighted four-view
+  on request. Each four-view includes isometric, top, front, and right views
+  with a common coordinate frame and visible ID labels.
 - The first response targets roughly 5% of the calling agent's context budget.
   Large inventories and non-sample images are references to artifacts, not
   injected payloads. The agent can request an expanded or image-free response.
@@ -196,14 +203,21 @@ geometry that the edit script loads.
 - Grouped results expose member topology IDs. Highlighting, measurements,
   search records, and edit selectors refer to the same baseline entities.
 
-### S4. CLI and MCP parity
+### S4. CLI, MCP, and execution-mode parity
 
 - CLI and MCP accept the same query fields and produce the same structured
   result fields, counts, ID scopes, artifact paths, and error meanings.
-- Image transport may differ: the CLI returns paths; MCP may also attach
-  images. Both allow the agent to retrieve the same images and full manifests.
+- Image transport may differ: the CLI returns local paths or retrievable
+  artifact references; MCP may also attach images. Both allow the agent to
+  retrieve the same images and full manifests.
 - Direct ID lookup, filtered search, similarity search, pagination, and
   inspect-result retrieval are available through both interfaces.
+- All requirements apply to local, cloud, and remote mode. An artifact
+  reference includes a stable artifact ID and an executable retrieval action;
+  a worker's filesystem path alone is insufficient for a remote caller.
+  Local paths, downloadable URLs, and image attachments are transport options
+  for the same artifacts. Expiring download links can be refreshed by artifact
+  ID without changing geometry IDs or search ordering.
 
 ## Illustrative query contract
 
@@ -237,7 +251,8 @@ can be shown together or inspected separately.
   calling agent may translate user intent into structured query fields.
 - Reconstruction of a STEP or BREP file into editable parametric feature-tree
   source code. Editing begins by loading the imported finished geometry.
-- Persistent face or feature identity across different edited versions.
+- Guaranteed persistent face or feature identity across edited versions.
+  Best-effort correspondence is proposed below and must expose ambiguity.
 - Automatic proof that an edit changed only the intended region. Expected
   change and source-preservation checks belong to Specify and Validate.
 - A mesh-specific import and search experience for STL, OBJ, or 3MF. Those
@@ -245,6 +260,8 @@ can be shown together or inspected separately.
 - A 2D drawing/sketch inspection experience. Preserve it as a future product
   idea, including links from drawing dimensions to 3D geometry where possible.
 - Search across a library of projects or a shared server database.
+- Interactive search controls in the human-facing viewer. The viewer may
+  display the report and highlights; the new query interface is for agents.
 
 ## Implementation boundaries
 
@@ -256,8 +273,8 @@ can be shown together or inspected separately.
 - Extract measurements, part membership, and relationships through one shared
   indexing path. Search must not create an independent ID mapping from the
   one used by inspection and edit selectors.
-- Render the default samples and prepared image set during import; support
-  later image generation for any addressable ID. Record render failures as
+- Render the default samples during import; generate other images on request
+  and cache them for reuse. Record render failures as
   partial artifact status without hiding the underlying geometry record.
 - Keep source assembly metadata alongside normalized geometry because STEP
   re-export may not preserve all supplier names and hierarchy.
@@ -289,6 +306,9 @@ can be shown together or inspected separately.
 8. Record import time, search latency, index and image sizes, and measured
    model-context cost on small parts and large assemblies. Tune image sizes
    and budgets against this evidence before release.
+9. Run the same import, image retrieval, filtered search, and similarity
+   requests locally and through cloud/remote execution. Every returned artifact
+   is accessible to the caller without access to the worker's local filesystem.
 
 ## Delivery sequence
 
@@ -297,20 +317,71 @@ can be shown together or inspected separately.
 2. Deliver the default import report, media bundle, retrieval calls, and
    editable scaffold contract.
 3. Add exact structured filters, relationships, complete result manifests,
-   and CLI/MCP parity.
+   and CLI/MCP parity across local, cloud, and remote execution.
 4. Add part and feature similarity ranking with query-specific evidence.
 5. Run the acceptance fixtures and context/latency evaluation; refine sample
    selection, ranking, and budgets from observed agent behavior.
 
-## Decisions to validate during implementation
+## Review questions and proposed defaults
 
-- Which first 100 feature images are most useful to prepare: traversal order,
-  representative selection, or an importance ranking? The image manifest must
-  make the chosen order explicit.
-- What minimum grouping rule makes a candidate feature safe to expose, and
-  when should results remain individual faces or edges?
-- Which similarity descriptors produce useful rankings for both simple parts
-  and complex assemblies? The PRD requires measured evidence; benchmark data
-  should determine weighting.
-- What image resolution and delivery method keeps the default import near its
-  context target and makes 10-image search pages useful across agent models?
+The recommendations below are proposals for product discussion, not finalized
+requirements.
+
+### Object IDs and continuity between versions
+
+Proposed public IDs encode object type, version, and a short entity token:
+`part_v1_1`, `face_v1_55`, `edge_v1_17`, and `feature_v1_3`. Compact aliases such
+as `F55` may appear in images when the version is also labeled. Records include
+the canonical version identifier and baseline hash so a `v1` from another
+project cannot be mistaken for the current one.
+
+Try to retain the entity token in the next version when there is unambiguous
+evidence that it is the same entity: `face_v1_55` could become `face_v2_55`.
+Use operation history when available, then conservative geometric matching.
+Record the correspondence and its evidence. Ambiguous matches, splits, and
+merges receive new tokens with explicit lineage where known. Reusing a token
+never promises that its geometry or dimensions are unchanged. Public tokens
+resolve through the version's ID map and need not equal the kernel's traversal
+indices. A reference from the wrong version must be rejected rather than
+silently remapped.
+
+### Search scope
+
+Open decision: does v1 exclude searching features across multiple parts,
+comparing whole parts, or only searching other imported models? Existing
+requirements allow part similarity and filters within one imported version;
+revise them together once this boundary is agreed.
+
+### Feature grouping
+
+Options range from reporting individual faces and edges only, to conservative
+geometric groups, to recognizing named design features such as holes, slots,
+and pockets. Recommend conservative groups alongside the raw entities: group
+adjacent faces only when a stated geometric rule proves their relationship,
+such as contiguous patches of the same cylindrical surface. Report the rule
+and member IDs. Sharing a diameter or axis alone does not prove two regions
+are one feature. Broader manufacturing-feature recognition can be added later.
+
+### Similarity ranking
+
+Options are an explainable comparison of measured properties, a comparison of
+actual shape after alignment, or learned shape embeddings. Recommend measured
+properties for candidate retrieval, then actual geometry comparison for the
+most promising candidates where those properties cannot distinguish shape.
+For faces and groups, use surface type, dimensions, extent, boundary shape,
+and nearby topology. For parts, use dimensions, volume, and surface composition
+to retrieve candidates, then compare their shape. Explain why an item ranked
+high and how it differs; matching bounding dimensions alone is insufficient.
+Confirm this default with a small set of agent selection tasks before choosing
+weights or promising a particular similarity score.
+
+### Image resolution and delivery
+
+Proposed default: a 1024 × 1024 PNG four-view sheet per result, with legible IDs,
+consistent view directions, a neutral background, and highlighted targets.
+Keep precise dimensions in the accompanying record so the agent does not have
+to read them from pixels. Include image attachments where the transport supports
+them, plus stable artifact references and retrieval actions in every mode.
+Offer higher-resolution or isolated views on request. Measure token use on
+supported agent models; adjust resolution or image count through explicit
+budget options rather than claiming one universal image token cost.
