@@ -182,6 +182,18 @@ geometry that the edit script loads.
   selected ID, additional images, and search results. It does not assume the
   agent will discover command syntax elsewhere.
 
+### I3a. Image format and delivery
+
+- Use a 1024 × 1024 PNG four-view sheet by default for import and search,
+  with legible IDs, consistent view directions, a neutral background, and
+  highlighted targets. Keep precise dimensions in the accompanying record.
+- Include image attachments where the transport supports them, plus stable
+  artifact references and retrieval actions in every execution mode. Offer
+  higher-resolution or isolated views on request.
+- Measure token use on supported agent models. Adjust resolution or image
+  count through explicit budget options rather than claiming one universal
+  image token cost.
+
 ### I4. Editable starting point
 
 - Import supplies an `edit.py` that loads the finished imported solid or
@@ -440,19 +452,3 @@ Earlier milestones may ship incrementally. This effort is complete after the
 named-feature recognition milestone and the full agent workflow evaluation
 pass, with demonstrated coverage and documented technology limits for the
 supported input formats.
-
-## Review questions and proposed defaults
-
-The recommendations below are proposals for product discussion, not finalized
-requirements.
-
-### Image resolution and delivery
-
-Proposed default: a 1024 × 1024 PNG four-view sheet per result, with legible IDs,
-consistent view directions, a neutral background, and highlighted targets.
-Keep precise dimensions in the accompanying record so the agent does not have
-to read them from pixels. Include image attachments where the transport supports
-them, plus stable artifact references and retrieval actions in every mode.
-Offer higher-resolution or isolated views on request. Measure token use on
-supported agent models; adjust resolution or image count through explicit
-budget options rather than claiming one universal image token cost.
