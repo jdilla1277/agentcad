@@ -194,6 +194,27 @@ geometry that the edit script loads.
   count through explicit budget options rather than claiming one universal
   image token cost.
 
+### I3b. Analysis completion and reuse
+
+- By default, wait for the complete inspection report, including feature
+  recognition and the selected default images, before returning the import
+  response. A completed report states recognition coverage and technical
+  limits; completion does not imply that every region has a known feature
+  label.
+- Support an explicit caller timeout and a background option for unusually
+  large jobs. If the response is unfinished, distinguish successful geometry
+  import from inspection progress, list pending or failed stages, and provide
+  an executable wait/retrieval or resume action. State whether work is still
+  running or has stopped. Pending recognition must not appear as zero features.
+- Persist analysis for each geometry version and reuse it for inspection and
+  search. The same reuse contract applies to imported and script-generated
+  versions. Invalidate affected results when geometry, recognition software,
+  configuration, or source evidence changes. Repeated queries on an unchanged
+  version must not rerun full recognition.
+- Establish latency expectations from complete import/report measurements,
+  including validation, recognition, default image rendering, and artifact
+  delivery. Recognition-only timings are not an end-to-end time guarantee.
+
 ### I4. Editable starting point
 
 - Import supplies an `edit.py` that loads the finished imported solid or
@@ -430,6 +451,10 @@ can be shown together or inspected separately.
     every member highlighted, and selected in the edit scaffold. The complete
     effort must meet this criterion; finishing geometric grouping alone is an
     intermediate milestone.
+12. The default import waits for a finished report with the selected images
+    and recognition coverage. Explicit timeout/background responses identify
+    unfinished work and provide a working continuation. Repeated inspection
+    or search of unchanged geometry reuses the recorded recognition results.
 
 ## Delivery milestones
 
