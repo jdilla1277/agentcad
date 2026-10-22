@@ -22,8 +22,12 @@ remote mode.
 This effort includes a required milestone for recognizing named design
 features such as holes, slots, pockets, bosses, and fillets. Geometric grouping
 is an intermediate deliverable. Completion means delivering the strongest
-Inspect experience that available technology can support and that we can
-demonstrate reliably on imported geometry.
+Inspect experience that available open-source technology supports and that we
+can demonstrate reliably on imported geometry.
+
+This effort uses open-source components throughout. Local recognition must
+run with open-source code and appropriately licensed model assets. Commercial
+engines or paid services may be considered for a future paid cloud offering.
 
 Built-in natural-language search is outside this PRD. A calling agent can turn a
 user's words into structured filters and a similarity reference.
@@ -59,7 +63,7 @@ and code selector identify it.
    reported manifest, image, inspection record, and edit baseline.
 8. Recognize meaningful design features, connect them to measured geometry and
    editable IDs, and establish the achievable recognition quality through
-   evaluation of available technology and real imported models.
+   evaluation of available open-source technology and real imported models.
 
 ## Scope and terms
 
@@ -229,13 +233,13 @@ geometry that the edit script loads.
 - Recognize through and blind holes, counterbores and countersinks, slots,
   pockets, bosses, and fillets. Evaluate additional feature types and
   recognition approaches to deliver the strongest reliable inspection that
-  available technology supports within this effort's format and deployment
-  scope. The milestone begins with a capability assessment, not an assumption
-  that conservative grouping is the limit of recognition.
-- Compare available geometric, connectivity-based, and learned recognition
-  approaches against the same annotated imported models. Select methods using
-  measured recognition quality, coverage, usefulness to an editing agent,
-  latency, and resource cost. Record which approaches were evaluated and
+  available open-source technology supports within this effort's format and
+  deployment scope. Begin the milestone by assessing available capabilities
+  and methods beyond conservative grouping.
+- Compare available open-source geometric, connectivity-based, and learned
+  recognition approaches against the same annotated imported models. Select
+  methods using measured recognition quality, coverage, usefulness to an
+  editing agent, latency, and resource cost. Record which approaches were evaluated and
   why the selected implementation provides the strongest demonstrated result.
 - Build each recognized feature from measured geometry and its relationships.
   For example, a counterbored hole combines the bore, larger recess, and
@@ -361,7 +365,8 @@ can be shown together or inspected separately.
 
 - Built-in natural-language query interpretation. The calling agent may
   translate user intent into structured query fields. This exclusion does
-  not constrain the recognition technologies evaluated for milestone I5.
+  not preclude learned recognition that meets the open-source dependency
+  requirements for milestone I5.
 - Reconstruction of a STEP or BREP file into editable parametric feature-tree
   source code. Editing begins by loading the imported finished geometry.
 - Guaranteed persistent face or feature identity across edited versions.
@@ -376,6 +381,7 @@ can be shown together or inspected separately.
   within the selected project version is in scope.
 - Interactive search controls in the human-facing viewer. The viewer may
   display the report and highlights; the new query interface is for agents.
+- Proprietary recognition SDKs and paid inference services in this effort.
 
 ## Future ideas
 
@@ -384,9 +390,20 @@ can be shown together or inspected separately.
   geometry, and placement differences plus visual comparisons where supported.
   An arbitrary comparison must not imply that the objects share lineage.
   This extends the shared ID contract; it is outside this release's scope.
+- Evaluate additional recognition engines and services for a future paid cloud
+  offering. That decision does not change this effort's open-source local
+  implementation or its dependency requirements.
 
 ## Implementation boundaries
 
+- Use open-source recognition, geometry analysis, and similarity components in
+  every deployment mode for this effort. Dependencies must have licenses
+  compatible with AgentCAD's distribution and intended use. Any bundled or
+  required model assets must also permit that use; source-available or
+  noncommercial-only research releases do not satisfy this requirement.
+  After installing the required open-source packages and model assets, the
+  local implementation must run without a proprietary SDK, license server,
+  or paid hosted inference endpoint.
 - Build a versioned, rebuildable search index from normalized geometry. The
   storage format is an engineering choice; a per-version JSON index searched
   in memory is sufficient to begin. Measure larger assemblies before moving
@@ -455,6 +472,10 @@ can be shown together or inspected separately.
     and recognition coverage. Explicit timeout/background responses identify
     unfinished work and provide a working continuation. Repeated inspection
     or search of unchanged geometry reuses the recorded recognition results.
+13. The full local inspection workflow, including named-feature recognition
+    and similarity, runs using only the required open-source components and
+    model assets. Verify dependency and model licenses and demonstrate local
+    execution without proprietary SDKs, license servers, or paid services.
 
 ## Delivery milestones
 
@@ -466,9 +487,9 @@ can be shown together or inspected separately.
    and CLI/MCP parity across local, cloud, and remote execution.
 4. Add part and feature similarity ranking with query-specific evidence.
    Deliver both measured-property retrieval and aligned shape comparison.
-5. Deliver named design-feature recognition: assess available technology,
-   implement the strongest validated approach, and integrate recognized
-   features into reports, IDs, images, search, and edit selection. Geometric
+5. Deliver named design-feature recognition: assess available open-source
+   technology, implement the strongest validated approach, and integrate
+   recognized features into reports, IDs, images, search, and edit selection. Geometric
    grouping establishes the foundation for this required milestone.
 6. Run all acceptance fixtures and context/latency evaluation; refine sample
    selection, ranking, and budgets from observed agent behavior.
