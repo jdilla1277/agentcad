@@ -276,10 +276,13 @@ index revisions, ranking method and budget, ordered results, and coverage.
   including validation, recognition, default image rendering, and artifact
   delivery. Recognition-only timings are not an end-to-end time guarantee.
 - Define the supported input-size envelope and reference local hardware in
-  milestone 1, including faces, occurrences, file size, memory, and cold/warm
-  end-to-end latency limits. Test the complete-report default against these
-  limits early. A missed limit requires an explicit product decision about
-  optimization, the supported envelope, or response budgets; it does not
+  milestone 1, including faces, occurrences, file size, and memory. Separate
+  measured spike timings from projected complete-pipeline costs and identify
+  unmeasured stages. Set numeric cold/warm gates for the first useful release
+  before evaluating it; freeze full-report gates before milestone 4 evaluation.
+  Measure the integrated pipeline as stages become available. A missed limit
+  requires an explicit product decision about optimization, the supported
+  envelope, or response budgets; it does not
   silently change the agreed default to partial/background delivery.
 
 ### I3.3. Context and image budgets
@@ -332,6 +335,27 @@ index revisions, ranking method and budget, ordered results, and coverage.
   committed-core/artifact-status boundary and implement recovery for these
   operations without introducing a general-purpose scheduling product.
 
+### I3.5. Retention and storage limits
+
+- Apply configurable age and byte limits to derived search manifests, reports,
+  and images. Choose documented defaults before their first release. Return
+  retention state and expiry information with artifact/snapshot references;
+  distinguish an expiry deadline from earlier eviction under byte pressure.
+- Keep source/baseline geometry, the durable geometry manifest, and issued-ID
+  memberships outside derived-cache eviction. Cleanup cannot permit ID reuse
+  or retargeting. Expired payloads return an explicit unavailable/stale error
+  and retrieval/restart action; regeneration never substitutes new evidence
+  for the old immutable artifact.
+- Active jobs protect the checkpoints and artifacts needed to finish or resume;
+  these bytes count toward the quota. If space cannot be reclaimed safely,
+  stop with an explicit resource-limit status and a resume action instead of
+  deleting protected state or growing without bound. After the job stops,
+  advertise which outputs remain protected and which are evictable.
+- Protect an in-progress page/artifact read from concurrent cleanup. An idle
+  cursor does not pin an entire snapshot indefinitely: retained pages remain
+  immutable, while evicted snapshots fail explicitly on the next request.
+  Use the existing local artifact store; no separate storage service is needed.
+
 ### I4. Editable starting point
 
 - build123d is the reference editing backend for this effort and the first
@@ -356,9 +380,10 @@ index revisions, ranking method and budget, ordered results, and coverage.
   pockets, bosses, and fillets. Evaluate additional feature types and
   recognition approaches to deliver the strongest reliable inspection that
   available open-source technology supports within this effort's format and
-  deployment scope. Milestone 1 assesses available capabilities and methods
-  before the report and similarity contracts are finalized. Milestones 3 and
-  4 deliver feature families through the complete workflow.
+  deployment scope. Milestone 1 probes representative recognition feasibility;
+  the broader family assessment has its own fixed deadline and does not block
+  the first import-to-edit release. Milestones 3.2 and 4 deliver feature
+  families through the complete workflow.
 - Compare available open-source geometric, connectivity-based, and learned
   recognition approaches against the same annotated imported models. Select
   methods using measured recognition quality, coverage, usefulness to an
@@ -375,17 +400,27 @@ index revisions, ranking method and budget, ordered results, and coverage.
 - Expose recognized feature types and measurements in the default report,
   structured search filters, similarity ranking, and inspection records.
   Underlying faces and edges remain available for verification and selection.
-- Report recognition coverage and uncertainty. Preserve measured geometric
-  groups when a design-feature label cannot be established reliably. Track
-  missed and unrecognized regions explicitly; an unknown label does not imply
-  the absence of a feature.
+- Report observable analysis coverage: families/configuration run, supported
+  input cases, and analyzed, skipped, failed, and unclassified regions. Define
+  each denominator and unit, such as analyzed faces out of the scoped face
+  inventory; return unknown when a denominator cannot be established. Preserve
+  measured groups when a design-feature label cannot be established reliably.
+- Runtime analysis completion is not recognition recall. Analyzing every face
+  does not establish that every feature was found, and an unlabeled face is
+  not itself a missed feature. Reserve missed-feature counts and recall for
+  annotated evaluation with ground truth. A zero-result feature query says no
+  recognized matches and reports analysis coverage; it does not prove physical
+  absence.
 - Completion requires demonstrated recognition on real imported models,
   integration into the agent workflow, and documented technical limits.
   Recognition does not claim to recover the original source feature tree.
-- Time-box the initial feasibility assessment with a recorded effort limit
-  and end date. It must produce a finite feature/input matrix, definitions of
-  each feature type, annotated development and held-out fixtures, numeric
-  per-type quality and membership gates, and local resource/license findings.
+- Record a fixed duration/end date for the initial spike before it starts and
+  a separate deadline for the broader required-family assessment. The latter
+  produces a finite feature/input matrix, feature definitions, annotated
+  development and held-out fixtures, per-type quality/membership gates, and
+  local resource/license findings. Freeze each family's numeric gates before
+  evaluating its implementation. Do not require full-family production
+  evidence before the first useful release.
 - Required feature types remain completion gates. If a type misses its gate,
   evaluate another open-source approach or improve the implementation. If the
   gate remains infeasible, bring the evidence to an explicit product scope
@@ -433,14 +468,21 @@ index revisions, ranking method and budget, ordered results, and coverage.
   evidence for each ranked result. Evaluate candidate selection and final
   ranking together so early filtering does not hide the useful shape matches.
 - Bound aligned geometry comparison by explicit attempted-comparison and
-  elapsed-time budgets established in milestone 1, including a per-comparison
-  limit. Return eligible, evaluated, unscored, and failed counts. Evaluated
-  means successfully shape-compared, failed means attempted but unsuccessful,
-  and unscored means not attempted; these three counts sum to eligible count.
+  elapsed-time budgets frozen before milestone 5 evaluation, including a
+  per-comparison limit. Return eligible, evaluated, unscored, and failed counts.
+  Evaluated means successfully shape-compared, failed means attempted but
+  unsuccessful, and unscored means not attempted; these three counts sum to
+  eligible count.
   Set `ranking_complete` only when no eligible candidates remain unscored or
   failed. A shortlist ranking is approximate relative to the full candidate
   set and must be labeled accordingly. Never represent unevaluated candidates
   as having received actual shape comparison.
+- Pin deterministic candidate traversal, comparison configuration, and score
+  tie-breaking. A wall-time stop reports partial coverage and its stop reason;
+  different machines may compare different subsets before that deadline.
+  Exact result parity applies to replay of a retained snapshot or comparison
+  of the same successfully evaluated candidate set with the same geometry and
+  configuration. Independent time-limited runs may have different subsets.
 - Offer explicit exhaustive comparison through the same wait/background job
   contract when the caller needs ordering over every eligible candidate. A
   completed exhaustive ranking accounts for every candidate and discloses
@@ -464,30 +506,40 @@ index revisions, ranking method and budget, ordered results, and coverage.
   Include a search snapshot ID, analysis/index revisions, ranking mode,
   coverage counts, and the applied text/image/work budgets.
 - Return the first 10 results by default, each with ID, parent part, hard
-  dimensions, location, rank evidence, code selector when applicable, and a
-  path to a highlighted four-view image.
+  dimensions, location, rank evidence and code selector when applicable, and
+  a path to a highlighted four-view image.
 - Include up to 10 first-page images in the agent response by default, subject
   to explicit image-budget controls. Deduplicate identical views. The agent
   can request fewer results, fewer images, or no images.
 - Save the complete hard-filter candidate manifest as an artifact and return
   its reference. Distinguish this inventory from the shape-ranked result set:
-  include ranking/evaluation state for every candidate. The default first
-  page contains compared candidates ordered by the stated ranking method.
+  include ranking/evaluation state for every similarity candidate. For
+  similarity queries, the default first page contains successfully compared
+  candidates ordered by the stated ranking method.
   Unscored candidates remain discoverable through the manifest and exhaustive
   continuation, without fabricated scores. Large manifests remain references.
+- Exact-filter queries without a similarity reference perform zero shape
+  comparisons. Return matching records in deterministic public-ID order with
+  ordinary match counts and pagination. Set ranking mode to `not_applicable`
+  and comparison counts/`ranking_complete` to null; they do not describe this
+  query. Report filter coverage separately, including pending/partial status.
 - Bind pagination to an immutable query/geometry/analysis/index/ranking
   snapshot with deterministic tie-breaking by public ID. Completing more
   comparisons or re-analyzing geometry creates a new snapshot; it does not
   reorder an existing cursor. Expired snapshots return an explicit error and
-  restart action. Any result's inspection and four-view image remain
-  retrievable by their pinned identity/revision.
+  restart action. Retrieve inspection and images by pinned identity/revision
+  while retained; expired payloads follow I3.5 rather than substituting a
+  newer report or image.
 - Grouped results expose member topology IDs. Highlighting, measurements,
   search records, and edit selectors refer to the same baseline entities.
 
 ### S4. CLI, MCP, and execution-mode parity
 
 - CLI and MCP accept the same query fields and produce the same structured
-  result fields, counts, ID scopes, artifact paths, and error meanings.
+  result fields, ID scopes, artifact references, and error meanings. Exact
+  queries and retained snapshot replays have equivalent counts and ordering.
+  Fresh similarity runs follow S2's evaluated-set parity rule; wall-time stops
+  may produce different subsets and must disclose partial coverage.
 - Image transport may differ: the CLI returns local paths or retrievable
   artifact references; MCP may also attach images. Both allow the agent to
   retrieve the same images and full manifests.
@@ -524,7 +576,8 @@ machine-readable request should support the following shape:
 ```
 
 The comparison count above is an illustrative caller limit, not a fixed
-product default. Milestone 1 sets the default work budget from measurements.
+product default. Freeze default work budgets from measurements before
+milestone 5 evaluation.
 The response pins a search snapshot and returns `eligible_count`,
 `evaluated_count`, `unscored_count`, `failed_count`, and `ranking_complete` so
 the caller can distinguish a complete inventory from exhaustive shape ranking.
@@ -610,10 +663,13 @@ can be shown together or inspected separately.
 
 ### Evaluation setup
 
-- Milestone 1 creates a versioned gate registry with concrete numeric
-  thresholds, fixture identities, reference hardware/software, supported
-  input-size envelopes, and measurement methods. Subsequent milestones cannot
+- Milestone 1 creates a versioned gate registry, measurement methods, reference
+  hardware/input envelope, and numeric gates needed for milestone 2. Add and
+  freeze each later milestone's numeric thresholds, fixtures, and relevant
+  configuration before evaluating that implementation. Milestones cannot
   pass with unset thresholds or thresholds selected after held-out evaluation.
+  Full-report production measurements and every later family/ranking gate do
+  not block the first import-to-edit release.
 - Include per-feature precision/recall, dimensional tolerances, face/edge
   membership accuracy, candidate recall, top-10 similarity relevance, peak
   memory, index-build time, cold/warm report latency, warm query latency, and
@@ -668,20 +724,27 @@ can be shown together or inspected separately.
    near matches, unrelated geometry, and different shapes with matching
    dimensions or volume. Both measured properties and aligned geometry
    comparison contribute to the ranking. Ranking explanations identify the
-   measured similarities and actual shape differences. Establish a top-10
-   relevance target and candidate-recall gate in milestone 1.
+   measured similarities and actual shape differences. Freeze a top-10
+   relevance target and candidate-recall gate before milestone 5 evaluation.
    Bounded ranking reports eligible/evaluated/unscored/failed counts, discloses
    approximation, and stays within its work budget. Exhaustive mode accounts
    for every candidate and comparison failure.
-6. With sufficient compared candidates and response budget, search returns
-   ten records and images by default, plus the complete candidate manifest
-   and a working next page. Lower budgets report omissions explicitly.
+6. With sufficient matches and response budget, exact queries return ten
+   records and images by default, plus the complete candidate manifest and a
+   working next page. A fixture with more than ten exact matches and no
+   similarity reference retrieves all pages with zero shape comparisons and
+   ranking fields marked not applicable. Similarity queries use successfully
+   compared candidates for their ranked pages. Lower budgets report omissions.
    Pagination is deterministic and pinned to a snapshot, including while a
    newer analysis or exhaustive ranking becomes available. Image-free mode
-   returns the same geometry matches for the same query/work budget.
-7. Equivalent CLI and MCP requests return equivalent IDs, measurements,
-   counts, ordering, and artifact references. Neither route silently drops an
-   unsupported filter.
+   returns the same matches when replaying that snapshot; separate time-limited
+   executions may have different evaluated sets.
+7. Equivalent CLI and MCP exact requests and retained snapshot replays return
+   equivalent IDs, measurements, counts, ordering, and artifacts. Fresh
+   similarity runs have exact parity for the same evaluated candidate set and
+   configuration. Inject a slow comparison to prove a wall-time stop discloses
+   partial coverage rather than promising the same subset across machines.
+   Neither route silently drops an unsupported filter.
    The build123d scaffold imports, looks up an ID, selects the intended entity
    or occurrence, and saves an edited version. CadQuery reports the unsupported
    typed-ID editing combination without silently changing the runtime.
@@ -698,6 +761,10 @@ can be shown together or inspected separately.
     of face/edge membership separately for each type. Set per-type acceptance
     targets before evaluating the implementation; document unsupported cases
     and the technical evidence for those limits.
+    On an unfamiliar model, runtime coverage uses stated observable denominators
+    and unknown values; benchmark recall is reported separately. A fixture with
+    a real feature missed by the recognizer returns zero recognized matches
+    after completed analysis without claiming the feature is absent.
 11. In an agent workflow, a recognized feature can be identified in the default
     report, retrieved by its ID, filtered and ranked in search, rendered with
     every member highlighted, and selected in the edit scaffold. The complete
@@ -725,13 +792,19 @@ can be shown together or inspected separately.
     unsampled target and a repeated occurrence. Record tool calls and context
     consumed as supporting measurements. These evaluation checks do not add
     automatic edit-preservation enforcement to the product scope.
+16. Issue many queries/images under a small age/byte quota. Cleanup keeps
+    retained snapshots consistently pageable and makes expired cursors and
+    artifacts return the documented error/restart action. Protect active reads
+    and required job checkpoints, and stop with a resource-limit status if
+    protected bytes prevent progress. Durable geometry and issued IDs survive;
+    no number is reused or reference silently retargeted.
 
 ## Delivery milestones
 
 Each milestone has its own entry criteria, visible demonstration, fixtures,
 pass/fail gates, and release decision. Apply relevant regression and agent
-workflow checks when each slice lands. The gate registry established in
-milestone 1 supplies the concrete performance and quality thresholds.
+workflow checks when each slice lands. The gate registry starts in milestone 1;
+each slice's performance and quality thresholds are frozen before evaluation.
 
 Intermediate releases advertise their supported stages and feature families.
 Before recognition ships, report `recognition_not_available`, not an empty
@@ -743,24 +816,30 @@ required family and the final workflow gates pass.
 
 - **Entry:** agreed product scope, open-source constraint, and build123d
   editing backend.
-- **Demonstration:** a bounded recognition assessment and current-workflow
-  baseline; prototype recognized records with member evidence and measured
-  local costs. Define occurrence identity, immutable revisions, job recovery,
-  budget fields, and search coverage before consumers depend on the schema.
-- **Fixtures:** annotated examples for every required feature family, a nested
-  repeated-component assembly, ordinary real parts, and a high-face-count
-  model. Reserve separate held-out models and targeting tasks.
-- **Pass/fail:** publish the finite feature/input matrix, license and model
-  asset findings, reference hardware/software, effort limit, and numeric
-  quality, membership, latency, memory, ranking, and agent-value gates. Test
-  cold/warm complete-report costs, not recognition alone. No unset gates.
-- **Release decision:** proceed with the demonstrated contracts and supported
-  envelope, or resolve an evidenced feasibility miss explicitly. Recognition
-  remains required for completion.
+- **Demonstration:** a spike with a fixed duration/end date recorded before
+  work begins. Probe source assembly/occurrence mapping, ID selection after
+  normalized reload in build123d, and one representative recognition family
+  with member evidence and local resource/license findings. Record today's
+  workflow baseline and outline revision/job/budget/search contracts.
+- **Fixtures:** a real one-part model, nested assembly with rotated repeats,
+  representative annotated recognition examples, and a high-face-count model.
+  Reserve held-out tasks and plan the broader required-family fixture matrix.
+- **Pass/fail:** milestone 2 is blocked only by unresolved baseline/occurrence/
+  reload-selection feasibility, incompatible required dependencies, or missing
+  milestone 2 contracts and numeric resource/agent-value gates. Label measured
+  spike results separately from projected full-pipeline costs and unmeasured
+  stages. Production-equivalent full reports, all-family recognition quality,
+  and final similarity budgets are not exit requirements.
+- **Release decision:** at the fixed deadline, proceed to milestone 2 when its
+  blocking evidence passes, or resolve the specific blocker explicitly. The
+  broader family assessment continues against its own recorded deadline and
+  freezes per-family gates before evaluation. It does not delay the first
+  slice; named-feature completion remains mandatory.
 
 ### Milestone 2. First useful import-to-edit release
 
-- **Entry:** milestone 1 contracts and gates established.
+- **Entry:** milestone 1 blocking evidence passes and milestone 2 contracts
+  and numeric gates are frozen.
 - **Demonstration:** import a representative STEP, receive quality/dimensions
   and an overall labeled view, retrieve a face/edge by ID, and select and edit
   it through the build123d scaffold after normalized reload. Establish the
@@ -779,25 +858,44 @@ required family and the final workflow gates pass.
 
 ### Milestone 3. Exact filters and one named feature family
 
-- **Entry:** milestone 2 workflow passes; the first family and its acceptance
-  thresholds are selected from the feasibility assessment.
-- **Demonstration:** recognize one family end to end through report, ID lookup,
-  exact filter, highlighted member faces/edges, and build123d edit selection.
-  Deliver exact structured filters, complete candidate manifests, and pinned
-  pagination across CLI/MCP and remote execution.
-- **Fixtures:** annotated positives, near misses, split surfaces, and repeated
-  occurrences for that family; exact-filter sets and multi-page results.
-- **Pass/fail:** meet the family's quality/dimension/membership gates; all
-  exact-filter expected sets and snapshot pages pass. Demonstrate job
-  interruption/restart/resume, concurrent callers, cancellation, lost-response
-  retries, and immutable feature identity after configuration changes. Meet
-  applicable resource and agent-value gates.
-- **Release decision:** ship the validated family and filters with explicit
-  coverage for supported and not-yet-supported families.
+Milestones 3.1 and 3.2 are separately releasable; both are required to finish
+milestone 3. Recognition quality and recovery do not block raw-geometry filters.
+
+#### Milestone 3.1. Raw-geometry filters and pagination
+
+- **Entry:** milestone 2 passes; exact-filter and retention gates are frozen.
+- **Demonstration:** filter parts, occurrences, faces, and edges using measured
+  properties and relationships. Return complete candidate manifests and pinned
+  pagination across CLI/MCP and remote execution without shape comparison.
+- **Fixtures:** expected exact-match sets, more than ten matches, repeated
+  instances, and small-quota retention/performance cases.
+- **Pass/fail:** expected sets/counts and all pages pass, ranking fields are
+  not applicable, and shape-comparison calls stay at zero. Verify parity,
+  remote retrieval, quota cleanup, stable retained pages, and explicit expiry.
+  Meet applicable resource and agent-targeting gates.
+- **Release decision:** ship exact filters independently with accurate
+  recognition capability status, even if milestone 3.2 is still in progress.
+
+#### Milestone 3.2. First recognized family through the workflow
+
+- **Entry:** milestone 3.1 passes; choose the first family from the broader
+  assessment and freeze its numeric quality/dimension/membership gates.
+- **Demonstration:** recognize that family through report, ID lookup, exact
+  filter, highlighted members, and build123d edit selection using the existing
+  search path. Expose runtime coverage separately from benchmark recall.
+- **Fixtures:** annotated positives, near misses, split surfaces, repeated
+  instances, and a real feature missed despite completed analysis.
+- **Pass/fail:** meet family gates and workflow checks. Prove recognition
+  interruption/restart/resume, concurrency, cancellation, lost-response retry,
+  and immutable membership after configuration changes. A zero recognized
+  result cannot claim physical absence. Meet resource and agent-value gates.
+- **Release decision:** ship the validated family with explicit coverage and
+  finish milestone 3; remaining required families continue in milestone 4.
 
 ### Milestone 4. Complete required recognition and report
 
-- **Entry:** a named family and its complete workflow pass milestone 3.
+- **Entry:** milestone 3.2 passes; remaining family and full-report numeric
+  gates are frozen before evaluation.
 - **Demonstration:** deliver remaining required families in measured batches,
   preserving raw topology and conservative groups. Connect each family to
   reports, retrieval, filters, images, and editable member selection. Deliver
@@ -816,7 +914,8 @@ required family and the final workflow gates pass.
 ### Milestone 5. Measured and shape-based similarity
 
 - **Entry:** stable recognized-feature records and exact queries from
-  milestone 4; part definitions and occurrences are already established.
+  milestone 4, with similarity quality/resource/work-budget gates frozen;
+  part definitions and occurrences are already established.
 - **Demonstration:** use a part, face, or feature as an example, narrow by
   filters, and retrieve explained results using measured properties followed
   by aligned shape comparison. Expose bounded ranking and explicit exhaustive
@@ -826,7 +925,8 @@ required family and the final workflow gates pass.
 - **Pass/fail:** meet predeclared candidate-recall and top-10 relevance gates
   within resource budgets. Coverage counts reconcile; approximation and failed
   comparisons are explicit; old cursors never reorder when analysis or ranking
-  progresses. Prove CLI/MCP parity and remote result/image retrieval.
+  progresses. Prove snapshot/evaluated-set parity, explicit partial coverage
+  under injected slow comparisons, and remote result/image retrieval.
 - **Release decision:** ship similarity with its measured coverage and bounded
   work contract.
 
