@@ -23,6 +23,7 @@ Why no version-mismatch handshake:
     is gated on it.
 """
 
+import contextvars
 import hashlib
 import json
 import os
@@ -113,6 +114,49 @@ class DaemonProtocolError(Exception):
     """A peer sent a frame that violates the daemon protocol contract."""
 
 
+# These describe the daemon process itself: anything named ``AGENTCAD_DAEMON*``
+# plus the socket and pid paths. Every other ``AGENTCAD_*`` variable is a
+# client setting (viewer home, timeouts, logging) and travels with each
+# request, because the daemon's own environment is whatever the process that
+# happened to spawn it had.
+_DAEMON_PROCESS_ENV_PREFIX = "AGENTCAD_DAEMON"
+_DAEMON_PROCESS_ENV = frozenset({"AGENTCAD_SOCKET_PATH", "AGENTCAD_PID_PATH"})
+
+
+def _is_client_env_key(key):
+    return (
+        key.startswith("AGENTCAD_")
+        and not key.startswith(_DAEMON_PROCESS_ENV_PREFIX)
+        and key not in _DAEMON_PROCESS_ENV
+    )
+
+
+def client_request_env(environ=None):
+    """The caller's ``AGENTCAD_*`` settings to send with a ``run`` request."""
+    environ = os.environ if environ is None else environ
+    return {k: v for k, v in environ.items() if _is_client_env_key(k)}
+
+
+def _request_env_overrides(request_env):
+    """Environment changes for one request, in ``CliRunner.invoke`` form.
+
+    A request that carries ``env`` replaces every client-scoped
+    ``AGENTCAD_*`` variable: values it sends are set (an empty string stays
+    empty), and ones it doesn't send are unset (``None``). Requests without
+    ``env`` (older clients) keep the daemon's values.
+    """
+    overrides = {}
+    if isinstance(request_env, dict):
+        overrides = {k: None for k in os.environ if _is_client_env_key(k)}
+        overrides.update(
+            (k, v) for k, v in request_env.items()
+            if _is_client_env_key(k) and isinstance(v, str)
+        )
+    overrides["AGENTCAD_DAEMON"] = "1"
+    overrides["_AGENTCAD_DAEMON_CHILD"] = "1"
+    return overrides
+
+
 def encode_message(msg):
     """Encode a dict as length-prefixed JSON (4-byte big-endian uint32 + UTF-8)."""
     payload = json.dumps(msg).encode("utf-8")
@@ -192,24 +236,34 @@ class DaemonServer:
 
         In production this only runs inside a forked child (see ``_run_in_child``);
         the child exits after sending the response so cwd/env mutations don't
-        leak. The in-process path (tests) restores cwd and the recursion-guard
-        env var explicitly.
+        leak. The in-process path (tests) restores cwd explicitly;
+        ``CliRunner.invoke(env=...)`` restores the environment.
+
+        A request runs as its client: in the client's ``cwd``, with the
+        client's ``AGENTCAD_*`` settings from ``env`` when present, and with
+        no output state inherited from the command that spawned the daemon.
         """
         from click.testing import CliRunner
         from agentcad.cli import cli
 
         cwd = request.get("cwd")
         argv = request.get("argv", [])
-        original_cwd = os.getcwd()
-        original_env = os.environ.get("AGENTCAD_DAEMON")
-        original_child_env = os.environ.get("_AGENTCAD_DAEMON_CHILD")
-        os.environ["AGENTCAD_DAEMON"] = "1"
-        os.environ["_AGENTCAD_DAEMON_CHILD"] = "1"
+        try:
+            original_cwd = os.getcwd()
+        except OSError:
+            # The directory this process started in was deleted. Requests
+            # carry their own cwd, so that must not take the daemon down.
+            original_cwd = None
+        env = _request_env_overrides(request.get("env"))
         try:
             if cwd:
                 os.chdir(cwd)
             runner = CliRunner()
-            result = runner.invoke(cli, argv)
+            # A fresh context: no per-invocation state (such as the output
+            # formatter of the command that spawned this daemon) carries
+            # into this request. That includes the usage-error JSON the CLI
+            # echoes after the command's own output state has been reset.
+            result = contextvars.Context().run(runner.invoke, cli, argv, env=env)
             output = result.stdout
             if result.exit_code != 0 and not output.strip():
                 command = argv[0] if argv else "unknown"
@@ -251,15 +305,8 @@ class DaemonServer:
                 "version": self._version,
             }
         finally:
-            os.chdir(original_cwd)
-            if original_env is None:
-                os.environ.pop("AGENTCAD_DAEMON", None)
-            else:
-                os.environ["AGENTCAD_DAEMON"] = original_env
-            if original_child_env is None:
-                os.environ.pop("_AGENTCAD_DAEMON_CHILD", None)
-            else:
-                os.environ["_AGENTCAD_DAEMON_CHILD"] = original_child_env
+            if original_cwd is not None:
+                os.chdir(original_cwd)
 
     def serve(self):
         """Run the accept-and-fork loop until ``shutdown`` arrives."""
@@ -1261,6 +1308,10 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
         socket_path = _default_socket_path()
     if pid_path is None:
         pid_path = _default_pid_path()
+    # The daemon leaves the spawning project's directory (below), so pin
+    # its own files first.
+    socket_path = os.path.abspath(socket_path)
+    pid_path = os.path.abspath(pid_path)
 
     status = daemon_status(socket_path=socket_path, pid_path=pid_path)
     if status.get("running"):
@@ -1333,6 +1384,13 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     if devnull > 2:
         os.close(devnull)
 
+    # This process was copied out of a running command in some project.
+    # Don't keep that project's directory as the daemon's home: every
+    # request carries its own cwd. (Each request also runs in a fresh
+    # context, see ``_handle_run``, so the spawning command's
+    # per-invocation state stays behind.)
+    _leave_start_directory()
+
     try:
         server = DaemonServer(socket_path=socket_path, pid_path=pid_path)
         server.serve()
@@ -1343,6 +1401,19 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
 
 
 # ---------- __main__ ----------
+
+def _leave_start_directory():
+    """Move the daemon out of the directory it was started from.
+
+    Requests carry their own cwd, so the starting directory (some project,
+    possibly a temporary one) has no meaning for the daemon. Callers make
+    socket and pid paths absolute first.
+    """
+    try:
+        os.chdir("/")
+    except OSError:
+        pass
+
 
 def _warm_step_reader():
     """Pay the STEP reader's one-time initialization in the daemon parent.
@@ -1378,6 +1449,12 @@ def _main():
     parser.add_argument("--socket", default=None)
     parser.add_argument("--pid", default=None)
     args = parser.parse_args()
+    # Pin the daemon's own files before leaving the starting directory, so a
+    # relative --socket/--pid or AGENTCAD_SOCKET_PATH/AGENTCAD_PID_PATH keeps
+    # meaning what the starting command meant.
+    socket_path = os.path.abspath(args.socket or _default_socket_path())
+    pid_path = os.path.abspath(args.pid or _default_pid_path())
+    _leave_start_directory()
 
     # Eager imports — warm up all expensive modules in the parent so each
     # forked child inherits OCP in memory via copy-on-write. build123d is
@@ -1394,8 +1471,8 @@ def _main():
     _warm_step_reader()
 
     server = DaemonServer(
-        socket_path=args.socket,
-        pid_path=args.pid,
+        socket_path=socket_path,
+        pid_path=pid_path,
     )
     server.serve()
 
