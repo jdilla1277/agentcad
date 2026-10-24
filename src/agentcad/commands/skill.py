@@ -12,7 +12,7 @@ from pathlib import Path
 import click
 from agentcad.project import get_project, project_options
 
-from agentcad.guide import effective_runtime, guide_body, guide_fingerprint
+from agentcad.guide import effective_runtime, guide_body, guide_fingerprint, read_text_file
 
 
 SKILL_RELATIVE_PATH = Path(".claude") / "skills" / "agentcad" / "SKILL.md"
@@ -55,7 +55,7 @@ def install_skill(cwd: Path, runtime: str) -> dict:
     """Write the skill file for ``runtime`` and return install evidence."""
     skill_path = cwd / SKILL_RELATIVE_PATH
     skill_path.parent.mkdir(parents=True, exist_ok=True)
-    skill_path.write_text(_skill_content(runtime))
+    skill_path.write_text(_skill_content(runtime), encoding="utf-8")
     return {
         "runtime": runtime,
         "path": str(skill_path),
@@ -69,7 +69,7 @@ def skill_status(cwd: Path, runtime: str) -> dict:
     if not skill_path.exists():
         return {"state": "missing", "path": str(skill_path)}
     try:
-        installed = skill_path.read_text()
+        installed = read_text_file(skill_path)
     except OSError:
         return {"state": "missing", "path": str(skill_path)}
     state = "current" if installed == _skill_content(runtime) else "stale"

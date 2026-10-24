@@ -12,6 +12,7 @@ content hash, not a manually bumped version, so it can never be forgotten.
 """
 
 import hashlib
+from pathlib import Path
 
 from agentcad.runners import dispatch
 
@@ -636,3 +637,17 @@ def guide_fingerprint(runtime: str) -> str:
     """Short content hash identifying this package's rendered guide."""
     digest = hashlib.sha256(guide_body(runtime).encode("utf-8")).hexdigest()
     return digest[:12]
+
+
+def read_text_file(path: Path) -> str:
+    """Read a managed text file as UTF-8, falling back to cp1252.
+
+    Earlier releases wrote these files with the platform default encoding, so
+    copies installed on Windows may be cp1252 and invalid UTF-8. Decoding them
+    as cp1252 recovers the original characters so a reinstall can rewrite the
+    file as UTF-8.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return Path(path).read_text(encoding="cp1252", errors="replace")
