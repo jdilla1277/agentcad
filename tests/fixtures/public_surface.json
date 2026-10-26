@@ -1,6 +1,7 @@
 {
   "commands": [
     "check-spec",
+    "cloud",
     "context",
     "diff",
     "docs",
@@ -26,6 +27,7 @@
     "build123d",
     "cadquery",
     "check-spec",
+    "cloud",
     "commands",
     "daemon",
     "editing",

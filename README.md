@@ -294,6 +294,41 @@ Add to `.mcp.json`:
 {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
 ```
 
+### Cloud projects
+
+If your host has issued an AgentCAD API address and key pair, the same local
+MCP server also offers `cloud_run`, `cloud_import`, `cloud_measure`,
+`cloud_inspect`, `cloud_check_spec`, `cloud_render`, and `cloud_diff`. Project,
+job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
+`AGENTCAD_KEY_ID`, and `AGENTCAD_KEY_SECRET` in the server process environment.
+Keep credentials in a password manager, outside project files and agent prompts.
+
+The bounded CLI adapter is available with `pip install 'agentcad[cloud]'`
+(also included in `agentcad[mcp]`):
+
+```bash
+agentcad cloud projects create --name Bracket
+agentcad cloud run PROJECT examples/cloud/bracket.py --label first
+agentcad cloud job PROJECT JOB --wait
+agentcad cloud measure PROJECT 1
+agentcad cloud inspect PROJECT 1 --summary
+agentcad cloud check-spec PROJECT 1 examples/cloud/spec.json
+agentcad cloud render PROJECT 1
+agentcad cloud download PROJECT iso.png --job RENDER_JOB --kind render
+```
+
+Replace `PROJECT` and `JOB` with the returned IDs. Submissions return immediately;
+poll the same job until it completes. Keep its `idempotency_key` for an identical
+retry after a lost response. Upload an edited script with a new key and label to
+create another version, then compare with `agentcad cloud diff PROJECT 1 2`.
+
+Only the named script, STEP, or spec file is uploaded. No local project is needed.
+Downloads require an explicit destination and preserve existing files by default.
+Job completion, geometry validity, spec verdicts, and human approval remain
+separate. Run `agentcad docs cloud` for all commands, limits, and MCP tool names.
+Cloud access uses your host's installed CAD engine and credentials; it is not a
+hosted remote MCP endpoint or a general remote mode for local commands.
+
 ## Requirements
 
 - Python 3.10–3.12 (OpenCascade bindings do not support 3.13+)
