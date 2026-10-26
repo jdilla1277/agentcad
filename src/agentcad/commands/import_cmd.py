@@ -426,7 +426,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
                     get_project().response_path(version_dir), file_path.name, label, project_rt,
                     build_dir=str(get_project().build_root) if get_project().configured else None,
                     geometry_manifest=manifest_ok,
-                )
+                ),
+                encoding="utf-8",
             )
 
         scaffold_written, _ = _attempt_artifact(

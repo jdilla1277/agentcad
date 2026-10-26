@@ -24,7 +24,17 @@ def _json(runner, args):
     return json.loads(result.stdout)
 
 
-def test_named_assembly_import_issues_normalized_ids_and_targets_one_instance(runner, isolated_dir):
+@pytest.mark.parametrize("platform_encoding", ["utf-8", "cp1252"])
+def test_named_assembly_import_issues_normalized_ids_and_targets_one_instance(
+    runner, isolated_dir, monkeypatch, platform_encoding,
+):
+    # Exercise the Windows default even when this test runs on macOS/Linux.
+    original_write_text = Path.write_text
+
+    def platform_write_text(path, data, encoding=None, **kwargs):
+        return original_write_text(path, data, encoding=encoding or platform_encoding, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", platform_write_text)
     source = _nested_step(isolated_dir / "supplier.step", tilted=True)
     imported = _import(runner, source)
     step = Path(imported["outputs"]["step"])
@@ -63,7 +73,7 @@ def test_named_assembly_import_issues_normalized_ids_and_targets_one_instance(ru
     assert legacy["edges"][0]["id"] == 1
     assert legacy["edges"][0]["object_id"] == "edge_v1_1"
     # The generated handoff runs unmodified and uses this same checked map.
-    scaffold = (isolated_dir / "edit.py").read_text()
+    scaffold = (isolated_dir / "edit.py").read_text(encoding="utf-8")
     assert "geometry = load_geometry(" in scaffold
     assert "geometry.pick_face" in scaffold
     _json(runner, ["run", "edit.py", "--label", "unchanged", "--no-preview", "--no-view", "--no-diff"])
