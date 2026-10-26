@@ -30,8 +30,9 @@ class TestImportScaffold:
         content = scaffold.read_text()
         # Templated to the imported version's path
         assert "v1_bracket/output.step" in content
-        # Uses load_step (the Phase 2 helper), not raw cadquery.importers
-        assert "load_step(" in content
+        # Bind selection to the normalized baseline's saved identity map.
+        assert "geometry = load_geometry(" in content
+        assert "base = geometry.shape" in content
         # Establishes the positive object contract where editing starts.
         assert "build123d Part" in content
         assert "base.solids()" in content
@@ -127,7 +128,7 @@ class TestImportScaffoldRuntimeAware:
         runner.invoke(cli, ["import", str(step)])
         scaffold = (isolated_dir / "edit.py").read_text()
         assert "from build123d" in scaffold
-        assert "load_step(" in scaffold
+        assert "geometry = load_geometry(" in scaffold
 
     def test_cq_scaffold_runs_successfully_unedited(self, runner, isolated_dir):
         """The cq scaffold must produce a valid v2 without any agent edits,

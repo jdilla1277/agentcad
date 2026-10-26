@@ -35,8 +35,8 @@ class VersionConflictError(RuntimeError):
         )
 
 
-def atomic_write_json(path: Path, payload: dict) -> None:
-    """Replace *path* with complete JSON, never a partially written document."""
+def atomic_write_json(path: Path, payload: dict, *, overwrite: bool = True) -> None:
+    """Publish complete JSON, optionally refusing to replace an existing file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
@@ -52,7 +52,13 @@ def atomic_write_json(path: Path, payload: dict) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+        if overwrite:
+            os.replace(temp_path, path)
+        else:
+            # Linking the completed file publishes it atomically and fails if
+            # another writer has already issued this immutable document.
+            os.link(temp_path, path)
+            temp_path.unlink()
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
