@@ -243,3 +243,44 @@ def test_source_units_are_preserved_while_geometry_uses_millimeters(tmp_path):
     assert document.source_length_units == ("metre",)
     assert document.length_unit == "mm"
     assert solid_entries(document.shape)[0]["volume"] == pytest.approx(1000 * 2000 * 3000)
+
+
+@pytest.mark.parametrize("ambient_unit", ["MM", "M", "INCH"])
+def test_geometry_and_nested_placements_ignore_ambient_target_units(tmp_path, ambient_unit):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.Interface import Interface_Static
+    from OCP.STEPCAFControl import STEPCAFControl_Controller
+    from agentcad.topo_ids import solid_entries
+
+    STEPCAFControl_Controller.Init_s()
+    original = Interface_Static.CVal_s("xstep.cascade.unit")
+    try:
+        # Create known-mm inputs before changing the reader's ambient setting.
+        assert Interface_Static.SetCVal_s("xstep.cascade.unit", "MM")
+        box_path = tmp_path / "millimeters.step"
+        write_step_shape(BRepPrimAPI_MakeBox(1, 2, 3).Shape(), box_path)
+        assembly_path = _nested_step(tmp_path / "nested.step")
+        assert Interface_Static.SetCVal_s("xstep.cascade.unit", ambient_unit)
+
+        box = read_step_assembly(box_path)
+        assert box.length_unit == "mm"
+        assert box.source_length_units == ("millimetre",)
+        box_bounds = solid_entries(box.shape)[0]["bbox"]
+        for axis, expected in zip("xyz", ([0, 1], [0, 2], [0, 3])):
+            assert box_bounds[axis] == pytest.approx(expected)
+
+        assembly = read_step_assembly(assembly_path)
+        assert assembly.length_unit == "mm"
+        leaves = _leaves(assembly)
+        assert len(leaves) == 2
+        solids = {s["id"]: s for s in solid_entries(assembly.shape)}
+        for leaf, expected_y in zip(leaves, (50, 90)):
+            assert [row[3] for row in leaf.placement] == pytest.approx([100, expected_y, 0])
+            bounds = solids[leaf.solid_ids[0]]["bbox"]
+            for axis, expected in zip("xyz", ([80, 100], [expected_y, expected_y + 10], [0, 5])):
+                assert bounds[axis] == pytest.approx(expected)
+
+        # The reader must not reconfigure other CAD code in this process.
+        assert Interface_Static.CVal_s("xstep.cascade.unit") == ambient_unit
+    finally:
+        assert Interface_Static.SetCVal_s("xstep.cascade.unit", original)

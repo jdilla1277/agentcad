@@ -77,6 +77,10 @@ roots, malformed input, and metre-to-millimetre conversion. Both real fixtures
 retain the same measured face/edge records through the existing shape loader
 and the build123d editing loader.
 
+Millimetre geometry and nested placements are also checked with the ambient
+OCCT target unit set to millimetres, metres, and inches. The reader explicitly
+sets its document target unit and leaves that process-wide setting unchanged.
+
 For the nested assembly fixture, source records are checked against normalized
 STEP after reload, then an edge ID is used to fillet one instance in build123d.
 The other instance has zero occupied-space difference in both Boolean

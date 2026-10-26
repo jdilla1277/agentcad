@@ -84,6 +84,9 @@ def read_step_assembly(path: str | Path) -> StepAssembly:
     try:
         with silence_native_stdout():
             document = TDocStd_Document(TCollection_ExtendedString("XCAF"))
+            # CAF transfer uses the document's target unit in preference to
+            # the reader setting. This API takes metres: 0.001 m is 1 mm.
+            XCAFDoc_DocumentTool.SetLengthUnit_s(document, 0.001)
             reader = STEPCAFControl_Reader()
             reader.SetNameMode(True)
             reader.SetColorMode(False)
