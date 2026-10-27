@@ -129,6 +129,47 @@ def test_ranking_and_full_parts_inventory_are_deterministic_and_budgeted(isolate
         inspection_report(step, isolated_dir, images=False, text_budget=1)
 
 
+def test_sphere_samples_exclude_collapsed_poles_but_keep_explicit_ids(runner, isolated_dir):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeSphere
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
+    from agentcad.geometry_manifest import load_geometry
+    from agentcad.native_io import silence_native_stdout
+
+    source = isolated_dir / "sphere.step"
+    with silence_native_stdout():
+        writer = STEPControl_Writer()
+        writer.Transfer(BRepPrimAPI_MakeSphere(10).Shape(), STEPControl_AsIs)
+        assert writer.Write(str(source)) == IFSelect_RetDone
+    step, saved = _baseline(isolated_dir, source)
+    registry = step.with_name("geometry_manifest.json").read_bytes()
+    edges = [e for e in saved["entities"].values() if e["kind"] == "edge"]
+    poles = [e for e in edges if e["length"] == 0]
+    assert len(edges) == 3
+    assert len(poles) == 2
+
+    result, prepared = inspection_report(step, isolated_dir, text_budget=5000)
+    features = result["samples"]["features"]
+    assert [e["kind"] for e in features] == ["face", "edge"]
+    assert features[1]["length"] > 0
+    assert len(result["media"]) == 3  # Overall, spherical face and meridian.
+    assert result["media_summary"]["state"] == "complete"
+    assert result["counts"] == saved["counts"]
+    overall = Path(result["inventory"]["image_root"]) / result["media"][0]["png"]
+    labels = {r["id"] for r in json.loads(overall.with_suffix(".json").read_text())["annotations"]}
+    assert labels.isdisjoint(e["id"] for e in poles)
+
+    context = load_geometry(step)
+    for pole in poles:
+        looked_up = _json(runner, ["inspect", str(step), "--id", pole["id"]])
+        assert looked_up["entity"] == pole
+        assert context.pick_edge(pole["id"]).wrapped.IsSame(context.image_shape(pole["id"]))
+    cached, _ = inspection_report(step, isolated_dir, text_budget=5000)
+    assert cached == result
+    assert prepared["analysis"]["samples"] == result["samples"]
+    assert step.with_name("geometry_manifest.json").read_bytes() == registry
+
+
 def test_context_and_cached_analysis_are_reused_and_corruption_recovers(isolated_dir, monkeypatch):
     import agentcad.inspection_report as reports
     import agentcad.geometry_images as images

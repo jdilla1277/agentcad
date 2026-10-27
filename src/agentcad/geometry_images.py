@@ -11,7 +11,7 @@ import tempfile
 from agentcad.geometry_manifest import BaselineGeometry, _digest, read_manifest, record
 from agentcad.versioning import atomic_write_json
 
-IMAGE_REVISION = "geometry-image-v2"
+IMAGE_REVISION = "geometry-image-v3"
 IMAGE_SIZE = 1024
 IMAGE_VIEWS = ("iso", "top", "front", "right")
 

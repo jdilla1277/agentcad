@@ -12,7 +12,7 @@ from agentcad.geometry_manifest import BaselineGeometry, MANIFEST_NAME, _digest,
 from agentcad.inspection_samples import dimensions, select_samples
 from agentcad.versioning import atomic_write_json
 
-REPORT_REVISION = "inspection-report-v1"
+REPORT_REVISION = "inspection-report-v2"
 DEFAULT_TEXT_BUDGET = 2000
 MAX_IMAGES = 9
 

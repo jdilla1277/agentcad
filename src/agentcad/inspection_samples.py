@@ -41,7 +41,9 @@ def select_samples(saved):
     entities = list(saved["entities"].values())
     parts = [e for e in entities if e["kind"] == "part" and e["definition_kind"] == "part"]
     faces = [e for e in entities if e["kind"] == "face"]
-    edges = [e for e in entities if e["kind"] == "edge"]
+    # Collapsed edges (for example, sphere poles) have IDs but no visible curve.
+    # Keep them in the inventory and explicit lookup, not representative media.
+    edges = [e for e in entities if e["kind"] == "edge" and e["length"] > 0]
     repetitions = {e["id"]: len(saved["entities"][e["part_id"]]["occurrence_ids"])
                    for e in entities if e["kind"] == "occurrence"}
 

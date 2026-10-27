@@ -29,6 +29,11 @@ These measurements guide representative sampling; they do not prove shape
 equivalence or semantic feature recognition. Selection reasons and repetition
 counts are available in the saved analysis.
 
+Edges whose recorded length is zero are excluded from representative samples
+and overall sample labels. Remaining slots use other faces where available,
+or the bundle returns fewer samples. These edges retain their IDs in the
+complete inventory and remain available through explicit lookup.
+
 Priority is overall, then alternating part and face/edge sample rank. A sole
 part definition can reuse the overall image when its memberships cover every
 model entity. The overall sheet labels that part ID, and its sample explicitly
