@@ -180,9 +180,20 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     #    around the OCCT call and raises a clean ValueError with an
     #    agent-actionable message on empty compounds / null shapes /
     #    parser failures.
+    source_document = None
+    assembly_warning = None
     try:
         from agentcad.step_io import load_cad_shape
-        topo_shape = load_cad_shape(file_path)
+        if ext in (".step", ".stp"):
+            from agentcad.step_assembly import read_step_assembly
+            try:
+                source_document = read_step_assembly(file_path)
+                topo_shape = source_document.shape
+            except ValueError as exc:
+                assembly_warning = f"Source assembly metadata unavailable: {exc}"
+                topo_shape = load_cad_shape(file_path)
+        else:
+            topo_shape = load_cad_shape(file_path)
     except Exception as exc:
         # load_cad_shape's message is already complete (what + why + what to
         # do) — don't wrap it with another sentence that duplicates content.
@@ -281,7 +292,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     #    so we standardize on STEP regardless of input format.
     try:
         with silence_native_stdout():
-            _export_step(topo_shape, version_dir / "output.step")  # noqa: silencer wraps the writer
+            _export_step(source_document or topo_shape, version_dir / "output.step")
 
     except Exception as exc:
         shutil.rmtree(version_dir, ignore_errors=True)
@@ -345,6 +356,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
                 open_view, "Browser launch disabled with --no-view."
             ),
             "edit_scaffold": {"status": "pending"},
+            "geometry_manifest": {"status": "pending"},
         },
     }
     comparison_enabled = auto_diff and has_previous_step
@@ -358,6 +370,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         "path": f"{dir_name}/",
     }, advance_current=True)
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
+    if assembly_warning:
+        lifecycle.add_warning(assembly_warning)
     comparison_recorder = None
     if comparison_enabled:
         comparison_recorder = ComparisonPhaseRecorder(
@@ -377,6 +391,56 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             return False, None
         lifecycle.set_artifact(name, "success")
         return True, value
+
+    # Issue identities from normalized geometry after the usable core is
+    # committed, before optional rendering. A failed inventory cannot erase it.
+    from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
+
+    manifest_ok, geometry_data = _attempt_artifact(
+        "geometry_manifest",
+        lambda: create_manifest(version_dir / "output.step", version_num, source={
+            "sha256": sha256, "filename": file_path.name,
+            "length_units": list(source_document.source_length_units) if source_document else [],
+            "assembly_metadata": "preserved_source_document" if source_document else "derived_normalized_geometry",
+        }),
+    )
+    if manifest_ok:
+        lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
+        lifecycle.meta["geometry_manifest"] = geometry_summary(
+            Path(get_project().response_path(version_dir / "output.step")), geometry_data,
+        )
+        lifecycle.persist()
+
+    # 10. Edit scaffold — write `edit.py` if absent, so the agent has a
+    #     templated starting point. The scaffold must match the project's
+    #     pinned runtime (b3d uses the M60 edit helpers, cq uses the
+    #     kernel-neutral `importers.importStep` fallback documented in
+    #     `agentcad docs editing`).
+    project_rt = manifest.get("runtime") or dispatch.DEFAULT_RUNTIME
+    scaffold_path = get_project().project_root / "edit.py"
+    scaffold_written = False
+    if not scaffold_path.exists():
+        def _write_scaffold():
+            scaffold_path.write_text(
+                _edit_scaffold(
+                    get_project().response_path(version_dir), file_path.name, label, project_rt,
+                    build_dir=str(get_project().build_root) if get_project().configured else None,
+                    geometry_manifest=manifest_ok,
+                ),
+                encoding="utf-8",
+            )
+
+        scaffold_written, _ = _attempt_artifact(
+            "edit_scaffold", _write_scaffold
+        )
+        if scaffold_written:
+            lifecycle.meta["scaffold"] = "edit.py"
+            lifecycle.persist()
+    else:
+        lifecycle.set_artifact(
+            "edit_scaffold", "skipped", message="edit.py already exists."
+        )
+
 
     # 8. Visual artifacts (preview, glb, viewer).
     from agentcad.render import render_composite_4view
@@ -637,34 +701,6 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "browser", "skipped", message="Viewer artifact was unavailable."
         )
 
-    # 10. Edit scaffold — write `edit.py` if absent, so the agent has a
-    #     templated starting point. The scaffold must match the project's
-    #     pinned runtime (b3d uses the M60 edit helpers, cq uses the
-    #     kernel-neutral `importers.importStep` fallback documented in
-    #     `agentcad docs editing`).
-    project_rt = manifest.get("runtime") or dispatch.DEFAULT_RUNTIME
-    scaffold_path = get_project().project_root / "edit.py"
-    scaffold_written = False
-    if not scaffold_path.exists():
-        def _write_scaffold():
-            scaffold_path.write_text(
-                _edit_scaffold(
-                    get_project().response_path(version_dir), file_path.name, label, project_rt,
-                    build_dir=str(get_project().build_root) if get_project().configured else None,
-                )
-            )
-
-        scaffold_written, _ = _attempt_artifact(
-            "edit_scaffold", _write_scaffold
-        )
-        if scaffold_written:
-            lifecycle.meta["scaffold"] = "edit.py"
-            lifecycle.persist()
-    else:
-        lifecycle.set_artifact(
-            "edit_scaffold", "skipped", message="edit.py already exists."
-        )
-
     lifecycle.finish_pending(message="Optional artifact was not needed.")
 
     # 11. Output JSON. Mirrors committed metadata plus next_actions per the
@@ -706,6 +742,7 @@ def _edit_scaffold(
     label: str,
     runtime: str,
     build_dir: str | None = None,
+    geometry_manifest: bool = False,
 ) -> str:
     """Templated edit.py — gives the agent a working starting point.
 
@@ -718,6 +755,25 @@ def _edit_scaffold(
         source = _edit_scaffold_cadquery(version_dir, original_filename, label)
     else:
         source = _edit_scaffold_build123d(version_dir, original_filename, label)
+        if geometry_manifest:
+            version_token = Path(version_dir).name.split("_", 1)[0]
+            source = source.replace(
+                "from build123d import *",
+                "from build123d import *\nfrom agentcad.geometry_manifest import load_geometry",
+            ).replace(
+                "# load_step() returns the imported baseline as a build123d Part.",
+                "# geometry.shape returns the checked imported baseline as a build123d Part.",
+            ).replace(
+                "base = load_step(" + json.dumps(version_dir + '/output.step') + ")",
+                "geometry = load_geometry(" + json.dumps(version_dir + '/output.step') + ")\nbase = geometry.shape",
+            ).replace(
+                "# --- Edit here",
+                "# Typed IDs are bound to this baseline's geometry_manifest.json.\n"
+                "# Look up one record: agentcad inspect " + shlex.quote(version_dir + '/output.step') + f" --id face_{version_token}_1\n"
+                "# Select it with geometry.pick_face('face_v...') or geometry.pick_edge('edge_v...').\n"
+                "# Selectors address the original baseline; inspect each newly saved version.\n\n"
+                "# --- Edit here",
+            )
     if build_dir is not None:
         source = source.replace(
             "agentcad run edit.py --label my_edit",
@@ -829,13 +885,12 @@ def _find_prev_success(versions):
 
 
 def _export_step(topo_shape, output_path: Path) -> None:
-    """Re-export a TopoDS_Shape to STEP via OCCT's writer.
+    """Preserve assembly documents; wrap raw shapes in the legacy compound."""
+    from agentcad.step_assembly import StepAssembly, write_step_assembly
+    if isinstance(topo_shape, StepAssembly):
+        write_step_assembly(topo_shape, output_path)
+        return
 
-    The shape is wrapped in a one-child compound first. That matches what
-    the previous CadQuery-based exporter wrote (``exporters.export`` on a
-    Workplane always emits a compound), so the baseline STEP an ``import``
-    produces keeps the same top-level container across the loader switch.
-    """
     from OCP.BRep import BRep_Builder
     from OCP.TopoDS import TopoDS_Compound
 
