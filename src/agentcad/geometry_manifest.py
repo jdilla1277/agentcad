@@ -207,6 +207,10 @@ class BaselineGeometry:
         return deepcopy(self._manifest)
 
     @property
+    def manifest_id(self) -> str:
+        return self._manifest["manifest_id"]
+
+    @property
     def shape(self):
         from build123d import Part
 

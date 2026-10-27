@@ -74,9 +74,13 @@ from agentcad.native_io import silence_native_stdout
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-@click.option("--inspection-image/--no-inspection-image", default=True, help="Prepare the labeled overall inspection sheet (default: enabled). Retrieve it later with inspect --image.")
+@click.option("--inspection-image/--no-inspection-image", default=True, help="Prepare inspection image media (overall and ranked samples; default enabled). Retrieval remains available later.")
+@click.option("--report/--no-report", "show_report", default=True, help="Include the compact inspection report in the response. The saved report/bundle remain available when disabled.")
+@click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum inspection images to prepare, including the overall sheet.")
+@click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated token allowance for the inline inspection report, excluding legacy import fields.")
 @project_options
-def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image):
+def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image,
+               show_report, max_images, text_budget):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
@@ -130,6 +134,12 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         argv.append("--no-diff")
     if not inspection_image:
         argv.append("--no-inspection-image")
+    if not show_report:
+        argv.append("--no-report")
+    if max_images != 9:
+        argv.extend(["--max-images", str(max_images)])
+    if text_budget != 2000:
+        argv.extend(["--text-budget", str(text_budget)])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
@@ -361,6 +371,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "edit_scaffold": {"status": "pending"},
             "geometry_manifest": {"status": "pending"},
             "inspection_image": {"status": "pending"},
+            "inspection_report": {"status": "pending"},
         },
     }
     comparison_enabled = auto_diff and has_previous_step
@@ -446,31 +457,51 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         )
 
 
-    # The overall ID sheet uses the same verified normalized baseline as
-    # selection. Its failure remains independent of geometry/scaffold success.
-    if manifest_ok and inspection_image:
-        from agentcad.geometry_images import geometry_image
+    # Build reusable analysis and a bounded sample catalogue. Media failures
+    # are recorded individually and cannot undo the committed core/scaffold.
+    inspection_payload = None
+    if manifest_ok:
+        from agentcad.inspection_report import inspection_report
 
-        sheet_ok, sheet = _attempt_artifact(
-            "inspection_image", lambda: geometry_image(version_dir / "output.step", version_dir),
+        report_ok, report_result = _attempt_artifact(
+            "inspection_report", lambda: inspection_report(
+                version_dir / "output.step", version_dir, images=inspection_image,
+                max_images=max_images, text_budget=text_budget if show_report else 2000,
+                meta=lifecycle.meta, response_path=get_project().response_path,
+            ),
         )
-        if sheet_ok:
-            png_path = Path(sheet["png"]).resolve().relative_to(get_project().build_root).as_posix()
-            metadata_path = Path(sheet["metadata"]).resolve().relative_to(get_project().build_root).as_posix()
-            lifecycle.meta["outputs"]["inspection_image"] = png_path
-            lifecycle.meta["inspection_image"] = {
-                "png": png_path,
-                "metadata": metadata_path,
-                "manifest_id": geometry_data["manifest_id"],
-                "labeled_ids": [a["id"] for a in sheet["annotations"]],
-                "labels_complete": sheet["labels"]["complete"],
-                "size": sheet["request"]["size"],
-            }
+        if report_ok:
+            inspection_payload, prepared = report_result
+
+            def relative(path):
+                return Path(path).resolve().relative_to(get_project().build_root).as_posix()
+
+            lifecycle.meta["outputs"]["inspection_report"] = relative(prepared["report"])
+            lifecycle.meta["outputs"]["inspection_bundle"] = relative(prepared["bundle"])
+            overall = next((row for row in prepared["media"] if row["id"] == "overall"), None)
+            if overall:
+                image_path = Path(overall["png"])
+                if not image_path.is_absolute():
+                    image_path = get_project().project_root / image_path
+                png_path = relative(image_path)
+                lifecycle.meta["outputs"]["inspection_image"] = png_path
+                lifecycle.meta["inspection_image"] = {
+                    "png": png_path, "metadata": relative(image_path.with_suffix(".json")),
+                    "manifest_id": geometry_data["manifest_id"],
+                    "labeled_ids": [row["id"] for group in prepared["analysis"]["samples"].values() for row in group],
+                    "labels_complete": False, "size": [1024, 1024],
+                }
+                lifecycle.set_artifact("inspection_image", "success")
+            elif not inspection_image or max_images == 0:
+                lifecycle.set_artifact("inspection_image", "skipped", message="Inspection images disabled or capped at zero.")
+            else:
+                lifecycle.set_artifact("inspection_image", "failed", message="Overall image unavailable; see inspection bundle omissions.")
             lifecycle.persist()
+        else:
+            lifecycle.set_artifact("inspection_image", "skipped", message="Inspection analysis unavailable.")
     else:
-        lifecycle.set_artifact("inspection_image", "skipped", message=(
-            "Disabled with --no-inspection-image." if not inspection_image else "Geometry manifest was unavailable."
-        ))
+        lifecycle.set_artifact("inspection_report", "skipped", message="Geometry manifest was unavailable.")
+        lifecycle.set_artifact("inspection_image", "skipped", message="Geometry manifest was unavailable.")
 
     # 8. Visual artifacts (preview, glb, viewer).
     from agentcad.render import render_composite_4view
@@ -736,6 +767,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # 11. Output JSON. Mirrors committed metadata plus next_actions per the
     #     `next_actions` design convention.
     response = lifecycle.response()
+    if show_report and inspection_payload is not None:
+        response["inspection"] = inspection_payload
     step_argument = shlex.quote(get_project().response_path(version_dir / "output.step"))
     root_arg = " --build-dir " + shlex.quote(str(get_project().build_root)) if get_project().configured else ""
     response["viewer_opened"] = viewer_opened

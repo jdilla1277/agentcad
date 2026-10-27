@@ -270,7 +270,7 @@ def project_options(function):
             "recover",
             "feedback",
         } or (name == "diff" and kwargs.get("visual")) or (
-            name == "inspect" and kwargs.get("with_image")
+            name == "inspect" and (kwargs.get("with_image") or kwargs.get("with_report"))
         )
         if kwargs.get("dry_run"):
             writes = False
