@@ -72,6 +72,7 @@ def test_real_bundle_reuses_labeled_overall_and_preserves_identity(isolated_dir,
     registry = step.with_name("geometry_manifest.json").read_bytes()
     result, prepared = inspection_report(step, isolated_dir, text_budget=5000)
     assert result["recognition"] == {"status": "not_available", "recognized_feature_count": None}
+    assert result["baseline_sha256"] == saved["baseline"]["sha256"]
     assert result["quality"]["status"] == "not_available"  # No import validation metadata here.
     assert len(result["samples"]["parts"]) == 1
     assert len(result["samples"]["features"]) == 4

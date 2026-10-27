@@ -113,7 +113,7 @@ box assembly (6,000 faces, 12,000 edges) took **4.20 seconds** to create its
 first bundle and **0.565 seconds** for verified cached replay. It returned
 five distinct images: overall reused for the sole part definition plus four
 raw face/edge samples. The compact report retained the part name and used
-1,642 estimated text tokens. Reference environment: Apple M4, macOS 15.6,
+approximately 1,700 estimated text tokens. Reference environment: Apple M4, macOS 15.6,
 Python 3.12.12, build123d 0.10.0, cadquery-ocp 7.8.1.1.post1.
 
 The predeclared local smoke limits were 20 seconds first-bundle and 3 seconds

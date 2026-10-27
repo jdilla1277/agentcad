@@ -172,7 +172,7 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
     command = f"agentcad inspect {shlex.quote(response_path(step))}"
     payload = {
         "command": "inspect", "status": "success", "analysis_revision": data["analysis_revision"],
-        "manifest_id": data["manifest_id"], "version": data["version"],
+        "manifest_id": data["manifest_id"], "version": data["version"], "baseline_sha256": data["baseline_sha256"],
         "quality": data["quality"], "units": "mm", "coordinate_frame": "assembly",
         "model": data["model"], "counts": data["counts"], "recognition": data["recognition"],
         "provenance": {**data["provenance"], "filename": str(data["provenance"].get("filename", ""))[:80]},
