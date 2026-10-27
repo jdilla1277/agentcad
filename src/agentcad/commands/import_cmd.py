@@ -74,8 +74,9 @@ from agentcad.native_io import silence_native_stdout
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@click.option("--inspection-image/--no-inspection-image", default=True, help="Prepare the labeled overall inspection sheet (default: enabled). Retrieve it later with inspect --image.")
 @project_options
-def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon):
+def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
@@ -127,6 +128,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         argv.append("--no-view")
     if not auto_diff:
         argv.append("--no-diff")
+    if not inspection_image:
+        argv.append("--no-inspection-image")
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
@@ -357,6 +360,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             ),
             "edit_scaffold": {"status": "pending"},
             "geometry_manifest": {"status": "pending"},
+            "inspection_image": {"status": "pending"},
         },
     }
     comparison_enabled = auto_diff and has_previous_step
@@ -441,6 +445,32 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "edit_scaffold", "skipped", message="edit.py already exists."
         )
 
+
+    # The overall ID sheet uses the same verified normalized baseline as
+    # selection. Its failure remains independent of geometry/scaffold success.
+    if manifest_ok and inspection_image:
+        from agentcad.geometry_images import geometry_image
+
+        sheet_ok, sheet = _attempt_artifact(
+            "inspection_image", lambda: geometry_image(version_dir / "output.step", version_dir),
+        )
+        if sheet_ok:
+            png_path = Path(sheet["png"]).resolve().relative_to(get_project().build_root).as_posix()
+            metadata_path = Path(sheet["metadata"]).resolve().relative_to(get_project().build_root).as_posix()
+            lifecycle.meta["outputs"]["inspection_image"] = png_path
+            lifecycle.meta["inspection_image"] = {
+                "png": png_path,
+                "metadata": metadata_path,
+                "manifest_id": geometry_data["manifest_id"],
+                "labeled_ids": [a["id"] for a in sheet["annotations"]],
+                "labels_complete": sheet["labels"]["complete"],
+                "size": sheet["request"]["size"],
+            }
+            lifecycle.persist()
+    else:
+        lifecycle.set_artifact("inspection_image", "skipped", message=(
+            "Disabled with --no-inspection-image." if not inspection_image else "Geometry manifest was unavailable."
+        ))
 
     # 8. Visual artifacts (preview, glb, viewer).
     from agentcad.render import render_composite_4view
@@ -722,6 +752,10 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         f"agentcad view {step_argument}{root_arg} — open in browser to inspect or share with humans",
         f"agentcad measure {step_argument}{root_arg} — check dimensions before editing",
     ]
+    if manifest_ok:
+        sample = response["geometry_manifest"]["sample_ids"]["face"]
+        if sample:
+            response["next_actions"][-1] = f"agentcad inspect {step_argument} --id {sample} --image{root_arg}"
     response["more_at"] = "agentcad docs editing"
     click.echo(json.dumps(response))
 

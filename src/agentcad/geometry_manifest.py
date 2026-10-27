@@ -166,6 +166,7 @@ def summary(step_path: str | Path, payload: dict) -> dict:
         "root_occurrence_ids": roots[:10], "root_occurrences_total": len(roots),
         "sample_ids": sample_ids,
         "lookup_example": f"agentcad inspect {shlex.quote(str(step_path))} --id {roots[0] if roots else sample_ids['face']}",
+        "image_example": f"agentcad inspect {shlex.quote(str(step_path))} --image",
     }
 
 
@@ -179,7 +180,7 @@ class BaselineGeometry:
     def __init__(self, step_path: str | Path):
         from agentcad.step_assembly import read_step_assembly
         from agentcad.topo_ids import _indexed_map
-        from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE
+        from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_SOLID
 
         self._manifest = read_manifest(step_path)
         document = read_step_assembly(step_path)
@@ -195,7 +196,11 @@ class BaselineGeometry:
         self._shape = _flat_part(document.shape).wrapped
         if _inventory(self._shape) != expected:
             raise ValueError("Build123d baseline container changed the issued ID mapping; re-import before selecting.")
-        self._maps = {"face": _indexed_map(self._shape, TopAbs_FACE), "edge": _indexed_map(self._shape, TopAbs_EDGE)}
+        self._maps = {
+            "face": _indexed_map(self._shape, TopAbs_FACE),
+            "edge": _indexed_map(self._shape, TopAbs_EDGE),
+            "solid": _indexed_map(self._shape, TopAbs_SOLID),
+        }
 
     @property
     def manifest(self) -> dict:
@@ -223,6 +228,47 @@ class BaselineGeometry:
         from OCP.TopoDS import TopoDS
 
         return Edge(TopoDS.Edge_s(self._pick(object_id, "edge")))
+
+    def image_shape(self, object_id: str):
+        """Raw image target in assembly coordinates, using issued memberships.
+
+        A part definition shows all its placed occurrences. An occurrence
+        shows only that instance and its descendants. This is a visualization
+        helper; shared topology does not promise an exclusive edit selector.
+        """
+        from OCP.BRep import BRep_Builder
+        from OCP.TopoDS import TopoDS_Compound
+        from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE
+        from agentcad.topo_ids import _indexed_map
+
+        entry = self.record(object_id)
+        if entry["kind"] in self._maps:
+            return self._maps[entry["kind"]].FindKey(entry["index"])
+        pending = [object_id] if entry["kind"] == "occurrence" else list(entry["occurrence_ids"])
+        members = {kind: set() for kind in self._maps}
+        visited = set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            occurrence = self._manifest["entities"][current]
+            pending.extend(occurrence["children"])
+            for kind, values in occurrence["members"].items():
+                members[kind].update(self._manifest["entities"][value]["index"] for value in values)
+        target = TopoDS_Compound()
+        builder = BRep_Builder()
+        builder.MakeCompound(target)
+        for index in sorted(members["solid"]):
+            builder.Add(target, self._maps["solid"].FindKey(index))
+        # Keep loose faces and wires too, without drawing solid boundaries twice.
+        for kind, topology in (("face", TopAbs_FACE), ("edge", TopAbs_EDGE)):
+            covered = _indexed_map(target, topology)
+            for index in sorted(members[kind]):
+                raw = self._maps[kind].FindKey(index)
+                if not covered.Contains(raw):
+                    builder.Add(target, raw)
+        return target
 
     def _pick(self, object_id: str, kind: str):
         entry = self.record(object_id)
