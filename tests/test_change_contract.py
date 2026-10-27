@@ -131,7 +131,9 @@ def test_model_fingerprint_changes_with_geometry_not_review_or_revision_metadata
 
 def test_artifact_location_is_not_geometry_identity_and_input_order_is_canonical():
     a = artifact()
-    b = artifact(b"written STEP", name="output.step", role="geometry")
+    b = artifact(
+        b"written STEP", name="output.step", role="geometry", path="snapshots/r42/output.step"
+    )
     c = candidate(inputs=[a, b])
     assert candidate(inputs=[b, a])["model_fingerprint"] == c["model_fingerprint"]
     a["path"] = "another-store/bracket.py"
@@ -569,3 +571,240 @@ def test_deliverables_must_be_explicit_for_multiple_targets_and_pin_available_in
         candidate(policies=[p, second])
     with pytest.raises(contract.ContractError):
         candidate(deliverables={"cad": [artifact(b"not in snapshot", role="geometry")]})
+
+
+@pytest.mark.parametrize("conflict", ["hash", "size"])
+def test_candidate_rejects_conflicting_content_at_one_snapshot_path(conflict):
+    source = artifact(name="source", path="snapshots/r42/model.step")
+    output = artifact(
+        name="output",
+        role="geometry",
+        path=source["path"],
+        **({"sha256": "0" * 64} if conflict == "hash" else {"size_bytes": len(BRACKET) + 1}),
+    )
+    with pytest.raises(contract.ContractError) as exc:
+        candidate(inputs=[source, output])
+    assert exc.value.reason == "artifact_path_conflict"
+    assert source["path"] in str(exc.value)
+
+
+@pytest.mark.parametrize("conflict", ["hash", "size"])
+def test_reloaded_candidate_rejects_conflicting_snapshot_path_identities(conflict):
+    source = artifact(name="source", path="snapshots/r42/model.step")
+    output = artifact(
+        name="output",
+        role="geometry",
+        path="snapshots/r42/other.step",
+        **({"sha256": "0" * 64} if conflict == "hash" else {"size_bytes": len(BRACKET) + 1}),
+    )
+    c = candidate(inputs=[source, output])
+    # Paths are excluded from model identity. Updating both references and
+    # resealing avoids failing on a stale fingerprint or deliverable binding.
+    c["inputs"][1]["path"] = source["path"]
+    c["deliverables"]["cad"][0]["path"] = source["path"]
+    with pytest.raises(contract.ContractError) as exc:
+        contract.validate_document(reseal(c))
+    assert exc.value.reason == "artifact_path_conflict"
+
+
+def test_identical_content_aliases_can_share_a_snapshot_path():
+    source = artifact(name="source", path="snapshots/r42/model.step")
+    output = {**source, "name": "output", "role": "geometry"}
+    c = candidate(inputs=[source, output])
+    assert contract.validate_document(json.loads(json.dumps(c))) == c
+    checked = contract.make_change_receipt(c, policy(), results(c, policy()))
+    assert checked["validation_state"] == "valid"
+    assert checked["promotion_ready"] is True
+
+
+def observed_operation(c, p, *, generation=8):
+    return {
+        "candidate": {k: c[k] for k in ("revision_id", "model_fingerprint", "content_sha256")},
+        "policy": {
+            "policy_id": p["policy_id"],
+            "version": p["version"],
+            "sha256": p["content_sha256"],
+        },
+        "selection_generation": generation,
+        "promoted_revision_id": "r41",
+    }
+
+
+def test_ready_candidate_refusal_preserves_observed_selection_and_reconciliation():
+    p, c = policy(), candidate()
+    selected = candidate(revision_id="r43", parent_revision_id="r42")
+    checked = contract.make_change_receipt(c, p, results(c, p), promoted_revision_id="r41")
+    assert checked["promotion_ready"] is True
+    checked_before = copy.deepcopy(checked)
+    req = request(c, p)
+    observed = observed_operation(selected, p)
+    receipt = contract.make_promotion_receipt(
+        req,
+        checked,
+        outcome="not_promoted",
+        promoted_revision_after="r41",
+        operation_diagnostics=[
+            {
+                "reason": "selection_conflict",
+                "observed": observed,
+                "actions": [{"action": "reconcile", "revision_id": "r43"}],
+            }
+        ],
+    )
+    diagnostic = receipt["operation_diagnostics"][0]
+    assert diagnostic["requested"] == observed_operation(c, p, generation=7)
+    assert diagnostic["observed"] == observed
+    assert diagnostic["actions"] == [{"action": "reconcile", "revision_id": "r43"}]
+    assert receipt["reason_codes"] == ["selection_conflict"]
+    assert receipt["blockers"] == []
+    assert receipt["validation_state"] == "valid"
+    assert receipt["check_receipt_sha256"] == checked["content_sha256"]
+    assert receipt["promoted_revision_before"] == receipt["promoted_revision_after"] == "r41"
+    assert checked == checked_before
+    observed["candidate"]["revision_id"] = "r99"
+    observed["selection_generation"] = 100
+    restored = contract.validate_document(json.loads(json.dumps(receipt)))
+    assert restored["operation_diagnostics"][0]["observed"]["candidate"]["revision_id"] == "r43"
+    assert restored["operation_diagnostics"][0]["observed"]["selection_generation"] == 8
+
+
+def test_policy_conflict_preserves_the_observed_policy_not_only_the_requested_one():
+    p, c = policy(), candidate()
+    updated = contract.make_policy(
+        target_id="cad",
+        policy_id="bracket",
+        version=2,
+        checks=p["checks"],
+        previous_policy=p,
+        actor="user",
+        rationale="Explicitly update the policy.",
+    )
+    selected = candidate(updated, revision_id="r43", parent_revision_id="r42")
+    checked = contract.make_change_receipt(c, p, results(c, p), promoted_revision_id="r41")
+    receipt = contract.make_promotion_receipt(
+        request(c, p),
+        checked,
+        outcome="not_promoted",
+        promoted_revision_after="r41",
+        operation_diagnostics=[
+            {
+                "reason": "policy_conflict",
+                "observed": observed_operation(selected, updated),
+                "actions": [{"action": "reconcile_policy", "policy_id": "bracket", "version": 2}],
+            }
+        ],
+    )
+    diagnostic = receipt["operation_diagnostics"][0]
+    assert diagnostic["requested"]["policy"]["version"] == 1
+    assert diagnostic["observed"]["policy"]["version"] == 2
+    assert diagnostic["observed"]["policy"]["sha256"] == updated["content_sha256"]
+    assert contract.validate_document(json.loads(json.dumps(receipt))) == receipt
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda d: d["observed"].update(selection_generation=True),
+        lambda d: d["observed"]["policy"].update(sha256="not-a-hash"),
+        lambda d: d["observed"]["candidate"].update(revision_id=""),
+        lambda d: d.update(actions=[]),
+        lambda d: d.update(reason=""),
+    ],
+)
+def test_operation_diagnostic_schema_is_validated_for_builders_and_reloaded_records(mutation):
+    p, c = policy(), candidate()
+    checked = contract.make_change_receipt(c, p, results(c, p), promoted_revision_id="r41")
+    data = {
+        "reason": "selection_conflict",
+        "observed": observed_operation(c, p, generation=8),
+        "actions": [{"action": "reconcile", "revision_id": "r42"}],
+    }
+    receipt = contract.make_promotion_receipt(
+        request(c, p),
+        checked,
+        outcome="not_promoted",
+        promoted_revision_after="r41",
+        operation_diagnostics=[data],
+    )
+    bad = copy.deepcopy(data)
+    mutation(bad)
+    with pytest.raises(contract.ContractError):
+        contract.make_promotion_receipt(
+            request(c, p),
+            checked,
+            outcome="not_promoted",
+            promoted_revision_after="r41",
+            operation_diagnostics=[bad],
+        )
+    mutation(receipt["operation_diagnostics"][0])
+    with pytest.raises(contract.ContractError):
+        contract.validate_document(reseal(receipt))
+
+
+def test_reloaded_operation_diagnostic_cannot_change_the_original_request():
+    p, c = policy(), candidate()
+    checked = contract.make_change_receipt(c, p, results(c, p), promoted_revision_id="r41")
+    receipt = contract.make_promotion_receipt(
+        request(c, p),
+        checked,
+        outcome="not_promoted",
+        promoted_revision_after="r41",
+        operation_diagnostics=[
+            {
+                "reason": "selection_conflict",
+                "observed": observed_operation(c, p, generation=8),
+                "actions": [{"action": "reconcile", "revision_id": "r42"}],
+            }
+        ],
+    )
+    receipt["operation_diagnostics"][0]["requested"]["selection_generation"] = 3
+    with pytest.raises(contract.ContractError) as exc:
+        contract.validate_document(reseal(receipt))
+    assert exc.value.reason == "binding_mismatch"
+
+
+def test_success_receipt_cannot_include_operation_failure_diagnostics():
+    p, c = policy(), candidate()
+    checked = contract.make_change_receipt(c, p, results(c, p), promoted_revision_id="r41")
+    with pytest.raises(contract.ContractError):
+        contract.make_promotion_receipt(
+            request(c, p),
+            checked,
+            outcome="promoted",
+            promoted_revision_after="r42",
+            operation_diagnostics=[
+                {
+                    "reason": "selection_conflict",
+                    "observed": observed_operation(c, p, generation=8),
+                    "actions": [{"action": "reconcile", "revision_id": "r42"}],
+                }
+            ],
+        )
+
+
+def test_operation_diagnostics_can_retain_an_absent_observed_selection():
+    p, c = policy(), candidate()
+    checked = contract.make_change_receipt(c, p, results(c, p), promoted_revision_id="r41")
+    observed = {
+        "candidate": None,
+        "policy": None,
+        "selection_generation": 8,
+        "promoted_revision_id": "r41",
+    }
+    receipt = contract.make_promotion_receipt(
+        request(c, p),
+        checked,
+        outcome="not_promoted",
+        promoted_revision_after="r41",
+        reason_codes=["selection_conflict"],
+        operation_diagnostics=[
+            {
+                "reason": "selection_conflict",
+                "observed": observed,
+                "actions": [{"action": "select_candidate", "revision_id": "r42"}],
+            }
+        ],
+    )
+    assert receipt["reason_codes"] == ["selection_conflict"]
+    assert receipt["operation_diagnostics"][0]["observed"] == observed
+    assert contract.validate_document(json.loads(json.dumps(receipt))) == receipt

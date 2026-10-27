@@ -17,6 +17,7 @@ digest covers its exact content, using sorted UTF-8 JSON with finite numbers.
   ``model_fingerprint`` excludes storage paths and administrative metadata;
   geometry, placements, units, and other model inputs belong in ``model`` or
   ``inputs``, never in ``metadata``. Artifact paths are snapshot-relative.
+  Aliases at one path must declare the same content hash and byte size.
 * ``target_policy`` pins versioned check definitions/settings, completion and
   failure obligations, and required review IDs. A successor also identifies
   its previous policy, actor, rationale, and before/after requirements.
@@ -31,6 +32,8 @@ digest covers its exact content, using sorted UTF-8 JSON with finite numbers.
 * ``operation_status`` describes in-progress work without a terminal outcome.
   ``promotion_receipt`` describes one completed promoted/not_promoted outcome,
   the before/after accepted revision, evidence identity, and artifact references.
+  Refusals may retain operation diagnostics with requested/observed selection
+  and policy snapshots plus reconciliation actions, separate from check blockers.
 
 These are record contracts, not new CLI/MCP commands. Builders trust supplied
 measurement/review facts; they do not measure geometry or grant approvals.
@@ -118,6 +121,7 @@ _FIELDS = {
         "blockers",
         "warnings",
         "reason_codes",
+        "operation_diagnostics",
         "check_receipt_sha256",
         "review_states",
         "verified_artifacts",
@@ -178,6 +182,80 @@ def _policy_reference(value) -> None:
     _text(value["policy_id"], "policy_id")
     _integer(value["version"], "policy version", 1)
     _hash(value["sha256"], "policy.sha256")
+
+
+def _candidate_reference(value) -> None:
+    _require(
+        isinstance(value, dict)
+        and set(value) == {"revision_id", "model_fingerprint", "content_sha256"},
+        "Invalid pinned candidate reference.",
+    )
+    _text(value["revision_id"], "candidate.revision_id")
+    for field in ("model_fingerprint", "content_sha256"):
+        _hash(value[field], f"candidate.{field}")
+
+
+def _operation_snapshot(value, *, observed: bool) -> None:
+    _require(
+        isinstance(value, dict)
+        and set(value) == {"candidate", "policy", "selection_generation", "promoted_revision_id"},
+        "Operation context needs candidate, policy, selection generation, and accepted revision.",
+    )
+    if value["candidate"] is not None or not observed:
+        _candidate_reference(value["candidate"])
+    if value["policy"] is not None or not observed:
+        _policy_reference(value["policy"])
+    _integer(value["selection_generation"], "operation selection_generation")
+    if value["promoted_revision_id"] is not None:
+        _text(value["promoted_revision_id"], "operation promoted_revision_id")
+
+
+def _operation_diagnostic(value, receipt: dict) -> None:
+    _require(
+        isinstance(value, dict) and set(value) == {"reason", "requested", "observed", "actions"},
+        "Operation diagnostics need a reason, requested/observed snapshots, and actions.",
+    )
+    _text(value["reason"], "operation diagnostic reason")
+    _operation_snapshot(value["requested"], observed=False)
+    _operation_snapshot(value["observed"], observed=True)
+    actions = value["actions"]
+    _require(
+        isinstance(actions, list) and bool(actions),
+        "Operation diagnostics need reconciliation actions.",
+    )
+    for action in actions:
+        _require(isinstance(action, dict), "Operation actions must be objects.")
+        _text(action.get("action"), "operation action")
+    requested = value["requested"]
+    _require(
+        all(requested[key] == receipt[key] for key in ("candidate", "policy")),
+        "Operation diagnostic identifies a different promotion request.",
+        "binding_mismatch",
+    )
+    # The requested generation and accepted revision are not duplicated in the
+    # receipt's top-level scope. Reconstruct the exact request to verify both.
+    request_body = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "promotion_request",
+        **{
+            key: receipt[key]
+            for key in (
+                "candidate",
+                "policy",
+                "target_id",
+                "project_id",
+                "request_key",
+                "promotion_mode",
+            )
+        },
+        "selection_generation": requested["selection_generation"],
+        "expected_promoted_revision_id": requested["promoted_revision_id"],
+    }
+    _require(
+        _digest(request_body) == receipt["request_sha256"],
+        "Requested conflict context does not match the original promotion request.",
+        "binding_mismatch",
+    )
 
 
 def _json(value) -> str:
@@ -281,15 +359,7 @@ def validate_document(record: dict, *, kind: str | None = None) -> dict:
     )
     if record["kind"] not in ("candidate", "target_policy"):
         _text(record["target_id"], "target_id")
-        ref = record["candidate"]
-        _require(
-            isinstance(ref, dict)
-            and set(ref) == {"revision_id", "model_fingerprint", "content_sha256"},
-            "Invalid pinned candidate reference.",
-        )
-        _text(ref["revision_id"], "candidate.revision_id")
-        for field in ("model_fingerprint", "content_sha256"):
-            _hash(ref[field], f"candidate.{field}")
+        _candidate_reference(record["candidate"])
         _policy_reference(record["policy"])
     if "promotion_mode" in record:
         _require(
@@ -350,8 +420,15 @@ def validate_document(record: dict, *, kind: str | None = None) -> dict:
             isinstance(record.get("inputs"), list),
             "inputs must be a list of pinned artifacts.",
         )
+        path_identities = {}
         for item in record["inputs"]:
             _artifact(item)
+            identity = (item["sha256"], item["size_bytes"])
+            _require(
+                path_identities.setdefault(item["path"], identity) == identity,
+                f"Snapshot path {item['path']!r} declares conflicting content hashes or sizes.",
+                "artifact_path_conflict",
+            )
         deliverables = record["deliverables"]
         _require(
             isinstance(deliverables, dict) and set(deliverables) == set(record["target_policies"]),
@@ -520,6 +597,14 @@ def validate_document(record: dict, *, kind: str | None = None) -> dict:
         _require(isinstance(record["jobs"], list), "jobs must be a list.")
     elif record["kind"] == "promotion_receipt":
         _require(
+            isinstance(record["operation_diagnostics"], list),
+            "operation_diagnostics must be a list.",
+        )
+        for diagnostic in record["operation_diagnostics"]:
+            _operation_diagnostic(diagnostic, record)
+        for reason in record["reason_codes"]:
+            _text(reason, "operation reason code")
+        _require(
             record.get("outcome") in ("promoted", "not_promoted"),
             "Unknown terminal promotion outcome.",
         )
@@ -531,6 +616,10 @@ def validate_document(record: dict, *, kind: str | None = None) -> dict:
         for item in record["verified_artifacts"]:
             _artifact(item)
         if record["outcome"] == "promoted":
+            _require(
+                not record["operation_diagnostics"],
+                "A successful promotion cannot contain operation failure diagnostics.",
+            )
             _require(
                 bool(record["verified_artifacts"]),
                 "A promoted target must identify its deliverable artifacts.",
@@ -860,9 +949,43 @@ def make_promotion_receipt(
     outcome: str,
     promoted_revision_after: str | None,
     reason_codes: list | None = None,
+    operation_diagnostics: list | None = None,
 ) -> dict:
+    """Describe a terminal outcome without performing the target transition.
+
+    Each operation diagnostic supplies ``reason``, ``observed``, and nonempty
+    ``actions``. The observed snapshot contains candidate/policy references
+    (or None when absent), selection_generation, and promoted_revision_id.
+    Requested context is copied from the pinned request, never supplied by the
+    caller. Diagnostics explain operation refusals, not failed model checks.
+    """
     request = validate_document(request, kind="promotion_request")
     checked = validate_document(checked, kind="change_receipt")
+    provided_diagnostics = operation_diagnostics if operation_diagnostics is not None else []
+    _require(isinstance(provided_diagnostics, list), "operation_diagnostics must be a list.")
+    diagnostics = []
+    for diagnostic in provided_diagnostics:
+        _require(
+            isinstance(diagnostic, dict) and set(diagnostic) == {"reason", "observed", "actions"},
+            "Provide an operation reason, observed snapshot, and actions; requested context comes from the request.",
+        )
+        _text(diagnostic["reason"], "operation diagnostic reason")
+        diagnostics.append(
+            {
+                **diagnostic,
+                "requested": {
+                    "candidate": request["candidate"],
+                    "policy": request["policy"],
+                    "selection_generation": request["selection_generation"],
+                    "promoted_revision_id": request["expected_promoted_revision_id"],
+                },
+            }
+        )
+    codes = reason_codes if reason_codes is not None else []
+    _require(isinstance(codes, list), "reason_codes must be a list.")
+    for reason in codes:
+        _text(reason, "operation reason code")
+    codes = list(dict.fromkeys(codes + [diagnostic["reason"] for diagnostic in diagnostics]))
     _require(
         all(request[k] == checked[k] for k in ("candidate", "target_id", "policy")),
         "Promotion request and checked evidence identify different inputs.",
@@ -895,7 +1018,7 @@ def make_promotion_receipt(
             "A refused attempt cannot advance the accepted target.",
         )
         _require(
-            bool(checked["blockers"] or reason_codes),
+            bool(checked["blockers"] or codes),
             "A refusal must explain its blockers or reason.",
         )
     return _seal(
@@ -915,7 +1038,8 @@ def make_promotion_receipt(
         candidate_retained=True,
         blockers=checked["blockers"],
         warnings=checked["warnings"],
-        reason_codes=reason_codes if reason_codes is not None else [],
+        reason_codes=codes,
+        operation_diagnostics=diagnostics,
         check_receipt_sha256=checked["content_sha256"],
         review_states=checked["review_states"],
         verified_artifacts=checked["artifacts"] if outcome == "promoted" else [],
