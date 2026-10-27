@@ -11,6 +11,7 @@ from agentcad.project import ProjectError, format_response, get_project
 
 from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
+from agentcad.commands.cloud import cloud
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
@@ -849,7 +850,7 @@ class _LoggingGroup(click.Group):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
-        if not cmd_name or cmd_name in ("feedback", "subscribe"):
+        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud"):
             return
         # Parse the last JSON output (commands may echo multiple things)
         result = {}
@@ -883,6 +884,7 @@ def cli():
 
 cli.add_command(context)
 cli.add_command(check_spec)
+cli.add_command(cloud)
 cli.add_command(daemon)
 cli.add_command(diff)
 cli.add_command(docs)
