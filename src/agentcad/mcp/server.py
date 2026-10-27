@@ -6,10 +6,13 @@ import os
 import sys
 import traceback
 from pathlib import Path
-from typing import Literal
+import base64
+import hashlib
+from typing import Any, Literal
 
 from click.testing import CliRunner
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from agentcad.cli import cli
 from agentcad.cloud import CloudError, cloud_call
@@ -429,7 +432,9 @@ def inspect(
     no_limit: bool = False,
     build_dir: str | None = None,
     entity_id: str | None = None,
-) -> dict:
+    image: bool = False,
+    isolate: bool = False,
+) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
     Args:
@@ -442,10 +447,16 @@ def inspect(
         limit: Optional maximum records per ID list and IDs per summary cluster.
         no_limit: Return complete ID lists. Can be very large.
         entity_id: Retrieve one typed ID from the imported baseline's geometry manifest.
+        image: Return a labeled four-view PNG attachment plus its JSON record.
+        isolate: Show only the selected entity; requires image and entity_id.
     """
     args = ["inspect", file]
     if entity_id is not None:
         args.extend(["--id", entity_id])
+    if image:
+        args.append("--image")
+    if isolate:
+        args.append("--isolate")
     if ids:
         args.append("--ids")
     if summary:
@@ -454,7 +465,25 @@ def inspect(
         args.extend(["--limit", str(limit)])
     if no_limit:
         args.append("--no-limit")
-    return _invoke(_build_args(args, build_dir), cwd=cwd)
+    result = _invoke(_build_args(args, build_dir), cwd=cwd)
+    if image and result.get("image", {}).get("status") == "success":
+        path = Path(result["image"]["png"])
+        if not path.is_absolute():
+            path = Path(cwd) / path
+        try:
+            png = path.read_bytes()
+            if hashlib.sha256(png).hexdigest() != result["image"]["png_sha256"]:
+                raise ValueError("Image changed before attachment; retry the image request.")
+        except (OSError, ValueError) as exc:
+            return {**result, "status": "error", "_exit_code": 1,
+                    "image": {"status": "failed", "message": str(exc)}}
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(result)), ImageContent(
+                type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii"),
+            )],
+            structuredContent=result,
+        )
+    return result
 
 
 @mcp.tool()
