@@ -124,7 +124,7 @@ def test_run_reports_and_records_runtime_source(runner, isolated_dir, mode, expe
 
 @pytest.mark.parametrize("source,status,recorded", [
     ("show_object(Box(1, 1,\n", "validation_error", False),
-    ("raise RuntimeError('broken edit')\nshow_object(Box(1, 1, 1))\n", "failed", True),
+    ("show_object(Box(1, 1, 1))\nraise RuntimeError('broken edit')\n", "failed", True),
 ])
 def test_errors_keep_runtime_source(runner, isolated_dir, source, status, recorded):
     runner.invoke(cli, ["init", "--runtime", "build123d"])

@@ -33,6 +33,9 @@ jobs:
       - name: Collect tests
         run: pytest --collect-only -q
 
+      - name: Run cloud adapter and local MCP contracts
+        run: pytest tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py -q
+
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
 
