@@ -48,6 +48,7 @@ class StepAssembly:
     occurrences: tuple[StepOccurrence, ...]
     source_length_units: tuple[str, ...]
     hierarchy_status: str
+    _document: Any = field(repr=False, compare=False)
     length_unit: str = "mm"
 
 
@@ -190,9 +191,30 @@ def read_step_assembly(path: str | Path) -> StepAssembly:
                 if any(d.kind == "assembly" for d in definitions.values())
                 else "flat_roots"
             ),
+            _document=document,
         )
     except Exception as exc:
         raise ValueError(f"Could not read STEP assembly {p.name}: {exc}") from exc
+
+
+def write_step_assembly(assembly: StepAssembly, path: str | Path) -> None:
+    """Export the retained document, preserving definitions and references.
+
+    Unlike exporting OneShape(), this retains source component names and the
+    assembly tree. Re-read the result before assigning normalized entity IDs.
+    """
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPCAFControl import STEPCAFControl_Writer
+    from OCP.STEPControl import STEPControl_AsIs
+    from agentcad.native_io import silence_native_stdout
+
+    with silence_native_stdout():
+        writer = STEPCAFControl_Writer()
+        writer.SetNameMode(True)
+        if not writer.Transfer(assembly._document, STEPControl_AsIs):
+            raise RuntimeError("STEP assembly transfer did not complete")
+        if writer.Write(str(path)) != IFSelect_RetDone:
+            raise RuntimeError(f"STEP assembly write did not complete: {path}")
 
 
 def _label_id(label) -> str:

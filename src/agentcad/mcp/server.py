@@ -428,6 +428,7 @@ def inspect(
     limit: int | None = None,
     no_limit: bool = False,
     build_dir: str | None = None,
+    entity_id: str | None = None,
 ) -> dict:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
@@ -440,8 +441,11 @@ def inspect(
         summary: Include compact face/edge clusters.
         limit: Optional maximum records per ID list and IDs per summary cluster.
         no_limit: Return complete ID lists. Can be very large.
+        entity_id: Retrieve one typed ID from the imported baseline's geometry manifest.
     """
     args = ["inspect", file]
+    if entity_id is not None:
+        args.extend(["--id", entity_id])
     if ids:
         args.append("--ids")
     if summary:

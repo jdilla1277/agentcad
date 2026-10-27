@@ -22,7 +22,7 @@ from agentcad.step_assembly import read_step_assembly
 from agentcad.topo_ids import face_entries, edge_entries, pick_face_topods, topology_counts
 
 
-def _generated_fixture(path: Path, *, repeated: bool) -> Path:
+def _generated_fixture(path: Path, *, repeated: bool, count: int | None = None) -> Path:
     from OCP.BRep import BRep_Builder
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
     from OCP.IFSelect import IFSelect_RetDone
@@ -46,7 +46,7 @@ def _generated_fixture(path: Path, *, repeated: bool) -> Path:
     if repeated:
         root = tool.AddShape(compound, True)
         leaf = tool.AddShape(BRepPrimAPI_MakeBox(1, 2, 3).Shape(), False)
-        for i in range(100):
+        for i in range(100 if count is None else count):
             transform = gp_Trsf()
             transform.SetTranslation(gp_Vec(4 * i, 0, 0))
             tool.AddComponent(root, leaf, TopLoc_Location(transform))
@@ -54,7 +54,7 @@ def _generated_fixture(path: Path, *, repeated: bool) -> Path:
     else:
         # A single source part can contain many solids. Its 900 faces stress
         # membership and measurement work without requiring a slow Boolean.
-        for i in range(150):
+        for i in range(150 if count is None else count):
             builder.Add(compound, BRepPrimAPI_MakeBox(gp_Pnt(4 * i, 0, 0), 1, 2, 3).Shape())
         root = tool.AddShape(compound, False)
     TDataStd_Name.Set_s(root, TCollection_ExtendedString(path.stem))

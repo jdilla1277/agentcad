@@ -6,9 +6,10 @@ their placed occurrences, including nested paths, composed placements, source
 length-unit names, and Unicode labels. The implementation uses the default
 OCP stack and adds no dependency.
 
-This is an internal intake primitive. Existing import/inspect commands still
-use their existing paths; the returned records are not a versioned inspection
-manifest or a default agent report.
+This is an internal intake primitive used by import. Import issues its
+versioned geometry manifest after reloading the normalized STEP; source-reader
+records alone are not that manifest or a default agent report. See the separate
+[verified ID lookup benchmark](geometry-lookup.md) for the manifest/CLI/MCP path.
 
 ## Geometry and identity
 

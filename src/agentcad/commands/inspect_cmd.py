@@ -187,6 +187,7 @@ def _clear_validation_timeout(previous_state) -> None:
 
 @click.command("inspect")
 @click.argument("file")
+@click.option("--id", "entity_id", help="Retrieve one typed ID from an imported baseline's saved geometry manifest.")
 @click.option(
     "--ids", "with_ids", is_flag=True,
     help="Include per-feature ID lists (solids, faces, edges) for use with "
@@ -241,6 +242,7 @@ def _clear_validation_timeout(previous_state) -> None:
 @project_options
 def inspect_cmd(
     file,
+    entity_id,
     with_ids,
     with_summary,
     id_limit,
@@ -257,8 +259,12 @@ def inspect_cmd(
             "--validate-only cannot be combined with --ids or --summary; "
             "remove --validate-only to request deep feature extraction."
         )
+    if entity_id and (with_ids or with_summary or validate_only):
+        raise click.UsageError("--id cannot be combined with --ids, --summary, or --validate-only.")
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
+    if entity_id:
+        argv.extend(["--id", entity_id])
     if with_ids:
         argv.append("--ids")
     if with_summary:
@@ -273,6 +279,25 @@ def inspect_cmd(
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    if entity_id:
+        from agentcad.geometry_manifest import read_manifest, record, summary
+        try:
+            saved = read_manifest(file)
+            selected = record(saved, entity_id)
+        except ValueError as exc:
+            _emit({"command": "inspect", "status": "error", "message": str(exc)}, exit_code=1)
+            return
+        _emit({
+            "command": "inspect", "status": "success",
+            "geometry_manifest": summary(file, saved), "entity": selected,
+            "selector": {
+                "backend": "build123d",
+                "call": f"geometry.pick_{selected['kind']}({entity_id!r})",
+            } if selected["kind"] in ("face", "edge") and len(selected["occurrence_ids"]) <= 1 else None,
+            "next_actions": ["agentcad docs editing — load this baseline with load_geometry; part/occurrence records link to their members"],
+        })
+        return
 
     file_path = Path(file)
     detection = file_detect.detect_file_type(file_path)
@@ -685,6 +710,26 @@ def _inspect_tier0_impl(
                         with_summary=with_summary,
                     ),
                 }
+            if with_ids:
+                from agentcad.geometry_manifest import MANIFEST_NAME, read_manifest, summary
+                if Path(file_path).with_name(MANIFEST_NAME).is_file() and Path(file_path).name == "output.step":
+                    try:
+                        saved = read_manifest(file_path)
+                        for plural, kind in (("solids", "solid"), ("faces", "face"), ("edges", "edge")):
+                            for entry in payload[plural]:
+                                typed = f"{kind}_v{saved['version']}_{entry['id']}"
+                                issued = saved["entities"][typed]
+                                if any(issued.get(key) != value for key, value in entry.items() if key != "id"):
+                                    raise ValueError("Inspection loader disagrees with the saved ID map; use --id or re-import.")
+                                entry["object_id"] = typed
+                        payload["geometry_manifest"] = summary(file_path, saved)
+                    except (ValueError, KeyError) as exc:
+                        # Do not leave a partially annotated list that suggests
+                        # some selectors are safe against a mismatched baseline.
+                        for plural in ("solids", "faces", "edges"):
+                            for entry in payload[plural]:
+                                entry.pop("object_id", None)
+                        payload["geometry_manifest"] = {"status": "unavailable", "message": str(exc)}
         # When the agent has IDs (or summary IDs), the most-likely next
         # action shifts: they're here because they want to write an edit
         # script that targets specific features. Point them at the
@@ -702,6 +747,15 @@ def _inspect_tier0_impl(
                 "pick_face/pick_edge in edit.py",
             ]
         payload["more_at"] = "agentcad docs editing"
+        saved_summary = payload.get("geometry_manifest", {})
+        if saved_summary.get("manifest_id"):
+            payload.setdefault("notes", []).append(
+                "id is the legacy integer for pick_face/pick_edge; object_id is the typed baseline ID for geometry.pick_face/pick_edge after load_geometry."
+            )
+            payload["next_actions"] = [
+                saved_summary["lookup_example"],
+                "agentcad docs editing — use object_id strings with the baseline geometry selection context",
+            ]
     else:
         tracker.skip(
             "feature_extraction",
