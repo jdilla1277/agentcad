@@ -5,6 +5,7 @@ import asyncio
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -83,6 +84,12 @@ def test_cloud_mcp_missing_file_is_structured_and_does_not_change_cwd(tmp_path, 
     assert Path.cwd() == before
 
 
+def test_cloud_mcp_invalid_base_directory_is_structured(monkeypatch):
+    install(monkeypatch, lambda _: pytest.fail("Invalid directory made a request"))
+    result = asyncio.run(server.cloud_run(PROJECT, "model.py", "first", cwd="\x00"))
+    assert result["reason"] == "invalid_directory" and result["_exit_code"] == 1
+
+
 def test_cloud_cli_unsupported_local_option_is_json_error():
     result = CliRunner().invoke(cli, ["cloud", "render", PROJECT, "1", "--view", "all"])
     assert result.exit_code != 0
@@ -137,3 +144,82 @@ def test_mcp_stays_responsive_during_cloud_io(operation, tmp_path, monkeypatch):
             await waiting
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("operation", ["run", "import_step", "check_spec", "download"])
+@pytest.mark.parametrize("cwd", [None, "inputs"])
+def test_cloud_paths_survive_local_tool_chdir(operation, cwd, tmp_path, monkeypatch):
+    source, other = tmp_path / "source", tmp_path / "other"
+    for directory in (source, other):
+        directory.mkdir()
+        (directory / "inputs").mkdir()
+    selected = source / cwd if cwd else source
+    unrelated = other / cwd if cwd else other
+    selected.joinpath("model.py").write_text("show_object(Box(11, 12, 13))")
+    unrelated.joinpath("model.py").write_text("show_object(Box(99, 99, 99))")
+    selected.joinpath("model.step").write_bytes(b"selected STEP")
+    unrelated.joinpath("model.step").write_bytes(b"unrelated STEP")
+    selected.joinpath("spec.json").write_text('{"expect_solids": 1}')
+    unrelated.joinpath("spec.json").write_text('{"expect_solids": 2}')
+    monkeypatch.chdir(source)
+    started, local_entered, completed = (threading.Event() for _ in range(3))
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.method == "POST":
+            return httpx.Response(202, json={"id": JOB, "project_id": PROJECT, "kind":
+                                           "import" if operation == "import_step" else operation, "status": "queued"})
+        if request.url.path.endswith(f"/jobs/{JOB}"):
+            return httpx.Response(200, json={"status": "succeeded", "artifact": {
+                "project": PROJECT, "version": 1, "path": "v1_first/output.step"}})
+        return httpx.Response(200, content=b"downloaded STEP")
+
+    install(monkeypatch, handler)
+    original_call = server.cloud_call
+
+    def held_cloud_call(*args, **kwargs):
+        started.set()
+        try:
+            assert local_entered.wait(5), "Local tool did not enter its directory"
+            return original_call(*args, **kwargs)
+        finally:
+            completed.set()
+
+    def local_invoke(self, *args, **kwargs):
+        assert Path.cwd() == other
+        local_entered.set()
+        assert completed.wait(5), "Cloud operation did not finish during the local call"
+        return SimpleNamespace(stdout='{"status":"success"}', stderr="", exit_code=0, exception=None)
+
+    monkeypatch.setattr(server, "cloud_call", held_cloud_call)
+    monkeypatch.setattr(server.CliRunner, "invoke", local_invoke)
+
+    async def check():
+        calls = {
+            "run": lambda: server.cloud_run(PROJECT, "model.py", "first", cwd=cwd),
+            "import_step": lambda: server.cloud_import(PROJECT, "model.step", cwd=cwd),
+            "check_spec": lambda: server.cloud_check_spec(PROJECT, 1, "spec.json", cwd=cwd),
+            "download": lambda: server.cloud_download(PROJECT, "model.step", job=JOB, cwd=cwd, overwrite=True),
+        }
+        waiting = asyncio.create_task(calls[operation]())
+        try:
+            assert await asyncio.to_thread(started.wait, 5), "Cloud worker did not start"
+            assert server._invoke(["docs", "cloud"], cwd=str(other))["status"] == "success"
+        finally:
+            local_entered.set()
+            result = await waiting
+        assert result["_exit_code"] == 0, result
+
+    asyncio.run(check())
+    assert Path.cwd() == source
+    assert requests
+    if operation == "run":
+        assert b"Box(11, 12, 13)" in requests[0].content and b"Box(99" not in requests[0].content
+    elif operation == "import_step":
+        assert b"selected STEP" in requests[0].content and b"unrelated STEP" not in requests[0].content
+    elif operation == "check_spec":
+        assert json.loads(requests[0].content) == {"expect_solids": 1}
+    else:
+        assert selected.joinpath("model.step").read_bytes() == b"downloaded STEP"
+        assert unrelated.joinpath("model.step").read_bytes() == b"unrelated STEP"

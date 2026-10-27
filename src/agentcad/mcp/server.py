@@ -5,13 +5,14 @@ import json
 import os
 import sys
 import traceback
+from pathlib import Path
 from typing import Literal
 
 from click.testing import CliRunner
 from mcp.server.fastmcp import FastMCP
 
 from agentcad.cli import cli
-from agentcad.cloud import cloud_call
+from agentcad.cloud import CloudError, cloud_call
 
 class AgentCADMCP(FastMCP):
     async def list_tools(self):
@@ -40,6 +41,14 @@ mcp = AgentCADMCP(name="agentcad")
 
 
 async def _cloud_tool(operation, **kwargs):
+    if operation in {"run", "import_step", "check_spec", "download"}:
+        # Local tools temporarily chdir on this event loop. Freeze the caller's
+        # base directory before yielding so a worker cannot use that temporary cwd.
+        try:
+            kwargs["cwd"] = str(Path(kwargs.get("cwd") or Path.cwd()).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            error = CloudError("invalid_directory", "cwd must resolve to a local directory.")
+            return {**error.payload(operation), "_exit_code": 1}
     # HTTP requests, polling sleeps, and local file I/O must not block MCP's
     # event loop: discovery, pings, and cancellation still need to be served.
     result = await asyncio.to_thread(cloud_call, operation, **kwargs)
