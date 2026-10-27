@@ -188,6 +188,8 @@ def _clear_validation_timeout(previous_state) -> None:
 @click.command("inspect")
 @click.argument("file")
 @click.option("--id", "entity_id", help="Retrieve one typed ID from an imported baseline's saved geometry manifest.")
+@click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of an imported baseline or --id target.")
+@click.option("--isolate", is_flag=True, help="Show only the --id target; requires --image. Default images highlight it in context.")
 @click.option(
     "--ids", "with_ids", is_flag=True,
     help="Include per-feature ID lists (solids, faces, edges) for use with "
@@ -243,6 +245,8 @@ def _clear_validation_timeout(previous_state) -> None:
 def inspect_cmd(
     file,
     entity_id,
+    with_image,
+    isolate,
     with_ids,
     with_summary,
     id_limit,
@@ -259,12 +263,18 @@ def inspect_cmd(
             "--validate-only cannot be combined with --ids or --summary; "
             "remove --validate-only to request deep feature extraction."
         )
-    if entity_id and (with_ids or with_summary or validate_only):
-        raise click.UsageError("--id cannot be combined with --ids, --summary, or --validate-only.")
+    if (entity_id or with_image) and (with_ids or with_summary or validate_only):
+        raise click.UsageError("--id/--image cannot be combined with --ids, --summary, or --validate-only.")
+    if isolate and not (entity_id and with_image):
+        raise click.UsageError("--isolate requires --id and --image.")
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
     if entity_id:
         argv.extend(["--id", entity_id])
+    if with_image:
+        argv.append("--image")
+    if isolate:
+        argv.append("--isolate")
     if with_ids:
         argv.append("--ids")
     if with_summary:
@@ -280,23 +290,52 @@ def inspect_cmd(
         argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
-    if entity_id:
+    if entity_id or with_image:
         from agentcad.geometry_manifest import read_manifest, record, summary
         try:
             saved = read_manifest(file)
-            selected = record(saved, entity_id)
+            selected = record(saved, entity_id) if entity_id else None
         except ValueError as exc:
             _emit({"command": "inspect", "status": "error", "message": str(exc)}, exit_code=1)
             return
-        _emit({
+        payload = {
             "command": "inspect", "status": "success",
             "geometry_manifest": summary(file, saved), "entity": selected,
             "selector": {
                 "backend": "build123d",
                 "call": f"geometry.pick_{selected['kind']}({entity_id!r})",
-            } if selected["kind"] in ("face", "edge") and len(selected["occurrence_ids"]) <= 1 else None,
+            } if selected and selected["kind"] in ("face", "edge") and len(selected["occurrence_ids"]) <= 1 else None,
             "next_actions": ["agentcad docs editing — load this baseline with load_geometry; part/occurrence records link to their members"],
-        })
+        }
+        image_action = f"agentcad inspect {shlex.quote(file)}" + (f" --id {entity_id}" if entity_id else "") + " --image"
+        payload["next_actions"].insert(0, image_action)
+        if with_image:
+            from agentcad.geometry_images import geometry_image
+            from agentcad.project import derived_dir
+            try:
+                image = geometry_image(file, derived_dir("inspect", Path(file)), object_id=entity_id, isolate=isolate)
+                for key in ("png", "metadata"):
+                    image[key] = get_project().response_path(Path(image[key]))
+                payload["image"] = {"status": "success", **image}
+                if entity_id and not isolate:
+                    payload["next_actions"][0] = image_action + " --isolate"
+                elif not entity_id and payload["geometry_manifest"]["sample_ids"]["face"]:
+                    sample = payload["geometry_manifest"]["sample_ids"]["face"]
+                    payload["next_actions"][0] = f"agentcad inspect {shlex.quote(file)} --id {sample} --image"
+            except Exception as exc:
+                payload.update(status="error", error_kind="image_unavailable")
+                payload["image"] = {"status": "failed", "message": str(exc)}
+                payload["next_actions"] = [
+                    image_action + (" --isolate" if isolate else ""),
+                    f"agentcad inspect {shlex.quote(file)}" + (f" --id {entity_id}" if entity_id else " --ids"),
+                ]
+                payload["suggestion"] = (
+                    "Resolve the reported image error and retry, or inspect the record without --image. "
+                    "Headless Linux PNG rendering requires X11/GLX, for example xvfb-run -a."
+                )
+                _emit(payload, exit_code=1)
+                return
+        _emit(payload)
         return
 
     file_path = Path(file)
