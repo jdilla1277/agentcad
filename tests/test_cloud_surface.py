@@ -2,6 +2,8 @@
 
 import json
 import asyncio
+import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -58,7 +60,7 @@ def test_cli_and_mcp_complete_job_preserve_null_verdict(monkeypatch):
     response = CliRunner().invoke(cli, ["cloud", "job", PROJECT, JOB])
     assert response.exit_code == 0, response.output
     assert json.loads(response.stdout)["result"]["passed"] is None
-    result = server.cloud_job(PROJECT, JOB)
+    result = asyncio.run(server.cloud_job(PROJECT, JOB))
     assert result["result"]["passed"] is None and result["_exit_code"] == 0
 
 
@@ -76,7 +78,7 @@ def test_cloud_mcp_registers_typed_tools_alongside_local_tools():
 def test_cloud_mcp_missing_file_is_structured_and_does_not_change_cwd(tmp_path, monkeypatch):
     before = Path.cwd()
     install(monkeypatch, lambda _: pytest.fail("Missing file made a request"))
-    result = server.cloud_run(PROJECT, "missing.py", "first", cwd=str(tmp_path))
+    result = asyncio.run(server.cloud_run(PROJECT, "missing.py", "first", cwd=str(tmp_path)))
     assert result["status"] == "error" and result["_exit_code"] == 1
     assert Path.cwd() == before
 
@@ -104,3 +106,34 @@ def test_mcp_rejects_unsupported_options_before_submitting(monkeypatch):
 def test_mcp_discovery_declares_closed_cloud_arguments():
     tools = asyncio.run(server.mcp.list_tools())
     assert all(tool.inputSchema.get("additionalProperties") is False for tool in tools if tool.name.startswith("cloud_"))
+
+
+@pytest.mark.parametrize("operation", ["poll", "download"])
+def test_mcp_stays_responsive_during_cloud_io(operation, tmp_path, monkeypatch):
+    started = threading.Event()
+
+    def handler(request):
+        started.set()
+        if operation == "poll":
+            return httpx.Response(200, json={"id": JOB, "project_id": PROJECT, "status": "queued"})
+        time.sleep(1)
+        return httpx.Response(200, content=b"STEP download")
+
+    install(monkeypatch, handler)
+
+    async def check():
+        if operation == "poll":
+            tool, args = "cloud_job", {"project": PROJECT, "job": JOB, "wait_seconds": 1}
+        else:
+            tool, args = "cloud_download", {"project": PROJECT, "version": 1, "path": "v1_first/output.step",
+                                           "destination": str(tmp_path / "model.step")}
+        waiting = asyncio.create_task(server.mcp.call_tool(tool, args))
+        try:
+            assert await asyncio.to_thread(started.wait, 5), "Cloud request did not start"
+            tools = await asyncio.wait_for(server.mcp.list_tools(), timeout=0.5)
+            assert CLOUD_TOOLS <= {tool.name for tool in tools}
+            assert not waiting.done(), "Cloud I/O blocked discovery until the tool finished"
+        finally:
+            await waiting
+
+    asyncio.run(check())

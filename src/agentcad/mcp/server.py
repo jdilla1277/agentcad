@@ -1,5 +1,6 @@
 """agentcad MCP server — exposes CLI commands as MCP tools."""
 
+import asyncio
 import json
 import os
 import sys
@@ -38,36 +39,38 @@ class AgentCADMCP(FastMCP):
 mcp = AgentCADMCP(name="agentcad")
 
 
-def _cloud_tool(operation, **kwargs):
-    result = cloud_call(operation, **kwargs)
+async def _cloud_tool(operation, **kwargs):
+    # HTTP requests, polling sleeps, and local file I/O must not block MCP's
+    # event loop: discovery, pings, and cancellation still need to be served.
+    result = await asyncio.to_thread(cloud_call, operation, **kwargs)
     return {**result, "_exit_code": 1 if result.get("status") in {"error", "failed"} else 0}
 
 
 @mcp.tool()
-def cloud_create_project(name: str, runtime: Literal["build123d", "cadquery"] = "build123d") -> dict:
+async def cloud_create_project(name: str, runtime: Literal["build123d", "cadquery"] = "build123d") -> dict:
     """Create an account-owned cloud project. Runtime is build123d or cadquery.
 
     Requires AGENTCAD_API_URL, AGENTCAD_KEY_ID, AGENTCAD_KEY_SECRET in the server
     process environment. A lost response may still have created the project;
     check cloud_projects before creating another one.
     """
-    return _cloud_tool("create_project", name=name, runtime=runtime)
+    return await _cloud_tool("create_project", name=name, runtime=runtime)
 
 
 @mcp.tool()
-def cloud_projects() -> dict:
+async def cloud_projects() -> dict:
     """List cloud projects owned by the configured API account."""
-    return _cloud_tool("projects")
+    return await _cloud_tool("projects")
 
 
 @mcp.tool()
-def cloud_project(project: str) -> dict:
+async def cloud_project(project: str) -> dict:
     """Read a returned cloud project ID and its version count."""
-    return _cloud_tool("project", project=project)
+    return await _cloud_tool("project", project=project)
 
 
 @mcp.tool()
-def cloud_run(project: str, script: str, label: str, cwd: str | None = None, idempotency_key: str | None = None) -> dict:
+async def cloud_run(project: str, script: str, label: str, cwd: str | None = None, idempotency_key: str | None = None) -> dict:
     """Upload one explicit UTF-8 .py CAD script (at most 256 KiB) to a cloud project.
 
     Returns a job immediately. Call cloud_job with the returned project/job IDs.
@@ -76,63 +79,63 @@ def cloud_run(project: str, script: str, label: str, cwd: str | None = None, ide
     new version. Only this file is uploaded, not its folder or dependencies.
     cwd resolves the local file; no local AgentCAD project is required.
     """
-    return _cloud_tool("run", project=project, script=script, label=label, cwd=cwd, idempotency_key=idempotency_key)
+    return await _cloud_tool("run", project=project, script=script, label=label, cwd=cwd, idempotency_key=idempotency_key)
 
 
 @mcp.tool()
-def cloud_import(project: str, file: str, cwd: str | None = None, idempotency_key: str | None = None) -> dict:
+async def cloud_import(project: str, file: str, cwd: str | None = None, idempotency_key: str | None = None) -> dict:
     """Upload one explicit .step/.stp file (at most 20 MiB) to a cloud project.
 
     Returns a job immediately. Poll cloud_job; preserve the retry key for an
     identical lost-response retry. cwd resolves this one local file.
     """
-    return _cloud_tool("import_step", project=project, file=file, cwd=cwd, idempotency_key=idempotency_key)
+    return await _cloud_tool("import_step", project=project, file=file, cwd=cwd, idempotency_key=idempotency_key)
 
 
 @mcp.tool()
-def cloud_measure(project: str, version: int) -> dict:
+async def cloud_measure(project: str, version: int) -> dict:
     """Read stored cloud-version measurements using returned project/version IDs.
 
     Read metrics.is_valid separately from spec pass/fail and human acceptance.
     """
-    return _cloud_tool("measure", project=project, version=version)
+    return await _cloud_tool("measure", project=project, version=version)
 
 
 @mcp.tool()
-def cloud_inspect(project: str, version: int, ids: bool = False, summary: bool = False, limit: int = 100,
+async def cloud_inspect(project: str, version: int, ids: bool = False, summary: bool = False, limit: int = 100,
                   validate_only: bool = False, idempotency_key: str | None = None) -> dict:
     """Inspect a stored cloud version; returns a job to poll with cloud_job.
 
     limit is 1..1000. validate_only cannot combine with ids/summary. Completed
     inspection and geometry_valid are separate; invalid geometry can be inspected.
     """
-    return _cloud_tool("inspect", project=project, version=version, ids=ids, summary=summary, limit=limit,
+    return await _cloud_tool("inspect", project=project, version=version, ids=ids, summary=summary, limit=limit,
                        validate_only=validate_only, idempotency_key=idempotency_key)
 
 
 @mcp.tool()
-def cloud_check_spec(project: str, version: int, spec_file: str, cwd: str | None = None, idempotency_key: str | None = None) -> dict:
+async def cloud_check_spec(project: str, version: int, spec_file: str, cwd: str | None = None, idempotency_key: str | None = None) -> dict:
     """Upload one explicit JSON spec (at most 256 KiB); returns a verification job.
 
     Poll cloud_job. Supported solid/shell counts and cylinder checks can pass or
     fail; unsupported requirements remain listed and passed can be null. Job
     completion, geometry_valid, and passed are separate. cwd resolves spec_file.
     """
-    return _cloud_tool("check_spec", project=project, version=version, spec_file=spec_file, cwd=cwd, idempotency_key=idempotency_key)
+    return await _cloud_tool("check_spec", project=project, version=version, spec_file=spec_file, cwd=cwd, idempotency_key=idempotency_key)
 
 
 @mcp.tool()
-def cloud_render(project: str, version: int, idempotency_key: str | None = None) -> dict:
+async def cloud_render(project: str, version: int, idempotency_key: str | None = None) -> dict:
     """Request the fixed 800x600 isometric PNG of a cloud version; returns a job.
 
     Poll cloud_job then use cloud_download(kind='render', job=ID) to open the
     picture locally. Rendering does not establish geometry validity or approval.
     """
-    return _cloud_tool("render", project=project, version=version, idempotency_key=idempotency_key)
+    return await _cloud_tool("render", project=project, version=version, idempotency_key=idempotency_key)
 
 
 @mcp.tool()
-def cloud_diff(project: str, from_version: int, to_version: int, idempotency_key: str | None = None) -> dict:
+async def cloud_diff(project: str, from_version: int, to_version: int, idempotency_key: str | None = None) -> dict:
     """Compare two stored versions in one cloud project; returns a job.
 
     Poll cloud_job for metric changes and comparison_3d. Preserve its exact or
@@ -140,22 +143,22 @@ def cloud_diff(project: str, from_version: int, to_version: int, idempotency_key
     unavailable comparison does not establish unchanged geometry. Files are
     compared in their stored positions, without alignment or an interactive viewer.
     """
-    return _cloud_tool("diff", project=project, from_version=from_version, to_version=to_version, idempotency_key=idempotency_key)
+    return await _cloud_tool("diff", project=project, from_version=from_version, to_version=to_version, idempotency_key=idempotency_key)
 
 
 @mcp.tool()
-def cloud_job(project: str, job: str, wait_seconds: int = 0) -> dict:
+async def cloud_job(project: str, job: str, wait_seconds: int = 0) -> dict:
     """Read a cloud job and, when complete, its nested result or measurement.
 
     wait_seconds is 0..60. Queued/running means poll this same job again, not
     resubmit it. Job status is distinct from result.geometry_valid, result.passed,
     and result.comparison_3d.status. A failed job returns its reason.
     """
-    return _cloud_tool("job", project=project, job=job, wait_seconds=wait_seconds)
+    return await _cloud_tool("job", project=project, job=job, wait_seconds=wait_seconds)
 
 
 @mcp.tool()
-def cloud_download(project: str, destination: str, job: str | None = None, kind: Literal["step", "render", "report"] = "step",
+async def cloud_download(project: str, destination: str, job: str | None = None, kind: Literal["step", "render", "report"] = "step",
                    version: int | None = None, path: str | None = None, cwd: str | None = None, overwrite: bool = False) -> dict:
     """Download a private STEP, PNG render, or JSON report to an explicit local file.
 
@@ -164,7 +167,7 @@ def cloud_download(project: str, destination: str, job: str | None = None, kind:
     cwd resolves destination. Existing files are preserved unless overwrite=True.
     Returns byte count and SHA-256; interrupted downloads leave no partial file.
     """
-    return _cloud_tool("download", project=project, destination=destination, job=job, kind=kind,
+    return await _cloud_tool("download", project=project, destination=destination, job=job, kind=kind,
                        version=version, path=path, cwd=cwd, overwrite=overwrite)
 
 
