@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from time import perf_counter
 
 import pytest
 
@@ -87,12 +86,9 @@ def test_real_file_reload_and_lookup(runner, isolated_dir, name):
     faces = [e for e in context.manifest["entities"].values() if e["kind"] == "face"]
     for face in faces:
         assert context.pick_face(face["id"]).area == pytest.approx(face["area"], abs=1e-3)
-    from agentcad.geometry_manifest import record
-    saved = context.manifest
-    start = perf_counter()
-    for _ in range(100):
-        record(saved, faces[-1]["id"])
-    assert (perf_counter() - start) / 100 < 0.1
+    looked_up = _json(runner, ["inspect", imported["outputs"]["step"], "--id", faces[-1]["id"]])
+    assert looked_up["entity"] == faces[-1]
+    assert looked_up["geometry_manifest"]["manifest_id"] == context.manifest["manifest_id"]
 
 
 def test_cli_and_mcp_lookup_are_equivalent(runner, isolated_dir):
