@@ -755,7 +755,10 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     if manifest_ok:
         sample = response["geometry_manifest"]["sample_ids"]["face"]
         if sample:
-            response["next_actions"][-1] = f"agentcad inspect {step_argument} --id {sample} --image{root_arg}"
+            response["next_actions"][-1] = (
+                f"agentcad inspect {step_argument} --id {sample} --image{root_arg}"
+                " — highlight this ID; add --isolate to show only the target"
+            )
     response["more_at"] = "agentcad docs editing"
     click.echo(json.dumps(response))
 
