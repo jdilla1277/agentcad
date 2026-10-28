@@ -636,6 +636,7 @@ const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
 const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
 const partObjects = new Map();
 const partObjectsByRole = { a: new Map(), b: new Map() };
+const commentPartObjectsByModel = new WeakMap();
 const partRows = new Map();
 const groupRows = new Map();
 let currentMode = null;
@@ -1186,16 +1187,21 @@ function registerPartMeshes(model) {
   });
 }
 
-function indexCommentPartMeshes(model, role) {
-  const index = partObjectsByRole[role];
-  model.traverse(c => {
-    if (!c.isMesh) return;
-    const partId = detectPartId(c, COMMENT_PARTS);
-    if (!partId) return;
-    c.userData.partId = partId;
-    if (!index.has(partId)) index.set(partId, []);
-    index.get(partId).push(c);
-  });
+function indexCommentPartMeshes(model, role=null) {
+  let index = commentPartObjectsByModel.get(model);
+  if (!index) {
+    index = new Map();
+    model.traverse(c => {
+      if (!c.isMesh) return;
+      const partId = detectPartId(c, COMMENT_PARTS);
+      if (!partId) return;
+      c.userData.partId = partId;
+      if (!index.has(partId)) index.set(partId, []);
+      index.get(partId).push(c);
+    });
+    commentPartObjectsByModel.set(model, index);
+  }
+  if (role) partObjectsByRole[role] = index;
 }
 
 function partIsPrimary(partId) {
@@ -1840,14 +1846,8 @@ function commentPartVisible(comment, role) {
   if (!model || !objectIsVisible(model)) return false;
   const partId = comment.target?.part_id;
   if (!partId) return true;
-  if (!['side-by-side', 'overlay'].includes(currentMode)) {
-    return commentPartMeshes(partId, role).some(objectIsVisible);
-  }
-  let visible = false;
-  model.traverseVisible(mesh => {
-    if (mesh.isMesh && detectPartId(mesh, COMMENT_PARTS) === partId) visible = true;
-  });
-  return visible;
+  const meshes = commentPartObjectsByModel.get(model)?.get(partId) || [];
+  return meshes.some(objectIsVisible);
 }
 
 function pointFromPartRelative(anchor, partId, role, useCurrentParts=false) {
@@ -2992,6 +2992,9 @@ function attach(scene, url, { material, onMesh, alignToCenter=false }) {
       axes.position.set(box.min.x - maxDim * 0.3, box.min.y + 0.02, box.min.z - maxDim * 0.3);
       scene.add(axes);
 
+      // All scene copies get an index once, so pin updates never need to
+      // traverse the assembly or match mesh names on each animation frame.
+      indexCommentPartMeshes(model);
       if (onMesh) onMesh(model);
       resolve(model);
     }, undefined, reject);
@@ -3011,7 +3014,10 @@ function fitCamera(box=combinedBox, preserveDirection=false) {
     : new THREE.Vector3(1.2, 0.8, 1.2).normalize();
   const center = box.getCenter(new THREE.Vector3());
   const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 0.01);
-  const aspect = canvas.clientWidth / canvas.clientHeight / (splitMode ? 2 : 1);
+  // Parts and Agent views hide the canvas, making its client size zero even
+  // when model loading is still in progress. The renderer retains its size.
+  const viewport = renderer.getSize(new THREE.Vector2());
+  const aspect = viewport.x / viewport.y / (splitMode ? 2 : 1);
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   const limitingHalfFov = Math.min(halfFov, Math.atan(Math.tan(halfFov) * aspect));
   const distance = radius / Math.sin(limitingHalfFov) * 1.12;
