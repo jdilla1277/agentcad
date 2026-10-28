@@ -280,6 +280,9 @@ def run(
 
     New projects use build123d. Existing CadQuery compatibility projects follow
     the runtime pinned in their agentcad.json.
+    Saved STEP versions also issue version-local geometry IDs. Use inspect
+    with report=True or entity_id to inspect the result without re-importing.
+    Reports/images are prepared on request; dry runs do not issue IDs.
 
     Args:
         script: Path to the Python CAD script.
@@ -461,7 +464,7 @@ def inspect(
         summary: Include compact face/edge clusters.
         limit: Optional maximum records per ID list and IDs per summary cluster.
         no_limit: Return complete ID lists. Can be very large.
-        entity_id: Retrieve one typed ID from the imported baseline's geometry manifest.
+        entity_id: Retrieve one typed ID from an imported or run-generated baseline's geometry manifest.
         image: Return a labeled four-view PNG attachment plus its JSON record.
         isolate: Show only the selected entity; requires image and entity_id.
         report: Return the saved compact inspection report and ranked sample bundle.
