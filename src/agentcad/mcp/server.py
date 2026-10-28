@@ -434,6 +434,10 @@ def inspect(
     entity_id: str | None = None,
     image: bool = False,
     isolate: bool = False,
+    report: bool = False,
+    report_images: bool = True,
+    max_images: int = 9,
+    text_budget: int = 2000,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
@@ -449,8 +453,20 @@ def inspect(
         entity_id: Retrieve one typed ID from the imported baseline's geometry manifest.
         image: Return a labeled four-view PNG attachment plus its JSON record.
         isolate: Show only the selected entity; requires image and entity_id.
+        report: Return the saved compact inspection report and ranked sample bundle.
+        report_images: Prepare/deliver report images; false keeps the same analysis without images.
+        max_images: Maximum distinct report images, 0..9; overall then alternating part/face-edge samples.
+        text_budget: Estimated token allowance for the report JSON (compact UTF-8 bytes / 3).
     """
     args = ["inspect", file]
+    if report:
+        args.append("--report")
+    if not report_images:
+        args.append("--no-images")
+    if report or max_images != 9:
+        args.extend(["--max-images", str(max_images)])
+    if report or text_budget != 2000:
+        args.extend(["--text-budget", str(text_budget)])
     if entity_id is not None:
         args.extend(["--id", entity_id])
     if image:
@@ -466,21 +482,27 @@ def inspect(
     if no_limit:
         args.append("--no-limit")
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
+    media = result.get("media", []) if report else []
     if image and result.get("image", {}).get("status") == "success":
-        path = Path(result["image"]["png"])
-        if not path.is_absolute():
-            path = Path(cwd) / path
+        media = [{"png": result["image"]["png"], "sha256": result["image"]["png_sha256"]}]
+    if media:
+        attachments = []
         try:
-            png = path.read_bytes()
-            if hashlib.sha256(png).hexdigest() != result["image"]["png_sha256"]:
-                raise ValueError("Image changed before attachment; retry the image request.")
+            for item in media:
+                path = Path(item["png"])
+                if report:
+                    path = Path(result["inventory"]["image_root"]) / path
+                if not path.is_absolute():
+                    path = Path(cwd) / path
+                png = path.read_bytes()
+                if hashlib.sha256(png).hexdigest() != item["sha256"]:
+                    raise ValueError("Image changed before attachment; retry the image request.")
+                attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
         except (OSError, ValueError) as exc:
             return {**result, "status": "error", "_exit_code": 1,
                     "image": {"status": "failed", "message": str(exc)}}
         return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(result)), ImageContent(
-                type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii"),
-            )],
+            content=[TextContent(type="text", text=json.dumps(result)), *attachments],
             structuredContent=result,
         )
     return result

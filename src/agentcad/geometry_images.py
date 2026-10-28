@@ -11,7 +11,7 @@ import tempfile
 from agentcad.geometry_manifest import BaselineGeometry, _digest, read_manifest, record
 from agentcad.versioning import atomic_write_json
 
-IMAGE_REVISION = "geometry-image-v1"
+IMAGE_REVISION = "geometry-image-v3"
 IMAGE_SIZE = 1024
 IMAGE_VIEWS = ("iso", "top", "front", "right")
 
@@ -50,14 +50,13 @@ def _bounds(shape):
 
 
 def _overall_labels(saved):
-    # Bound the overall sheet to four placed leaf parts and four large faces.
-    entities = list(saved["entities"].values())
-    parts = [e for e in entities if e["kind"] == "occurrence" and e["mapping_status"] != "assembly"]
-    faces = sorted((e for e in entities if e["kind"] == "face"), key=lambda e: (-e["area"], e["index"]))
-    return [e["id"] for e in parts[:4] + faces[:4]]
+    from agentcad.inspection_samples import select_samples
+
+    plan = select_samples(saved)
+    return [entry["id"] for entry in plan["parts"] + plan["features"]]
 
 
-def geometry_image(step_path, output_root, *, object_id=None, isolate=False):
+def geometry_image(step_path, output_root, *, object_id=None, isolate=False, _session=None):
     """Verify the baseline on every call; cache only a checked derived image."""
     step_path = Path(step_path)
     saved = read_manifest(step_path)
@@ -85,7 +84,11 @@ def geometry_image(step_path, output_root, *, object_id=None, isolate=False):
     except (OSError, ValueError, KeyError, TypeError):
         pass
 
-    context = BaselineGeometry(step_path)
+    context = (_session or {}).get("context")
+    if context is None or context.manifest_id != saved["manifest_id"]:
+        context = BaselineGeometry(step_path)
+        if _session is not None:
+            _session["context"] = context
     overall = context.shape.wrapped
     target = context.image_shape(object_id) if object_id else None
     frame = target if isolate else overall
