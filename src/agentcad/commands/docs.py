@@ -80,6 +80,8 @@ SECTIONS = {
         "  approximate method and unavailable/timeout states. Unavailable does\n"
         "  not mean unchanged; rendering does not establish validity.\n"
         "  This is a local MCP adapter calling HTTPS, not a hosted remote MCP URL.\n"
+        "  Full setup and build/edit walkthrough:\n"
+        "    https://github.com/jdilla1277/agentcad/blob/main/docs/cloud-workflow.md\n"
     ),
     "artifacts": (
         "Artifact directories and version labels:\n"
