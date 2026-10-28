@@ -622,7 +622,8 @@ const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
 const hasPartChanges = Boolean(PART_CHANGES);
 const hasPartsView = hasParts || hasPartChanges;
 const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
-const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
+const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec || REVIEW.change_receipt);
+const singleModelRole = REVIEW && REVIEW.change_receipt ? 'Retained' : 'Current';
 const partObjects = new Map();
 const partObjectsByRole = { a: new Map(), b: new Map() };
 const partRows = new Map();
@@ -730,8 +731,8 @@ function setupModeButtons() {
     disable('btn-side', 'Open two models to use side-by-side comparison.');
     disable('btn-overlay', 'Open two models to use overlay comparison.');
   }
-  document.getElementById('btn-single-a').textContent = hasB ? 'Previous' : 'Current';
-  document.getElementById('btn-single-a').title = hasB ? LABEL_A : `Current · ${LABEL_A}`;
+  document.getElementById('btn-single-a').textContent = hasB ? 'Previous' : singleModelRole;
+  document.getElementById('btn-single-a').title = hasB ? LABEL_A : `${singleModelRole} · ${LABEL_A}`;
   document.getElementById('btn-single-b').textContent = 'Current';
   document.getElementById('btn-single-b').title = `Current · ${LABEL_B}`;
   if (!hasAgentView) {
@@ -1466,14 +1467,14 @@ function cancelCommentPlacement() {
 function commentScopeLabel(scope) {
   if (scope === 'previous') return 'Previous';
   if (scope === 'both') return 'Both';
-  if (!hasB) return 'Current';
+  if (!hasB) return singleModelRole;
   return scope === 'b' ? 'Current' : 'Previous';
 }
 
 function commentScopeDescription(scope) {
   if (scope === 'previous') return 'Previous revision is not displayed in this viewer';
   if (scope === 'both') return `Both · ${LABEL_A} + ${LABEL_B}`;
-  if (!hasB) return `Current · ${LABEL_A}`;
+  if (!hasB) return `${singleModelRole} · ${LABEL_A}`;
   return scope === 'b' ? `Current · ${LABEL_B}` : `Previous · ${LABEL_A}`;
 }
 
@@ -2468,6 +2469,10 @@ function makeReviewRow({ label, status, badge, summary, bucket, missing }) {
 }
 
 function setupReviewPanel() {
+  if (REVIEW.change_receipt) {
+    setupChangeReceiptPanel();
+    return;
+  }
   const measure = REVIEW.measure || {};
   const spec = REVIEW.check_spec || null;
   const dims = (spec && spec.metrics && spec.metrics.dimensions) || (measure.metrics && measure.metrics.dimensions) || {};
@@ -2584,6 +2589,47 @@ function setupReviewPanel() {
       summary: `axis ${bucket.axis} · ${bucket.representative_centers.length} representative centers`,
       bucket,
     }));
+  }
+}
+
+function setupChangeReceiptPanel() {
+  const number = value => value === null || value === undefined ? 'unavailable' : String(value);
+  const receipt = REVIEW.change_receipt;
+  const state = receipt.validation_state;
+  const tone = state === 'valid' ? 'pass' : state === 'invalid' ? 'fail' : 'info';
+  document.getElementById('review-heading').textContent = 'Change checks';
+  document.getElementById('btn-spec').textContent = 'Change checks';
+  const pill = document.getElementById('review-pill');
+  pill.textContent = state;
+  pill.className = 'pill ' + tone;
+  document.getElementById('review-subtitle').textContent =
+    `Retained snapshot ${receipt.candidate.revision_id}. This view does not change acceptance. Reopen to refresh the receipt.`;
+  document.getElementById('review-features').textContent = `${receipt.checks.filter(c => c.state === 'pass').length} / ${receipt.checks.length}`;
+  document.getElementById('review-error').textContent = String(receipt.blockers.length);
+  document.querySelector('#review-features').parentElement.querySelector('span').textContent = 'Checks passed';
+  document.querySelector('#review-error').parentElement.querySelector('span').textContent = 'Blockers';
+  document.querySelector('#review-validity').parentElement.querySelector('span').textContent = 'Check state';
+  document.querySelector('#review-spec-section h2').textContent = 'Requirements';
+  document.getElementById('review-dimensions').closest('section').style.display = 'none';
+  document.getElementById('review-validity').textContent = state;
+  document.getElementById('review-measure-section').style.display = 'none';
+  const rows = document.getElementById('review-spec-rows');
+  const required = new Set(REVIEW.check_policy.checks.filter(c => c.require_completion).map(c => c.check_id));
+  for (const check of receipt.checks) {
+    const observed = check.observed || {};
+    let summary = observed.reason || JSON.stringify(observed);
+    if (observed.expected_mm !== undefined) {
+      summary = `Expected ${number(observed.expected_mm)} mm ± ${number(observed.tolerance_mm)} mm; measured ${number(observed.measured_mm)} mm.`;
+    } else if (observed.expected_count !== undefined) {
+      const diameters = [...new Set((observed.cylinders || []).map(c => c.diameter_mm))]
+        .sort((a, b) => Math.abs(a - observed.expected_diameter_mm) - Math.abs(b - observed.expected_diameter_mm));
+      summary = `Expected ${observed.expected_count} cylinders at diameter ${number(observed.expected_diameter_mm)} mm ± ${number(observed.tolerance_mm)} mm; matched ${observed.matched_count}. Measured axis diameters: ${diameters.slice(0, 6).map(number).join(', ') || 'none'} mm${diameters.length > 6 ? ' (more in receipt)' : ''}.`;
+    } else if (observed.expected_displacement_mm !== undefined) {
+      summary = `Expected unchanged axes; maximum center displacement ${number(observed.max_displacement_mm)} mm; diameter change ${number(observed.max_diameter_change_mm)} mm; tolerance ${number(observed.tolerance_mm)} mm.`;
+    }
+    rows.appendChild(makeReviewRow({label: `${check.check_id} (${required.has(check.check_id) ? 'required' : 'advisory'})`,
+      status: check.state === 'pass' ? 'pass' : check.state === 'fail' ? 'fail' : 'info',
+      badge: check.state, summary}));
   }
 }
 
@@ -3109,7 +3155,7 @@ function setMode(mode) {
   if (mode === 'single-a') {
     clearReviewMarkers();
     currentScene = sceneA_single;
-    labelL.textContent = `${hasB ? 'Previous' : 'Current'} · ${LABEL_A}`;
+    labelL.textContent = `${hasB ? 'Previous' : singleModelRole} · ${LABEL_A}`;
     labelL.style.display = 'block';
     if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
   } else if (mode === 'single-b') {
@@ -3132,7 +3178,7 @@ function setMode(mode) {
     currentScene = sceneA_single;
     if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
     specPanel.style.display = 'grid';
-    labelL.textContent = `${hasB ? 'Previous' : 'Current'} · ${LABEL_A}`;
+    labelL.textContent = `${hasB ? 'Previous' : singleModelRole} · ${LABEL_A}`;
     labelL.style.display = 'block';
     selectFirstReviewRow();
   }
@@ -3448,7 +3494,7 @@ def _render_unified(
         "__PARTS_JSON__": json.dumps(parts_payload),
         "__PART_CHANGES_JSON__": json.dumps(part_changes) if part_changes else "null",
         "__GROUPS_JSON__": json.dumps(groups_payload),
-        "__REVIEW_JSON__": json.dumps(review) if review else "null",
+        "__REVIEW_JSON__": json.dumps(review).replace("</", "<\\/") if review else "null",
         "__PART_REVIEW_JSON__": json.dumps(part_review) if part_review else "null",
         "__VIEWER_CONTEXT_JSON__": json.dumps(viewer_context or {}),
         "__COMMENT_PARTS_JSON__": json.dumps([
@@ -3467,7 +3513,8 @@ def _render_single(glb_path, *, review=None):
     _render_unified(
         html_path,
         glb_a=glb_path,
-        label_a=glb_path.name,
+        label_a=(review["change_receipt"]["candidate"]["revision_id"]
+                 if review and review.get("change_receipt") else glb_path.name),
         default_mode="spec" if review else "single-a",
         review=review,
     )
@@ -3686,11 +3733,29 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None, in
 )
 @project_options
 def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
-    """Open a GLB or STEP file in the browser.
+    """Open a GLB, STEP, or retained revision in the browser.
 
     With one file: single-model viewer.
     With two files: diff view (side-by-side by default, or --overlay for tinted overlay).
+    A retained revision opens its diagnostic geometry and pinned check receipt.
     """
+    retained_review = None
+    if file.startswith("r_") and not Path(file).exists():
+        if file_b or spec_file or overlay:
+            _error("Open a retained revision alone; its requirements are already pinned.")
+        from agentcad.change_store import ChangeStore
+        store = ChangeStore(get_project().build_root)
+        revision_id = file
+        try:
+            saved = store.read(revision_id)
+            checked = store.read_checks(revision_id)
+            geometry = next((a for a in (saved["candidate"] or {}).get("inputs", []) if a["role"] == "geometry"), None)
+            if geometry is None:
+                _error("This revision has no renderable geometry. Inspect its retained source and diagnostics; no older model was substituted.")
+            file = str(store.root / geometry["path"])
+            retained_review = {"change_receipt": checked["receipt"], "check_policy": saved["policy"]}
+        except ValueError as exc:
+            _error(str(exc))
     if with_validation and file_b is not None:
         _error("--validation accepts one STEP/BREP file; omit the second file.")
     review, err = _build_review_payload(
@@ -3701,6 +3766,8 @@ def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
     )
     if err:
         _error(err)
+    if retained_review:
+        review = {**(review or {}), **retained_review}
 
     if file_b is None:
         glb_a, shape_a, err = _resolve_to_glb_and_shape(file)
@@ -3719,6 +3786,9 @@ def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
         if review:
             response["mode"] = "validation" if with_validation else "spec"
             response["review"] = True
+            if retained_review:
+                response.update(mode="checks", revision_id=revision_id,
+                                receipt=checked["receipt_path"], current_advanced=False)
             if with_validation:
                 response["validation"] = review["validation"]
                 response["is_valid"] = review["validation"]["is_valid"]

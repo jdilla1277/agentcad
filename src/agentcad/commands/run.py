@@ -26,6 +26,7 @@ from agentcad.commands.export_cmd import (
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import load_manifest
+from agentcad.change_retention import change_options
 
 
 _DEFAULT_RUN_TIMEOUT_S = 115.0
@@ -170,6 +171,8 @@ def _run_retry_command(ctx, *, script=None, omit=(), **overrides):
         ("--no-diff", values.get("auto_diff") is False),
         ("--no-view", values.get("open_view") is False),
         ("--params", values.get("params")),
+        ("--checks", values.get("checks_file")),
+        ("--defer-checks", values.get("defer_checks", False)),
         ("--dry-run", values.get("dry_run", False)),
         ("--runtime", values.get("runtime")),
         ("--validation-profile", values.get("validation_profile")
@@ -1240,6 +1243,7 @@ def _assign_part_identity(raw_parts):
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @click.pass_context
 @project_options
+@change_options
 def run(
     ctx, script, label, legacy_output, render, export, preview, auto_diff,
     open_view, params, dry_run, runtime, validation_profile, no_daemon,
@@ -1331,6 +1335,8 @@ def run(
             auto_diff=auto_diff,
             open_view=open_view,
             no_daemon=no_daemon,
+            checks_file=ctx.meta.get("change_checks_file"),
+            defer_checks=ctx.meta.get("change_defer_checks", False),
         )
         return
 
@@ -1438,6 +1444,8 @@ def _run_impl(
         argv.extend(["--runtime", runtime])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
+    from agentcad.change_retention import forward_check_options
+    forward_check_options(argv)
     # Check syntax/capture locally before contacting a daemon or importing CAD.
     _t = _start_phase("validation")
 
@@ -1897,6 +1905,14 @@ def _run_impl(
             warnings,
             invalid_response,
         )
+
+    from agentcad.change_retention import assess_change
+    blocked = assess_change({"command": "run", "status": "success", "metrics": metrics,
+                             "validation": validation, "validation_profile": validation_profile}, staged_step)
+    if blocked:
+        _discard_staged_step()
+        _emit_run(blocked)
+        sys.exit(1)
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:

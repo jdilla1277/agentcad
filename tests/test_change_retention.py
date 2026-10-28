@@ -389,3 +389,210 @@ def test_import_core_retention_failure_cleans_unaccepted_version(
     assert payload["change"]["status"] == "incomplete"
     assert not list(isolated_dir.glob("v1_*"))
     assert json.loads((isolated_dir / "agentcad.json").read_text())["versions"] == []
+
+
+def test_declared_failure_preserves_current_and_repair_inherits_checks(runner, isolated_dir):
+    init(runner)
+    script = isolated_dir / "script.py"
+    script.write_text(BRACKET)
+    result, good = run(runner, "accepted")
+    assert result.exit_code == 0, result.output
+    requirements = {
+        "schema_version": 1,
+        "checks": [
+            {
+                "check_id": "length",
+                "kind": "dimension",
+                "axis": "x",
+                "expected_mm": 80,
+                "tolerance_mm": 0.1,
+            }
+        ],
+    }
+    (isolated_dir / "checks.json").write_text(json.dumps(requirements))
+    result = runner.invoke(
+        cli, ["run", "script.py", "--label", "wrong", "--checks", "checks.json", *QUIET]
+    )
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "checks_failed"
+    assert payload["outputs"]["step"] is None
+    assert Path(payload["change"]["geometry"]).is_file()
+    checked = payload["change"]["validation_checks"]
+    assert checked["blockers"][0]["check_id"] == "length"
+    assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == "accepted"
+    script.write_text(BRACKET.replace("60, 30, 6", "80, 30, 6"))
+    result, repaired = run(runner, "repaired")
+    assert result.exit_code == 0, result.output
+    assert repaired["change"]["validation_checks"]["promotion_ready"] is True
+    assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == "repaired"
+
+
+def test_deferred_check_cli_completes_without_accepting_and_mcp_reads_receipt(runner, isolated_dir):
+    from agentcad.mcp import server
+
+    init(runner)
+    (isolated_dir / "script.py").write_text(BRACKET)
+    (isolated_dir / "checks.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "checks": [
+                    {"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 60}
+                ],
+            }
+        )
+    )
+    result = runner.invoke(
+        cli,
+        [
+            "run",
+            "script.py",
+            "--label",
+            "later",
+            "--checks",
+            "checks.json",
+            "--defer-checks",
+            *QUIET,
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "checks_pending"
+    revision = payload["change"]["revision_id"]
+    pending = runner.invoke(cli, ["check-spec", revision, "--no-daemon"])
+    assert json.loads(pending.stdout)["validation_state"] == "pending"
+    completed = runner.invoke(cli, ["check-spec", revision, "--complete", "--no-daemon"])
+    assert completed.exit_code == 0, completed.output
+    assert json.loads(completed.stdout)["validation_state"] == "valid"
+    assert json.loads((isolated_dir / "agentcad.json").read_text()).get("current") is None
+    result = server.check_spec(revision, None, str(isolated_dir))
+    assert result["validation_state"] == "valid"
+    assert result["current_advanced"] is False
+
+
+@pytest.mark.parametrize("expected,passed", [(60, True), (80, False)])
+def test_import_checks_measure_and_deliver_the_same_normalized_bytes(
+    runner, isolated_dir, expected, passed
+):
+    init(runner)
+    (isolated_dir / "script.py").write_text(BRACKET)
+    result, built = run(runner, "accepted")
+    assert result.exit_code == 0, result.output
+    source = Path(built["outputs"]["step"])
+    (isolated_dir / "checks.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "checks": [
+                    {
+                        "check_id": "length",
+                        "kind": "dimension",
+                        "axis": "x",
+                        "expected_mm": expected,
+                    }
+                ],
+            }
+        )
+    )
+    result = runner.invoke(
+        cli,
+        [
+            "import",
+            str(source),
+            "--label",
+            "checked-import",
+            "--checks",
+            "checks.json",
+            "--no-view",
+            "--no-diff",
+            "--no-inspection-image",
+            "--no-daemon",
+        ],
+    )
+    payload = json.loads(result.stdout)
+    assert result.exit_code == (0 if passed else 1), result.output
+    if passed:
+        assert (
+            Path(payload["change"]["geometry"]).read_bytes()
+            == Path(payload["outputs"]["step"]).read_bytes()
+        )
+    else:
+        assert payload["status"] == "checks_failed"
+        assert payload["outputs"]["step"] is None
+    assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == (
+        "checked-import" if passed else "accepted"
+    )
+
+
+def test_failed_revision_opens_viewer_with_the_same_receipt(runner, isolated_dir):
+    init(runner)
+    (isolated_dir / "script.py").write_text(BRACKET)
+    (isolated_dir / "checks.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "checks": [
+                    {"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 80}
+                ],
+            }
+        )
+    )
+    result = runner.invoke(
+        cli, ["run", "script.py", "--label", "wrong", "--checks", "checks.json", *QUIET]
+    )
+    revision = json.loads(result.stdout)["change"]["revision_id"]
+    viewed = runner.invoke(cli, ["view", revision])
+    assert viewed.exit_code == 0, viewed.output
+    payload = json.loads(viewed.stdout)
+    assert payload["mode"] == "checks"
+    assert payload["revision_id"] == revision
+    from urllib.parse import urlparse, unquote
+
+    html = Path(unquote(urlparse(payload["url"]).path)).read_text()
+    assert '"change_receipt"' in html
+    assert '"expected_mm": 80' in html
+    assert '"validation_state": "invalid"' in html
+    assert json.loads((isolated_dir / "agentcad.json").read_text()).get("current") is None
+
+
+def test_wrong_bore_and_preserved_mounts_have_independent_pinned_results(runner, isolated_dir):
+    init(runner)
+    script = isolated_dir / "script.py"
+    script.write_text(BRACKET)
+    result, baseline = run(runner, "accepted")
+    assert result.exit_code == 0, result.output
+    baseline_id = baseline["change"]["revision_id"]
+    checks = {
+        "schema_version": 1,
+        "checks": [
+            {"check_id": "bore", "kind": "cylinders", "axis": "z", "diameter_mm": 12, "count": 1},
+            {
+                "check_id": "mounts",
+                "kind": "preserve_cylinders",
+                "axis": "z",
+                "diameter_mm": 6,
+                "baseline_revision_id": baseline_id,
+            },
+        ],
+    }
+    (isolated_dir / "checks.json").write_text(json.dumps(checks))
+    source = BRACKET.replace("60, 30, 6", "80, 30, 6").replace(
+        "bracket = fillet", "plate = plate - Cylinder(5.8, 12)\nbracket = fillet"
+    )
+    script.write_text(source)
+    result = runner.invoke(
+        cli, ["run", "script.py", "--label", "wrong-bore", "--checks", "checks.json", *QUIET]
+    )
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "checks_failed", result.output
+    rows = {r["check_id"]: r for r in payload["change"]["validation_checks"]["checks"]}
+    assert rows["bore"]["state"] == "fail"
+    assert rows["mounts"]["state"] == "pass"
+    saved = ChangeStore(isolated_dir).read(payload["change"]["revision_id"])
+    assert any(a["name"] == "baseline:mounts" for a in saved["candidate"]["inputs"])
+    script.write_text(source.replace("Cylinder(5.8, 12)", "Cylinder(6, 12)"))
+    result, repaired = run(runner, "repaired-bore")
+    assert result.exit_code == 0, result.output
+    assert repaired["change"]["validation_checks"]["promotion_ready"] is True

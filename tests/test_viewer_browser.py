@@ -66,6 +66,51 @@ def _canvas_pixel_summary(page):
     )
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+def test_retained_revision_viewer_shows_required_check_states(runner, isolated_dir, deferred):
+    sync_playwright = _require_playwright()
+    initialized = runner.invoke(cli, ["init", "--name", "checks", "--runtime", "build123d"])
+    assert initialized.exit_code == 0, initialized.output
+    (isolated_dir / "bracket.py").write_text(
+        "plate = Box(60, 30, 6) - Pos(-20, 0, 0) * Cylinder(3, 12) - Pos(20, 0, 0) * Cylinder(3, 12)\n"
+        "show_object(fillet(plate.edges().filter_by(Axis.Z), radius=1))\n"
+    )
+    (isolated_dir / "checks.json").write_text(json.dumps({"schema_version": 1, "checks": [
+        {"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 80},
+        {"check_id": "vendor", "kind": "external", "validator": "vendor"},
+    ]}))
+    built = runner.invoke(cli, ["run", "bracket.py", "--label", "wrong", "--checks", "checks.json",
+                               "--no-preview", "--no-diff", "--no-view", "--no-daemon"]
+                          + (["--defer-checks"] if deferred else []))
+    assert built.exit_code == 1, built.output
+    revision = json.loads(built.stdout)["change"]["revision_id"]
+    viewed = runner.invoke(cli, ["view", revision])
+    assert viewed.exit_code == 0, viewed.output
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto(json.loads(viewed.stdout)["url"], wait_until="domcontentloaded")
+            page.wait_for_selector("#spec-panel", state="visible", timeout=45_000)
+            assert page.locator("#review-heading").inner_text() == "Change checks"
+            assert page.locator("#review-pill").inner_text().lower() == ("pending" if deferred else "invalid")
+            rows = page.locator("#review-spec-rows").inner_text().lower()
+            assert "length (required)" in rows
+            assert "vendor (required)" in rows
+            assert ("pending" if deferred else "unavailable") in rows
+            assert "pass" in rows  # Core execution and written geometry remain visible.
+            if not deferred:
+                assert "80" in rows and "60" in rows and "fail" in rows
+            assert revision in page.locator("#review-subtitle").inner_text()
+            assert "Current" not in page.locator("#label-left").inner_text()
+            assert "Retained" in page.locator("#label-left").inner_text()
+            assert not errors
+        finally:
+            browser.close()
+
+
 def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir):
     sync_playwright = _require_playwright()
 

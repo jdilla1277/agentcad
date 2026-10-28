@@ -273,6 +273,8 @@ def run(
     diff: bool = True,
     view: bool = True,
     build_dir: str | None = None,
+    checks_file: str | None = None,
+    defer_checks: bool = False,
 ) -> dict:
     """Execute a build123d script and produce a versioned STEP file with metrics.
 
@@ -290,6 +292,11 @@ def run(
         preview: Render a quick 256x256 iso preview. Default True — pass False to suppress.
         params: Parameter overrides as key=value,key=value.
         dry_run: Compute metrics without creating a version.
+        checks_file: Optional JSON dimension/preservation requirements. Repairs
+            inherit the selected policy when omitted. See docs check-spec.
+        defer_checks: Retain pending declared checks instead of evaluating them
+            now. Complete with check_spec(revision_id, complete=True); completion
+            records evidence without changing current.
         diff: Compare automatically with the prior successful version. Pass
             False to skip it; explicit diff remains available.
         view: Open or reuse the live project viewer. Share project_viewer.url
@@ -315,6 +322,10 @@ def run(
         args.extend(["--params", params])
     if dry_run:
         args.append("--dry-run")
+    if checks_file:
+        args.extend(["--checks", checks_file])
+    if defer_checks:
+        args.append("--defer-checks")
     return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
@@ -509,20 +520,29 @@ def inspect(
 
 
 @mcp.tool()
-def check_spec(file: str, spec_file: str, cwd: str, build_dir: str | None = None) -> dict:
-    """Check a STEP/BREP file against a JSON cylindrical-feature spec.
+def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, build_dir: str | None = None,
+               complete: bool = False) -> dict:
+    """Check a file/spec or inspect a retained revision's pinned check receipt.
 
-    Returns the same structured result as `agentcad check-spec`, including
-    passed, matched_features, and missing_features.
+    File checks return passed, matched_features, and missing_features. Revision
+    reads return the saved receipt, validation_state, and check lifecycle.
 
     Args:
-        file: Path to the STEP/STP/BREP file to check.
-        spec_file: Path to the JSON spec (cylindrical feature checklist).
-        cwd: Source project directory (or a subdirectory).
+        file: STEP/STP/BREP path, or a returned retained revision ID.
+        spec_file: JSON cylindrical-feature spec for file checks. Omit for a
+            retained revision: its requirements are already pinned.
+        complete: Complete deferred checks on a retained revision; never changes
+            current or accepts an older candidate. A normal read is read-only.
+        cwd: Source project directory (or a subdirectory); defaults to current.
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    return _invoke(_build_args(["check-spec", file, spec_file], build_dir), cwd=cwd)
+    args = ["check-spec", file]
+    if spec_file is not None:
+        args.append(spec_file)
+    if complete:
+        args.append("--complete")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
@@ -595,10 +615,11 @@ def diff(ref1: str, ref2: str, cwd: str, build_dir: str | None = None) -> dict:
 
 @mcp.tool()
 def view(file: str, cwd: str, build_dir: str | None = None, validation: bool = False) -> dict:
-    """Open a GLB or STEP file in the browser via three.js.
+    """Open a GLB, STEP, or retained revision in the browser via three.js.
 
     Args:
-        file: Path to GLB or STEP file.
+        file: GLB/STEP path, or retained revision ID to review its diagnostic
+            geometry and pinned check receipt without changing current.
         validation: Show failure markers and conditional repair guidance for a STEP file.
         cwd: Source project directory (or a subdirectory).
         build_dir: Optional artifact/history root, relative to the project root.
