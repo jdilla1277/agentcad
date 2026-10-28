@@ -135,6 +135,26 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
+    original_filename = file_path.name
+
+    def _pin_source(path):
+        from agentcad.change_retention import begin_change
+        if (not manifest_path.is_file() or path.suffix.lower() not in (".step", ".stp", ".brep")
+                or not path.is_file()):
+            return path
+        try:
+            source = path.read_bytes()
+        except OSError:
+            return path  # File detection supplies the existing actionable error.
+        attempt = begin_change(
+            command="import", label=_safe_label(label or Path(file).stem or "import"),
+            source=source, source_name=original_filename,
+            model={"command": "import", "validation_profile": validation_profile,
+                   "runtime": runtime},
+        )
+        return attempt.source_path if attempt else path
+
+    file_path = _pin_source(file_path)
 
     # 1. Sniff the file type. Tier 0 only.
     detection = file_detect.detect_file_type(file_path)
@@ -171,11 +191,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
 
     manifest = get_project().read_manifest()
     versions = manifest.get("versions", [])
+    # --init may only now have created the manifest; pin before any parser or
+    # validator reads source bytes. Reuse an already retained source otherwise.
+    file_path = _pin_source(file_path)
 
     # 3. Resolve the label. Version numbers are reserved atomically only after
     # parsing/metrics establish whether this is valid or diagnostic output.
     if label is None:
-        label = file_path.stem or "import"
+        label = Path(file).stem or "import"
     label = _safe_label(label)
     ext = file_path.suffix.lower()
 
@@ -255,12 +278,18 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "version": version_num,
             "label": label,
             "source": "import",
-            "original_filename": file_path.name,
+            "original_filename": original_filename,
             "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
             "tool_version": __version__,
             "created": datetime.now(timezone.utc).isoformat(),
             "outputs": {"source": f"{invalid_dir_name}/source{ext}"},
         }
+        from agentcad.change_retention import prepare_change
+        try:
+            prepare_change(invalid_meta)
+        except Exception:
+            shutil.rmtree(invalid_dir, ignore_errors=True)
+            raise
         commit_version(reservation, invalid_meta, {
             "version": version_num,
             "label": label,
@@ -298,6 +327,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             _export_step(source_document or topo_shape, version_dir / "output.step")
 
     except Exception as exc:
+        from agentcad.change_retention import capture_geometry
+        capture_geometry(version_dir / "output.step")
         shutil.rmtree(version_dir, ignore_errors=True)
         _emit({
             "command": "import", "status": "malformed",
@@ -332,7 +363,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         "version": version_num,
         "label": label,
         "source": "import",
-        "original_filename": file_path.name,
+        "original_filename": original_filename,
         "sha256": sha256,
         "tool_version": __version__,
         "created": created,
@@ -366,6 +397,12 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     comparison_enabled = auto_diff and has_previous_step
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
+    from agentcad.change_retention import prepare_change
+    try:
+        prepare_change(meta, geometry=version_dir / "output.step")
+    except Exception:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        raise
     commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
@@ -403,7 +440,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     manifest_ok, geometry_data = _attempt_artifact(
         "geometry_manifest",
         lambda: create_manifest(version_dir / "output.step", version_num, source={
-            "sha256": sha256, "filename": file_path.name,
+            "sha256": sha256, "filename": original_filename,
             "length_units": list(source_document.source_length_units) if source_document else [],
             "assembly_metadata": "preserved_source_document" if source_document else "derived_normalized_geometry",
         }),
@@ -427,7 +464,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         def _write_scaffold():
             scaffold_path.write_text(
                 _edit_scaffold(
-                    get_project().response_path(version_dir), file_path.name, label, project_rt,
+                    get_project().response_path(version_dir), original_filename, label, project_rt,
                     build_dir=str(get_project().build_root) if get_project().configured else None,
                     geometry_manifest=manifest_ok,
                 ),

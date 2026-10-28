@@ -790,6 +790,9 @@ class _LoggingGroup(click.Group):
                     try:
                         payload = json.loads(message)
                         if isinstance(payload, dict) and "command" in payload:
+                            from agentcad.change_retention import attach_change
+
+                            payload = attach_change(payload)
                             message = json.dumps(format_response(payload, layout))
                     except (TypeError, json.JSONDecodeError):
                         pass
@@ -807,6 +810,19 @@ class _LoggingGroup(click.Group):
                 payload.update(label=ctx.meta.get("run_label"), artifact_created=False,
                                outputs={"step": None})
             click.echo(json.dumps(payload))
+            sys.exit(1)
+        except Exception as exc:
+            # Import has no run-style outer recovery boundary. Once its source
+            # is retained, preserve unexpected parser/metric failures as a
+            # structured terminal attempt rather than leaving an empty stdout.
+            attempt = ctx.meta.get("change_attempt")
+            if attempt is None:
+                raise
+            click.echo(json.dumps({
+                "command": ctx.meta.get("change_command", ctx.invoked_subcommand),
+                "status": "error",
+                "message": f"Internal error: {type(exc).__name__}: {exc}",
+            }))
             sys.exit(1)
         finally:
             click.echo = original_echo
