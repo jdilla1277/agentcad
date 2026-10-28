@@ -269,7 +269,9 @@ def project_options(function):
             "view",
             "recover",
             "feedback",
-        } or (name == "diff" and kwargs.get("visual"))
+        } or (name == "diff" and kwargs.get("visual")) or (
+            name == "inspect" and kwargs.get("with_image")
+        )
         if kwargs.get("dry_run"):
             writes = False
             ctx.meta["project_dry_run"] = True
@@ -330,6 +332,7 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         "viewer_glb",
         "preview",
         "png",
+        "metadata",
         "glb",
         "stl",
         "obj",

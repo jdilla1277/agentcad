@@ -91,6 +91,8 @@ def _setup_render(
     background_color=None,
     show_edges=False,
     validation_markers=None,
+    highlight_shape=None,
+    depth_prepass=False,
 ):
     """Set up offscreen rendering pipeline, returning (view, context)."""
     try:
@@ -128,6 +130,7 @@ def _setup_render(
 
     view = viewer.CreateView()
     view.ChangeRenderingParams().NbMsaaSamples = msaa
+    view.ChangeRenderingParams().ToEnableDepthPrepass = depth_prepass
     if background_color is not None:
         view.SetBackgroundColor(
             Quantity_Color(*background_color, Quantity_TOC_RGB)
@@ -172,7 +175,21 @@ def _setup_render(
         ais_shape = AIS_Shape(shape)
         ais_shape.SetMaterial(Graphic3d_MaterialAspect(Graphic3d_NameOfMaterial_Silver))
         ais_shape.Attributes().SetFaceBoundaryDraw(show_edges)
+        if highlight_shape is not None:
+            ais_shape.SetTransparency(0.75)
         context.Display(ais_shape, 1, -1, True)
+
+    if highlight_shape is not None:
+        from OCP.Graphic3d import Graphic3d_ZLayerId_Topmost
+        from OCP.TopAbs import TopAbs_EDGE
+
+        overlay = AIS_Shape(highlight_shape)
+        overlay.SetColor(Quantity_Color(1.0, 0.45, 0.02, Quantity_TOC_RGB))
+        overlay.SetWidth(5)
+        overlay.Attributes().SetFaceBoundaryDraw(True)
+        overlay.SetZLayer(Graphic3d_ZLayerId_Topmost)
+        context.Display(overlay, 0 if highlight_shape.ShapeType() == TopAbs_EDGE else 1, -1, False)
+        context.UpdateCurrentViewer()
 
     if validation_markers:
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
@@ -399,6 +416,69 @@ def _image_label_font(size):
             return ImageFont.load_default(size=size)
         except TypeError:
             return ImageFont.load_default()
+
+
+def render_geometry_sheet(shape, output_path, *, annotations, dimensions, title, target=None):
+    """1024-square inspection sheet: assembly-frame iso/top/front/right.
+
+    Leader endpoints come from the exact same camera that captured each
+    panel. Highlighted geometry is intentionally shown through the context.
+    Returns pixel and model coordinates for auditable ID/image correspondence.
+    """
+    import tempfile
+    from PIL import Image, ImageDraw
+
+    width, height, header, label_height = 512, 452, 88, 24
+    render_height = height - label_height
+    output = Image.new("RGB", (1024, 1024), (245, 245, 245))
+    draw = ImageDraw.Draw(output)
+    font = _image_label_font(15)
+    draw.text((16, 10), title, fill=(25, 25, 25), font=_image_label_font(21))
+    draw.text((16, 40), "X {:.6g}  Y {:.6g}  Z {:.6g} mm | assembly coordinates".format(
+        dimensions["x"], dimensions["y"], dimensions["z"],
+    ), fill=(25, 25, 25), font=font)
+    draw.text((16, 64), "ORANGE: target shown through model" if target is not None else "ID leaders point to target geometry; labels are a sample for overall views",
+              fill=(25, 25, 25), font=font)
+    view, context = _setup_render(
+        shape, width, render_height, background_color=(0.9, 0.91, 0.93),
+        show_edges=True, highlight_shape=target, depth_prepass=True,
+    )
+    projections = []
+    try:
+        with tempfile.TemporaryDirectory() as temp:
+            for i, name in enumerate(("iso", "top", "front", "right")):
+                view.SetProj(VIEWS[name])
+                view.FitAll(0.18)
+                view.Redraw()
+                path = Path(temp) / f"{name}.png"
+                _capture(view, path, width, render_height)
+                x0, y0 = (i % 2) * width, header + (i // 2) * height
+                draw.text((x0 + 12, y0 + 3), name.upper(), fill=(25, 25, 25), font=font)
+                with Image.open(path) as panel:
+                    output.paste(panel.convert("RGB"), (x0, y0 + label_height))
+                for j, annotation in enumerate(annotations):
+                    px, py = view.Convert(*map(float, annotation["point"]))
+                    endpoint = [x0 + px, y0 + label_height + py]
+                    label = annotation["id"]
+                    text_width = draw.textbbox((0, 0), label, font=font)[2] + 10
+                    right = px >= width / 2
+                    lx = x0 + width - text_width - 6 if right else x0 + 6
+                    ly = y0 + label_height + 8 + j * 25
+                    start = [lx if right else lx + text_width, ly + 10]
+                    draw.line([tuple(start), tuple(endpoint)], fill=(150, 65, 0), width=2)
+                    draw.ellipse((endpoint[0] - 3, endpoint[1] - 3, endpoint[0] + 3, endpoint[1] + 3), fill=(230, 95, 0))
+                    draw.rectangle((lx, ly, lx + text_width, ly + 21), fill=(255, 255, 255), outline=(150, 65, 0))
+                    draw.text((lx + 4, ly + 2), label, font=font, fill=(70, 35, 0))
+                    projections.append({"id": label, "view": name, "point": annotation["point"],
+                                        "pixel": endpoint, "label_box": [lx, ly, lx + text_width, ly + 21]})
+                draw.line([(x0, y0), (x0, y0 + height)], fill=(180, 180, 180))
+        draw.text((16, 999), "Exact measurements and complete inventory: geometry_manifest.json | Request another ID with inspect --id ID --image",
+                  font=_image_label_font(13), fill=(25, 25, 25))
+        output.save(output_path)
+    finally:
+        context.RemoveAll(False)
+        view.Remove()
+    return projections
 
 
 def _projected_shape_extent(shape, view_spec):
