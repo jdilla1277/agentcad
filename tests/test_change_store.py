@@ -254,6 +254,30 @@ def test_per_part_and_comparison_review_artifacts_are_retained(tmp_path):
     assert (tmp_path / refs["parts.0.preview"]["path"]).read_bytes() == b"part preview"
 
 
+def test_inspection_catalogue_retains_media_even_when_inline_report_is_disabled(tmp_path):
+    store = initialized(tmp_path)
+    attempt = begin(store)
+    image = tmp_path / "inspection" / "face.png"
+    image.parent.mkdir()
+    image.write_bytes(b"labeled inspection image")
+    image.with_suffix(".json").write_text('{"target_id":"face:f1"}')
+    bundle = tmp_path / "inspection" / "bundle.json"
+    bundle.write_text(json.dumps({"media": [{"id": "face:f1", "png": "inspection/face.png"}]}))
+    attempt.finish(
+        {"status": "success", "outputs": {"inspection_bundle": "inspection/bundle.json"}}
+    )
+    refs = {a["name"]: a for a in store.read(attempt.revision_id)["outcome"]["artifacts"]}
+    assert {
+        "outputs.inspection_bundle",
+        "inspection.media.0.png",
+        "inspection.media.0.metadata",
+    } == set(refs)
+    image.unlink()
+    assert (
+        tmp_path / refs["inspection.media.0.png"]["path"]
+    ).read_bytes() == b"labeled inspection image"
+
+
 def test_corrupted_working_selection_is_not_silently_replaced(tmp_path):
     store = initialized(tmp_path)
     first = begin(store)

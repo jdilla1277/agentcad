@@ -450,6 +450,21 @@ class Attempt:
             for name in ("side_by_side", "overlay", "volume_glb", "volume_png"):
                 paths(comparison.get(name), "diff." + name)
         artifacts, unavailable = [], []
+        sheet = response.get("inspection_image") or {}
+        if isinstance(sheet, dict):
+            paths(sheet.get("metadata"), "inspection_image.metadata")
+        # The saved catalogue includes all prepared inspection images, even
+        # when the inline report is disabled or trimmed by its text budget.
+        bundle = outputs.get("inspection_bundle") if isinstance(outputs, dict) else None
+        if isinstance(bundle, str):
+            try:
+                catalogue = json.loads(self.store._path(bundle).read_text())
+                for i, row in enumerate(catalogue["media"]):
+                    png = row["png"]
+                    paths(png, f"inspection.media.{i}.png")
+                    paths(str(Path(png).with_suffix(".json")), f"inspection.media.{i}.metadata")
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                unavailable.append({"name": "inspection.media", "path": bundle, "reason": str(exc)})
         for name, value in declared.items():
             try:
                 source = self.store._path(value)
