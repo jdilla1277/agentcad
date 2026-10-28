@@ -190,6 +190,10 @@ def _clear_validation_timeout(previous_state) -> None:
 @click.option("--id", "entity_id", help="Retrieve one typed ID from an imported baseline's saved geometry manifest.")
 @click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of an imported baseline or --id target.")
 @click.option("--isolate", is_flag=True, help="Show only the --id target; requires --image. Default images highlight it in context.")
+@click.option("--report", "with_report", is_flag=True, help="Return the saved compact import report and ranked sample image bundle.")
+@click.option("--no-images", is_flag=True, help="Omit image preparation/delivery for --report; keep the same analysis and sample plan.")
+@click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum distinct --report images; overall first, then alternating part/face-edge samples.")
+@click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated text-token allowance for --report (compact JSON UTF-8 bytes / 3).")
 @click.option(
     "--ids", "with_ids", is_flag=True,
     help="Include per-feature ID lists (solids, faces, edges) for use with "
@@ -247,6 +251,10 @@ def inspect_cmd(
     entity_id,
     with_image,
     isolate,
+    with_report,
+    no_images,
+    max_images,
+    text_budget,
     with_ids,
     with_summary,
     id_limit,
@@ -267,8 +275,16 @@ def inspect_cmd(
         raise click.UsageError("--id/--image cannot be combined with --ids, --summary, or --validate-only.")
     if isolate and not (entity_id and with_image):
         raise click.UsageError("--isolate requires --id and --image.")
+    if with_report and (entity_id or with_image or with_ids or with_summary or validate_only or isolate):
+        raise click.UsageError("--report cannot be combined with --id, --image, --ids, --summary, or --validate-only.")
+    if not with_report and (no_images or max_images != 9 or text_budget != 2000):
+        raise click.UsageError("--no-images, --max-images and --text-budget require --report.")
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
+    if with_report:
+        argv.extend(["--report", "--max-images", str(max_images), "--text-budget", str(text_budget)])
+    if no_images:
+        argv.append("--no-images")
     if entity_id:
         argv.extend(["--id", entity_id])
     if with_image:
@@ -289,6 +305,23 @@ def inspect_cmd(
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    if with_report:
+        from agentcad.inspection_report import inspection_report, ReportBudgetError
+        from agentcad.project import derived_dir
+
+        try:
+            payload, _ = inspection_report(
+                file, derived_dir("inspect", Path(file)), images=not no_images,
+                max_images=max_images, text_budget=text_budget, response_path=get_project().response_path,
+                response_extra=get_project().describe(),
+            )
+        except Exception as exc:
+            _emit({"command": "inspect", "status": "error", "message": str(exc),
+                   "error_kind": "report_budget_too_small" if isinstance(exc, ReportBudgetError) else "report_unavailable"}, exit_code=1)
+            return
+        _emit(payload)
+        return
 
     if entity_id or with_image:
         from agentcad.geometry_manifest import read_manifest, record, summary
