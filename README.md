@@ -303,6 +303,9 @@ Add to `.mcp.json`:
 
 ### Cloud projects
 
+For setup and a complete agent build-and-edit loop, see the
+[cloud workflow guide](docs/cloud-workflow.md).
+
 If your host has issued an AgentCAD API address and key pair, the same local
 MCP server also offers `cloud_run`, `cloud_import`, `cloud_measure`,
 `cloud_inspect`, `cloud_check_spec`, `cloud_render`, and `cloud_diff`. Project,
@@ -310,8 +313,9 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 `AGENTCAD_KEY_ID`, and `AGENTCAD_KEY_SECRET` in the server process environment.
 Keep credentials in a password manager, outside project files and agent prompts.
 
-The bounded CLI adapter is available with `pip install 'agentcad[cloud]'`
-(also included in `agentcad[mcp]`):
+The bounded CLI adapter is awaiting a package release. Use the pinned install
+in the guide above for now; after release it will be available with
+`pip install 'agentcad[cloud]'` (also included in `agentcad[mcp]`):
 
 ```bash
 agentcad cloud projects create --name Bracket

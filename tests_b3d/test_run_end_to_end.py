@@ -947,8 +947,8 @@ class TestFailures:
         script = (
             'from build123d import Box\n'
             'result = Box(10, 10, 10)\n'
-            'raise ValueError("something went wrong")\n'
             'show_object(result)\n'
+            'raise ValueError("something went wrong")\n'
         )
         _write(isolated_dir, "s.py", script)
         r = _run(runner, "s.py", "--output", "broken")
