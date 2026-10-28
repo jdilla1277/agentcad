@@ -259,6 +259,19 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     position: absolute; bottom: 12px; left: 16px; color: #666;
     font-size: 11px; user-select: none;
   }
+  #viewer-tools {
+    position: absolute; bottom: 38px; left: 16px; z-index: 35;
+    display: flex; gap: 6px;
+  }
+  #viewer-tools button {
+    height: 34px; padding: 0 12px; border: 1px solid rgba(0,0,0,.14);
+    border-radius: 6px; background: rgba(255,255,255,.94); color: #27313f;
+    font: 12px monospace; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+  }
+  #viewer-tools button:hover { background: #e8eef5; }
+  #viewer-tools button[aria-pressed="true"] { background: #333; color: #fff; }
+  #canvas.pan-mode { cursor: grab; }
+  #canvas.pan-mode:active { cursor: grabbing; }
   #pause-btn {
     position: absolute; bottom: 16px; right: 16px;
     width: 32px; height: 32px; border: none; border-radius: 50%;
@@ -284,13 +297,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     font-family: monospace; font-size: 11px;
     padding: 6px 10px; border-radius: 4px; user-select: none;
   }
-  #comment-toggle-btn {
-    position: absolute; top: 10px; left: 12px; z-index: 42;
-    height: 34px; padding: 0 12px; border: 1px solid rgba(0,0,0,.14);
-    border-radius: 17px; background: rgba(255,255,255,.94); color: #27313f;
-    font: 12px monospace; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.12);
-  }
-  #comment-toggle-btn.active { background: #1b75bb; border-color: #1b75bb; color: #fff; }
+  #viewer-tools #comment-toggle-btn.active { background: #1b75bb; border-color: #1b75bb; color: #fff; }
   #comment-toggle-btn[disabled] { opacity: .5; cursor: not-allowed; }
   body.placing-comment #canvas {
     cursor: crosshair;
@@ -537,11 +544,15 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   <button data-mode="parts" id="btn-parts">Parts</button>
   <button data-mode="spec" id="btn-spec" class="spec">Spec check</button>
 </div>
-<div id="info">drag to orbit · scroll to zoom</div>
+<div id="viewer-tools" role="toolbar" aria-label="Viewer controls">
+  <button id="pan-btn" aria-pressed="false" title="Toggle drag to pan (or hold Shift while dragging)">Pan</button>
+  <button id="fit-view-btn" title="Center and fit the visible model">Fit view</button>
+  <button id="comment-toggle-btn" aria-expanded="false" aria-controls="comments-panel" title="Open comments, then choose + New comment (or press C)">Comments</button>
+</div>
+<div id="info">drag to orbit · Shift + drag to pan · scroll to zoom</div>
 <button id="pause-btn" title="Pause / play rotation">&#9646;&#9646;</button>
 <button id="export-gif-btn" title="Export current view as animated GIF">Export GIF</button>
 <div id="export-progress" style="display:none;">Encoding GIF… <span id="export-progress-pct">0%</span></div>
-<button id="comment-toggle-btn" title="Open spatial comments (C)">Comments</button>
 <div id="comment-placement-hud"><strong>Place comment</strong><span>Click the surface you mean</span><kbd>Esc</kbd><span>cancel</span></div>
 <div id="comment-target-preview"></div>
 <div id="comment-pins"></div>
@@ -652,6 +663,7 @@ function captureLiveState() {
     mode: currentMode, hasB,
     position: camera.position.toArray(), target: controls.target.toArray(),
     autoRotate: controls.autoRotate,
+    panEnabled: controls.mouseButtons.LEFT === THREE.MOUSE.PAN,
     hidden: [...partState.hidden], isolated: [...partState.isolated],
     selected: partState.selected, ghostRest: partState.ghostRest,
     overlay: ['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].map(id => {
@@ -670,6 +682,7 @@ function restoreLiveState(state) {
   const fallback = !button || button.disabled;
   setMode(fallback ? (hasB ? 'single-b' : 'single-a') : mode);
   setAutoRotate(false);
+  setPanMode(Boolean(state.panEnabled));
   const vector = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
   if (vector(state.position) && vector(state.target)) {
     controls.enableDamping = false;
@@ -1427,6 +1440,7 @@ function setCommentPanel(open, { preserveCamera=false }={}) {
   const oldWidth = canvas.clientWidth;
   document.getElementById('comments-panel').classList.toggle('open', open);
   document.getElementById('comment-toggle-btn').classList.toggle('active', open);
+  document.getElementById('comment-toggle-btn').setAttribute('aria-expanded', String(open));
   resize();
   if (!preserveCamera && oldWidth !== canvas.clientWidth) {
     camera.position.sub(controls.target).multiplyScalar(oldWidth / canvas.clientWidth).add(controls.target);
@@ -1437,7 +1451,7 @@ function setCommentPanel(open, { preserveCamera=false }={}) {
 
 function beginCommentPlacement() {
   if (!reviewEnabled) return;
-  if (['agent-view', 'parts'].includes(currentMode)) return;
+  if (['agent-view', 'parts'].includes(currentMode)) setMode(hasB ? 'single-b' : 'single-a');
   setCommentPanel(true);
   pendingCommentAnchor = null;
   editingCommentId = null;
@@ -1816,6 +1830,26 @@ function commentPartMeshes(partId, role, useCurrentParts=false) {
   return roleIndex.get(partId) || [];
 }
 
+function commentPartVisible(comment, role) {
+  // Check the model actually drawn in this viewport. Split and overlay views
+  // have their own copies, whose visibility can differ from the single view.
+  const model = currentMode === 'side-by-side'
+    ? (role === 'b' ? reviewSplitModelB : reviewSplitModelA)
+    : currentMode === 'overlay' ? (role === 'b' ? overlayModelB : overlayModelA)
+    : modelForRole(role);
+  if (!model || !objectIsVisible(model)) return false;
+  const partId = comment.target?.part_id;
+  if (!partId) return true;
+  if (!['side-by-side', 'overlay'].includes(currentMode)) {
+    return commentPartMeshes(partId, role).some(objectIsVisible);
+  }
+  let visible = false;
+  model.traverseVisible(mesh => {
+    if (mesh.isMesh && detectPartId(mesh, COMMENT_PARTS) === partId) visible = true;
+  });
+  return visible;
+}
+
 function pointFromPartRelative(anchor, partId, role, useCurrentParts=false) {
   if (!partId || !Array.isArray(anchor.part_relative)) return null;
   const meshes = commentPartMeshes(partId, role, useCurrentParts);
@@ -2127,7 +2161,10 @@ function updateCommentPins() {
     const comment = reviewComments.find(entry => entry.id === pin.dataset.commentId);
     if (!comment || canvas.style.display === 'none') { pin.style.display = 'none'; continue; }
     const role = pin.dataset.role || commentSourceRole(comment);
-    if (!commentRoleVisible(role, comment)) { pin.style.display = 'none'; continue; }
+    if (!commentRoleVisible(role, comment) || !commentPartVisible(comment, role)) {
+      pin.style.display = 'none';
+      continue;
+    }
     const anchor = comment.anchor || {};
     if (anchor.kind === 'view') {
       if (!sameViewerVersion(comment) || (comment.view || {}).mode !== currentMode) {
@@ -2220,7 +2257,10 @@ function setupReviewComments() {
     toggle.title = 'Open the live project with `agentcad viewer open` to add comments.';
     return;
   }
-  toggle.addEventListener('click', () => setCommentPanel(!document.getElementById('comments-panel').classList.contains('open')));
+  toggle.addEventListener('click', () => {
+    if (['agent-view', 'parts'].includes(currentMode)) setMode(hasB ? 'single-b' : 'single-a');
+    setCommentPanel(!document.getElementById('comments-panel').classList.contains('open'));
+  });
   document.getElementById('close-comments-btn').addEventListener('click', () => setCommentPanel(false));
   document.getElementById('new-comment-btn').addEventListener('click', beginCommentPlacement);
   document.getElementById('cancel-comment-btn').addEventListener('click', cancelCommentPlacement);
@@ -2958,17 +2998,45 @@ function attach(scene, url, { material, onMesh, alignToCenter=false }) {
   });
 }
 
-function fitCamera() {
-  if (combinedBox.isEmpty()) return;
-  const center = combinedBox.getCenter(new THREE.Vector3());
-  const size = combinedBox.getSize(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z);
+function fitCamera(box=combinedBox, preserveDirection=false) {
+  if (box.isEmpty()) return;
+  // Clear any pending pan/rotation before positioning the camera, so damping
+  // cannot pull the model off center again after Fit view.
+  const damping = controls.enableDamping;
+  const autoRotate = controls.autoRotate;
+  controls.enableDamping = false;
+  controls.autoRotate = false;
+  controls.update();
+  const direction = preserveDirection ? camera.position.clone().sub(controls.target).normalize()
+    : new THREE.Vector3(1.2, 0.8, 1.2).normalize();
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 0.01);
+  const aspect = canvas.clientWidth / canvas.clientHeight / (splitMode ? 2 : 1);
+  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  const limitingHalfFov = Math.min(halfFov, Math.atan(Math.tan(halfFov) * aspect));
+  const distance = radius / Math.sin(limitingHalfFov) * 1.12;
   controls.target.copy(center);
-  camera.position.set(center.x + maxDim * 1.2, center.y + maxDim * 0.8, center.z + maxDim * 1.2);
-  camera.near = maxDim * 0.001;
-  camera.far = maxDim * 100;
+  camera.position.copy(center).addScaledVector(direction, distance);
+  camera.near = radius * 0.001;
+  camera.far = Math.max(radius * 100, distance + radius * 2);
   camera.updateProjectionMatrix();
   controls.update();
+  controls.enableDamping = damping;
+  controls.autoRotate = autoRotate;
+}
+
+function fitVisibleModels() {
+  const models = splitMode ? [reviewSplitModelA, reviewSplitModelB]
+    : currentMode === 'overlay' ? [overlayModelA, overlayModelB]
+    : [currentMode === 'single-b' ? reviewModelB : reviewModelA];
+  const box = new THREE.Box3();
+  for (const model of models) {
+    model?.traverseVisible(mesh => {
+      if (mesh.isMesh) box.expandByObject(mesh);
+    });
+  }
+  pauseAutoRotate();
+  fitCamera(box, true);
 }
 
 // Load all scenes in parallel, then fit camera
@@ -3041,10 +3109,12 @@ function setMode(mode) {
   currentMode = mode;
   const spatialCommentsAvailable = !['agent-view', 'parts'].includes(mode);
   const commentToggle = document.getElementById('comment-toggle-btn');
-  commentToggle.style.display = spatialCommentsAvailable ? '' : 'none';
+  document.getElementById('pan-btn').style.display = spatialCommentsAvailable ? '' : 'none';
+  document.getElementById('fit-view-btn').style.display = spatialCommentsAvailable ? '' : 'none';
   if (!spatialCommentsAvailable) {
     document.getElementById('comments-panel').classList.remove('open');
     commentToggle.classList.remove('active');
+    commentToggle.setAttribute('aria-expanded', 'false');
     cancelCommentPlacement();
     for (const pin of document.querySelectorAll('.comment-pin')) pin.style.display = 'none';
   }
@@ -3165,6 +3235,20 @@ pauseBtn.addEventListener('click', () => {
   setAutoRotate(!controls.autoRotate);
 });
 controls.addEventListener('start', pauseAutoRotate);
+
+function setPanMode(enabled) {
+  controls.mouseButtons.LEFT = enabled ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+  controls.touches.ONE = enabled ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+  canvas.classList.toggle('pan-mode', enabled);
+  document.getElementById('pan-btn').setAttribute('aria-pressed', String(enabled));
+  document.getElementById('info').textContent = enabled
+    ? 'drag to pan · Shift + drag to orbit · scroll to zoom'
+    : 'drag to orbit · Shift + drag to pan · scroll to zoom';
+}
+document.getElementById('pan-btn').addEventListener('click', () => {
+  setPanMode(controls.mouseButtons.LEFT !== THREE.MOUSE.PAN);
+});
+document.getElementById('fit-view-btn').addEventListener('click', fitVisibleModels);
 
 // Render one frame to the canvas. Shared between the rAF loop and the GIF
 // export, so split-viewport rendering stays consistent.
