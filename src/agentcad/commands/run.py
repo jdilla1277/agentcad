@@ -1023,7 +1023,8 @@ def _record_failure(
     version_dir = reservation.path
 
     # Copy script into failed directory
-    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+    from agentcad.change_retention import copy_run_source, prepare_change
+    copy_run_source(script_path, version_dir / "script.py")
 
     # Write meta.json
     created = datetime.now(timezone.utc).isoformat()
@@ -1041,6 +1042,7 @@ def _record_failure(
         meta["runtime_source"] = runtime_source
     if guidance:
         meta.update(guidance)
+    prepare_change(meta)
     commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
@@ -1083,7 +1085,8 @@ def _record_invalid_geometry(
     version_num = reservation.number
     dir_name = reservation.dir_name
     version_dir = reservation.path
-    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+    from agentcad.change_retention import copy_run_source, prepare_change
+    copy_run_source(script_path, version_dir / "script.py")
 
     meta = {
         **response,
@@ -1101,6 +1104,7 @@ def _record_invalid_geometry(
         meta["groups"] = groups
     if warnings:
         meta["warnings"] = warnings
+    prepare_change(meta)
     commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
@@ -1365,6 +1369,7 @@ def run(
         # they already emitted the proper JSON. Pass through.
         raise
     except ProjectError:
+        _cleanup_uncommitted_reservation()
         raise
     except _RunTimeout as e:
         recovered = _recover_committed_core(e, timeout_payload=e.payload)
@@ -1493,7 +1498,9 @@ def _run_impl(
     from agentcad.runners import dispatch
 
     try:
-        raw_source = script_path.read_text(encoding="utf-8")
+        source_bytes = script_path.read_bytes()
+        ctx.meta["change_run_source"] = (source_bytes, script_path.name)
+        raw_source = source_bytes.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         _emit_run({
             "command": "run", "status": "error", "error_kind": "script_unreadable",
@@ -1544,6 +1551,9 @@ def _run_impl(
         sys.exit(1)
 
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    from agentcad.change_retention import begin_run_change
+    begin_run_change()
 
     # Pre-execution import/helper validation (before version allocation)
     validation_errors = runner.validate(raw_source)
@@ -1638,6 +1648,7 @@ def _run_impl(
             })
             sys.exit(1)
         reservation = reserve_version(get_project().build_root, label, suffix="_failed")
+        _phase_tracker.reservation = reservation
         _record_failure(
             script_path,
             label,
@@ -1784,7 +1795,11 @@ def _run_impl(
     staged_step = staging_dir / "output.step"
     _heartbeat("writing STEP…")
     _sub = time.perf_counter()
-    runner.export_step(shape, str(staged_step))
+    try:
+        runner.export_step(shape, str(staged_step))
+    finally:
+        from agentcad.change_retention import capture_geometry
+        capture_geometry(staged_step)
     _timings["export_write_ms"] = round((time.perf_counter() - _sub) * 1000)
     _heartbeat("validating the written STEP…")
     validation = validate_delivered_step(
@@ -1887,6 +1902,7 @@ def _run_impl(
         invalid_response["completed_phases"] = list(_phase_tracker.completed)
         invalid_response["phase_timings"] = dict(_timings)
         reservation = reserve_version(get_project().build_root, label, suffix="_invalid")
+        _phase_tracker.reservation = reservation
         _record_invalid_geometry(
             script_path,
             label,
@@ -1935,7 +1951,8 @@ def _run_impl(
     version_dir = reservation.path
 
     # Copy script into version directory
-    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+    from agentcad.change_retention import copy_run_source, prepare_change
+    copy_run_source(script_path, version_dir / "script.py")
 
     # Export STEP file via the runner (each engine has its own writer)
     _heartbeat("exporting STEP…")
@@ -2035,6 +2052,7 @@ def _run_impl(
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
 
+    prepare_change(meta, geometry=version_dir / "output.step")
     commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
