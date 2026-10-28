@@ -405,6 +405,9 @@ def _handle_run_timeout(_signum, _frame):
 
 def _install_run_timeout(phase_tracker):
     global _ACTIVE_PHASE_TRACKER, _PREVIOUS_ALARM_HANDLER, _RUN_TIMEOUT_INSTALLED
+    # Recovery of an already committed STEP also needs the tracker when
+    # timers are disabled or SIGALRM is unavailable (for example Windows).
+    _ACTIVE_PHASE_TRACKER = phase_tracker
     timeout_s = _run_timeout_seconds()
     if timeout_s is None:
         return
@@ -412,7 +415,6 @@ def _install_run_timeout(phase_tracker):
         return
     if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
         return
-    _ACTIVE_PHASE_TRACKER = phase_tracker
     _PREVIOUS_ALARM_HANDLER = signal.getsignal(signal.SIGALRM)
     signal.signal(signal.SIGALRM, _handle_run_timeout)
     signal.setitimer(signal.ITIMER_REAL, timeout_s)

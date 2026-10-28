@@ -155,6 +155,9 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
     from agentcad.commands.run import _handle_run_timeout
 
     _json(runner, ["init"])
+    # Exercise recovery independently of platform alarm support. The timeout
+    # below is injected at the phase boundary, not scheduled by a real timer.
+    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
 
     def broken(*args, **kwargs):
         if failure == "timeout":
@@ -174,6 +177,23 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
     failed_lookup = runner.invoke(cli, ["inspect", saved["outputs"]["step"], "--id", "face_v1_1"])
     assert failed_lookup.exit_code == 1
     assert not Path(saved["outputs"]["step"]).with_name("geometry_manifest.json").exists()
+
+
+def test_graphics_failure_without_alarm_preserves_generated_ids(runner, isolated_dir, monkeypatch):
+    import signal
+
+    _json(runner, ["init"])
+    monkeypatch.delattr(signal, "SIGALRM", raising=False)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("graphics unavailable")
+
+    monkeypatch.setattr("agentcad.render.render_shape", broken)
+    saved = _save(runner, isolated_dir, "show_object(Box(10,20,5))", extra=["--render", "iso"])
+    assert saved["status"] == saved["core"]["status"] == "success"
+    assert saved["artifacts"]["renders"]["status"] == "failed"
+    assert saved["artifacts"]["geometry_manifest"]["status"] == "success"
+    assert read_manifest(saved["outputs"]["step"])["manifest_id"] == saved["geometry_manifest"]["manifest_id"]
 
 
 def test_dry_invalid_and_failed_runs_do_not_issue_ids(runner, isolated_dir, monkeypatch):
