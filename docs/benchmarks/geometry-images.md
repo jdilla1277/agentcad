@@ -1,12 +1,11 @@
 # ID-linked inspection images
 
-Import now prepares one labeled overall sheet by default, available at
-`outputs.inspection_image`. It is a 1024 × 1024 PNG containing isometric, top,
-front and right views, assembly-frame dimensions in millimetres, and at most
-eight sampled labels: up to four placed leaf occurrences and four large faces.
-The complete inventory remains in `geometry_manifest.json`. This is the image
-slice; named feature recognition and the richer part/feature sample bundle
-remain separate work.
+Import prepares a labeled overall sheet at `outputs.inspection_image`, as part
+of its [ranked inspection bundle](inspection-bundle.md). It is a 1024 × 1024 PNG
+containing isometric, top, front and right views, assembly-frame dimensions in
+millimetres, and at most eight sampled labels: up to four part definitions and
+four measured face/edge samples. The complete inventory remains in
+`geometry_manifest.json`. Named feature recognition remains separate work.
 
 ## Retrieve a target
 

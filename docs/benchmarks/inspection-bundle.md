@@ -1,0 +1,137 @@
+# Default inspection bundle
+
+Import includes a compact `inspection` report and prepares a ranked image
+bundle. Its report summarizes validation quality, provenance, units, model
+dimensions, reusable part definitions and occurrence counts, and raw topology.
+The complete part list and sample measurements/reasons live at
+`outputs.inspection_report`; the complete media catalogue is at
+`outputs.inspection_bundle`. Every entity remains in the durable
+`geometry_manifest.json`.
+
+This release reports named recognition as `not_available`, with
+`recognized_feature_count: null`. Sampled faces and edges are raw topology,
+not identified holes, pockets, bosses or fillets. A completed raw report does
+not claim that named recognition ran or found zero features.
+
+## Images and selection
+
+The default bundle contains one overall four-view sheet, up to four part
+samples and up to four face/edge samples, with at most nine distinct PNGs.
+All are 1024 × 1024 with iso/top/front/right views, hard dimensions in mm and
+canonical ID labels. Sample images are isolated in assembly coordinates;
+contextual highlighting remains available through `--id ID --image`.
+
+Parts rank by placed volume, including repeated occurrences, with preference
+for varied measured dimensions. Faces rank by area weighted by source-part
+repetition; edges rank by length weighted by repetition. Selection prefers
+varied measured sizes and endpoint spans, with deterministic ID tie breaks.
+These measurements guide representative sampling; they do not prove shape
+equivalence or semantic feature recognition. Selection reasons and repetition
+counts are available in the saved analysis.
+
+Edges whose recorded length is zero are excluded from representative samples
+and overall sample labels. Remaining slots use other faces where available,
+or the bundle returns fewer samples. These edges retain their IDs in the
+complete inventory and remain available through explicit lookup.
+
+Priority is overall, then alternating part and face/edge sample rank. A sole
+part definition can reuse the overall image when its memberships cover every
+model entity. The overall sheet labels that part ID, and its sample explicitly
+states `image_id: overall` and `image_mode: overall_reuse`. For a repeated part,
+this image covers all its placements. To inspect one placement, request its
+occurrence ID. Part-list definition dimensions use `definition_local`; sample
+and image dimensions describe the placed geometry in `assembly` coordinates.
+
+Report `media[].png` filenames resolve against `inventory.image_root`. This
+avoids repeating long paths for every image. The full bundle catalogue retains
+complete paths. MCP returns actual PNG image content blocks in the same order
+as the report's media array, with hashes checked before attachment. CLI and
+sidecar paths refer to the execution filesystem.
+
+## Retrieve, reduce or omit
+
+Use actual IDs returned for your imported version:
+
+```sh
+agentcad import supplier.step --init --no-view --no-diff
+agentcad inspect v1_supplier/output.step --report
+agentcad inspect v1_supplier/output.step --report --max-images 2
+agentcad inspect v1_supplier/output.step --report --no-images
+agentcad inspect v1_supplier/output.step --report --text-budget 1500
+agentcad inspect v1_supplier/output.step --id edge_v1_17 --image
+```
+
+On import, `--no-report` omits inline report text while retaining saved
+analysis and the prepared bundle. `--no-inspection-image` skips inspection
+media while keeping the report. `--max-images 0..9` caps media preparation;
+later report/image retrieval can prepare omitted samples. A report-off import
+still returns its legacy import metadata and artifact references.
+
+MCP `inspect(report=True, report_images=False, max_images=..., text_budget=...)`
+exposes the same operation. Image-free requests retain the same analysis
+revision, selected IDs and planned aliases. Optional inline detail can differ
+because image references also consume the text allowance. Media failures are
+explicit in `media_summary` and the full catalogue; they preserve core geometry,
+the ID registry, the report and edit scaffold.
+
+## Text and context limits
+
+The fallback text allowance is **2,000 estimated tokens**, using
+`ceil(compact UTF-8 JSON bytes / 3)`. This is an explicit estimate rather than
+model-specific tokenizer accounting. A small transport reserve accommodates
+MCP's exit-code field. Optional reasons/bounds and tail records are omitted
+before essential identity, status/counts, compact part names and retrieval
+references. Returned/total/truncation counts are explicit. Source names may be
+shortened; the saved report retains the originals. A budget too small for the
+minimum required response returns an actionable error.
+
+The allowance covers the report object, including project metadata for a
+direct `inspect --report` response. Import preserves its existing metadata,
+validation and comparison envelope outside the nested `inspection` object;
+this slice does not compact that compatibility surface. Calling context-window
+size and image-token cost remain explicitly unknown. Count/resolution caps
+are enforced; no universal 5% context guarantee or combined vision-token
+budget is claimed.
+
+## Reuse and identity
+
+Analysis is keyed by baseline manifest identity, report revision and the stored
+validation summary, adopted only when import version and original-source hash
+match the saved manifest. A neighbouring file's validation is not substituted.
+Cached analysis is checksummed and verified against the
+baseline/kernel before reuse. Replays do not repeat shape analysis or issue new
+entity IDs. Missing images reuse one checked geometry context across the bundle.
+Image publication rechecks the baseline, and cached PNG/metadata hashes remain
+verified. Corrupt derived artifacts regenerate; source geometry and issued
+memberships are never rewritten by report preparation.
+
+The saved report is independent of delivery budgets. The media catalogue records
+prepared and omitted samples, including failures, while a smaller response can
+reference this full detail. Caller-specific media catalogues may differ without
+changing the analysis revision or selected entities. Legacy and cloud-specific
+commands retain their existing behavior; this adds no hosted analysis service.
+
+## Measured slice check
+
+On 2026-10-27, the report operation on an existing normalized 1,000-instance
+box assembly (6,000 faces, 12,000 edges) took **4.20 seconds** to create its
+first bundle and **0.565 seconds** for verified cached replay. It returned
+five distinct images: overall reused for the sole part definition plus four
+raw face/edge samples. The compact report retained the part name and used
+approximately 1,700 estimated text tokens. Reference environment: Apple M4, macOS 15.6,
+Python 3.12.12, build123d 0.10.0, cadquery-ocp 7.8.1.1.post1.
+
+The predeclared local smoke limits were 20 seconds first-bundle and 3 seconds
+cached. These timings include analysis, selected image rendering, persistence,
+baseline checks and response construction. They exclude initial source import,
+geometry validation, legacy preview/viewer generation and MCP transport. They
+are first-process/warm-cache observations, not cold-filesystem, peak-memory,
+full import/report or model-context guarantees. The simple repeated-box fixture
+does not represent a complex machined assembly.
+
+Regression coverage includes both real CADGenBench and pump-manifold imports,
+12 distinct part definitions with nine sample images, capped/image-free modes,
+part/overall reuse, cached-context reuse, corruption/recovery and wrong-baseline
+rejection. A separate fresh-agent workflow checked real MCP stdio attachments,
+configured paths with spaces, retrieval of an unsampled ID and an actual
+scaffold edit with independent sibling-preservation checks.

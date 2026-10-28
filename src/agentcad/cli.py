@@ -265,6 +265,10 @@ COMMAND REFERENCE: VERIFY AND DEBUG
   agentcad inspect IMPORTED_STEP [--id TYPED_ID] --image [--isolate]
     Retrieve an overall or ID-targeted four-view PNG with dimensions and labels.
     --isolate requires --id. Images and build123d selectors use the same IDs.
+  agentcad inspect IMPORTED_STEP --report [--no-images] [--max-images 0..9]
+                        [--text-budget N]
+    Bounded quality/inventory report and ranked part/face-edge sample bundle.
+    Context window and image-token cost remain explicitly unknown.
     Report recognized format and, for STEP/STP/BREP, solids, shells, face
     orientations, edges, free edges, and validity. --summary clusters topology;
     --ids returns 1-indexed feature IDs used by editing helpers. Lists are capped
