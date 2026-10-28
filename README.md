@@ -294,6 +294,13 @@ Add to `.mcp.json`:
 {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
 ```
 
+For local STEP/STP/BREP files, call `import_cad` with `file`, `cwd`, and
+`initialize=True` to start a project. The default response includes the import
+JSON and up to nine inspection PNG attachments. Use `report_images=False` for
+an image-free report or `report=False` to keep the bundle on disk. Follow the
+returned IDs and paths with `inspect` and `run`. Local paths refer to the MCP
+execution filesystem. See `agentcad docs mcp` for controls.
+
 ### Cloud projects
 
 For setup and a complete agent build-and-edit loop, see the
