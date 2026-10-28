@@ -187,10 +187,10 @@ def _clear_validation_timeout(previous_state) -> None:
 
 @click.command("inspect")
 @click.argument("file")
-@click.option("--id", "entity_id", help="Retrieve one typed ID from an imported baseline's saved geometry manifest.")
-@click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of an imported baseline or --id target.")
+@click.option("--id", "entity_id", help="Retrieve one typed ID from an imported or run-generated baseline's saved geometry manifest.")
+@click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of a saved baseline or --id target.")
 @click.option("--isolate", is_flag=True, help="Show only the --id target; requires --image. Default images highlight it in context.")
-@click.option("--report", "with_report", is_flag=True, help="Return the saved compact import report and ranked sample image bundle.")
+@click.option("--report", "with_report", is_flag=True, help="Prepare or reuse a compact report and ranked sample image bundle for an imported or run-generated baseline.")
 @click.option("--no-images", is_flag=True, help="Omit image preparation/delivery for --report; keep the same analysis and sample plan.")
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum distinct --report images; overall first, then alternating part/face-edge samples.")
 @click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated text-token allowance for --report (compact JSON UTF-8 bytes / 3).")

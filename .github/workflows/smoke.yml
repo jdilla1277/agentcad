@@ -107,6 +107,7 @@ jobs:
             tests_b3d/test_geometry_manifest.py \
             tests_b3d/test_geometry_images.py \
             tests_b3d/test_inspection_report.py \
+            tests_b3d/test_generated_inspection.py \
             tests/test_cadquery_optional.py tests/test_written_mesh_validation.py tests/test_run_guidance.py tests_b3d/test_step_output_contract.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py -q
 
       - name: Run OCP-free interface guardrails
@@ -131,7 +132,7 @@ jobs:
         run: pytest --collect-only -q
 
       - name: Run Windows-relevant guardrails
-        run: pytest tests/test_daemon_platform.py tests/test_package_positioning.py tests/test_project_viewer.py tests_b3d/test_step_assembly.py tests_b3d/test_geometry_manifest.py tests_b3d/test_geometry_images.py tests_b3d/test_inspection_report.py -q
+        run: pytest tests/test_daemon_platform.py tests/test_package_positioning.py tests/test_project_viewer.py tests_b3d/test_step_assembly.py tests_b3d/test_geometry_manifest.py tests_b3d/test_geometry_images.py tests_b3d/test_inspection_report.py tests_b3d/test_generated_inspection.py -q
 
   browser-smoke:
     runs-on: ubuntu-22.04

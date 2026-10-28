@@ -1526,7 +1526,7 @@ def test_run_no_diff_skips_every_automatic_comparison_call(
     assert 'DEFAULT_MODE = "single-a"' in viewer_html
 
 
-def test_run_fast_path_writes_only_core_and_explicit_exports(
+def test_run_fast_path_writes_core_ids_and_explicit_exports_without_visuals(
     runner, isolated_dir, monkeypatch
 ):
     _init_project(runner)
@@ -1563,14 +1563,16 @@ def test_run_fast_path_writes_only_core_and_explicit_exports(
     assert parsed["outputs"] == {
         "step": "v2_fast/output.step",
         "script": "v2_fast/script.py",
+        "geometry_manifest": "v2_fast/geometry_manifest.json",
         "stl": "v2_fast/output.stl",
     }
     assert parsed["artifacts"]["diff"]["status"] == "skipped"
     assert parsed["artifacts"]["viewer_glb"]["status"] == "skipped"
     assert parsed["artifacts"]["viewer"]["status"] == "skipped"
     assert set(path.name for path in version_dir.iterdir()) == {
-        "meta.json", "output.step", "output.stl", "script.py",
+        "meta.json", "output.step", "output.stl", "script.py", "geometry_manifest.json",
     }
+    assert parsed["artifacts"]["geometry_manifest"]["status"] == "success"
     assert not any("diff" in key for key in parsed["timings"])
 
     explicit = runner.invoke(cli, ["diff", "1", "2", "--no-daemon"])

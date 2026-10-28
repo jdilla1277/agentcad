@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import os
 import re
@@ -41,6 +42,7 @@ _OUTPUT_DEPRECATION = (
 )
 
 _PHASE_ARTIFACTS = {
+    "geometry_manifest": "geometry_manifest",
     "export_mesh": "mesh_exports",
     "render_views": "renders",
     "preview": "preview",
@@ -302,6 +304,10 @@ def _timeout_suggestion(phase, completed):
         "export_mesh": (
             "Mesh export timed out; try skipping optional mesh exports or reducing "
             "geometry complexity."
+        ),
+        "geometry_manifest": (
+            "The STEP and script are already saved, but typed-ID inventory timed out. "
+            "Use inspect --ids for legacy topology or import the saved STEP as a new baseline."
         ),
         "render_views": (
             "Requested view rendering timed out; rerun without --render while "
@@ -1969,6 +1975,7 @@ def _run_impl(
         "validation": validation,
         "validation_profile": validation_profile,
         "artifacts": {
+            "geometry_manifest": {"status": "pending"},
             "mesh_exports": _artifact_state(
                 bool(export), "No optional mesh exports requested."
             ),
@@ -2024,6 +2031,34 @@ def _run_impl(
     }, advance_current=True)
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     _phase_tracker.lifecycle = lifecycle
+
+    # Issue IDs only from the delivered STEP, never the script's in-memory
+    # traversal. Inventory is post-core work: failure cannot undo a valid run.
+    _heartbeat("indexing saved geometry IDs…")
+    _t = _start_phase("geometry_manifest")
+    from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
+
+    try:
+        geometry_data = create_manifest(version_dir / "output.step", version_num, source={
+            "kind": "script", "filename": script_path.name,
+            "sha256": hashlib.sha256((version_dir / "script.py").read_bytes()).hexdigest(),
+            "runtime": runtime_name, "assembly_metadata": "derived_normalized_geometry",
+        })
+        lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
+        lifecycle.meta["geometry_manifest"] = geometry_summary(
+            Path(get_project().response_path(version_dir / "output.step")), geometry_data,
+        )
+        lifecycle.set_artifact("geometry_manifest", "success")
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        lifecycle.set_artifact("geometry_manifest", "failed", message=message)
+        warnings.append(
+            "Typed-ID inventory unavailable; the saved STEP/script remain usable. "
+            "Use inspect --ids or import the saved STEP as a new baseline. " + message
+        )
+        lifecycle.meta["warnings"] = warnings
+        lifecycle.persist()
+    _finish_phase("geometry_manifest", _t)
 
     comparison_recorder = None
     if comparison_enabled:
@@ -2499,9 +2534,18 @@ def _run_impl(
         "outputs": {
             "step": f"{dir_name}/output.step",
             "script": f"{dir_name}/script.py",
+            **({"geometry_manifest": lifecycle.meta["outputs"]["geometry_manifest"]}
+               if "geometry_manifest" in lifecycle.meta["outputs"] else {}),
             **exports_meta,
         },
     }
+    if "geometry_manifest" in lifecycle.meta:
+        output_json["geometry_manifest"] = lifecycle.meta["geometry_manifest"]
+        step_argument = shlex.quote(get_project().response_path(version_dir / "output.step"))
+        output_json["next_actions"] = [
+            f"agentcad inspect {step_argument} --report",
+            output_json["geometry_manifest"]["lookup_example"],
+        ]
     output_json["metrics"] = metrics
     output_json["validation"] = validation
     output_json["validation_profile"] = validation_profile

@@ -947,8 +947,8 @@ class TestFailures:
         script = (
             'from build123d import Box\n'
             'result = Box(10, 10, 10)\n'
-            'raise ValueError("something went wrong")\n'
             'show_object(result)\n'
+            'raise ValueError("something went wrong")\n'
         )
         _write(isolated_dir, "s.py", script)
         r = _run(runner, "s.py", "--output", "broken")
@@ -958,6 +958,7 @@ class TestFailures:
         meta = json.loads((failed_dir / "meta.json").read_text())
         assert meta["status"] == "failed"
         assert "something went wrong" in meta["error"]
+        assert not (failed_dir / "geometry_manifest.json").exists()
 
     def test_part_bounding_box_error_has_persisted_guidance(
         self, runner, isolated_dir

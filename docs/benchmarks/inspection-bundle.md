@@ -8,6 +8,26 @@ The complete part list and sample measurements/reasons live at
 `outputs.inspection_bundle`. Every entity remains in the durable
 `geometry_manifest.json`.
 
+Successful saved `run` versions now issue the same typed-ID manifest from
+their delivered STEP before optional graphics. Use the returned
+`outputs.step` with `inspect --report`, `--id ID`, or `--image` without
+re-importing. Reports and inspection sheets are prepared on request; run's
+existing preview controls still apply. Dry runs, script failures, and invalid
+geometry do not issue IDs. Inventory failure or timeout preserves the saved
+STEP, script, and successful version, with explicit artifact status.
+
+Generated provenance records the archived script's filename/hash and runtime.
+Generated report quality is adopted only when the saved run's version,
+manifest ID, and delivered baseline hash match. Part names and hierarchy come
+from the exported STEP and are marked as derived output metadata, rather than
+recovered supplier structure or a mapping from script display IDs. `run.parts`
+still describes script display objects; inspect's typed IDs address normalized
+geometry. Each saved version issues fresh entity numbers. Matching numbers in
+two versions do not establish correspondence; use the new version's IDs to edit
+its geometry. Older versions without manifests retain the legacy integer-ID
+path, or can be imported as a new baseline; inspection never silently reissues
+an existing mapping.
+
 This release reports named recognition as `not_available`, with
 `recognized_feature_count: null`. Sampled faces and edges are raw topology,
 not identified holes, pockets, bosses or fillets. A completed raw report does
@@ -135,3 +155,23 @@ part/overall reuse, cached-context reuse, corruption/recovery and wrong-baseline
 rejection. A separate fresh-agent workflow checked real MCP stdio attachments,
 configured paths with spaces, retrieval of an unsampled ID and an actual
 scaffold edit with independent sibling-preservation checks.
+
+### Saved-version inspection follow-up
+
+On 2026-10-28, a real CLI `run --no-preview --no-diff --no-view` loaded and
+saved each fixture, then the report API prepared/replayed an image-free report
+against its saved STEP. The same Apple M4 / Python 3.12.12 environment was used.
+
+| Fixture | Saved topology | ID-manifest phase | First image-free report | Cached image-free report |
+|---|---|---:|---:|---:|
+| CADGenBench 101 | 150 faces / 427 edges | 0.083 s | 1.181 s | 0.003 s |
+| 1,000 repeated boxes | 6,000 faces / 12,000 edges | 0.977 s | 1.458 s | 0.101 s |
+
+Fresh CLI process totals, including script execution, validation, STEP export
+and inventory, were 2.83 s and 4.66 s respectively. The report calls shared one
+process; the first includes lazy CAD imports and subsequent calls reuse them.
+Source fixture generation was excluded. Predeclared local limits of 5 s for
+inventory and 3 s for first/cached image-free reports passed. These are single
+process-local observations on warm filesystems, not cold-filesystem, peak-memory,
+complex-assembly, graphical-report or remote-delivery guarantees. The saved
+manifests were 0.30 MB and 10.66 MB; the full inventory stays out of inline text.
