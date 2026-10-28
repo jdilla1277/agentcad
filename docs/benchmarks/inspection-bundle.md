@@ -15,6 +15,9 @@ re-importing. Reports and inspection sheets are prepared on request; run's
 existing preview controls still apply. Dry runs, script failures, and invalid
 geometry do not issue IDs. Inventory failure or timeout preserves the saved
 STEP, script, and successful version, with explicit artifact status.
+Recovered timeout responses retain the phase-specific suggestion. An inventory
+timeout also returns an executable `inspect <saved STEP> --ids` action for legacy
+inspection, including the selected build root; it does not create another version.
 
 Generated provenance records the archived script's filename/hash and runtime.
 Generated report quality is adopted only when the saved run's version,

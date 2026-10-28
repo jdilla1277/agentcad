@@ -481,7 +481,17 @@ def _recover_committed_core(error, *, timeout_payload=None):
     lifecycle.meta["completed_phases"] = list(tracker.completed)
     lifecycle.meta["phase_timings"] = dict(tracker.timings)
     lifecycle.persist()
-    return lifecycle.response()
+    response = lifecycle.response()
+    if timeout_payload and timeout_payload.get("suggestion"):
+        response["suggestion"] = timeout_payload["suggestion"]
+    if phase == "geometry_manifest":
+        layout = get_project()
+        step = layout.response_path(layout.artifact_path(response["outputs"]["step"]))
+        action = ["agentcad", "inspect", step, "--ids"]
+        if layout.configured:
+            action.extend(["--build-dir", str(layout.build_root)])
+        response["next_actions"] = [shlex.join(action)]
+    return response
 
 
 def _cleanup_uncommitted_reservation():

@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -151,9 +152,13 @@ def test_mcp_saved_run_and_inspection_match_cli_with_configured_paths(runner, is
 
 
 @pytest.mark.parametrize("failure", ["exception", "timeout"])
-def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkeypatch, failure):
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("transport", ["cli", "mcp"])
+def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkeypatch, failure, configured, transport):
     from agentcad.commands.run import _handle_run_timeout
 
+    if configured:
+        (isolated_dir / "agentcad.toml").write_text('build_dir = "artifacts with spaces"\n', encoding="utf-8")
     _json(runner, ["init"])
     # Exercise recovery independently of platform alarm support. The timeout
     # below is injected at the phase boundary, not scheduled by a real timer.
@@ -165,15 +170,39 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         raise RuntimeError("inventory unavailable")
 
     monkeypatch.setattr("agentcad.geometry_manifest.create_manifest", broken)
-    saved = _save(runner, isolated_dir, "show_object(Box(10,20,5))")
+    if transport == "cli":
+        saved = _save(runner, isolated_dir, "show_object(Box(10,20,5))", label="saved part")
+    else:
+        from agentcad.mcp.server import run as mcp_run
+
+        (isolated_dir / "edit.py").write_text("show_object(Box(10,20,5))", encoding="utf-8")
+        saved = mcp_run(script="edit.py", cwd=str(isolated_dir), output="saved part", preview=False, diff=False, view=False)
+        assert saved["_exit_code"] == 0
     assert saved["status"] == saved["core"]["status"] == "success"
     assert saved["artifacts"]["geometry_manifest"]["status"] == ("failed" if failure == "exception" else "timeout")
     assert "geometry_manifest" not in saved["outputs"]
     assert Path(saved["outputs"]["step"]).is_file()
     assert Path(saved["outputs"]["script"]).is_file()
     assert any("inventory" in warning or "geometry_manifest" in warning for warning in saved["warnings"])
-    manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+    build = isolated_dir / "artifacts with spaces" if configured else isolated_dir
+    history = (build / "agentcad.json").read_bytes()
+    manifest = json.loads(history)
     assert manifest["versions"][0]["status"] == "success"
+    if failure == "timeout":
+        assert "typed-ID inventory timed out" in saved["suggestion"]
+        assert "inspect --ids" in saved["suggestion"]
+        action = shlex.split(saved["next_actions"][0])
+        assert action[:2] == ["agentcad", "inspect"]
+        assert action[2] == saved["outputs"]["step"]
+        assert "--ids" in action
+        if configured:
+            assert action[-2:] == ["--build-dir", str(build)]
+        step_bytes = Path(saved["outputs"]["step"]).read_bytes()
+        legacy = _json(runner, action[1:])
+        assert legacy["status"] == "success"
+        assert legacy["faces"] and all("object_id" not in face for face in legacy["faces"])
+        assert Path(saved["outputs"]["step"]).read_bytes() == step_bytes
+        assert (build / "agentcad.json").read_bytes() == history
     failed_lookup = runner.invoke(cli, ["inspect", saved["outputs"]["step"], "--id", "face_v1_1"])
     assert failed_lookup.exit_code == 1
     assert not Path(saved["outputs"]["step"]).with_name("geometry_manifest.json").exists()

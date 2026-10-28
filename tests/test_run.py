@@ -470,7 +470,8 @@ def test_run_preview_timeout_preserves_registered_core(
     _init_project(runner)
     _write_script(isolated_dir)
 
-    # Warm native imports before starting a deliberately tiny watchdog.
+    # Keep a prior version, then inject at the preview boundary. A tiny real
+    # watchdog can expire during export/inventory on a busy machine instead.
     monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
     warmup = runner.invoke(cli, [
         "run", "script.py", "--output", "warmup", "--no-preview",
@@ -478,13 +479,14 @@ def test_run_preview_timeout_preserves_registered_core(
     ])
     assert warmup.exit_code == 0, warmup.output
 
-    def slow_preview(*_args, **_kwargs):
-        time.sleep(1)
+    from agentcad.commands.run import _handle_run_timeout
 
-    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    def timed_out_preview(*_args, **_kwargs):
+        _handle_run_timeout(None, None)
+
     monkeypatch.setattr(
         "agentcad.render.render_composite_4view",
-        slow_preview,
+        timed_out_preview,
     )
 
     result = runner.invoke(cli, [
@@ -495,6 +497,7 @@ def test_run_preview_timeout_preserves_registered_core(
     parsed = json.loads(result.stdout)
     assert parsed["status"] == "success"
     assert parsed["artifacts"]["preview"]["status"] == "timeout"
+    assert "Preview rendering timed out" in parsed["suggestion"]
     assert parsed["artifact_created"] is True
     assert parsed["outputs"]["step"] == "v2_timeout/output.step"
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
