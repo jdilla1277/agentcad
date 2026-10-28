@@ -958,6 +958,7 @@ class TestFailures:
         meta = json.loads((failed_dir / "meta.json").read_text())
         assert meta["status"] == "failed"
         assert "something went wrong" in meta["error"]
+        assert not (failed_dir / "geometry_manifest.json").exists()
 
     def test_part_bounding_box_error_has_persisted_guidance(
         self, runner, isolated_dir
