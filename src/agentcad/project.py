@@ -360,8 +360,8 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
             (layout.configured or Path.cwd().resolve() != layout.project_root)
             and isinstance(value, str)
             and (key in path_keys or paths)
-            and re.match(r"^v\d+(?:_|/)", value)
-            and "/" in value
+            and re.match(r"^v\d+(?:_|[/\\])", value)
+            and ("/" in value or os.sep in value)
         ):
             return layout.response_path(layout.artifact_path(value))
         return value
@@ -414,7 +414,9 @@ def _format_import_presentation(result, original_step, layout):
 
         def relocate(action, target=step):
             for verb in ("inspect", "measure", "view"):
-                for previous in (original_step, step):
+                # Stored output paths use '/', while Path-generated examples
+                # can use native Windows separators in the same cached reply.
+                for previous in (original_step, str(Path(original_step)), step):
                     prefix = f"agentcad {verb} {shlex.quote(previous)}"
                     if action == prefix or action.startswith(prefix + " "):
                         suffix = action[len(prefix):]

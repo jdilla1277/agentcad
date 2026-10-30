@@ -337,14 +337,16 @@ def test_cli_and_registered_mcp_share_retry_and_checked_images(runner, isolated_
     assert len(_history(project / "build files")) == 1
 
 
-@pytest.mark.parametrize(("build_dir", "text_budget"), [(None, 1000), (None, 2000), ("build — owner's files", 2000)])
-def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatch, build_dir, text_budget):
+@pytest.mark.parametrize(("build_dir", "text_budget", "label"), [
+    (None, 1000, None), (None, 2000, None), (None, 2000, "v1"), ("build — owner's files", 2000, None),
+])
+def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatch, build_dir, text_budget, label):
     from agentcad.inspection_report import _estimated_tokens
 
     if build_dir:
         (isolated_dir / "agentcad.toml").write_text("build_dir = " + json.dumps(build_dir) + "\n", encoding="utf-8")
     options = dict(initialize=True, view=False, diff=False, max_images=1,
-                   text_budget=text_budget, idempotency_key="subdir", build_dir=build_dir)
+                   text_budget=text_budget, idempotency_key="subdir", build_dir=build_dir, label=label)
     first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options)
     first = first_result.structuredContent if isinstance(first_result, CallToolResult) else first_result
     assert first["status"] == "success" and "inspection" in first
@@ -381,6 +383,7 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
     assert report["analysis_revision"] == first["inspection"]["analysis_revision"]
     assert report["manifest_id"] == first["inspection"]["manifest_id"]
     assert Path(report["inventory"]["image_root"]).is_absolute()
+    assert Path(replay["geometry_manifest"]["path"]) == step.with_name("geometry_manifest.json")
     if report["media"]:
         assert isinstance(replay_result, CallToolResult)
         assert len(replay_result.content[1:]) == len(report["media"])
@@ -392,6 +395,8 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
     cli_args = _args(REAL_SOURCE, "subdir", "--inspection-image", "--max-images", "1", "--text-budget", str(text_budget))
     if build_dir:
         cli_args.extend(["--build-dir", build_dir])
+    if label is not None:
+        cli_args.extend(["--label", label])
     cli_result, cli_replay = _invoke(runner, cli_args)
     assert cli_result.exit_code == 0
     assert cli_replay == {k: v for k, v in replay.items() if k != "_exit_code"}
