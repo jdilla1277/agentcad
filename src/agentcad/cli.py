@@ -797,6 +797,9 @@ class _LoggingGroup(click.Group):
                             from agentcad.change_retention import attach_change
 
                             payload = attach_change(payload)
+                            if payload.get("command") == "import":
+                                from agentcad.import_requests import finish_response
+                                payload = finish_response(payload)
                             message = json.dumps(format_response(payload, layout))
                     except (TypeError, json.JSONDecodeError):
                         pass
@@ -834,7 +837,7 @@ class _LoggingGroup(click.Group):
             self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
 
     def _record_live_build(self, ctx, captured, root, exception=None):
-        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
+        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay"):
             return
         layout = ctx.meta.get("project_layout")
         if layout is not None:

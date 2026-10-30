@@ -343,6 +343,10 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         "volume_glb",
         "volume_png",
         "source_copy",
+        "image_root",
+        "manifest",
+        "report",
+        "bundle",
     }
 
     def visit(value, key="", paths=False):

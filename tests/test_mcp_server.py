@@ -139,11 +139,11 @@ def test_import_cad_forwards_cli_controls(monkeypatch):
         "supplier.step", "/tmp/project", label="first part", initialize=True,
         runtime="build123d", validation_profile="kernel", view=False, diff=False,
         report=False, report_images=False, max_images=2, text_budget=1500,
-        build_dir="artifacts with spaces",
+        build_dir="artifacts with spaces", idempotency_key="supplier:1",
     )
     assert result["status"] == "success"
     assert calls == [([
-        "import", "supplier.step", "--label", "first part", "--init", "--runtime", "build123d",
+        "import", "supplier.step", "--idempotency-key", "supplier:1", "--label", "first part", "--init", "--runtime", "build123d",
         "--validation-profile", "kernel", "--no-view", "--no-diff", "--no-report",
         "--no-inspection-image", "--max-images", "2", "--text-budget", "1500",
         "--build-dir", "artifacts with spaces",

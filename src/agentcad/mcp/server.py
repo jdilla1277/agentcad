@@ -319,6 +319,7 @@ def import_cad(
     max_images: int = 9,
     text_budget: int = 2000,
     build_dir: str | None = None,
+    idempotency_key: str | None = None,
 ) -> Any:
     """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
 
@@ -341,8 +342,15 @@ def import_cad(
     match CLI defaults; set view=False for no browser handoff. build_dir selects
     the artifact/history root, relative to the project root. Attachment failure
     preserves successful core import and returns explicit image_delivery status.
+
+    Keep idempotency_key and identical source/options to retry a lost response
+    without another version. Keys are scoped to the selected build root. A busy
+    retry reports in_progress; interruption recovers committed CAD or explicitly
+    reports stopped pre-commit work. It does not restart optional analysis.
     """
     args = ["import", file]
+    if idempotency_key is not None:
+        args.extend(["--idempotency-key", idempotency_key])
     if label is not None:
         args.extend(["--label", label])
     if initialize:
