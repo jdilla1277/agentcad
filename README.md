@@ -313,6 +313,11 @@ execution filesystem. See `agentcad docs mcp` for controls.
 For setup and a complete agent build-and-edit loop, see the
 [cloud workflow guide](docs/cloud-workflow.md).
 
+If your host supplies a hosted MCP URL, a supported agent can connect directly
+with the issued key pair, without installing AgentCAD locally. Call `cloud_help`
+for remote tools and explicit content uploads. The guide covers URL setup and
+retrieving private evidence through MCP.
+
 If your host has issued an AgentCAD API address and key pair, the same local
 MCP server also offers `cloud_run`, `cloud_import`, `cloud_measure`,
 `cloud_inspect`, `cloud_check_spec`, `cloud_render`, and `cloud_diff`. Project,
