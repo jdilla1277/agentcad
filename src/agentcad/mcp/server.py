@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 import base64
 import hashlib
+import shlex
 from typing import Any, Literal
 
 from click.testing import CliRunner
@@ -21,14 +22,14 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name.startswith("cloud_"):
+            if tool.name.startswith("cloud_") or tool.name == "import_cad":
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
     async def call_tool(self, name, arguments):
         # FastMCP otherwise drops unknown arguments before calling a tool.
-        # A local-only render option must not silently become a cloud request.
-        if name.startswith("cloud_"):
+        # Closed tool contracts must reject unsupported options before work.
+        if name.startswith("cloud_") or name == "import_cad":
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -36,7 +37,9 @@ class AgentCADMCP(FastMCP):
                 try:
                     jsonschema.validate(arguments, {**tool.parameters, "additionalProperties": False})
                 except jsonschema.ValidationError:
-                    raise ValueError("Invalid cloud arguments. Use the tool's declared parameters; local-only options are unavailable.") from None
+                    message = ("Invalid cloud arguments. Use the tool's declared parameters; local-only options are unavailable."
+                               if name.startswith("cloud_") else "Invalid import_cad arguments. Use the tool's declared parameters.")
+                    raise ValueError(message) from None
         return await super().call_tool(name, arguments)
 
 
@@ -258,6 +261,108 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     return _format_result(
         result.stdout, result.exit_code, result.exception, stderr=result.stderr,
     )
+
+
+def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
+    """Attach only the images named by the response, checking bytes at delivery."""
+    if not media:
+        return result
+    attachments = []
+    try:
+        for item in media:
+            path = Path(item["png"])
+            if image_root is not None:
+                path = Path(image_root) / path
+            if not path.is_absolute():
+                path = Path(cwd) / path
+            png = path.read_bytes()
+            if hashlib.sha256(png).hexdigest() != item["sha256"]:
+                raise ValueError("Image changed before attachment; retry the image request.")
+            if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("Inspection image is not a PNG; retry the image request.")
+            attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
+    except (OSError, ValueError) as exc:
+        if keep_core and result.get("core", {}).get("status") == "success":
+            action = ["agentcad", "inspect", result["outputs"]["step"], "--report"]
+            budget = result.get("inspection", {}).get("budget", {})
+            for field, option in (("max_images", "--max-images"), ("text_tokens", "--text-budget")):
+                if field in budget:
+                    action.extend([option, str(budget[field])])
+            if result.get("build_root"):
+                action.extend(["--build-dir", result["build_root"]])
+            return {
+                **result,
+                "warnings": [*result.get("warnings", []), "CAD import succeeded; inspection images could not be attached."],
+                "image_delivery": {"status": "failed", "attached": 0, "requested": len(media),
+                                   "message": str(exc), "next_actions": [shlex.join(action)]},
+            }
+        return {**result, "status": "error", "_exit_code": 1,
+                "image": {"status": "failed", "message": str(exc)}}
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(result)), *attachments],
+        structuredContent=result,
+    )
+
+
+@mcp.tool()
+def import_cad(
+    file: str,
+    cwd: str,
+    label: str | None = None,
+    initialize: bool = False,
+    runtime: Literal["build123d", "cadquery"] | None = None,
+    validation_profile: Literal["deliverable", "kernel"] = "deliverable",
+    view: bool = True,
+    diff: bool = True,
+    report: bool = True,
+    report_images: bool = True,
+    max_images: int = 9,
+    text_budget: int = 2000,
+    build_dir: str | None = None,
+) -> Any:
+    """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
+
+    file and cwd refer to the MCP execution filesystem. No cloud account is
+    needed; cloud_import uploads to a hosted project instead. initialize=True
+    maps to CLI --init and can create the selected project/build root. New
+    projects default to build123d; runtime only pins a newly initialized project.
+
+    Default: CLI import JSON, including quality, dimensions, saved inventories
+    and up to nine actual PNG image blocks (overall + up to four part/four raw
+    face-edge samples). Images and selectors name the same version-local IDs.
+    Named design-feature recognition is not available. Artifacts and edit.py
+    remain on the execution filesystem; use returned paths with inspect/run.
+
+    report=False omits inline inspection and attachments but retains the saved
+    bundle. report_images=False skips inspection media while keeping the report;
+    max_images (0..9) caps media. Neither disables legacy preview artifacts.
+    text_budget bounds the inspection object (default 2000 estimated tokens),
+    excluding legacy import metadata; image-token cost is unknown. view/diff
+    match CLI defaults; set view=False for no browser handoff. build_dir selects
+    the artifact/history root, relative to the project root. Attachment failure
+    preserves successful core import and returns explicit image_delivery status.
+    """
+    args = ["import", file]
+    if label is not None:
+        args.extend(["--label", label])
+    if initialize:
+        args.append("--init")
+    if runtime is not None:
+        args.extend(["--runtime", runtime])
+    args.extend(["--validation-profile", validation_profile])
+    if not view:
+        args.append("--no-view")
+    if not diff:
+        args.append("--no-diff")
+    if not report:
+        args.append("--no-report")
+    if not report_images:
+        args.append("--no-inspection-image")
+    args.extend(["--max-images", str(max_images), "--text-budget", str(text_budget)])
+    result = _invoke(_build_args(args, build_dir), cwd=cwd)
+    inspection = result.get("inspection", {})
+    return _with_images(result, inspection.get("media", []), cwd=cwd,
+                        image_root=inspection.get("inventory", {}).get("image_root"), keep_core=True)
 
 
 @mcp.tool()
@@ -499,27 +604,8 @@ def inspect(
     media = result.get("media", []) if report else []
     if image and result.get("image", {}).get("status") == "success":
         media = [{"png": result["image"]["png"], "sha256": result["image"]["png_sha256"]}]
-    if media:
-        attachments = []
-        try:
-            for item in media:
-                path = Path(item["png"])
-                if report:
-                    path = Path(result["inventory"]["image_root"]) / path
-                if not path.is_absolute():
-                    path = Path(cwd) / path
-                png = path.read_bytes()
-                if hashlib.sha256(png).hexdigest() != item["sha256"]:
-                    raise ValueError("Image changed before attachment; retry the image request.")
-                attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
-        except (OSError, ValueError) as exc:
-            return {**result, "status": "error", "_exit_code": 1,
-                    "image": {"status": "failed", "message": str(exc)}}
-        return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(result)), *attachments],
-            structuredContent=result,
-        )
-    return result
+    return _with_images(result, media, cwd=cwd,
+                        image_root=result["inventory"]["image_root"] if report and media else None)
 
 
 @mcp.tool()

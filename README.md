@@ -146,7 +146,8 @@ and edits:
 ## Spatial review comments
 
 Live project viewers opened after a run or with `agentcad viewer open` use the existing service bound to
-`127.0.0.1`. Press `C`, click the model, confirm the inferred named part and
+`127.0.0.1`. Click **Comments** in the bottom-left viewer controls, then **+ New comment**
+(or press `C`). Click the model, confirm the inferred named part and
 revision scope, then choose **Send comment**. To hold feedback back, choose
 **Save draft** instead; unsent drafts can be edited, deleted, sent individually,
 or submitted together with **Send all drafts**.
@@ -172,9 +173,15 @@ actor, timestamp, optional message, and associated revision. The older
 New builds wait while you write or send a comment or reply, then update the
 model once you send, save, or cancel. Current/Previous/Both follow the displayed
 revision sides; the original source version stays in the thread. If a part
-disappears, its comment remains in the list as unplaced. Comments become
+disappears, its comment remains in the list as unplaced. Hiding a part hides its
+comment pins in the 3D view; its threads stay in the sidebar. Showing the part
+restores its pins. Comments become
 available to the agent on its next turn; they do not start a new agent run.
 File viewers and temporary part/diff viewers remain read-only.
+
+To reposition the model, click **Pan** and drag, or hold **Shift** while dragging.
+Click **Pan** again to return to orbiting. **Fit view** centers the visible model
+and adjusts the zoom to fit it on screen.
 
 `--label` names the version; the JSON response returns the actual file under
 `outputs.step`. The older `--output LABEL` spelling remains a deprecated
@@ -293,6 +300,13 @@ Add to `.mcp.json`:
 ```json
 {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
 ```
+
+For local STEP/STP/BREP files, call `import_cad` with `file`, `cwd`, and
+`initialize=True` to start a project. The default response includes the import
+JSON and up to nine inspection PNG attachments. Use `report_images=False` for
+an image-free report or `report=False` to keep the bundle on disk. Follow the
+returned IDs and paths with `inspect` and `run`. Local paths refer to the MCP
+execution filesystem. See `agentcad docs mcp` for controls.
 
 ### Cloud projects
 
