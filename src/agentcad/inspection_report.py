@@ -53,8 +53,16 @@ def _covers_model(saved, part_id):
 
 def _analysis(step, output_root, saved, meta, session):
     source_hash = saved["source"].get("sha256")
-    if (meta.get("version") != saved["version"] or not source_hash
-            or meta.get("sha256") != source_hash):
+    recorded = meta.get("geometry_manifest") or {}
+    if saved["source"].get("kind") == "script":
+        # Generated quality describes the delivered STEP, not Python bytes.
+        # Bind it to the identity recorded at the successful run boundary.
+        matches = (meta.get("command") == "run" and isinstance(recorded, dict)
+                   and recorded.get("manifest_id") == saved["manifest_id"]
+                   and recorded.get("baseline_sha256") == saved["baseline"]["sha256"])
+    else:
+        matches = bool(source_hash and meta.get("sha256") == source_hash)
+    if meta.get("version") != saved["version"] or not matches:
         meta = {}
     quality = _quality(meta)
     inputs = {"revision": REPORT_REVISION, "manifest_id": saved["manifest_id"], "quality": quality}
