@@ -16,11 +16,13 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-### On CADGenBench: 48% higher CAD Score and 21.8% lower model cost
+## Recently from agentcad
 
-[![Watch measuring agentcad's effectiveness](https://img.youtube.com/vi/IacqGZH8Gu4/maxresdefault.jpg)](https://www.youtube.com/watch?v=IacqGZH8Gu4)
+- **[Measuring agentcad's effectiveness, again](https://agentcad.dev/measuring-agentcad-effectiveness-again):** The benchmark run behind v0.7.0 scored 33% higher overall than the previous agentcad result, with editing up 42% and 80 of 81 valid outputs.
+- **[Using Meta's Muse agent for 3D printing and CAD](https://agentcad.dev/muse-3d-printing):** A CAD workflow from a phone with Meta's Muse agent, including a video walkthrough.
+- **[The original effectiveness benchmark](https://agentcad.dev/measuring-agentcad-effectiveness):** The earlier comparison against direct build123d, with its [video walkthrough](https://www.youtube.com/watch?v=IacqGZH8Gu4).
 
-In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
+Browse the [change log](https://agentcad.dev/changelog) for more updates.
 
 The v0.7.0 release brings the five-stage workflow below to the installed guide
 and built-in help. In its [Candidate L CADGenBench run](https://huggingai4engineering-cadgenbench.hf.space/reports/james-dillard_gpt-5-nano-candidate-l-pi-harness-five-s_20261001-001100.html),
