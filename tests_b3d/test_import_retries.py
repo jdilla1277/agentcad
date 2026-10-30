@@ -337,19 +337,117 @@ def test_cli_and_registered_mcp_share_retry_and_checked_images(runner, isolated_
     assert len(_history(project / "build files")) == 1
 
 
-def test_default_root_replay_from_subdirectory_resolves_media(runner, isolated_dir, monkeypatch):
-    first = server.import_cad(str(REAL_SOURCE), str(isolated_dir), initialize=True,
-                              view=False, diff=False, max_images=1, idempotency_key="subdir")
-    assert isinstance(first, CallToolResult)
+@pytest.mark.parametrize(("build_dir", "text_budget"), [(None, 1000), (None, 2000), ("build — owner's files", 2000)])
+def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatch, build_dir, text_budget):
+    from agentcad.inspection_report import _estimated_tokens
+
+    if build_dir:
+        (isolated_dir / "agentcad.toml").write_text("build_dir = " + json.dumps(build_dir) + "\n", encoding="utf-8")
+    options = dict(initialize=True, view=False, diff=False, max_images=1,
+                   text_budget=text_budget, idempotency_key="subdir", build_dir=build_dir)
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options)
+    first = first_result.structuredContent if isinstance(first_result, CallToolResult) else first_result
+    assert first["status"] == "success" and "inspection" in first
+    root = isolated_dir / build_dir if build_dir else isolated_dir
+    step = Path(first["outputs"]["step"])
+    if not step.is_absolute():
+        step = root / step
+    protected = [root / "agentcad.json", root / ".agentcad/changes/working.json", isolated_dir / "edit.py",
+                 Path(first["idempotency"]["request"]).with_name("response.json"),
+                 step, step.with_name("geometry_manifest.json"), step.with_name("meta.json")]
+    protected.extend(step.parent / "inspection" / p.name for p in (step.parent / "inspection").iterdir() if p.is_file())
+    before = {p: p.read_bytes() for p in protected}
     subdir = isolated_dir / "caller"
     subdir.mkdir()
-    replay = server.import_cad(str(REAL_SOURCE), str(subdir), initialize=True,
-                               view=False, diff=False, max_images=1, idempotency_key="subdir")
-    assert isinstance(replay, CallToolResult) and len(replay.content) == 2
-    assert replay.content[1].data == first.content[1].data
-    assert replay.structuredContent["idempotency"]["replayed"]
-    assert Path(replay.structuredContent["inspection"]["inventory"]["image_root"]).is_absolute()
-    assert len(_history(isolated_dir)) == 1
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Response formatting reran import, analysis or rendering")
+
+    with monkeypatch.context() as guard:
+        guard.setattr("agentcad.commands.import_cmd._import_impl", unexpected)
+        guard.setattr("agentcad.inspection_report._analysis", unexpected)
+        guard.setattr("agentcad.geometry_images.geometry_image", unexpected)
+        replay_result = server.import_cad(str(REAL_SOURCE), str(subdir), **options)
+    replay = replay_result.structuredContent if isinstance(replay_result, CallToolResult) else replay_result
+    assert replay["idempotency"]["replayed"] and replay["version"] == 1
+    assert replay["change"] == first["change"]
+    report = replay["inspection"]
+    budget = report["budget"]
+    assert _estimated_tokens(report) == budget["estimated_text_tokens"] <= text_budget - budget["transport_reserve_tokens"]
+    assert budget["parts_returned"] == len(report["parts"])
+    assert budget["samples_returned"] == {name: len(rows) for name, rows in report["samples"].items()}
+    assert budget["media_references_returned"] == report["media_summary"]["returned"] == len(report["media"])
+    assert report["media_summary"]["omitted"] == first["inspection"]["media_summary"]["omitted"] + len(first["inspection"]["media"]) - len(report["media"])
+    assert report["analysis_revision"] == first["inspection"]["analysis_revision"]
+    assert report["manifest_id"] == first["inspection"]["manifest_id"]
+    assert Path(report["inventory"]["image_root"]).is_absolute()
+    if report["media"]:
+        assert isinstance(replay_result, CallToolResult)
+        assert len(replay_result.content[1:]) == len(report["media"])
+        assert replay_result.content[1].data == first_result.content[1].data
+    assert {p: p.read_bytes() for p in protected} == before
+    assert len(_history(root)) == len(_attempts(root)) == 1
+
+    monkeypatch.chdir(subdir)
+    cli_args = _args(REAL_SOURCE, "subdir", "--inspection-image", "--max-images", "1", "--text-budget", str(text_budget))
+    if build_dir:
+        cli_args.extend(["--build-dir", build_dir])
+    cli_result, cli_replay = _invoke(runner, cli_args)
+    assert cli_result.exit_code == 0
+    assert cli_replay == {k: v for k, v in replay.items() if k != "_exit_code"}
+    lookup_args = shlex.split(replay["geometry_manifest"]["lookup_example"])
+    lookup, record = _invoke(runner, [*lookup_args[1:], "--no-daemon"])
+    assert lookup.exit_code == 0 and record["entity"]["id"] == lookup_args[lookup_args.index("--id") + 1]
+    # Execute every generated image/report action in the directory that
+    # received it. Substituting the advertised face makes the ID template real.
+    actions = [replay["geometry_manifest"]["image_example"],
+               *[a.rsplit(" — ", 1)[0] for a in replay["next_actions"] if a.startswith("agentcad inspect ")],
+               *report["next_actions"]]
+    for action in actions:
+        args = shlex.split(action)[1:]
+        args = [replay["geometry_manifest"]["sample_ids"]["face"] if arg == "ID" else arg for arg in args]
+        result, delivered = _invoke(runner, [*args, "--no-daemon"])
+        assert result.exit_code == 0 and delivered["status"] == "success", action
+        if build_dir:
+            assert Path(delivered["build_root"]) == root
+    assert {p: p.read_bytes() for p in protected} == before
+    assert len(_history(root)) == 1
+
+
+def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner, isolated_dir, monkeypatch):
+    from agentcad import inspection_report as reports
+
+    options = dict(initialize=True, view=False, diff=False, max_images=1, idempotency_key="budget_failure")
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options)
+    first = first_result.structuredContent
+    step = isolated_dir / first["outputs"]["step"]
+    cache = Path(first["idempotency"]["request"]).with_name("response.json")
+    protected = [cache, step, step.with_name("geometry_manifest.json"),
+                 isolated_dir / first["outputs"]["inspection_report"],
+                 isolated_dir / "agentcad.json", isolated_dir / ".agentcad/changes/working.json"]
+    before = {p: p.read_bytes() for p in protected}
+    subdir = isolated_dir / "caller"
+    subdir.mkdir()
+
+    def too_small(report):
+        raise reports.ReportBudgetError("Required caller-specific references do not fit.")
+
+    with monkeypatch.context() as guard:
+        guard.setattr(reports, "compact_report", too_small)
+        replay = server.import_cad(str(REAL_SOURCE), str(subdir), **options)
+    assert isinstance(replay, dict) and replay["_exit_code"] == 0
+    assert replay["status"] == replay["core"]["status"] == "success"
+    assert "inspection" not in replay
+    assert replay["inspection_delivery"]["status"] == "omitted"
+    assert replay["inspection_delivery"]["reason"] == "text_budget_too_small"
+    assert replay["idempotency"]["replayed"] and replay["version"] == 1
+    monkeypatch.chdir(subdir)
+    action = shlex.split(replay["inspection_delivery"]["next_actions"][0])
+    result, report = _invoke(runner, [*action[1:], "--no-daemon"])
+    assert result.exit_code == 0 and report["status"] == "success"
+    assert report["manifest_id"] == first["inspection"]["manifest_id"]
+    assert {p: p.read_bytes() for p in protected} == before
+    assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 1
 
 
 # Real processes prove OS lock lifetime and persisted recovery; no CLI thread

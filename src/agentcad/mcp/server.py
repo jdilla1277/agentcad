@@ -347,6 +347,8 @@ def import_cad(
     without another version. Keys are scoped to the selected build root. A busy
     retry reports in_progress; interruption recovers committed CAD or explicitly
     reports stopped pre-commit work. It does not restart optional analysis.
+    Replay actions target the caller directory; inline report/media may shrink
+    to respect text_budget after formatting. Saved analysis and IDs stay fixed.
     """
     args = ["import", file]
     if idempotency_key is not None:

@@ -323,6 +323,11 @@ process releases ownership automatically. Retrying recovers a committed version
 and marks unfinished artifacts interrupted, or explicitly reports that execution
 stopped before commit. Optional analysis is not automatically resumed. Saved
 responses describe the original attempt; use `inspect` for fresh inspection.
+When retrying from another project subdirectory, returned actions target the
+selected baseline from that caller directory. Inline detail/media may be trimmed
+further to keep the final report within its text budget; saved analysis and IDs
+stay unchanged. If required references cannot fit, `inspection_delivery` reports
+the omission and provides a retrieval action with a larger allowance.
 Deleting `.agentcad/import_requests` deletes retry protection for those keys.
 
 ### Cloud projects
