@@ -97,6 +97,24 @@ because image references also consume the text allowance. Media failures are
 explicit in `media_summary` and the full catalogue; they preserve core geometry,
 the ID registry, the report and edit scaffold.
 
+MCP `import_cad(file=..., cwd=..., initialize=True)` delivers this bundle
+directly from a local STEP/STP/BREP import: the same CLI JSON plus transport
+`_exit_code`, one text block and the actual PNGs in `inspection.media` order.
+The maximum is nine distinct image blocks. `initialize` maps to `--init`;
+`runtime`, `validation_profile`, `build_dir`, `view` and `diff` mirror CLI
+controls. `report=False` omits inline inspection and its attachments while
+retaining prepared artifacts. `report_images=False` or `max_images=0` keeps
+the report without inspection image blocks. Legacy preview/viewer artifacts
+follow their existing controls. `text_budget` covers only nested `inspection`.
+
+Every attachment is checked against its declared hash and PNG signature.
+If delivery fails, the import response retains its successful core status,
+reports `image_delivery.status=failed` with zero attached images, and supplies
+an executable inspection retry action retaining the text/image limits. It does
+not repeat the import or issue new IDs. Source, scaffold and artifact paths refer to the MCP execution
+filesystem; inline PNGs are delivered to the caller. `cloud_import` remains a
+separate hosted-project upload operation. Local import needs no account.
+
 ## Text and context limits
 
 The fallback text allowance is **2,000 estimated tokens**, using

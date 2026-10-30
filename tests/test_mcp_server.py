@@ -18,7 +18,7 @@ from agentcad.mcp.server import (
 
 
 EXPECTED_TOOLS = {
-    "run", "render", "export", "measure", "inspect", "check_spec",
+    "import_cad", "run", "render", "export", "measure", "inspect", "check_spec",
     "docs", "context", "recover", "diff", "view",
 }
 
@@ -125,6 +125,62 @@ def test_run_mcp_passes_core_only_fast_path(monkeypatch):
         ],
         "/tmp/project",
     )]
+
+
+def test_import_cad_forwards_cli_controls(monkeypatch):
+    calls = []
+
+    def fake_invoke(args, cwd=None):
+        calls.append((args, cwd))
+        return {"command": "import", "status": "success", "_exit_code": 0}
+
+    monkeypatch.setattr(server, "_invoke", fake_invoke)
+    result = server.import_cad(
+        "supplier.step", "/tmp/project", label="first part", initialize=True,
+        runtime="build123d", validation_profile="kernel", view=False, diff=False,
+        report=False, report_images=False, max_images=2, text_budget=1500,
+        build_dir="artifacts with spaces",
+    )
+    assert result["status"] == "success"
+    assert calls == [([
+        "import", "supplier.step", "--label", "first part", "--init", "--runtime", "build123d",
+        "--validation-profile", "kernel", "--no-view", "--no-diff", "--no-report",
+        "--no-inspection-image", "--max-images", "2", "--text-budget", "1500",
+        "--build-dir", "artifacts with spaces",
+    ], "/tmp/project")]
+
+
+def test_import_cad_schema_is_closed_and_rejects_unknown_options(monkeypatch, tmp_path):
+    import asyncio
+
+    declared = next(tool for tool in asyncio.run(mcp.list_tools()) if tool.name == "import_cad")
+    assert declared.inputSchema["additionalProperties"] is False
+    assert set(declared.inputSchema["required"]) == {"file", "cwd"}
+    assert declared.inputSchema["properties"]["report"]["default"] is True
+    assert declared.inputSchema["properties"]["report_images"]["default"] is True
+    assert declared.outputSchema is None  # Image-bearing CallToolResult must pass through.
+    monkeypatch.setattr(server, "_invoke", lambda *a, **k: pytest.fail("Invalid arguments started an import"))
+    with pytest.raises(ValueError, match="Invalid import_cad arguments"):
+        asyncio.run(mcp.call_tool("import_cad", {"file": "part.step", "cwd": str(tmp_path), "initialize": True, "unknown_option": True}))
+    with pytest.raises(ValueError, match="Invalid import_cad arguments"):
+        asyncio.run(mcp.call_tool("import_cad", {"file": "part.step", "cwd": str(tmp_path), "runtime": "not-a-runtime"}))
+    assert not list(tmp_path.iterdir())
+
+
+def test_inspect_attachment_failure_keeps_existing_error_contract(monkeypatch, tmp_path):
+    import hashlib
+
+    png = tmp_path / "invalid.png"
+    png.write_bytes(b"not a PNG")
+    monkeypatch.setattr(server, "_invoke", lambda *a, **k: {
+        "command": "inspect", "status": "success", "_exit_code": 0,
+        "image": {"status": "success", "png": str(png), "png_sha256": hashlib.sha256(png.read_bytes()).hexdigest()},
+    })
+    result = server.inspect(file="part.step", cwd=str(tmp_path), image=True)
+    assert result["status"] == "error"
+    assert result["_exit_code"] == 1
+    assert result["image"]["status"] == "failed"
+    assert "not a PNG" in result["image"]["message"]
 
 
 def test_docs_mcp_runtime_override_returns_cadquery_content():
