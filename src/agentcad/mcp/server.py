@@ -319,6 +319,8 @@ def import_cad(
     max_images: int = 9,
     text_budget: int = 2000,
     build_dir: str | None = None,
+    checks_file: str | None = None,
+    defer_checks: bool = False,
 ) -> Any:
     """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
 
@@ -341,6 +343,13 @@ def import_cad(
     match CLI defaults; set view=False for no browser handoff. build_dir selects
     the artifact/history root, relative to the project root. Attachment failure
     preserves successful core import and returns explicit image_delivery status.
+
+    checks_file maps to CLI --checks, including on initialize=True imports.
+    Requirements are inherited when omitted; changing them requires actor and
+    rationale in the checks JSON. defer_checks maps to --defer-checks: retain
+    geometry with pending checks without advancing current. Failed checks also
+    leave current unchanged; check_spec(file=revision_id, complete=True) records
+    deferred evidence without changing current.
     """
     args = ["import", file]
     if label is not None:
@@ -359,6 +368,10 @@ def import_cad(
     if not report_images:
         args.append("--no-inspection-image")
     args.extend(["--max-images", str(max_images), "--text-budget", str(text_budget)])
+    if checks_file is not None:
+        args.extend(["--checks", checks_file])
+    if defer_checks:
+        args.append("--defer-checks")
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
     inspection = result.get("inspection", {})
     return _with_images(result, inspection.get("media", []), cwd=cwd,
