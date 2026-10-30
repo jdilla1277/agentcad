@@ -325,9 +325,9 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 `AGENTCAD_KEY_ID`, and `AGENTCAD_KEY_SECRET` in the server process environment.
 Keep credentials in a password manager, outside project files and agent prompts.
 
-The bounded CLI adapter is awaiting a package release. Use the pinned install
-in the guide above for now; after release it will be available with
-`pip install 'agentcad[cloud]'` (also included in `agentcad[mcp]`):
+The bounded CLI adapter is available in AgentCAD 0.7.1. Install it with
+`pip install 'agentcad[cloud]==0.7.1'` (also included in `agentcad[mcp]`),
+as shown in the guide above:
 
 ```bash
 agentcad cloud projects create --name Bracket
