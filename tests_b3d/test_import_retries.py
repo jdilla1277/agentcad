@@ -224,6 +224,31 @@ def test_reply_cache_write_failure_recovers_terminal_attempt(runner, isolated_di
     assert len(_attempts(isolated_dir)) == len(_history(isolated_dir)) == 1
 
 
+def test_outer_error_handler_cannot_finalize_after_unlock(runner, isolated_dir, monkeypatch):
+    from agentcad import import_requests
+    from agentcad.project import ProjectError
+
+    complete = import_requests.ImportRequest.complete
+    calls = []
+    monkeypatch.setattr(import_requests, "_LOCK_WAIT_SECONDS", 0)
+
+    def broken(self, payload, exit_code):
+        with import_requests._locked(self.directory / "execution.lock") as acquired:
+            assert not acquired, "Request finalization ran outside execution ownership"
+        calls.append(True)
+        raise ProjectError("retry_record_error", "Injected record failure", "Retry the original request.")
+
+    monkeypatch.setattr(import_requests.ImportRequest, "complete", broken)
+    first, failed = _invoke(runner, _args())
+    assert first.exit_code == 1 and failed["reason"] == "retry_record_error"
+    assert len(calls) == 2  # Original reply + handled error, both under lock.
+    monkeypatch.setattr(import_requests.ImportRequest, "complete", complete)
+    second, recovered = _invoke(runner, _args())
+    assert second.exit_code == 0 and recovered["version"] == 1
+    assert recovered["idempotency"]["state"] == "recovered"
+    assert len(_attempts(isolated_dir)) == len(_history(isolated_dir)) == 1
+
+
 def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypatch):
     requests = []
     monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)

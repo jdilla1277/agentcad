@@ -207,6 +207,10 @@ class ImportRequest:
         except Exception as exc:
             raise ProjectError("import_request_unavailable", f"Cannot recover import retry evidence: {exc}",
                                "Restore the retry records; no second import was started.") from exc
+        finally:
+            # Outer CLI error handling runs after the OS lock is released.
+            # It must not finalize this request/attempt without ownership.
+            click.get_current_context().meta["import_request_closed"] = True
 
     def _run(self, operation):
         ctx = click.get_current_context()
@@ -288,7 +292,8 @@ def mark_core(payload):
 def finish_response(payload):
     ctx = click.get_current_context(silent=True)
     request = ctx.meta.get("import_request") if ctx else None
-    if not request or ctx.meta.get("import_replay") or payload.get("command") != "import":
+    if (not request or ctx.meta.get("import_replay") or ctx.meta.get("import_request_closed")
+            or payload.get("command") != "import"):
         return payload
     exit_code = ctx.meta.get("import_exit_code", 0 if payload.get("status") == "success" else 1)
     try:

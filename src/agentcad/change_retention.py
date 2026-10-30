@@ -105,6 +105,7 @@ def attach_change(payload: dict) -> dict:
         or payload.get("command") not in ("run", "import")
         or payload.get("via") == "daemon"
         or ctx.meta.get("import_replay")
+        or ctx.meta.get("import_request_closed")
     ):
         return payload
     if ctx.meta.get("change_start_error"):
