@@ -470,7 +470,8 @@ def test_run_preview_timeout_preserves_registered_core(
     _init_project(runner)
     _write_script(isolated_dir)
 
-    # Warm native imports before starting a deliberately tiny watchdog.
+    # Keep a prior version, then inject at the preview boundary. A tiny real
+    # watchdog can expire during export/inventory on a busy machine instead.
     monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0")
     warmup = runner.invoke(cli, [
         "run", "script.py", "--output", "warmup", "--no-preview",
@@ -478,13 +479,14 @@ def test_run_preview_timeout_preserves_registered_core(
     ])
     assert warmup.exit_code == 0, warmup.output
 
-    def slow_preview(*_args, **_kwargs):
-        time.sleep(1)
+    from agentcad.commands.run import _handle_run_timeout
 
-    monkeypatch.setenv("AGENTCAD_RUN_TIMEOUT_S", "0.1")
+    def timed_out_preview(*_args, **_kwargs):
+        _handle_run_timeout(None, None)
+
     monkeypatch.setattr(
         "agentcad.render.render_composite_4view",
-        slow_preview,
+        timed_out_preview,
     )
 
     result = runner.invoke(cli, [
@@ -495,6 +497,7 @@ def test_run_preview_timeout_preserves_registered_core(
     parsed = json.loads(result.stdout)
     assert parsed["status"] == "success"
     assert parsed["artifacts"]["preview"]["status"] == "timeout"
+    assert "Preview rendering timed out" in parsed["suggestion"]
     assert parsed["artifact_created"] is True
     assert parsed["outputs"]["step"] == "v2_timeout/output.step"
     manifest = json.loads((isolated_dir / MANIFEST_FILE).read_text())
@@ -1526,7 +1529,7 @@ def test_run_no_diff_skips_every_automatic_comparison_call(
     assert 'DEFAULT_MODE = "single-a"' in viewer_html
 
 
-def test_run_fast_path_writes_only_core_and_explicit_exports(
+def test_run_fast_path_writes_core_ids_and_explicit_exports_without_visuals(
     runner, isolated_dir, monkeypatch
 ):
     _init_project(runner)
@@ -1563,14 +1566,16 @@ def test_run_fast_path_writes_only_core_and_explicit_exports(
     assert parsed["outputs"] == {
         "step": "v2_fast/output.step",
         "script": "v2_fast/script.py",
+        "geometry_manifest": "v2_fast/geometry_manifest.json",
         "stl": "v2_fast/output.stl",
     }
     assert parsed["artifacts"]["diff"]["status"] == "skipped"
     assert parsed["artifacts"]["viewer_glb"]["status"] == "skipped"
     assert parsed["artifacts"]["viewer"]["status"] == "skipped"
     assert set(path.name for path in version_dir.iterdir()) == {
-        "meta.json", "output.step", "output.stl", "script.py",
+        "meta.json", "output.step", "output.stl", "script.py", "geometry_manifest.json",
     }
+    assert parsed["artifacts"]["geometry_manifest"]["status"] == "success"
     assert not any("diff" in key for key in parsed["timings"])
 
     explicit = runner.invoke(cli, ["diff", "1", "2", "--no-daemon"])
