@@ -43,6 +43,56 @@ def run(runner, label="bracket", **kwargs):
     return result, json.loads(result.stdout)
 
 
+@pytest.mark.parametrize("command", ["run", "import"])
+@pytest.mark.parametrize("status", ["checks_failed", "checks_pending", "checks_unavailable"])
+def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
+    runner, isolated_dir, command, status
+):
+    from urllib.request import urlopen
+
+    init(runner)
+    (isolated_dir / "script.py").write_text(BRACKET)
+    accepted = runner.invoke(
+        cli, ["run", "script.py", "--label", "accepted", "--no-preview", "--no-diff", "--no-daemon"]
+    )
+    assert accepted.exit_code == 0, accepted.output
+    accepted = json.loads(accepted.stdout)
+    url = accepted["project_viewer"]["url"]
+    with urlopen(url + "state", timeout=3) as response:
+        before = json.load(response)
+    assert before["attempt"]["status"] == "success"
+    accepted_step = Path(accepted["outputs"]["step"])
+    accepted_bytes = accepted_step.read_bytes()
+    accepted_manifest = (isolated_dir / "agentcad.json").read_bytes()
+    check = {
+        "check_id": "length",
+        "kind": "dimension",
+        "axis": "x",
+        "expected_mm": 80 if status == "checks_failed" else 60,
+    }
+    if status == "checks_unavailable":
+        check = {"check_id": "vendor", "kind": "external", "validator": "vendor"}
+    (isolated_dir / "checks.json").write_text(json.dumps({"schema_version": 1, "checks": [check]}))
+    label = f"blocked-{command}"
+    source = "script.py" if command == "run" else str(accepted_step)
+    args = [command, source, "--label", label, "--checks", "checks.json", *QUIET]
+    if command == "import":
+        args.remove("--no-preview")
+    if status == "checks_pending":
+        args.append("--defer-checks")
+    blocked = runner.invoke(cli, args)
+    assert blocked.exit_code == 1, blocked.output
+    assert json.loads(blocked.stdout)["status"] == status
+    with urlopen(url + "state", timeout=3) as response:
+        after = json.load(response)
+    assert after["attempt"]["status"] == status
+    assert after["attempt"]["label"] == label
+    assert after["latest"] == before["latest"]
+    assert accepted_step.read_bytes() == accepted_bytes
+    assert (isolated_dir / "agentcad.json").read_bytes() == accepted_manifest
+    assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == "accepted"
+
+
 @pytest.mark.parametrize(
     "runtime,source",
     [

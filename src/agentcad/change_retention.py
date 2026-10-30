@@ -68,7 +68,10 @@ def forward_check_options(argv):
 def assess_change(payload, geometry):
     """Gate the existing acceptance path; refused geometry remains diagnostic."""
     attempt = current_attempt()
-    if attempt is None or not attempt._read("request.json", "attempt_request").get("check_policy"):
+    if attempt is None:
+        return None
+    request = attempt._read("request.json", "attempt_request")
+    if not request.get("check_policy"):
         return None
     prepare_change(payload, geometry=geometry)
     reference = attempt.reference()
@@ -87,6 +90,7 @@ def assess_change(payload, geometry):
     return {
         **payload,
         "status": status,
+        "label": request["label"],
         "outputs": {"step": None},
         "current_advanced": False,
         "message": "The candidate is retained, but required checks are not satisfied; the accepted model is unchanged.",
