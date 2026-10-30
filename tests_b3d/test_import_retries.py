@@ -300,6 +300,23 @@ def test_damaged_retry_evidence_never_starts_a_new_import(runner, isolated_dir, 
     assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 1
 
 
+@pytest.mark.parametrize("record", ["request.json", "response.json", "attempt.json"])
+def test_valid_record_from_another_key_cannot_retarget_a_request(runner, isolated_dir, record):
+    first, one = _invoke(runner, _args(key="one"))
+    second, two = _invoke(runner, _args(key="two"))
+    assert first.exit_code == second.exit_code == 0
+    target = Path(one["idempotency"]["request"]).with_name(record)
+    other = Path(two["idempotency"]["request"]).with_name(record)
+    target.write_bytes(other.read_bytes())  # Valid checksum, same source/options.
+    if record == "attempt.json":
+        target.with_name("response.json").unlink()  # Exercise retained recovery.
+    before = (isolated_dir / "agentcad.json").read_bytes()
+    result, failed = _invoke(runner, _args(key="one"))
+    assert result.exit_code == 1 and failed["reason"] == "import_request_unavailable"
+    assert (isolated_dir / "agentcad.json").read_bytes() == before
+    assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 2
+
+
 def test_cli_and_registered_mcp_share_retry_and_checked_images(runner, isolated_dir, monkeypatch):
     project = isolated_dir / "source project"
     project.mkdir()

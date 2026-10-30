@@ -35,11 +35,12 @@ def _save(path, body):
     atomic_write_json(path, {**body, "checksum": _digest(body)})
 
 
-def _read(path):
+def _read(path, request_id):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         body = {k: v for k, v in data.items() if k != "checksum"}
-        if data["checksum"] != _digest(body) or body["schema_version"] != 1:
+        if (data["checksum"] != _digest(body) or body["schema_version"] != 1
+                or body["request_id"] != request_id):
             raise ValueError("record integrity check failed")
         return body
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -122,7 +123,8 @@ class ImportRequest:
                 "replayed": self.replayed, "request": str(self.directory / "request.json")}
 
     def bind_attempt(self, attempt):
-        _save(self.directory / "attempt.json", {"schema_version": 1, "fingerprint": self.fingerprint,
+        _save(self.directory / "attempt.json", {"schema_version": 1, "request_id": self.request_id,
+                                                "fingerprint": self.fingerprint,
                                                 "revision_id": attempt.revision_id})
 
     def complete(self, payload, exit_code):
@@ -130,7 +132,8 @@ class ImportRequest:
         if payload.get("reason") == "import_interrupted":
             state = "interrupted"
         payload = {**payload, "idempotency": self.reference(state)}
-        _save(self.directory / "response.json", {"schema_version": 1, "fingerprint": self.fingerprint,
+        _save(self.directory / "response.json", {"schema_version": 1, "request_id": self.request_id,
+                                                 "fingerprint": self.fingerprint,
                                                  "exit_code": exit_code, "payload": payload})
         return payload
 
@@ -146,7 +149,7 @@ class ImportRequest:
         if attempt_path.exists():
             from agentcad.change_store import Attempt, ChangeStore
 
-            binding = _read(attempt_path)
+            binding = _read(attempt_path, self.request_id)
             if binding["fingerprint"] != self.fingerprint:
                 raise ProjectError("import_request_unavailable", "Retained attempt does not match this import request.",
                                    "Restore the retry records before continuing.")
@@ -218,7 +221,7 @@ class ImportRequest:
         with _locked(self.directory / "execution.lock") as acquired:
             if not acquired:
                 request_path = self.directory / "request.json"
-                if request_path.exists() and _read(request_path)["fingerprint"] != self.fingerprint:
+                if request_path.exists() and _read(request_path, self.request_id)["fingerprint"] != self.fingerprint:
                     raise ProjectError("idempotency_conflict", "This import key is already bound to a different source or options.",
                                        "Retry with the original bytes/options, or choose a new key for a new import.")
                 ctx.meta["import_replay"] = True
@@ -229,7 +232,7 @@ class ImportRequest:
                 raise SystemExit(1)
             request_path = self.directory / "request.json"
             if request_path.exists():
-                saved = _read(request_path)
+                saved = _read(request_path, self.request_id)
                 if saved["fingerprint"] != self.fingerprint:
                     raise ProjectError("idempotency_conflict", "This import key is already bound to a different source or options.",
                                        "Retry with the original bytes/options, or choose a new key for a new import.")
@@ -240,7 +243,7 @@ class ImportRequest:
                 self.replayed = True
                 response_path = self.directory / "response.json"
                 if response_path.exists():
-                    saved = _read(response_path)
+                    saved = _read(response_path, self.request_id)
                     if saved["fingerprint"] != self.fingerprint:
                         raise ProjectError("import_request_unavailable", "The import response does not match its request.",
                                            "Restore the retry records before continuing.")
