@@ -1,4 +1,5 @@
 import json
+import math
 import os
 
 import pytest
@@ -262,6 +263,87 @@ def test_previous_current_modes_preserve_camera_orientation(runner, isolated_dir
             browser.close()
 
 
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_viewer_pan_and_fit_controls(engine, runner, isolated_dir):
+    sync_playwright = _require_playwright()
+    assert runner.invoke(cli, ["init", "--name", "pan_smoke", "--runtime", "cadquery"]).exit_code == 0
+    (isolated_dir / "script.py").write_text(GROUPED_PARTS_SCRIPT)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "pan", "--no-preview", "--no-view", "--no-daemon",
+    ])
+    assert result.exit_code == 0, result.output
+
+    with sync_playwright() as playwright:
+        browser = getattr(playwright, engine).launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto((isolated_dir / "v1_pan" / "viewer.html").as_uri())
+            page.wait_for_function("() => window.agentcadViewer?.debugState().ready", timeout=45_000)
+            page.click("#pause-btn")
+
+            def state():
+                return page.evaluate("window.agentcadViewer.captureState()")
+
+            def offset(camera):
+                return [p - t for p, t in zip(camera["position"], camera["target"])]
+
+            def drag():
+                page.mouse.move(850, 430)
+                page.mouse.down()
+                page.mouse.move(1050, 330, steps=10)
+                page.mouse.up()
+                # Wait for OrbitControls damping to settle before comparing.
+                page.wait_for_timeout(1000)
+
+            initial = state()
+            page.click("#pan-btn")
+            assert page.locator("#pan-btn").get_attribute("aria-pressed") == "true"
+            drag()
+            panned = state()
+            assert panned["target"] != pytest.approx(initial["target"])
+            assert offset(panned) == pytest.approx(offset(initial))
+            assert panned["autoRotate"] is False
+
+            # Live snapshots retain the chosen drag mode as well as the camera.
+            page.click("#pan-btn")
+            page.evaluate("saved => window.agentcadViewer.restoreState(saved)", panned)
+            assert page.locator("#pan-btn").get_attribute("aria-pressed") == "true"
+            page.click("#fit-view-btn")
+            fitted = state()
+            assert fitted["target"] == pytest.approx(initial["target"])
+            assert offset(fitted) == pytest.approx(offset(initial))
+
+            page.click("#pan-btn")
+            page.keyboard.down("Shift")
+            drag()
+            page.keyboard.up("Shift")
+            assert state()["target"] != pytest.approx(fitted["target"])
+            assert offset(state()) == pytest.approx(offset(fitted))
+            page.click("#fit-view-btn")
+            drag()
+            assert state()["target"] == pytest.approx(fitted["target"])
+            assert offset(state()) != pytest.approx(offset(fitted))
+
+            # Fit also adjusts zoom for a narrow viewport, rather than cropping.
+            page.click("#fit-view-btn")
+            wide_distance = math.dist(state()["position"], state()["target"])
+            page.set_viewport_size({"width": 600, "height": 1000})
+            page.click("#fit-view-btn")
+            assert math.dist(state()["position"], state()["target"]) > wide_distance
+
+            # Hidden parts do not pull the fit away from the visible model.
+            page.click('#part-controls [data-part-id="center_rib"] [data-action="isolate"]')
+            page.click("#fit-view-btn")
+            isolated = state()
+            assert isolated["target"] != pytest.approx(initial["target"])
+            assert math.dist(isolated["position"], isolated["target"]) < wide_distance
+            assert not errors, errors
+        finally:
+            browser.close()
+
+
 def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_dir):
     sync_playwright = _require_playwright()
     assert runner.invoke(cli, ["init", "--name", "comment_smoke", "--runtime", "cadquery"]).exit_code == 0
@@ -283,7 +365,15 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
             try:
                 page.goto(url, wait_until="domcontentloaded")
                 page.wait_for_function("() => window.agentcadViewer?.debugState().ready === true", timeout=45_000)
-                page.click("#comment-toggle-btn")
+                # Comments stay discoverable in the parts table and return to
+                # the 3D model when opened, without covering the model label.
+                page.click("#btn-parts")
+                page.get_by_role("button", name="Comments", exact=True).click()
+                assert page.evaluate("window.agentcadViewer.debugState().mode") == "single-a"
+                assert page.locator("#comment-toggle-btn").get_attribute("aria-expanded") == "true"
+                tools = page.locator("#viewer-tools").bounding_box()
+                label = page.locator("#label-left").bounding_box()
+                assert tools["y"] > label["y"] + label["height"]
                 assert page.locator("#new-comment-btn").is_visible()
                 page.click('#part-controls [data-part-id="base_plate"] .name')
                 point = page.evaluate("window.agentcadViewer.selectedPartScreenPoint()")
@@ -449,7 +539,9 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                 assert pin_layout["C2"]["x"] > 1280 / 2
                 assert pin_layout["C3"]["x"] > 1280 / 2
                 page.click("#btn-agent")
-                assert not page.locator("#comment-toggle-btn").is_visible()
+                assert page.locator("#comment-toggle-btn").is_visible()
+                assert not page.locator("#pan-btn").is_visible()
+                assert not page.locator("#fit-view-btn").is_visible()
                 assert all(
                     pin["display"] == "none"
                     for pin in page.evaluate(
@@ -459,7 +551,7 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
                     )
                 )
                 page.click("#btn-parts")
-                assert not page.locator("#comment-toggle-btn").is_visible()
+                assert page.locator("#comment-toggle-btn").is_visible()
                 locator_badge = page.locator(
                     '#parts-list [data-part-id="locator_pin"] .part-comment-badge'
                 )
@@ -592,6 +684,82 @@ def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_d
     assert [comment["anchor"]["kind"] for comment in comments] == [
         "surface", "surface", "surface", "surface", "part"
     ]
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_comment_pins_follow_part_visibility(engine, runner, isolated_dir):
+    sync_playwright = _require_playwright()
+    assert runner.invoke(cli, ["init", "--name", "pin_visibility", "--runtime", "cadquery"]).exit_code == 0
+    (isolated_dir / "script.py").write_text(GROUPED_PARTS_SCRIPT)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "current", "--no-preview", "--no-view", "--no-daemon",
+    ])
+    assert result.exit_code == 0, result.output
+    anchors = [
+        {"kind": "part"},
+        {"kind": "surface", "point_mm": [0, 0, 6.5]},
+        {"kind": "view", "screen": [0.5, 0.5]},
+        {"kind": "view", "screen": [0.6, 0.6]},
+    ]
+    for index, anchor in enumerate(anchors):
+        create_comment(isolated_dir, {
+            "text": f"Visibility check {index}",
+            "source_version": 1,
+            "target": {"model": "a", "part_id": "cover_panel" if index < 3 else None},
+            "anchor": anchor,
+            "view": {"mode": "single-a"},
+        })
+    submit_drafts(isolated_dir)
+    url = live.open_project(isolated_dir, lambda _: True)["url"] + "artifacts/1/viewer.html"
+    try:
+        with sync_playwright() as playwright:
+            browser = getattr(playwright, engine).launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            try:
+                page.goto(url)
+                page.wait_for_function(
+                    "() => window.agentcadViewer?.debugState().ready && window.agentcadViewer.reviewDebugState().comments.length === 4",
+                    timeout=45_000,
+                )
+                page.click("#pause-btn")
+                page.click("#comment-toggle-btn")
+
+                def check_pins(visible):
+                    page.wait_for_function(
+                        """visible => ['C1', 'C2', 'C3'].every(id => {
+                          const pin = document.querySelector(`.comment-pin[data-comment-id="${id}"]`);
+                          return pin && (getComputedStyle(pin).display !== 'none') === visible;
+                        })""", arg=visible,
+                    )
+                    assert page.locator('.comment-pin[data-comment-id="C4"]').is_visible()
+                    assert page.locator(".comment-row").count() == 4
+                    for row in page.locator(".comment-row").all():
+                        assert row.is_visible()
+                        assert row.locator(".comment-unplaced").count() == 0
+
+                check_pins(True)
+                for selector in (
+                    '#part-controls [data-part-id="cover_panel"] [data-action="hide"]',
+                    '#part-controls [data-group-id="cover"] [data-action="hide"]',
+                ):
+                    page.click(selector)
+                    check_pins(False)
+                    page.click(selector)
+                    check_pins(True)
+
+                page.click('#part-controls [data-group-id="frame"] [data-action="isolate"]')
+                check_pins(False)
+                # Ghosted geometry is still shown, so its comment pins remain.
+                page.click("#ghost-rest-btn")
+                check_pins(True)
+                page.click("#ghost-rest-btn")
+                check_pins(False)
+                page.click('#part-controls [data-group-id="frame"] [data-action="isolate"]')
+                check_pins(True)
+            finally:
+                browser.close()
+    finally:
+        live.stop_service()
 
 
 def test_carried_surface_comment_maps_by_part_and_missing_part_is_unplaced(runner, isolated_dir):
