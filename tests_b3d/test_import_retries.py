@@ -252,6 +252,9 @@ def test_outer_error_handler_cannot_finalize_after_unlock(runner, isolated_dir, 
 def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypatch):
     requests = []
     monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    # This test simulates supported transport on Windows too; its socket
+    # location must not fall through to the POSIX-only getuid default.
+    monkeypatch.setenv("AGENTCAD_SOCKET_PATH", str(isolated_dir / "daemon.sock"))
     monkeypatch.setattr("agentcad.daemon.daemon_supported", lambda: True)
 
     def sent(request, **kwargs):
