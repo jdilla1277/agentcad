@@ -338,6 +338,13 @@ JSON RESPONSE CONTRACT
   not reverse core success or remove the registered STEP. Keep and use that STEP;
   retry only the optional render/view work if you need it.
 
+  Normal acceptance returns a durable `promotion` receipt for the exact checked
+  revision. `not_promoted` with selection_changed means a newer edit superseded
+  this build; its diagnostic geometry remains retained and current is unchanged.
+  Inspect/reconcile before rerunning the current script or import. This conflict
+  is separate from a measured geometry failure. See `agentcad docs check-spec`
+  for retained requirements, receipts, and deferred-check limitations.
+
 SPEC AND MEASUREMENT CHECKS
   When requirements include explicit holes, bores, diameters, counts, or
   overall dimensions:
@@ -854,6 +861,7 @@ class _LoggingGroup(click.Group):
             return  # The child already recorded the attempt with its own start time.
         checks_blocked = result.get("status") in {
             "checks_failed", "checks_pending", "checks_unavailable",
+            "not_promoted",
         }
         failed = checks_blocked or result.get("status") in {
             "error", "failed", "validation_error", "invalid_geometry", "timeout",

@@ -214,6 +214,18 @@ def attach_change(payload: dict) -> dict:
     if attempt is None:
         return payload
     try:
+        # Ordinary acceptance publishes this decision in the same atomic
+        # manifest write as current/history. Reads expose the immutable decision
+        # even when optional work failed after the core commit.
+        from agentcad.change_promotion import PromotionStore
+        promotions = PromotionStore(attempt.store.root)
+        operation = promotions.find("auto:" + attempt.revision_id)
+        if operation:
+            result = operation["result"]
+            payload["promotion"] = result
+            payload["current_advanced"] = result.get("outcome") == "promoted"
+            payload["accepted_version_before"] = operation["legacy_before"]["version"]
+            payload["accepted_version_after"] = operation["accepted_version"] or operation["legacy_before"]["version"]
         # A prepared core may already carry the reference; do not retain a
         # recursive or stale response reference as the operation's diagnostics.
         response = {k: v for k, v in payload.items() if k != "change"}

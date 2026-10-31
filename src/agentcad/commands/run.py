@@ -2069,12 +2069,18 @@ def _run_impl(
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
 
     prepare_change(meta, geometry=version_dir / "output.step")
-    commit_version(reservation, meta, {
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "path": f"{dir_name}/",
-    }, advance_current=True)
+    from agentcad.change_promotion import PromotionRefused
+    try:
+        commit_version(reservation, meta, {
+            "version": version_num,
+            "label": label,
+            "status": "success",
+            "path": f"{dir_name}/",
+        }, advance_current=True)
+    except PromotionRefused as exc:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        _emit_run({**exc.payload("run"), "label": label})
+        sys.exit(1)
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     _phase_tracker.lifecycle = lifecycle
 

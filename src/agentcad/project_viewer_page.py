@@ -31,6 +31,7 @@ function showStatus() {
     checks_failed: 'blocked by failed checks',
     checks_pending: 'awaiting checks',
     checks_unavailable: 'blocked by unavailable checks',
+    not_promoted: 'not accepted; selection or evidence changed',
   }[attempt?.status];
   status.textContent = label + (reconnecting ? ' — Disconnected; reconnecting…'
     : attempt?.status === 'preview_unavailable' ? ' — Latest build succeeded; preview unavailable'
