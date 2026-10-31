@@ -188,9 +188,12 @@ def test_changed_legacy_current_is_a_conflict_even_without_a_retained_target(tmp
     result = promotions.commit("guard", *materialized(attempt))
     assert result["outcome"] == "not_promoted"
     assert "accepted_target_changed" in result["reason_codes"]
+    fields = promotions.response_fields("guard")
+    assert fields["accepted_version_before"]["version"] == 1
+    assert fields["accepted_version_after"]["version"] == 2
 
 
-def test_legacy_writer_drift_before_request_is_also_a_conflict(tmp_path):
+def test_fresh_request_after_legacy_restore_can_accept_a_new_revision(tmp_path):
     store = project(tmp_path)
     promotions = promotion_store(tmp_path)
     first = candidate(store)
@@ -202,11 +205,45 @@ def test_legacy_writer_drift_before_request_is_also_a_conflict(tmp_path):
         "accepted"  # A legacy writer changed current outside the target ledger.
     )
     atomic_write_json(path, manifest)
+    assert (
+        promotions.accepted("cad") is None
+    )  # Restored legacy model has no retained ID.
     second = candidate(store, label="second")
     promotions.begin(second.revision_id, request_key="after-drift")
     result = promotions.commit("after-drift", *materialized(second))
+    assert result["outcome"] == "promoted"
+    assert result["promoted_revision_before"] is None
+    assert (
+        promotions.response_fields("after-drift")["accepted_version_before"]["version"]
+        == 1
+    )
+    assert promotions.accepted("cad")["revision_id"] == second.revision_id
+
+
+def test_legacy_restore_during_request_refuses_and_reports_observed_target(tmp_path):
+    store = project(tmp_path)
+    promotions = promotion_store(tmp_path)
+    first = candidate(store)
+    promotions.begin(first.revision_id, request_key="first")
+    promotions.commit("first", *materialized(first))
+    second = candidate(store, label="second")
+    promotions.begin(second.revision_id, request_key="racing")
+    path = tmp_path / "agentcad.json"
+    manifest = json.loads(path.read_text())
+    manifest["current"] = "accepted"
+    atomic_write_json(path, manifest)
+    result = promotions.commit("racing", *materialized(second))
     assert result["outcome"] == "not_promoted"
     assert "accepted_target_changed" in result["reason_codes"]
+    assert result["promoted_revision_before"] is None
+    fields = promotions.response_fields("racing")
+    assert fields["accepted_version_before"]["version"] == 2
+    assert fields["accepted_version_after"]["version"] == 1
+    # A new key after inspecting the restored baseline can deliberately retry.
+    promotions.begin(second.revision_id, request_key="reconciled")
+    assert (
+        promotions.commit("reconciled", *materialized(second))["outcome"] == "promoted"
+    )
 
 
 @pytest.mark.parametrize("changed", ["retained", "delivered", "source"])

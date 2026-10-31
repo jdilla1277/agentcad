@@ -57,6 +57,20 @@ def _legacy_current(manifest: dict) -> dict:
     return {"current": label, "version": copy.deepcopy(entry)}
 
 
+def _current_target(manifest: dict, state: dict, target_id: str) -> dict | None:
+    target = state["targets"].get(target_id)
+    if (
+        target_id == "cad"
+        and target
+        and target["version"] != _legacy_current(manifest)["version"]
+    ):
+        # A legacy writer/recover can deliberately select another accepted
+        # model. It has no known retained ID, just like a pre-retention history.
+        # Requests already in flight still retain their original guard.
+        return None
+    return target
+
+
 class PromotionRefused(ProjectError):
     def __init__(self, receipt: dict):
         self.receipt = receipt
@@ -172,7 +186,8 @@ class PromotionStore:
         return copy.deepcopy(state["operations"].get(_key(request_key)))
 
     def accepted(self, target_id: str) -> dict | None:
-        return self._state(self._manifest())["targets"].get(target_id)
+        manifest = self._manifest()
+        return _current_target(manifest, self._state(manifest), target_id)
 
     def response_fields(self, request_key: str) -> dict:
         """Describe the original decision, including on an import replay."""
@@ -183,8 +198,11 @@ class PromotionStore:
             "promotion": operation["result"],
             "current_advanced": operation["result"].get("outcome") == "promoted",
             "accepted_version_before": operation["legacy_before"]["version"],
-            "accepted_version_after": operation["accepted_version"]
-            or operation["legacy_before"]["version"],
+            "accepted_version_after": (
+                operation["accepted_version"]
+                if operation["result"]["kind"] == "promotion_receipt"
+                else operation["legacy_before"]["version"]
+            ),
         }
 
     def begin(
@@ -225,7 +243,7 @@ class PromotionStore:
                 )
                 contract.validate_replay(existing["request"], retry)
                 return copy.deepcopy(existing["request"])
-            accepted = state["targets"].get(target_id) or {}
+            accepted = _current_target(manifest, state, target_id) or {}
             request = contract.make_promotion_request(
                 candidate,
                 policy,
@@ -249,7 +267,7 @@ class PromotionStore:
         """Recheck pinned evidence/selection and atomically accept or refuse.
 
         A terminal key always returns its saved receipt. New evidence after a
-        refusal needs a new key. Unknown or corrupted evidence raises without
+        refusal needs a new key. Unreadable or corrupted inputs raise without
         advancing current; the pending request remains recoverable.
         """
         key = _key(request_key)
@@ -282,7 +300,7 @@ class PromotionStore:
                     ],
                 ),
             )
-            accepted = state["targets"].get(request["target_id"]) or {}
+            accepted = _current_target(manifest, state, request["target_id"]) or {}
             before = accepted.get("revision_id")
             evidence = self.changes.read_checks(revision)["receipt"]
             checked = contract.make_change_receipt(
@@ -298,10 +316,6 @@ class PromotionStore:
             if (
                 before != request["expected_promoted_revision_id"]
                 or _legacy_current(manifest) != operation["legacy_before"]
-                or (
-                    accepted
-                    and accepted["version"] != _legacy_current(manifest)["version"]
-                )
             ):
                 reasons.append("accepted_target_changed")
             diagnostics = []
@@ -358,7 +372,6 @@ class PromotionStore:
                         "promotion_request_key": request_key,
                     },
                 )
-                operation["accepted_version"] = copy.deepcopy(entry)
                 state["targets"][request["target_id"]] = {
                     "revision_id": revision,
                     "candidate": request["candidate"],
@@ -366,6 +379,7 @@ class PromotionStore:
                     "version": copy.deepcopy(entry),
                 }
             operation["result"] = result
+            operation["accepted_version"] = _legacy_current(manifest)["version"]
             self._write(manifest, state)
             meta["promotion"] = copy.deepcopy(result)
             return result
