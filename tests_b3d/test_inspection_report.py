@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -12,7 +13,7 @@ from PIL import Image
 
 from agentcad.cli import cli
 from agentcad.geometry_manifest import create_manifest, read_manifest
-from agentcad.inspection_report import inspection_report, ReportBudgetError
+from agentcad.inspection_report import compact_report, inspection_report, ReportBudgetError, _estimated_tokens
 from agentcad.inspection_samples import select_samples
 from agentcad.step_assembly import read_step_assembly, write_step_assembly
 from tests_b3d.test_step_assembly import _nested_step
@@ -127,6 +128,28 @@ def test_ranking_and_full_parts_inventory_are_deterministic_and_budgeted(isolate
     assert default["budget"]["estimated_text_tokens"] <= 2000
     with pytest.raises(ReportBudgetError, match="budget is too small"):
         inspection_report(step, isolated_dir, images=False, text_budget=1)
+
+
+@pytest.mark.parametrize("mode", ["one_image", "no_images_left", "disabled"])
+def test_recompaction_preserves_media_accounting_and_source(isolated_dir, mode):
+    step, _ = _baseline(isolated_dir)
+    report, _ = inspection_report(step, isolated_dir, images=mode != "disabled", max_images=2, text_budget=5000)
+    original_omitted = report["media_summary"]["omitted"]
+    prepared = report["media_summary"]["prepared"]
+    report["media"] = report["media"][:1] if mode == "one_image" else []
+    text_omitted = prepared - len(report["media"])
+    report["budget"].update(text_tokens=2000, media_omitted_by_text=text_omitted,
+                            truncated=text_omitted > 0, media_references_returned=len(report["media"]))
+    report["media_summary"].update(omitted=original_omitted + text_omitted, returned=len(report["media"]))
+    before = deepcopy(report)
+    compact = compact_report(report)
+    assert report == before
+    assert compact_report(compact) == compact
+    assert compact["media_summary"]["omitted"] == original_omitted + prepared - len(compact["media"])
+    assert compact["budget"]["media_omitted_by_text"] == prepared - len(compact["media"])
+    assert compact["budget"]["estimated_text_tokens"] == _estimated_tokens(compact) <= 1990
+    assert compact["media_summary"]["state"] == ("disabled" if mode == "disabled" else "bounded")
+    assert compact["analysis_revision"] == report["analysis_revision"]
 
 
 def test_sphere_samples_exclude_collapsed_poles_but_keep_explicit_ids(runner, isolated_dir):

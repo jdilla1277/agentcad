@@ -308,6 +308,29 @@ an image-free report or `report=False` to keep the bundle on disk. Follow the
 returned IDs and paths with `inspect` and `run`. Local paths refer to the MCP
 execution filesystem. See `agentcad docs mcp` for controls.
 
+For retry-safe imports, pass `idempotency_key="supplier-001"` (CLI:
+`agentcad import supplier.step --init --idempotency-key supplier-001`). Preserve
+the key and identical source/options after a lost response: retries return the
+original version without importing or opening the viewer again. A different
+source, label, runtime request, validation profile, report/image limits or
+viewer/diff options conflicts with that key. Explicit checks JSON content and
+`--defer-checks` must also match. Use a new key for an intentional
+new import. Keys are scoped to the selected build directory; the original file
+must remain readable with identical bytes.
+
+A contended retry waits up to ten seconds, then reports `in_progress` if the
+original process still owns execution; retry the same request later. A stopped
+process releases ownership automatically. Retrying recovers a committed version
+and marks unfinished artifacts interrupted, or explicitly reports that execution
+stopped before commit. Optional analysis is not automatically resumed. Saved
+responses describe the original attempt; use `inspect` for fresh inspection.
+When retrying from another project subdirectory, returned actions target the
+selected baseline from that caller directory. Inline detail/media may be trimmed
+further to keep the final report within its text budget; saved analysis and IDs
+stay unchanged. If required references cannot fit, `inspection_delivery` reports
+the omission and provides a retrieval action with a larger allowance.
+Deleting `.agentcad/import_requests` deletes retry protection for those keys.
+
 ### Cloud projects
 
 For setup and a complete agent build-and-edit loop, see the

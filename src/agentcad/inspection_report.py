@@ -193,7 +193,7 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         "media_path_basis": "inventory.image_root",
         "media_summary": {"prepared": len(media), "returned": len(media), "omitted": len(omitted),
                                          "failed": sum(row["reason"] == "image_failed" for row in omitted),
-                                         "reused_overall_for": reused},
+                                         "reused_overall_for": reused, "state": "disabled" if not images else "complete"},
         "next_actions": [f"{command} --id ID --image", f"{command} --report --no-images"],
         "budget": {"scope": "inspection_report", "text_tokens": text_budget, "max_images": allowed,
                    "image_size": [1024, 1024], "image_tokens": "unknown", "context_window": "unknown",
@@ -211,22 +211,38 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
                 part["name_truncated"] = True
                 payload["budget"]["truncated"] = True
             part["name"] = part["name"][:80]
-    # Preserve baseline/revision, status, counts, artifact references and CTAs.
-    # Remove optional tail detail in a declared order when a caller lowers text.
+    payload = compact_report(payload)
+    return payload, {"report": path, "bundle": catalogue_path, "media": media, "omitted": omitted,
+                     "analysis": data}
+
+
+def compact_report(report):
+    """Bound a detached presentation after paths/actions change, without I/O.
+
+    Previously omitted media remain omitted. Counts refer to the original
+    sample catalogue, so repeated presentation cannot lose or double-count them.
+    """
+    payload = deepcopy(report)
+    budget = payload["budget"]
+    text_budget = budget["text_tokens"]
+    reserve = budget["transport_reserve_tokens"]
+    prepared = payload["media_summary"]["prepared"]
+    omitted_by_images = payload["media_summary"]["omitted"] - budget.get("media_omitted_by_text", 0)
+    disabled = payload["media_summary"]["state"] == "disabled"
     while True:
         payload["budget"]["parts_returned"] = len(payload["parts"])
         payload["budget"]["media_references_returned"] = len(payload["media"])
         payload["budget"]["samples_returned"] = {group: len(values) for group, values in payload["samples"].items()}
         payload["media_summary"]["returned"] = len(payload["media"])
-        payload["media_summary"]["omitted"] = len(omitted) + len(media) - len(payload["media"])
+        payload["media_summary"]["omitted"] = omitted_by_images + prepared - len(payload["media"])
         payload["media_summary"]["state"] = (
-            "partial_failure" if payload["media_summary"]["failed"] else "disabled" if not images
+            "partial_failure" if payload["media_summary"]["failed"] else "disabled" if disabled
             else "bounded" if payload["media_summary"]["omitted"] else "complete"
         )
-        payload["budget"]["media_omitted_by_text"] = len(media) - len(payload["media"])
+        payload["budget"]["media_omitted_by_text"] = prepared - len(payload["media"])
         payload["budget"]["estimated_text_tokens"] = _estimated_tokens(payload)
         payload["budget"]["estimated_text_tokens"] = _estimated_tokens(payload)
-        if _estimated_tokens(payload) <= text_budget - 10:
+        if _estimated_tokens(payload) <= text_budget - reserve:
             break
         payload["budget"]["truncated"] = True
         samples = payload["samples"]
@@ -251,5 +267,4 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         else:
             raise ReportBudgetError("Text budget is too small for required identity, status and retrieval references; increase --text-budget.")
     payload["budget"]["estimated_text_tokens"] = _estimated_tokens(payload)
-    return payload, {"report": path, "bundle": catalogue_path, "media": media, "omitted": omitted,
-                     "analysis": data}
+    return payload

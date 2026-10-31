@@ -174,6 +174,19 @@ class PromotionStore:
     def accepted(self, target_id: str) -> dict | None:
         return self._state(self._manifest())["targets"].get(target_id)
 
+    def response_fields(self, request_key: str) -> dict:
+        """Describe the original decision, including on an import replay."""
+        operation = self.find(request_key)
+        if operation is None:
+            return {}
+        return {
+            "promotion": operation["result"],
+            "current_advanced": operation["result"].get("outcome") == "promoted",
+            "accepted_version_before": operation["legacy_before"]["version"],
+            "accepted_version_after": operation["accepted_version"]
+            or operation["legacy_before"]["version"],
+        }
+
     def begin(
         self, revision_id: str, *, request_key: str, target_id: str = "cad"
     ) -> dict:

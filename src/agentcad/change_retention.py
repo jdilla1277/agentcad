@@ -141,6 +141,9 @@ def begin_change(*, command: str, label: str, source: bytes, source_name: str, m
         ) from exc
     ctx.meta["change_attempt"] = attempt
     ctx.meta["change_command"] = command
+    request = ctx.meta.get("import_request")
+    if request is not None:
+        request.bind_attempt(attempt)
     return attempt
 
 
@@ -198,6 +201,8 @@ def attach_change(payload: dict) -> dict:
         ctx is None
         or payload.get("command") not in ("run", "import")
         or payload.get("via") == "daemon"
+        or ctx.meta.get("import_replay")
+        or ctx.meta.get("import_request_closed")
     ):
         return payload
     if ctx.meta.get("change_start_error"):
@@ -219,13 +224,7 @@ def attach_change(payload: dict) -> dict:
         # even when optional work failed after the core commit.
         from agentcad.change_promotion import PromotionStore
         promotions = PromotionStore(attempt.store.root)
-        operation = promotions.find("auto:" + attempt.revision_id)
-        if operation:
-            result = operation["result"]
-            payload["promotion"] = result
-            payload["current_advanced"] = result.get("outcome") == "promoted"
-            payload["accepted_version_before"] = operation["legacy_before"]["version"]
-            payload["accepted_version_after"] = operation["accepted_version"] or operation["legacy_before"]["version"]
+        payload.update(promotions.response_fields("auto:" + attempt.revision_id))
         # A prepared core may already carry the reference; do not retain a
         # recursive or stale response reference as the operation's diagnostics.
         response = {k: v for k, v in payload.items() if k != "change"}
