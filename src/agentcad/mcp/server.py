@@ -319,6 +319,7 @@ def import_cad(
     max_images: int = 9,
     text_budget: int = 2000,
     build_dir: str | None = None,
+    idempotency_key: str | None = None,
     checks_file: str | None = None,
     defer_checks: bool = False,
 ) -> Any:
@@ -344,6 +345,14 @@ def import_cad(
     the artifact/history root, relative to the project root. Attachment failure
     preserves successful core import and returns explicit image_delivery status.
 
+    Keep idempotency_key and identical source/options to retry a lost response
+    without another version. Keys are scoped to the selected build root. A busy
+    retry reports in_progress; interruption recovers committed CAD or explicitly
+    reports stopped pre-commit work. It does not restart optional analysis.
+    Replay actions target the caller directory; inline report/media may shrink
+    to respect text_budget after formatting. Saved analysis and IDs stay fixed.
+    Explicit checks JSON content and defer_checks must match on retries too.
+
     checks_file maps to CLI --checks, including on initialize=True imports.
     Requirements are inherited when omitted; changing them requires actor and
     rationale in the checks JSON. defer_checks maps to --defer-checks: retain
@@ -352,6 +361,8 @@ def import_cad(
     deferred evidence without changing current.
     """
     args = ["import", file]
+    if idempotency_key is not None:
+        args.extend(["--idempotency-key", idempotency_key])
     if label is not None:
         args.extend(["--label", label])
     if initialize:

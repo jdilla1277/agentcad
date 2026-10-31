@@ -141,6 +141,9 @@ def begin_change(*, command: str, label: str, source: bytes, source_name: str, m
         ) from exc
     ctx.meta["change_attempt"] = attempt
     ctx.meta["change_command"] = command
+    request = ctx.meta.get("import_request")
+    if request is not None:
+        request.bind_attempt(attempt)
     return attempt
 
 
@@ -198,6 +201,8 @@ def attach_change(payload: dict) -> dict:
         ctx is None
         or payload.get("command") not in ("run", "import")
         or payload.get("via") == "daemon"
+        or ctx.meta.get("import_replay")
+        or ctx.meta.get("import_request_closed")
     ):
         return payload
     if ctx.meta.get("change_start_error"):

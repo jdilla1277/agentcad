@@ -79,16 +79,78 @@ from agentcad.change_retention import change_options
 @click.option("--report/--no-report", "show_report", default=True, help="Include the compact inspection report in the response. The saved report/bundle remain available when disabled.")
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum inspection images to prepare, including the overall sheet.")
 @click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated token allowance for the inline inspection report, excluding legacy import fields.")
+@click.option("--idempotency-key", default=None, help="Reuse this key and identical source/options to recover an import without creating another version. Scoped to the selected build root.")
 @project_options
 @change_options
 def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image,
-               show_report, max_images, text_budget):
+               show_report, max_images, text_budget, idempotency_key):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
     tracking. Every other command (run, diff, render, view) works on it
     just like a scripted version.
     """
+    # Try routing through daemon. Exits before returning if reachable.
+    argv = ["import", file]
+    if label:
+        argv.extend(["--label", label])
+    if init_flag:
+        argv.append("--init")
+    if runtime:
+        argv.extend(["--runtime", runtime])
+    if not open_view:
+        argv.append("--no-view")
+    if not auto_diff:
+        argv.append("--no-diff")
+    if not inspection_image:
+        argv.append("--no-inspection-image")
+    if not show_report:
+        argv.append("--no-report")
+    if max_images != 9:
+        argv.extend(["--max-images", str(max_images)])
+    if text_budget != 2000:
+        argv.extend(["--text-budget", str(text_budget)])
+    if validation_profile != "deliverable":
+        argv.extend(["--validation-profile", validation_profile])
+    if idempotency_key is not None:
+        argv.extend(["--idempotency-key", idempotency_key])
+    from agentcad.change_retention import forward_check_options
+    forward_check_options(argv)
+    maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    def execute():
+        return _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
+                            validation_profile, no_daemon, inspection_image,
+                            show_report, max_images, text_budget)
+
+    if idempotency_key is not None:
+        from agentcad.import_requests import ImportRequest
+
+        semantic = {
+            "label": _safe_label(Path(file).stem if label is None else label),
+            "runtime": runtime, "validation_profile": validation_profile,
+            "open_view": open_view, "auto_diff": auto_diff,
+            "inspection_image": inspection_image, "show_report": show_report,
+            "max_images": max_images, "text_budget": text_budget,
+        }
+        ctx = click.get_current_context()
+        # Keep existing keys compatible when no explicit checks were requested.
+        # Bind declarations by content, so edits to the same file cannot replay
+        # a result evaluated against different requirements.
+        if "change_requirements" in ctx.meta:
+            semantic["requirements"] = ctx.meta["change_requirements"]
+        if ctx.meta.get("change_defer_checks"):
+            semantic["defer_checks"] = True
+        ImportRequest(idempotency_key, file=file, semantic=semantic).run(execute)
+        # Fork only after the request's execution lock has been released.
+        maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
+    else:
+        execute()
+
+
+def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
+                 validation_profile, no_daemon, inspection_image,
+                 show_report, max_images, text_budget):
     # --runtime pins only the manifest that --init creates. Refuse it when a
     # manifest already exists even if --init was also passed: --init is a
     # no-op in that case, so accepting the flag would silently ignore the
@@ -122,34 +184,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         }, exit_code=1)
         return
 
-    # Try routing through daemon. Exits before returning if reachable.
-    argv = ["import", file]
-    if label:
-        argv.extend(["--label", label])
-    if init_flag:
-        argv.append("--init")
-    if runtime:
-        argv.extend(["--runtime", runtime])
-    if not open_view:
-        argv.append("--no-view")
-    if not auto_diff:
-        argv.append("--no-diff")
-    if not inspection_image:
-        argv.append("--no-inspection-image")
-    if not show_report:
-        argv.append("--no-report")
-    if max_images != 9:
-        argv.extend(["--max-images", str(max_images)])
-    if text_budget != 2000:
-        argv.extend(["--text-budget", str(text_budget)])
-    if validation_profile != "deliverable":
-        argv.extend(["--validation-profile", validation_profile])
-    from agentcad.change_retention import forward_check_options
-    forward_check_options(argv)
-    maybe_route_through_daemon(argv, no_daemon=no_daemon)
-
-    file_path = Path(file)
-    original_filename = file_path.name
+    file_path = click.get_current_context().meta.get("import_request_source", Path(file))
+    original_filename = Path(file).name
 
     def _pin_source(path):
         from agentcad.change_retention import begin_change
@@ -299,6 +335,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "outputs": {"source": f"{invalid_dir_name}/source{ext}"},
         }
         from agentcad.change_retention import prepare_change
+        from agentcad.import_requests import mark_core
+        mark_core(invalid_meta)
         try:
             prepare_change(invalid_meta)
         except Exception:
@@ -310,6 +348,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "status": "invalid_geometry",
             "source": "import",
             "path": f"{invalid_dir_name}/",
+            **({"import_request": invalid_meta["import_request"]} if "import_request" in invalid_meta else {}),
         }, advance_current=False)
         _emit({**invalid_meta, "path": f"{invalid_dir_name}/"}, exit_code=1)
         return
@@ -441,6 +480,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
     from agentcad.change_retention import prepare_change
+    from agentcad.import_requests import mark_core
+    mark_core(meta)
     try:
         prepare_change(meta, geometry=version_dir / "output.step")
     except Exception:
@@ -452,6 +493,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         "status": "success",
         "source": "import",
         "path": f"{dir_name}/",
+        **({"import_request": meta["import_request"]} if "import_request" in meta else {}),
     }, advance_current=True)
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     if assembly_warning:
@@ -864,12 +906,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     response["more_at"] = "agentcad docs editing"
     click.echo(json.dumps(response))
 
-    maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
+    if not click.get_current_context().meta.get("import_request"):
+        maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
 
 
 # --- helpers ----------------------------------------------------------------
 
 def _emit(payload: dict, exit_code: int = 0) -> None:
+    click.get_current_context().meta["import_exit_code"] = exit_code
     click.echo(json.dumps(payload))
     if exit_code != 0:
         sys.exit(exit_code)

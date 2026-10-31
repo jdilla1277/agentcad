@@ -343,6 +343,10 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         "volume_glb",
         "volume_png",
         "source_copy",
+        "image_root",
+        "manifest",
+        "report",
+        "bundle",
     }
 
     def visit(value, key="", paths=False):
@@ -356,8 +360,8 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
             (layout.configured or Path.cwd().resolve() != layout.project_root)
             and isinstance(value, str)
             and (key in path_keys or paths)
-            and re.match(r"^v\d+(?:_|/)", value)
-            and "/" in value
+            and re.match(r"^v\d+(?:_|[/\\])", value)
+            and ("/" in value or os.sep in value)
         ):
             return layout.response_path(layout.artifact_path(value))
         return value
@@ -386,4 +390,69 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         if result.get("scaffold") == "edit.py":
             result["scaffold"] = str(layout.project_root / "edit.py")
     result.update(layout.describe())
+    if payload.get("command") == "import" and (
+        layout.configured or Path.cwd().resolve() != layout.project_root
+    ):
+        _format_import_presentation(result, payload.get("outputs", {}).get("step"), layout)
     return result
+
+
+def _format_import_presentation(result, original_step, layout):
+    """Relocate generated actions, then account for the final inline report.
+
+    Only known command prefixes are replaced. Descriptions and quoted paths
+    remain intact, including paths containing the em dash used in annotations.
+    The response is detached from retained requests and analysis artifacts.
+    """
+    if original_step:
+        step = str(layout.artifact_path(original_step))
+        root_option = " --build-dir " + shlex.quote(str(layout.build_root))
+        try:
+            report_step = os.path.relpath(step, Path.cwd())
+        except ValueError:  # A configured build root can be on another drive.
+            report_step = step
+
+        def relocate(action, target=step):
+            for verb in ("inspect", "measure", "view"):
+                # Stored output paths use '/', while Path-generated examples
+                # can use native Windows separators in the same cached reply.
+                for previous in (original_step, str(Path(original_step)), step):
+                    prefix = f"agentcad {verb} {shlex.quote(previous)}"
+                    if action == prefix or action.startswith(prefix + " "):
+                        suffix = action[len(prefix):]
+                        selected_root = root_option if layout.configured and root_option not in suffix else ""
+                        return f"agentcad {verb} {shlex.quote(target)}{selected_root}{suffix}"
+            return action
+
+        geometry = result.get("geometry_manifest", {})
+        for name in ("lookup_example", "image_example"):
+            if name in geometry:
+                geometry[name] = relocate(geometry[name])
+        for container in (result, result.get("inspection", {})):
+            if "next_actions" in container:
+                # Caller-relative report actions avoid repeating long absolute
+                # paths inside a tight allowance; they still target this STEP.
+                target = step if container is result else report_step
+                container["next_actions"] = [relocate(action, target) for action in container["next_actions"]]
+
+    report = result.get("inspection")
+    if report is not None and report.get("budget", {}).get("scope") == "inspection_report":
+        from agentcad.inspection_report import ReportBudgetError, compact_report, _estimated_tokens
+
+        try:
+            result["inspection"] = compact_report(report)
+        except ReportBudgetError as exc:
+            # Presentation failure cannot revoke the already committed CAD or
+            # mutate the original response/analysis to fit this caller's cwd.
+            result.pop("inspection")
+            recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
+                                  _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
+            result["inspection_delivery"] = {
+                "status": "omitted", "reason": "text_budget_too_small",
+                "text_tokens": report["budget"]["text_tokens"], "message": str(exc),
+                "next_actions": [shlex.join([
+                    "agentcad", "inspect", str(layout.artifact_path(original_step)),
+                    "--report", "--no-images", "--text-budget", str(recovery_budget),
+                    "--build-dir", str(layout.build_root),
+                ])],
+            }
