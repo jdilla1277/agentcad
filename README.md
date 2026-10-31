@@ -313,7 +313,8 @@ For retry-safe imports, pass `idempotency_key="supplier-001"` (CLI:
 the key and identical source/options after a lost response: retries return the
 original version without importing or opening the viewer again. A different
 source, label, runtime request, validation profile, report/image limits or
-viewer/diff options conflicts with that key. Use a new key for an intentional
+viewer/diff options conflicts with that key. Explicit checks JSON content and
+`--defer-checks` must also match. Use a new key for an intentional
 new import. Keys are scoped to the selected build directory; the original file
 must remain readable with identical bytes.
 

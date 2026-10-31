@@ -17,6 +17,71 @@ show_object(rib, id="rib", options={"color":"coral"})
 
 
 @pytest.mark.browser
+def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, isolated_dir):
+    if os.environ.get("AGENTCAD_BROWSER_SMOKE") != "1":
+        pytest.skip("set AGENTCAD_BROWSER_SMOKE=1")
+    from playwright.sync_api import sync_playwright
+
+    assert runner.invoke(cli, ["init", "--name", "blocked-checks"]).exit_code == 0
+    script = isolated_dir / "model.py"
+    script.write_text(SCRIPT)
+    result = runner.invoke(cli, ["run", str(script), "--label", "accepted",
+                                "--no-preview", "--no-diff", "--no-daemon"])
+    assert result.exit_code == 0, result.output
+    accepted = json.loads(result.stdout)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto(accepted["project_viewer"]["url"])
+            page.wait_for_function("document.querySelector('#status').textContent.includes('Showing v1 · accepted')", timeout=45000)
+            element = page.locator("iframe:not(.pending)").element_handle()
+            frame = element.content_frame()
+            snapshot = page.locator("#snapshot").get_attribute("href")
+            cases = [
+                ("checks_failed", "blocked by failed checks"),
+                ("checks_pending", "awaiting checks"),
+                ("checks_unavailable", "blocked by unavailable checks"),
+            ]
+            for command in ("run", "import"):
+                for status, message in cases:
+                    check = {"check_id": "length", "kind": "dimension", "axis": "x",
+                             "expected_mm": 80 if status == "checks_failed" else 60}
+                    if status == "checks_unavailable":
+                        check = {"check_id": "vendor", "kind": "external", "validator": "vendor"}
+                    requirements = isolated_dir / "checks.json"
+                    requirements.write_text(json.dumps({"schema_version": 1, "checks": [check],
+                        "actor": "test", "rationale": "Exercise each blocked-attempt status."}))
+                    label = f"{command}-{status}"
+                    source = str(script) if command == "run" else accepted["outputs"]["step"]
+                    args = [command, source, "--label", label, "--checks", str(requirements),
+                            "--no-view", "--no-diff", "--no-daemon"]
+                    if command == "run":
+                        args.append("--no-preview")
+                    if status == "checks_pending":
+                        args.append("--defer-checks")
+                    blocked = runner.invoke(cli, args)
+                    assert blocked.exit_code == 1, blocked.output
+                    assert json.loads(blocked.stdout)["status"] == status
+                    page.wait_for_function("label => document.querySelector('#status').textContent.includes(label)", arg=label)
+                    text = page.locator("#status").inner_text()
+                    assert message in text
+                    assert "Showing v1 · accepted" in text
+                    assert "keeping last accepted model" in text
+                    assert "Latest build failed" not in text
+                    assert "warning" in page.locator("#status").get_attribute("class")
+                    assert element.evaluate("element => element.isConnected")
+                    assert page.locator("iframe").count() == 1
+                    assert page.locator("#snapshot").get_attribute("href") == snapshot
+                    assert frame.evaluate("window.agentcadViewer.debugState().ready")
+            assert not errors
+        finally:
+            browser.close()
+
+
+@pytest.mark.browser
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_live_loop_twenty_builds_failure_import_and_restart(engine, runner, isolated_dir, monkeypatch):

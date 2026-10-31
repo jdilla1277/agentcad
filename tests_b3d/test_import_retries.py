@@ -123,6 +123,56 @@ def test_new_key_deliberately_imports_same_bytes_again(runner, isolated_dir):
     assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 2
 
 
+@pytest.mark.parametrize("state", ["success", "checks_failed", "checks_pending"])
+def test_declared_checks_replay_without_new_evaluation(runner, isolated_dir, monkeypatch, state):
+    from agentcad.change_checks import measure_geometry
+
+    expected = measure_geometry(REAL_SOURCE)["dimensions"]["x"]
+    requirements = {"schema_version": 1, "checks": [{
+        "check_id": "length", "kind": "dimension", "axis": "x",
+        "expected_mm": expected + (10 if state == "checks_failed" else 0),
+        "tolerance_mm": 0.1,
+    }]}
+    checks = isolated_dir / "requirements.json"
+    checks.write_text(json.dumps(requirements), encoding="utf-8")
+    args = _args(REAL_SOURCE, "checked", "--checks", str(checks))
+    if state == "checks_pending":
+        args.append("--defer-checks")
+    first, original = _invoke(runner, args)
+    assert original["status"] == state
+    assert first.exit_code == (0 if state == "success" else 1)
+    protected = [isolated_dir / "agentcad.json", isolated_dir / ".agentcad/changes/working.json"]
+    protected.extend((isolated_dir / ".agentcad/changes/attempts").rglob("*.json"))
+    before = {path: path.read_bytes() for path in protected if path.exists()}
+
+    def unexpected(*a, **kw):
+        pytest.fail("A declared-check replay attempted CAD or evaluation")
+
+    monkeypatch.setattr("agentcad.commands.import_cmd._import_impl", unexpected)
+    # A different path/format with the same JSON declaration is the same request.
+    alternate = isolated_dir / "same checks.json"
+    alternate.write_text(json.dumps(requirements, indent=2), encoding="utf-8")
+    args[args.index("--checks") + 1] = str(alternate)
+    second, replay = _invoke(runner, args)
+    assert second.exit_code == first.exit_code
+    assert replay["status"] == state and replay["idempotency"]["replayed"]
+    assert replay["change"] == original["change"]
+    assert len(_attempts(isolated_dir)) == 1
+    assert {path: path.read_bytes() for path in before} == before
+
+    # Changing a declaration in place, removing it, or deferring evaluation
+    # changes the request even when CAD source bytes remain identical.
+    requirements["checks"][0]["expected_mm"] += 1
+    alternate.write_text(json.dumps(requirements), encoding="utf-8")
+    for changed in [args, [*args[:args.index("--checks")]],
+                    [*args[:args.index("--checks")], "--checks", str(checks),
+                     *([] if state == "checks_pending" else ["--defer-checks"])]]:
+        result, conflict = _invoke(runner, changed)
+        assert result.exit_code == 1 and conflict["reason"] == "idempotency_conflict"
+    assert {path: path.read_bytes() for path in before} == before
+    assert len(_attempts(isolated_dir)) == 1
+
+
 def test_replaying_old_request_preserves_newer_work(runner, isolated_dir):
     assert _invoke(runner, _args(key="one"))[0].exit_code == 0
     assert _invoke(runner, _args(REAL_SOURCE, "two", "--label", "newer"))[0].exit_code == 0
@@ -249,7 +299,8 @@ def test_outer_error_handler_cannot_finalize_after_unlock(runner, isolated_dir, 
     assert len(_attempts(isolated_dir)) == len(_history(isolated_dir)) == 1
 
 
-def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypatch):
+@pytest.mark.parametrize("declared_checks", [False, True])
+def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypatch, declared_checks):
     requests = []
     monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
     # This test simulates supported transport on Windows too; its socket
@@ -264,9 +315,16 @@ def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypa
     monkeypatch.setattr("agentcad.daemon.send_request", sent)
     args = _args()
     args.remove("--no-daemon")
+    if declared_checks:
+        checks = isolated_dir / "requirements.json"
+        checks.write_text(json.dumps({"schema_version": 1, "checks": []}), encoding="utf-8")
+        args.extend(["--checks", str(checks), "--defer-checks"])
     result, payload = _invoke(runner, args)
     assert result.exit_code == 0 and payload["via"] == "daemon"
-    assert requests[0]["argv"][-2:] == ["--idempotency-key", "supplier:1"]
+    forwarded = requests[0]["argv"]
+    assert forwarded[forwarded.index("--idempotency-key") + 1] == "supplier:1"
+    if declared_checks:
+        assert forwarded[-3:] == ["--checks", str(checks), "--defer-checks"]
     assert not _requests(isolated_dir)
 
 

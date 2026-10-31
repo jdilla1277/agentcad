@@ -48,7 +48,7 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
-            tests/test_change_contract.py tests/test_change_store.py tests/test_change_retention.py \
+            tests/test_change_contract.py tests/test_change_checks.py tests/test_change_store.py tests/test_change_retention.py \
             tests/test_render.py::test_linux_render_window_uses_virtual_x11_drawable \
             tests/test_render.py::test_linux_display_connection_failure_is_actionable \
             tests/test_render.py::test_render_shape_produces_png \
@@ -101,7 +101,7 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
-            tests/test_change_contract.py tests/test_change_store.py tests/test_change_retention.py \
+            tests/test_change_contract.py tests/test_change_checks.py tests/test_change_store.py tests/test_change_retention.py \
             tests/test_build123d_primitive_aliases.py \
             tests/test_bbox_coordinates.py \
             tests_b3d/test_duplicate_capture.py \

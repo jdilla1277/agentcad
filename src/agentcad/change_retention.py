@@ -1,14 +1,103 @@
-"""Thin command adapters for retained attempts; no new promotion behavior."""
+"""Retained attempts and declared-check adapters for local commands."""
 
 from __future__ import annotations
 
 import shutil
+import json
+import shlex
+from functools import wraps
 from pathlib import Path
 
 import click
 
-from agentcad.change_store import ChangeStore
+from agentcad.change_store import ChangeStore, ChangeStoreError
 from agentcad.project import ProjectError, get_project
+
+
+def change_options(function):
+    """Share requirement options without duplicating command callback signatures."""
+
+    @click.option(
+        "--checks",
+        "checks_file",
+        type=click.Path(dir_okay=False),
+        default=None,
+        help="JSON dimension/preservation requirements; omitted on repairs, inherits the selected policy.",
+    )
+    @click.option(
+        "--defer-checks",
+        is_flag=True,
+        default=False,
+        help="Retain pending checks; complete later with check-spec REVISION --complete.",
+    )
+    @wraps(function)
+    def wrapped(*args, checks_file=None, defer_checks=False, **kwargs):
+        ctx = click.get_current_context()
+        if kwargs.get("dry_run") and (checks_file or defer_checks):
+            raise ProjectError(
+                "checks_need_retention",
+                "Declared checks need a retained attempt, not --dry-run.",
+                "Remove --dry-run to retain and evaluate the requirements.",
+            )
+        if checks_file:
+            try:
+                ctx.meta["change_requirements"] = json.loads(Path(checks_file).read_text())
+                if not isinstance(ctx.meta["change_requirements"], dict):
+                    raise ValueError("The requirements file must contain a JSON object.")
+            except (OSError, ValueError) as exc:
+                raise ProjectError(
+                    "invalid_checks",
+                    f"Cannot read checks JSON: {exc}",
+                    "Fix the checks file and retry.",
+                ) from exc
+        ctx.meta["change_checks_file"] = checks_file
+        ctx.meta["change_defer_checks"] = defer_checks
+        return function(*args, **kwargs)
+
+    return wrapped
+
+
+def forward_check_options(argv):
+    ctx = click.get_current_context()
+    if ctx.meta.get("change_checks_file"):
+        argv.extend(["--checks", ctx.meta["change_checks_file"]])
+    if ctx.meta.get("change_defer_checks"):
+        argv.append("--defer-checks")
+
+
+def assess_change(payload, geometry):
+    """Gate the existing acceptance path; refused geometry remains diagnostic."""
+    attempt = current_attempt()
+    if attempt is None:
+        return None
+    request = attempt._read("request.json", "attempt_request")
+    if not request.get("check_policy"):
+        return None
+    prepare_change(payload, geometry=geometry)
+    reference = attempt.reference()
+    checked = reference["validation_checks"]
+    if checked["promotion_ready"]:
+        return None
+    state = checked["validation_state"]
+    status = {"invalid": "checks_failed", "pending": "checks_pending"}.get(
+        state, "checks_unavailable"
+    )
+    action = f"agentcad check-spec {attempt.revision_id}" + (
+        " --complete" if state == "pending" else ""
+    )
+    if get_project().configured:
+        action += " --build-dir " + shlex.quote(str(get_project().build_root))
+    return {
+        **payload,
+        "status": status,
+        "label": request["label"],
+        "outputs": {"step": None},
+        "current_advanced": False,
+        "message": "The candidate is retained, but required checks are not satisfied; the accepted model is unchanged.",
+        "suggestion": action,
+        "more_at": "agentcad docs check-spec",
+        "change": reference,
+    }
 
 
 def current_attempt():
@@ -34,9 +123,17 @@ def begin_change(*, command: str, label: str, source: bytes, source_name: str, m
             source_name=source_name,
             model=model,
             legacy_baseline=manifest.get("current"),
+            requirements=ctx.meta.get("change_requirements"),
+            defer_checks=ctx.meta.get("change_defer_checks", False),
         )
     except Exception as exc:
         ctx.meta["change_start_error"] = str(exc)
+        if isinstance(exc, ValueError) and not isinstance(exc, ChangeStoreError):
+            raise ProjectError(
+                "invalid_checks",
+                str(exc),
+                "Fix the requirements JSON; policy changes need actor and rationale. See agentcad docs check-spec.",
+            ) from exc
         raise ProjectError(
             "change_retention_failed",
             f"Could not retain the change before execution: {exc}",
