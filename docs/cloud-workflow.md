@@ -8,17 +8,63 @@ picture, and submit an edited script as another version.
 The agent still needs an LLM from your agent provider. AgentCAD runs the CAD
 tools; it does not supply the LLM.
 
+## Connect directly to a hosted MCP URL
+
+If your host supplies an MCP URL, configure that URL and your issued credentials
+in a client supporting Streamable HTTP and custom HTTP headers. This connection
+does not need AgentCAD or a CAD engine installed on your machine. Your host
+must enable the hosted endpoint; an API address alone does not imply MCP access.
+
+For Codex, use this MCP configuration with your actual issued URL:
+
+```toml
+[mcp_servers.agentcad_cloud]
+url = "https://api.example.test/mcp"
+env_http_headers = { "X-AgentCAD-Key-ID" = "AGENTCAD_KEY_ID", "X-AgentCAD-Key-Secret" = "AGENTCAD_KEY_SECRET" }
+tool_timeout_sec = 120
+```
+
+Launch your client from the environment containing the two credential values.
+Keep values out of prompts and configuration files; this example stores only
+their environment variable names. See the [Codex MCP reference](https://developers.openai.com/codex/mcp)
+for the client configuration location. This pilot connection requires a client
+that can supply those headers; it does not provide an OAuth/login flow.
+
+Ask the connected agent to call `cloud_help`. The build-and-edit loop below
+also applies to the hosted tools, with these file-handling differences:
+
+| Operation | Hosted MCP input/output |
+| --- | --- |
+| Build | `cloud_run` takes `script_text` containing the Python source, not a local filename. |
+| Import | `cloud_import` takes `step_base64` file content, or an explicit `source_version` and `source_path` within the same cloud project. |
+| Check a spec | `cloud_check_spec` takes a `spec` JSON object, not a spec file path. |
+| Retrieve evidence | `cloud_artifact` takes a job/kind or returned version/path reference. `include_content=true` returns a native PNG image, embedded STEP bytes, or a JSON report over authenticated MCP. |
+
+Supply a unique `idempotency_key` before each submission if you need to retry
+after losing the MCP response. Use the same key and identical input for that
+retry; use a new key for an edit. Poll existing jobs rather than resubmitting.
+
+Hosted scripts/specs are limited to 256 KiB; STEP uploads to 20 MiB. Inline
+artifact content is limited to 8 MiB. Larger artifacts return an explicit limit
+error and a private download reference requiring the owning account's API
+credentials. Artifact URLs are relative to the API origin and are not public
+sharing links. Your client can save retrieved content locally; the hosted
+server does not accept local destination paths.
+
+The numbered setup below describes the local CLI/MCP adapter, which is another
+way to use the same cloud projects and results.
+
 ## 1. Install AgentCAD and supply your credentials
 
 Cloud access requires an API address, key ID, and secret issued by your host.
 There is no signup or login screen.
 
-The cloud adapter is merged but is awaiting a package release. For now, install
-the tested revision with Python 3.10–3.12; the example uses Python 3.12:
+The local cloud adapter is available in AgentCAD 0.7.1. Install it with
+Python 3.10–3.12; this example uses Python 3.12:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'agentcad[mcp] @ git+https://github.com/jdilla1277/agentcad.git@54a8abb5e7b106c6b417b9f5474f2b93df51faf9'
+.venv/bin/python -m pip install 'agentcad[mcp]==0.7.1'
 .venv/bin/agentcad cloud --help
 ```
 
@@ -66,8 +112,9 @@ See the [Codex MCP reference](https://developers.openai.com/codex/mcp) for your
 client's configuration location. Other agent clients can start the same command
 using their own MCP configuration format.
 
-This server runs on your machine and calls the HTTPS API. A direct hosted MCP
-URL is separate work. You do not need to initialize a local AgentCAD project.
+This server runs on your machine and calls the HTTPS API. For a host-issued
+remote URL, use the hosted connection above. You do not need to initialize a
+local AgentCAD project for either connection.
 
 If you prefer the CLI, give your agent the `.venv/bin/agentcad` executable and
 run `agentcad docs cloud` for the command reference. The CLI uses the same

@@ -17,6 +17,11 @@ from agentcad.runners import dispatch
 SECTIONS = {
     "cloud": (
         "Cloud projects through the CLI or local MCP server:\n"
+        "  A host-issued remote MCP URL is another connection option: no local\n"
+        "  AgentCAD installation is required. Call cloud_help on that server.\n"
+        "  Hosted tools upload script_text/STEP content/spec objects and use\n"
+        "  cloud_artifact for private evidence, rather than local file paths.\n"
+        "  See the full workflow guide below for supported client configuration.\n"
         "  Requires an API address and issued key pair from your host.\n"
         "  Install pip install 'agentcad[cloud]' for the CLI, or 'agentcad[mcp]'\n"
         "  for both CLI and native cloud tools. Start the usual local MCP server:\n"
