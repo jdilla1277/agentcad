@@ -286,3 +286,124 @@ def test_corrupted_working_selection_is_not_silently_replaced(tmp_path):
     with pytest.raises(ChangeStoreError):
         begin(store)
     assert first.source_path.read_bytes() == SOURCE
+
+
+def test_requirements_survive_no_output_and_are_inherited_by_a_repair(tmp_path):
+    store = initialized(tmp_path)
+    requirements = {
+        "schema_version": 1,
+        "checks": [
+            {
+                "check_id": "length",
+                "kind": "dimension",
+                "axis": "x",
+                "expected_mm": 80,
+                "tolerance_mm": 0.1,
+            }
+        ],
+    }
+    failed = begin(store, requirements=requirements)
+    failed.finish({"status": "failed"})
+    policy = store.read(failed.revision_id)["policy"]
+    repair = begin(store)
+    repair.finish({"status": "failed"})
+    assert store.read(repair.revision_id)["policy"] == policy
+    assert store.read(repair.revision_id)["receipt"]["promotion_ready"] is False
+
+
+def test_deferred_completion_survives_restart_and_never_selects_an_old_revision(tmp_path):
+    from build123d import Box, export_step
+
+    store = initialized(tmp_path)
+    requirements = {
+        "schema_version": 1,
+        "checks": [
+            {
+                "check_id": "length",
+                "kind": "dimension",
+                "axis": "x",
+                "expected_mm": 80,
+                "tolerance_mm": 0.1,
+            }
+        ],
+    }
+    attempt = begin(store, requirements=requirements, defer_checks=True)
+    step = tmp_path / "built.step"
+    export_step(Box(80, 30, 6), step)
+    attempt.prepare({"status": "success", "validation": {"is_valid": True}}, geometry=step)
+    attempt.finish({"status": "checks_pending"})
+    assert store.read_checks(attempt.revision_id)["receipt"]["validation_state"] == "pending"
+    newer = begin(store)
+    before = store.read(attempt.revision_id)["receipt"]
+    completed = ChangeStore(tmp_path).complete_checks(attempt.revision_id)
+    assert completed["receipt"]["validation_state"] == "valid"
+    assert completed["lifecycle"] == "completed"
+    assert store.working_revision_id == newer.revision_id
+    assert store.read(attempt.revision_id)["receipt"] == before
+    assert store.complete_checks(attempt.revision_id) == completed
+    assert json.loads((tmp_path / "agentcad.json").read_text())["current"] == "accepted"
+
+
+def test_completing_unknown_revision_never_creates_an_attempt_directory(tmp_path):
+    store = initialized(tmp_path)
+    with pytest.raises(ChangeStoreError):
+        store.complete_checks("r_" + "f" * 32)
+    assert not (tmp_path / ".agentcad/changes/attempts").exists()
+
+
+def test_request_policy_cannot_be_replaced_by_an_independently_valid_policy(tmp_path):
+    from agentcad.change_checks import compile_policy
+    from agentcad.change_store import _sealed
+
+    store = initialized(tmp_path)
+    declaration = {
+        "schema_version": 1,
+        "checks": [{"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 80}],
+    }
+    attempt = begin(store, requirements=declaration)
+    attempt.finish({"status": "failed"})
+    request = store.read(attempt.revision_id)["request"]
+    declaration["checks"][0]["expected_mm"] = 90
+    request["check_policy"] = compile_policy(declaration, core=True)
+    body = {
+        k: v for k, v in request.items() if k not in ("kind", "content_sha256", "schema_version")
+    }
+    (attempt.directory / "request.json").write_text(json.dumps(_sealed("attempt_request", **body)))
+    with pytest.raises(ChangeStoreError, match="policy|request"):
+        store.read(attempt.revision_id)
+
+
+def test_interrupted_check_completion_is_resumable_and_concurrent_retries_agree(
+    tmp_path, monkeypatch
+):
+    from build123d import Box, export_step
+    from agentcad.change_store import Attempt
+
+    store = initialized(tmp_path)
+    attempt = begin(
+        store,
+        requirements={
+            "schema_version": 1,
+            "checks": [{"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 80}],
+        },
+        defer_checks=True,
+    )
+    step = tmp_path / "built.step"
+    export_step(Box(80, 30, 6), step)
+    attempt.prepare({"status": "success", "validation": {"is_valid": True}}, geometry=step)
+    original = Attempt._evaluate
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("worker interrupted")
+
+    monkeypatch.setattr(Attempt, "_evaluate", interrupted)
+    with pytest.raises(RuntimeError):
+        store.complete_checks(attempt.revision_id)
+    assert store.read_checks(attempt.revision_id)["lifecycle"] == "running"
+    monkeypatch.setattr(Attempt, "_evaluate", original)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(
+            pool.map(lambda _: ChangeStore(tmp_path).complete_checks(attempt.revision_id), range(3))
+        )
+    assert all(r == results[0] for r in results)
+    assert results[0]["receipt"]["validation_state"] == "valid"

@@ -140,12 +140,14 @@ def test_import_cad_forwards_cli_controls(monkeypatch):
         runtime="build123d", validation_profile="kernel", view=False, diff=False,
         report=False, report_images=False, max_images=2, text_budget=1500,
         build_dir="artifacts with spaces",
+        checks_file="requirements with spaces.json", defer_checks=True,
     )
     assert result["status"] == "success"
     assert calls == [([
         "import", "supplier.step", "--label", "first part", "--init", "--runtime", "build123d",
         "--validation-profile", "kernel", "--no-view", "--no-diff", "--no-report",
         "--no-inspection-image", "--max-images", "2", "--text-budget", "1500",
+        "--checks", "requirements with spaces.json", "--defer-checks",
         "--build-dir", "artifacts with spaces",
     ], "/tmp/project")]
 
@@ -158,6 +160,8 @@ def test_import_cad_schema_is_closed_and_rejects_unknown_options(monkeypatch, tm
     assert set(declared.inputSchema["required"]) == {"file", "cwd"}
     assert declared.inputSchema["properties"]["report"]["default"] is True
     assert declared.inputSchema["properties"]["report_images"]["default"] is True
+    assert declared.inputSchema["properties"]["checks_file"]["default"] is None
+    assert declared.inputSchema["properties"]["defer_checks"]["default"] is False
     assert declared.outputSchema is None  # Image-bearing CallToolResult must pass through.
     monkeypatch.setattr(server, "_invoke", lambda *a, **k: pytest.fail("Invalid arguments started an import"))
     with pytest.raises(ValueError, match="Invalid import_cad arguments"):

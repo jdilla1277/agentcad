@@ -852,15 +852,23 @@ class _LoggingGroup(click.Group):
                 continue
         if result.get("via") == "daemon":
             return  # The child already recorded the attempt with its own start time.
-        failed = result.get("status") in {"error", "failed", "validation_error", "invalid_geometry", "timeout"}
+        checks_blocked = result.get("status") in {
+            "checks_failed", "checks_pending", "checks_unavailable",
+        }
+        failed = checks_blocked or result.get("status") in {
+            "error", "failed", "validation_error", "invalid_geometry", "timeout",
+        }
         if not result and exception is not None:
             failed = not isinstance(exception, SystemExit) or exception.code not in (0, None)
         unavailable = result.get("status") == "success" and result.get("version") and not result.get("viewer")
         if failed or unavailable:
             try:
                 from agentcad.project_viewer import record_failure
+                attempt_status = result["status"] if checks_blocked else (
+                    "failed" if failed else "preview_unavailable"
+                )
                 record_failure(root, result.get("label") or "unlabeled",
-                               "failed" if failed else "preview_unavailable",
+                               attempt_status,
                                started_ns=ctx.meta["viewer_started_ns"])
             except Exception:
                 pass  # Optional UI state must never replace the command result.

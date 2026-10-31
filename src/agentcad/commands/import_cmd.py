@@ -28,6 +28,7 @@ from agentcad.runners import dispatch
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import MANIFEST_FILE
 from agentcad.native_io import silence_native_stdout
+from agentcad.change_retention import change_options
 
 
 @click.command("import", short_help="Import a CAD file as a versioned baseline.")
@@ -79,6 +80,7 @@ from agentcad.native_io import silence_native_stdout
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum inspection images to prepare, including the overall sheet.")
 @click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated token allowance for the inline inspection report, excluding legacy import fields.")
 @project_options
+@change_options
 def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image,
                show_report, max_images, text_budget):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
@@ -142,6 +144,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         argv.extend(["--text-budget", str(text_budget)])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
+    from agentcad.change_retention import forward_check_options
+    forward_check_options(argv)
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     file_path = Path(file)
@@ -314,6 +318,31 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # validity. Parser errors do not consume a version.
     from agentcad.versioning import reserve_version
 
+    from agentcad.change_retention import assess_change
+    # Normalize once: requirements and delivery must use the same STEP bytes,
+    # including source assembly placement and metadata.
+    from agentcad.change_retention import current_attempt
+    attempt = current_attempt()
+    diagnostic = None
+    if attempt and attempt._read("request.json", "attempt_request").get("check_policy"):
+        diagnostic = attempt.directory / "import-normalized.step"
+        from agentcad.change_retention import capture_geometry
+        try:
+            with silence_native_stdout():
+                _export_step(source_document or topo_shape, diagnostic)
+        finally:
+            capture_geometry(diagnostic)
+        from agentcad.step_io import load_cad_shape
+        with silence_native_stdout():
+            metrics, validation = validated_metrics(load_cad_shape(diagnostic), profile=validation_profile,
+                                                     source_path=diagnostic)
+        blocked = assess_change({"command": "import", "status": "success", "metrics": metrics,
+                                 "validation": validation, "validation_profile": validation_profile}, diagnostic)
+        if blocked:
+            diagnostic.unlink(missing_ok=True)
+            _emit(blocked, exit_code=1)
+            return
+
     reservation = reserve_version(get_project().build_root, label)
     version_num = reservation.number
     dir_name = reservation.dir_name
@@ -334,7 +363,10 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     #    so we standardize on STEP regardless of input format.
     try:
         with silence_native_stdout():
-            _export_step(source_document or topo_shape, version_dir / "output.step")
+            if diagnostic is not None:
+                shutil.move(str(diagnostic), str(version_dir / "output.step"))
+            else:
+                _export_step(source_document or topo_shape, version_dir / "output.step")
 
     except Exception as exc:
         from agentcad.change_retention import capture_geometry

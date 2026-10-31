@@ -133,6 +133,8 @@ class ChangeStore:
         model: dict,
         legacy_baseline=None,
         promotion_mode: str = "automatic",
+        requirements: dict | None = None,
+        defer_checks: bool = False,
     ) -> Attempt:
         if not (self.root / "agentcad.json").is_file():
             raise ChangeStoreError(
@@ -150,6 +152,45 @@ class ChangeStore:
         attempt = Attempt(self, revision_id)
         with _version_lock(self.root):
             state = self._state()
+            from agentcad.change_checks import compile_policy
+
+            previous = None
+            if state["revision_id"]:
+                parent = Attempt(self, state["revision_id"])._read(
+                    "request.json", "attempt_request"
+                )
+                previous = parent.get("check_policy")
+            policy = compile_policy(
+                requirements,
+                previous=previous,
+                core=True,
+                profile=model.get("validation_profile", "deliverable"),
+            )
+            if defer_checks and policy is None:
+                raise ChangeStoreError(
+                    "--defer-checks requires declared or inherited requirements."
+                )
+            baseline_inputs, baseline_errors = [], {}
+            for spec in (policy or {}).get("checks", []):
+                if spec["settings"].get("kind") != "preserve_cylinders":
+                    continue
+                check_id = spec["check_id"]
+                try:
+                    baseline_id = spec["settings"]["baseline_revision_id"]
+                    baseline = self.read(baseline_id)
+                    baseline_artifact = next(
+                        a for a in baseline["candidate"]["inputs"] if a["role"] == "geometry"
+                    )
+                    data = Attempt(self, baseline_id)._verify(baseline_artifact).read_bytes()
+                    if hashlib.sha256(data).hexdigest() != baseline_artifact["sha256"]:
+                        raise ChangeStoreError("Preservation baseline changed during capture.")
+                    path = self._path(
+                        attempt.directory.relative_to(self.root) / f"baselines/{check_id}.step"
+                    )
+                    _write_bytes_once(path, data)
+                    baseline_inputs.append(attempt._artifact(path, "input", "baseline:" + check_id))
+                except (OSError, ValueError, TypeError, KeyError, StopIteration) as exc:
+                    baseline_errors[check_id] = str(exc)
             source_path = attempt.directory / ("source" + Path(source_name).suffix.lower())
             _write_bytes_once(source_path, source)
             request = _sealed(
@@ -164,6 +205,10 @@ class ChangeStore:
                 legacy_baseline=legacy_baseline,
                 promotion_mode=promotion_mode,
                 source=attempt._artifact(source_path, "source", source_name),
+                check_policy=policy,
+                check_inputs=baseline_inputs,
+                baseline_errors=baseline_errors,
+                defer_checks=bool(defer_checks),
             )
             _write_json_once(attempt.directory / "request.json", request)
             atomic_write_json(
@@ -183,6 +228,10 @@ class ChangeStore:
             if request["revision_id"] != revision_id:
                 raise ChangeStoreError("Retained request identifies a different attempt.")
             attempt._verify(request["source"])
+            for artifact in request.get("check_inputs", []):
+                attempt._verify(artifact)
+            if request.get("check_policy"):
+                contract.validate_document(request["check_policy"], kind="target_policy")
             core_path = attempt.directory / "core.json"
             core = attempt._read("core.json", "attempt_core") if core_path.exists() else None
             candidate = receipt = policy = None
@@ -202,8 +251,16 @@ class ChangeStore:
                 if (
                     candidate["revision_id"] != revision_id
                     or candidate["parent_revision_id"] != request["parent_revision_id"]
+                    or candidate["model"] != request["model"]
+                    or candidate["promotion_mode"] != request["promotion_mode"]
+                    or request["source"] not in candidate["inputs"]
+                    or any(a not in candidate["inputs"] for a in request.get("check_inputs", []))
                 ):
                     raise ChangeStoreError("Candidate does not match its retained attempt.")
+                if request.get("check_policy") and policy != request["check_policy"]:
+                    raise ChangeStoreError(
+                        "Core policy does not match the original request policy."
+                    )
                 if (
                     receipt["candidate"]["content_sha256"] != candidate["content_sha256"]
                     or receipt["candidate"]["model_fingerprint"] != candidate["model_fingerprint"]
@@ -250,6 +307,78 @@ class ChangeStore:
             if _REVISION.fullmatch(p.name) and (p / "request.json").exists()
         ]
         return sorted(requests, key=lambda r: r["selection_generation"])
+
+    def read_checks(self, revision_id: str) -> dict:
+        saved = self.read(revision_id)
+        attempt = Attempt(self, revision_id)
+        terminal = attempt.directory / "checks_complete.json"
+        receipt = saved["receipt"]
+        lifecycle = (
+            "pending"
+            if receipt is None or any(r["state"] == "pending" for r in receipt["checks"])
+            else "completed"
+        )
+        path = attempt.directory / "receipt.json" if receipt else None
+        if terminal.exists():
+            receipt = attempt._read("checks_complete.json", "change_receipt", shared=True)
+            original_core = [
+                r
+                for r in saved["receipt"]["checks"]
+                if r["check_id"] in ("execution", "written_geometry")
+            ]
+            if [
+                r for r in receipt["checks"] if r["check_id"] in ("execution", "written_geometry")
+            ] != original_core:
+                raise ChangeStoreError("Completed checks changed original core evidence.")
+            lifecycle, path = "completed", terminal
+        elif (attempt.directory / "checks_running.json").exists():
+            running = attempt._read("checks_running.json", "checks_running")
+            if running["candidate_sha256"] != saved["candidate"]["content_sha256"]:
+                raise ChangeStoreError("Running checks identify another candidate.")
+            lifecycle = "running"
+        if (
+            receipt is not None
+            and contract.make_change_receipt(saved["candidate"], saved["policy"], receipt["checks"])
+            != receipt
+        ):
+            raise ChangeStoreError("Check receipt does not match its pinned candidate and policy.")
+        return {
+            "revision_id": revision_id,
+            "lifecycle": lifecycle,
+            "receipt": receipt,
+            "receipt_path": str(path) if path else None,
+        }
+
+    def complete_checks(self, revision_id: str) -> dict:
+        # Validate before creating even a lock directory for an unknown ID.
+        observed = self.read_checks(revision_id)
+        if observed["lifecycle"] == "completed":
+            return observed
+        attempt = Attempt(self, revision_id)
+        # Per-attempt lock: independent revisions can evaluate concurrently.
+        with _version_lock(attempt.directory):
+            current = self.read_checks(revision_id)
+            if current["lifecycle"] == "completed":
+                return current
+            saved = self.read(revision_id)
+            if saved["candidate"] is None:
+                raise ChangeStoreError(
+                    "The build has not published its core snapshot; wait before completing checks."
+                )
+            _write_json_once(
+                attempt.directory / "checks_running.json",
+                _sealed("checks_running", candidate_sha256=saved["candidate"]["content_sha256"]),
+            )
+            response = attempt._read("core.json", "attempt_core")["response"]
+            results = [
+                r
+                for r in saved["receipt"]["checks"]
+                if r["check_id"] in ("execution", "written_geometry")
+            ]
+            results.extend(attempt._evaluate(saved["candidate"], saved["policy"], response))
+            receipt = contract.make_change_receipt(saved["candidate"], saved["policy"], results)
+            _write_json_once(attempt.directory / "checks_complete.json", receipt)
+            return self.read_checks(revision_id)
 
 
 class Attempt:
@@ -323,8 +452,9 @@ class Attempt:
                 ):
                     raise ChangeStoreError("A prepared geometry snapshot cannot be replaced.")
             return self.reference()
-        inputs = [request["source"]]
-        self._verify(inputs[0])
+        inputs = [request["source"], *request.get("check_inputs", [])]
+        for artifact in inputs:
+            self._verify(artifact)
         target = self.store._path(
             self.directory.relative_to(self.store.root) / "geometry/output.step"
         )
@@ -333,7 +463,7 @@ class Attempt:
         if target.exists():
             inputs.append(self._artifact(target, "geometry", "output.step"))
         settings = {"validation_profile": request["model"].get("validation_profile", "deliverable")}
-        policy = contract.make_policy(
+        policy = request.get("check_policy") or contract.make_policy(
             target_id="cad",
             policy_id="legacy-core-retention-" + settings["validation_profile"],
             version=1,
@@ -379,6 +509,26 @@ class Attempt:
                 candidate, policy, "written_geometry", state, observed=verdict, evidence=evidence
             ),
         ]
+        if request.get("check_policy"):
+            from agentcad.change_checks import CORE_IDS
+
+            if request.get("defer_checks") and execution == "pass" and state == "pass":
+                checks.extend(
+                    contract.make_check_result(
+                        candidate,
+                        policy,
+                        spec["check_id"],
+                        "pending",
+                        observed={
+                            "reason": "Deferred; complete this revision with check-spec --complete."
+                        },
+                        actions=[{"action": "complete_checks", "revision_id": self.revision_id}],
+                    )
+                    for spec in policy["checks"]
+                    if spec["check_id"] not in CORE_IDS
+                )
+            else:
+                checks.extend(self._evaluate(candidate, policy, response))
         receipt = contract.make_change_receipt(candidate, policy, checks)
         for name, record in (("policy", policy), ("candidate", candidate), ("receipt", receipt)):
             _write_json_once(
@@ -396,6 +546,30 @@ class Attempt:
             ),
         )
         return self.reference()
+
+    def _evaluate(self, candidate, policy, response):
+        from agentcad.change_checks import evaluate_checks, measure_geometry
+
+        request = self._read("request.json", "attempt_request")
+        measurement, baselines, reason = None, {}, "Written geometry is not valid or available."
+        verdict = (response.get("validation") or {}).get(
+            "is_valid", (response.get("metrics") or {}).get("is_valid")
+        )
+        if verdict is True:
+            try:
+                artifact = next(a for a in candidate["inputs"] if a["role"] == "geometry")
+                measurement = measure_geometry(self._verify(artifact))
+                reason = None
+            except Exception as exc:
+                reason = f"Geometry measurement unavailable: {exc}"
+        for artifact in request.get("check_inputs", []):
+            try:
+                baselines[artifact["name"].removeprefix("baseline:")] = measure_geometry(
+                    self._verify(artifact)
+                )
+            except Exception:
+                pass  # The individual preservation check reports unavailable.
+        return evaluate_checks(candidate, policy, measurement, baselines=baselines, reason=reason)
 
     def finish(self, response: dict) -> dict:
         if (self.directory / "outcome.json").exists():
@@ -484,7 +658,7 @@ class Attempt:
     def reference(self) -> dict:
         saved = self.store.read(self.revision_id)
         geometry = (saved["candidate"] or {}).get("deliverables", {}).get("cad", [])
-        return {
+        reference = {
             "revision_id": self.revision_id,
             "parent_revision_id": saved["request"]["parent_revision_id"],
             "selection_generation": saved["request"]["selection_generation"],
@@ -496,3 +670,16 @@ class Attempt:
             "receipt": str(self.directory / "receipt.json") if saved["receipt"] else None,
             "diagnostics": str(self.directory / "outcome.json") if saved["outcome"] else None,
         }
+        if saved["request"].get("check_policy") and saved["receipt"]:
+            checked = self.store.read_checks(self.revision_id)
+            receipt = checked["receipt"]
+            reference["validation_checks"] = {
+                "lifecycle": checked["lifecycle"],
+                "receipt": checked["receipt_path"],
+                "validation_state": receipt["validation_state"],
+                "promotion_ready": receipt["promotion_ready"],
+                "checks": receipt["checks"],
+                "blockers": receipt["blockers"],
+                "warnings": receipt["warnings"],
+            }
+        return reference
