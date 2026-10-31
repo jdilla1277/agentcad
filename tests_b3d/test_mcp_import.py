@@ -55,6 +55,58 @@ def _verify_images(result, cwd):
     return payload
 
 
+@pytest.mark.parametrize("initialize", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_registered_import_applies_declared_checks_without_advancing_current(
+    isolated_dir, initialize, deferred
+):
+    from agentcad.change_checks import measure_geometry
+
+    source = _source(isolated_dir, "cadgenbench")
+    project = isolated_dir / "checked project"
+    project.mkdir()
+    build = project / "artifacts"
+    baseline = None
+    if not initialize:
+        baseline = _payload(server.import_cad(
+            str(source), str(project), label="accepted", initialize=True,
+            view=False, diff=False, report=False, report_images=False, build_dir="artifacts",
+        ))
+        assert baseline["status"] == "success", baseline
+        accepted_step = Path(baseline["outputs"]["step"])
+        accepted_bytes = accepted_step.read_bytes()
+    expected = measure_geometry(source)["dimensions"]["x"] + (0 if deferred else 10)
+    checks = isolated_dir / "requirements.json"
+    checks.write_text(json.dumps({"schema_version": 1, "checks": [{
+        "check_id": "length", "kind": "dimension", "axis": "x",
+        "expected_mm": expected, "tolerance_mm": 0.1,
+    }]}))
+    result = asyncio.run(server.mcp.call_tool("import_cad", {
+        "file": str(source), "cwd": str(project), "label": "checked-import",
+        "initialize": initialize, "checks_file": str(checks), "defer_checks": deferred,
+        "view": False, "diff": False, "report": False, "report_images": False,
+        "build_dir": "artifacts",
+    }))
+    # The registered tool transports a refused import as one JSON text block.
+    text, = result
+    assert text.type == "text"
+    payload = json.loads(text.text)
+    assert payload["status"] == ("checks_pending" if deferred else "checks_failed")
+    assert payload["_exit_code"] == 1
+    assert payload["outputs"]["step"] is None
+    assert payload["current_advanced"] is False
+    assert Path(payload["change"]["geometry"]).is_relative_to(build)
+    receipt = payload["change"]["validation_checks"]
+    assert receipt["validation_state"] == ("pending" if deferred else "invalid")
+    row = next(r for r in receipt["checks"] if r["check_id"] == "length")
+    assert row["state"] == ("pending" if deferred else "fail")
+    manifest = json.loads((build / "agentcad.json").read_text())
+    assert manifest.get("current") == (None if initialize else "accepted")
+    assert len(manifest["versions"]) == (0 if initialize else 1)
+    if baseline:
+        assert accepted_step.read_bytes() == accepted_bytes
+
+
 @pytest.mark.parametrize("kind", ["cadgenbench", "nested", "brep"])
 def test_registered_import_delivers_cli_json_and_checked_pngs(isolated_dir, monkeypatch, kind):
     source = _source(isolated_dir, kind)

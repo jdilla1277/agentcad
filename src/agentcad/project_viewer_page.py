@@ -27,8 +27,14 @@ function showStatus() {
   const failed = attempt && attempt.status !== 'success';
   const label = current ? `Showing v${current.version} · ${current.label}` : 'Waiting for a completed viewer';
   const newer = latestState?.latest?.version !== current?.version;
+  const checkStatus = {
+    checks_failed: 'blocked by failed checks',
+    checks_pending: 'awaiting checks',
+    checks_unavailable: 'blocked by unavailable checks',
+  }[attempt?.status];
   status.textContent = label + (reconnecting ? ' — Disconnected; reconnecting…'
     : attempt?.status === 'preview_unavailable' ? ' — Latest build succeeded; preview unavailable'
+    : checkStatus ? ` — Latest edit ${checkStatus} (${attempt.label || 'unlabeled'}); keeping last accepted model`
     : failed ? ` — Latest build failed (${attempt.label || 'unlabeled'}); keeping last good model`
     : newer ? ' — Loading latest build…' : ' — Up to date') + restoreWarning;
   status.classList.toggle('warning', reconnecting || Boolean(failed) || Boolean(restoreWarning));
