@@ -51,7 +51,7 @@ def _covers_model(saved, part_id):
     )
 
 
-def _analysis(step, output_root, saved, meta, session):
+def analysis_inputs(saved, meta):
     source_hash = saved["source"].get("sha256")
     recorded = meta.get("geometry_manifest") or {}
     if saved["source"].get("kind") == "script":
@@ -66,6 +66,12 @@ def _analysis(step, output_root, saved, meta, session):
         meta = {}
     quality = _quality(meta)
     inputs = {"revision": REPORT_REVISION, "manifest_id": saved["manifest_id"], "quality": quality}
+    return inputs
+
+
+def _analysis(step, output_root, saved, meta, session):
+    inputs = analysis_inputs(saved, meta)
+    quality = inputs["quality"]
     revision = _digest(inputs)
     path = output_root / "inspection" / f"report_{revision[:16]}.json"
     try:
@@ -136,7 +142,8 @@ def _estimated_tokens(payload):
 
 
 def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMAGES,
-                      text_budget=DEFAULT_TEXT_BUDGET, meta=None, response_path=str, response_extra=None):
+                      text_budget=DEFAULT_TEXT_BUDGET, meta=None, response_path=str, response_extra=None,
+                      _checkpoint=None):
     """Reuse analysis and prepare a bounded deterministic gallery.
 
     Budget applies to this report object. The legacy import envelope is a
@@ -149,7 +156,10 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
     step, output_root = Path(step_path), Path(output_root)
     saved = read_manifest(step)
     session = {}
+    checkpoint = _checkpoint or (lambda *args: None)
+    checkpoint("analysis", "running", [])
     data, path = _analysis(step, output_root, saved, meta if meta is not None else _read_meta(step), session)
+    checkpoint("analysis", "complete", [path])
     from agentcad.geometry_images import geometry_image
 
     media, omitted = [], []
@@ -158,15 +168,20 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         if len(media) >= allowed:
             omitted.append({"id": planned["id"], "reason": "image_cap" if images else "images_disabled"})
             continue
+        stage = "image:" + planned["id"]
+        checkpoint(stage, "running", [])
         try:
             sheet = geometry_image(step, output_root, object_id=planned["target_id"],
                                    isolate=planned["isolate"], _session=session)
+        except Exception as exc:
+            omitted.append({"id": planned["id"], "reason": "image_failed", "message": str(exc)[:240]})
+            checkpoint(stage, "failed", [])
+        else:
+            checkpoint(stage, "complete", [Path(sheet["png"]), Path(sheet["metadata"])])
             media.append({
                 "id": planned["id"], "role": planned["role"],
                 "png": response_path(Path(sheet["png"])), "sha256": sheet["png_sha256"],
             })
-        except Exception as exc:
-            omitted.append({"id": planned["id"], "reason": "image_failed", "message": str(exc)[:240]})
     # Publish the full delivery catalogue separately so budget truncation never
     # hides which samples were chosen or how to retrieve their images.
     reused = data["overall_reused_for"] if any(row["id"] == "overall" for row in media) else None
@@ -174,7 +189,9 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
                  "overall_reused_for": reused}
     catalogue_id = _digest(catalogue)
     catalogue_path = output_root / "inspection" / f"bundle_{catalogue_id[:16]}.json"
+    checkpoint("catalogue", "running", [])
     atomic_write_json(catalogue_path, catalogue)
+    checkpoint("catalogue", "complete", [catalogue_path])
     manifest_path = response_path(step.with_name(MANIFEST_NAME))
     report_path = response_path(path)
     command = f"agentcad inspect {shlex.quote(response_path(step))}"

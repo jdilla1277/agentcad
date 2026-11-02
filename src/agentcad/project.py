@@ -161,10 +161,12 @@ def resolve_project(
     base = (start or Path.cwd()).resolve()
     root = base
     discovered_build = None
+    found_project = False
     for candidate in (base, *base.parents):
         if (candidate / "agentcad.toml").exists() or (
             candidate / "agentcad.json"
         ).exists():
+            found_project = True
             root = candidate
             if not (candidate / "agentcad.toml").exists():
                 try:
@@ -177,6 +179,19 @@ def resolve_project(
                 except (OSError, ValueError):
                     pass  # read_manifest supplies the actionable error.
             break
+    # Returned job actions carry an absolute build root. A source project
+    # created with only --build-dir may have no marker in its source tree;
+    # let its own descendants recover the recorded owner from that root.
+    # A separately marked project (or an unrelated cwd) must still fail the
+    # existing ownership check rather than adopting somebody else's history.
+    if not found_project and build_dir is not None and Path(build_dir).is_absolute():
+        try:
+            selected = json.loads((Path(build_dir) / "agentcad.json").read_text())
+            owner = Path(selected["project_root"]).resolve()
+            if base.is_relative_to(owner):
+                root = owner
+        except (OSError, ValueError, TypeError, KeyError):
+            pass  # read_manifest retains the normal invalid-manifest errors.
     configured = None
     config_path = root / "agentcad.toml"
     if config_path.exists():

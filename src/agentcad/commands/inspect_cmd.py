@@ -1,4 +1,5 @@
 import json
+import math
 import shlex
 import signal
 import sys
@@ -194,6 +195,10 @@ def _clear_validation_timeout(previous_state) -> None:
 @click.option("--no-images", is_flag=True, help="Omit image preparation/delivery for --report; keep the same analysis and sample plan.")
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum distinct --report images; overall first, then alternating part/face-edge samples.")
 @click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated text-token allowance for --report (compact JSON UTF-8 bytes / 3).")
+@click.option("--background", is_flag=True, help="Start --report analysis in a detached local worker and return its job.")
+@click.option("--wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for --report after these seconds; its worker continues.")
+@click.option("--job", "job_id", default=None, help="Retrieve/control the durable inspection job for this FILE; requires --report.")
+@click.option("--job-action", type=click.Choice(["status", "wait", "resume", "cancel"]), default=None, help="Action on --job. Default: wait. Cancellation stops between stages.")
 @click.option(
     "--ids", "with_ids", is_flag=True,
     help="Include per-feature ID lists (solids, faces, edges) for use with "
@@ -255,6 +260,10 @@ def inspect_cmd(
     no_images,
     max_images,
     text_budget,
+    background,
+    wait_timeout,
+    job_id,
+    job_action,
     with_ids,
     with_summary,
     id_limit,
@@ -279,10 +288,30 @@ def inspect_cmd(
         raise click.UsageError("--report cannot be combined with --id, --image, --ids, --summary, or --validate-only.")
     if not with_report and (no_images or max_images != 9 or text_budget != 2000):
         raise click.UsageError("--no-images, --max-images and --text-budget require --report.")
+    if not with_report and (background or wait_timeout is not None or job_id or job_action):
+        raise click.UsageError("Inspection job controls require --report.")
+    if wait_timeout is not None and not math.isfinite(wait_timeout):
+        raise click.BadParameter("Use a finite number of seconds.", param_hint="--wait-timeout")
+    if job_action and not job_id:
+        raise click.UsageError("--job-action requires --job.")
+    if job_id and (no_images or max_images != 9):
+        raise click.UsageError("--job uses its saved image configuration; omit --no-images/--max-images.")
+    if background and (job_action in {"status", "wait", "cancel"} or wait_timeout is not None):
+        raise click.UsageError("--background cannot be combined with a wait deadline or status/wait/cancel action.")
+    if job_id and job_action is None:
+        job_action = "wait"
+    if background and job_action == "wait":
+        raise click.UsageError("Use --job-action resume with --background to start a saved job.")
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
     if with_report:
         argv.extend(["--report", "--max-images", str(max_images), "--text-budget", str(text_budget)])
+        if background:
+            argv.append("--background")
+        if wait_timeout is not None:
+            argv.extend(["--wait-timeout", str(wait_timeout)])
+        if job_id:
+            argv.extend(["--job", job_id, "--job-action", job_action])
     if no_images:
         argv.append("--no-images")
     if entity_id:
@@ -308,19 +337,36 @@ def inspect_cmd(
 
     if with_report:
         from agentcad.inspection_report import inspection_report, ReportBudgetError
+        from agentcad.inspection_jobs import request_report
         from agentcad.project import derived_dir
 
         try:
-            payload, _ = inspection_report(
-                file, derived_dir("inspect", Path(file)), images=not no_images,
-                max_images=max_images, text_budget=text_budget, response_path=get_project().response_path,
-                response_extra=get_project().describe(),
-            )
+            controlled = background or wait_timeout is not None or job_id is not None
+            if not controlled:
+                payload, _ = inspection_report(
+                    file, derived_dir("inspect", Path(file)), images=not no_images,
+                    max_images=max_images, text_budget=text_budget, response_path=get_project().response_path,
+                    response_extra=get_project().describe(),
+                )
+            else:
+                job, result, expired = request_report(
+                    file, derived_dir("inspect", Path(file)), get_project(), images=not no_images,
+                    max_images=max_images, text_budget=text_budget,
+                    background=background, wait_timeout=wait_timeout, job_id=job_id, action=job_action,
+                    response_extra=get_project().describe(),
+                )
         except Exception as exc:
             _emit({"command": "inspect", "status": "error", "message": str(exc),
                    "error_kind": "report_budget_too_small" if isinstance(exc, ReportBudgetError) else "report_unavailable"}, exit_code=1)
             return
-        _emit(payload)
+        if not controlled:
+            _emit(payload)
+            return
+        payload = {"command": "inspect", "status": "success" if job["status"] == "complete" else job["status"],
+                   "inspection_job": job, "wait_expired": expired}
+        if result:
+            payload["inspection"] = result[0]
+        _emit(payload, exit_code=1 if job_action not in {"status", "cancel"} and job["status"] in {"failed", "stopped", "canceled"} else 0)
         return
 
     if entity_id or with_image:

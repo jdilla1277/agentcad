@@ -49,7 +49,7 @@ def _read(path, request_id):
 
 
 @contextmanager
-def _locked(path):
+def _locked(path, *, wait_seconds=None):
     with path.open("a+b") as handle:
         if os.name == "nt":
             import msvcrt
@@ -70,7 +70,7 @@ def _locked(path):
             def release():
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
-        deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+        deadline = time.monotonic() + (_LOCK_WAIT_SECONDS if wait_seconds is None else wait_seconds)
         while True:
             try:
                 acquire()
