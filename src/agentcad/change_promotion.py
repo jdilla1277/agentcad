@@ -365,13 +365,10 @@ class PromotionStore:
                 _merge_version_entry(manifest, reservation, entry, advance_current=True)
                 # Metadata is not acceptance authority. If the process dies
                 # before manifest replacement, this is only an orphan version.
-                atomic_write_json(
-                    reservation.path / "meta.json",
-                    {
-                        **meta,
-                        "promotion_request_key": request_key,
-                    },
-                )
+                # Keep the recovery binding in the caller's metadata too:
+                # optional artifact updates persist this same object later.
+                meta["promotion_request_key"] = request_key
+                atomic_write_json(reservation.path / "meta.json", meta)
                 state["targets"][request["target_id"]] = {
                     "revision_id": revision,
                     "candidate": request["candidate"],

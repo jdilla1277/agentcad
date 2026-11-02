@@ -110,6 +110,7 @@ def test_request_is_durable_before_acceptance_and_receipt_replays_after_restart(
     assert len(manifest["versions"]) == 2
     assert promotions.accepted("cad")["revision_id"] == attempt.revision_id
     assert meta["promotion"] == receipt
+    assert meta["promotion_request_key"] == request["request_key"]
 
 
 def test_key_cannot_bind_another_candidate_or_target(tmp_path):
