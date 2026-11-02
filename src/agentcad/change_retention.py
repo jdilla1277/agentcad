@@ -17,6 +17,8 @@ from agentcad.project import ProjectError, get_project
 def change_options(function):
     """Share requirement options without duplicating command callback signatures."""
 
+    @click.option("--stage", is_flag=True, default=False,
+                  help="Retain and check this candidate without replacing the accepted model; accept later with promote.")
     @click.option(
         "--checks",
         "checks_file",
@@ -31,9 +33,9 @@ def change_options(function):
         help="Retain pending checks; complete later with check-spec REVISION --complete.",
     )
     @wraps(function)
-    def wrapped(*args, checks_file=None, defer_checks=False, **kwargs):
+    def wrapped(*args, checks_file=None, defer_checks=False, stage=False, **kwargs):
         ctx = click.get_current_context()
-        if kwargs.get("dry_run") and (checks_file or defer_checks):
+        if kwargs.get("dry_run") and (checks_file or defer_checks or stage):
             raise ProjectError(
                 "checks_need_retention",
                 "Declared checks need a retained attempt, not --dry-run.",
@@ -52,6 +54,7 @@ def change_options(function):
                 ) from exc
         ctx.meta["change_checks_file"] = checks_file
         ctx.meta["change_defer_checks"] = defer_checks
+        ctx.meta["change_stage"] = stage
         return function(*args, **kwargs)
 
     return wrapped
@@ -63,6 +66,8 @@ def forward_check_options(argv):
         argv.extend(["--checks", ctx.meta["change_checks_file"]])
     if ctx.meta.get("change_defer_checks"):
         argv.append("--defer-checks")
+    if ctx.meta.get("change_stage"):
+        argv.append("--stage")
 
 
 def assess_change(payload, geometry):
@@ -71,15 +76,16 @@ def assess_change(payload, geometry):
     if attempt is None:
         return None
     request = attempt._read("request.json", "attempt_request")
-    if not request.get("check_policy"):
+    staged = request["promotion_mode"] == "staged"
+    if not request.get("check_policy") and not staged:
         return None
     prepare_change(payload, geometry=geometry)
     reference = attempt.reference()
     checked = reference["validation_checks"]
-    if checked["promotion_ready"]:
+    if checked["promotion_ready"] and not staged:
         return None
     state = checked["validation_state"]
-    status = {"invalid": "checks_failed", "pending": "checks_pending"}.get(
+    status = {"valid": "staged", "invalid": "checks_failed", "pending": "checks_pending"}.get(
         state, "checks_unavailable"
     )
     action = f"agentcad check-spec {attempt.revision_id}" + (
@@ -87,16 +93,23 @@ def assess_change(payload, geometry):
     )
     if get_project().configured:
         action += " --build-dir " + shlex.quote(str(get_project().build_root))
+    if status == "staged":
+        action = f"agentcad view {attempt.revision_id}"
+        if get_project().configured:
+            action += " --build-dir " + shlex.quote(str(get_project().build_root))
     return {
         **payload,
         "status": status,
         "label": request["label"],
         "outputs": {"step": None},
         "current_advanced": False,
-        "message": "The candidate is retained, but required checks are not satisfied; the accepted model is unchanged.",
+        "promotion_mode": request["promotion_mode"],
+        "message": ("The candidate is staged and its checks pass; explicitly promote it when ready. The accepted model is unchanged."
+                    if status == "staged" else "The candidate is retained, but required checks are not satisfied; the accepted model is unchanged."),
         "suggestion": action,
         "more_at": "agentcad docs check-spec",
         "change": reference,
+        **({"notes": ["Staging saves the candidate and check results. Prepare diagnostic views or exports from change.geometry; promote accepts only the saved STEP and source."]} if staged else {}),
     }
 
 
@@ -125,6 +138,7 @@ def begin_change(*, command: str, label: str, source: bytes, source_name: str, m
             legacy_baseline=manifest.get("current"),
             requirements=ctx.meta.get("change_requirements"),
             defer_checks=ctx.meta.get("change_defer_checks", False),
+            promotion_mode="staged" if ctx.meta.get("change_stage") else "automatic",
         )
     except Exception as exc:
         ctx.meta["change_start_error"] = str(exc)

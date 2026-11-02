@@ -32,9 +32,11 @@ function showStatus() {
     checks_pending: 'awaiting checks',
     checks_unavailable: 'blocked by unavailable checks',
     not_promoted: 'not accepted; selection or evidence changed',
+    staged: 'staged; checks passed',
   }[attempt?.status];
   status.textContent = label + (reconnecting ? ' — Disconnected; reconnecting…'
     : attempt?.status === 'preview_unavailable' ? ' — Latest build succeeded; preview unavailable'
+    : attempt?.status === 'accepted_without_viewer' ? ` — Accepted ${attempt.label}; showing previous model. Open the accepted STEP to review.`
     : checkStatus ? ` — Latest edit ${checkStatus} (${attempt.label || 'unlabeled'}); keeping last accepted model`
     : failed ? ` — Latest build failed (${attempt.label || 'unlabeled'}); keeping last good model`
     : newer ? ' — Loading latest build…' : ' — Up to date') + restoreWarning;

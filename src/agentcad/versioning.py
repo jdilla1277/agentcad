@@ -175,14 +175,21 @@ def reserve_version(
     validate_version_label(label)
     with _version_lock(project_dir):
         manifest = json.loads(manifest_path.read_text())
-        used = _used_version_numbers(project_dir, manifest)
-        number = max(used, default=0) + 1
-        if not suffix and label == f"v{number}":
-            dir_name = label
-        else:
-            dir_name = f"v{number}_{label}{suffix}"
-        path = project_dir / dir_name
-        path.mkdir(parents=False, exist_ok=False)
+        return _reserve_version_unlocked(project_dir, manifest, label, suffix=suffix)
+
+
+def _reserve_version_unlocked(project_dir, manifest, label, *, suffix=""):
+    """Reserve under a root lock already held by a promotion transaction."""
+    from agentcad.project import validate_version_label
+
+    validate_version_label(label)
+    used = _used_version_numbers(project_dir, manifest)
+    number = max(used, default=0) + 1
+    dir_name = (
+        label if not suffix and label == f"v{number}" else f"v{number}_{label}{suffix}"
+    )
+    path = project_dir / dir_name
+    path.mkdir(parents=False, exist_ok=False)
     return VersionReservation(number, label, dir_name, path)
 
 

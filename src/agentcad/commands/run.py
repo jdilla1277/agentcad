@@ -97,6 +97,8 @@ def _run_contract_payload(payload: dict) -> dict:
                 f"agentcad run {shlex.quote(script)} --label "
                 f"{shlex.quote(str(label)) if label is not None else 'LABEL'}"
             )
+            if contract.get("change_stage"):
+                recovery += " --stage"
             existing_message = payload.get("message")
             inherited = (payload.get("validation") or {}).get("inherited_from_input")
             if isinstance(inherited, dict) and inherited.get("path"):
@@ -175,6 +177,7 @@ def _run_retry_command(ctx, *, script=None, omit=(), **overrides):
         ("--params", values.get("params")),
         ("--checks", values.get("checks_file")),
         ("--defer-checks", values.get("defer_checks", False)),
+        ("--stage", values.get("stage", False)),
         ("--dry-run", values.get("dry_run", False)),
         ("--runtime", values.get("runtime")),
         ("--validation-profile", values.get("validation_profile")
@@ -1213,12 +1216,12 @@ def _assign_part_identity(raw_parts):
         "azimuth:elevation angles, or a mix such as front,45:30."
     ),
 )
-@click.option("--export", default=None, help="Comma-separated mesh formats (stl, glb, obj). STEP is always produced; read outputs.step.")
+@click.option("--export", default=None, help="Comma-separated mesh formats (stl, glb, obj). In normal mode STEP is always produced; read outputs.step. With --stage, prepare diagnostics separately from change.geometry.")
 @click.option(
     "--preview/--no-preview",
     default=True,
     help=(
-        "4-view composite PNG + per-part previews (default on, ~2-4s). "
+        "4-view composite PNG + per-part previews (default on in normal mode, ~2-4s). With --stage, prepare diagnostics separately. "
         "By itself, --no-preview skips only those PNGs; viewer.html, its GLB, "
         "and automatic diff work remain enabled. Combine it with --no-diff "
         "--no-view for the core-only fast path."
@@ -1267,6 +1270,9 @@ def run(
     open_view, params, dry_run, runtime, validation_profile, no_daemon,
 ):
     """Execute the project's CAD script and produce a versioned STEP file.
+
+    --stage saves a checked candidate at change.geometry instead of accepting a
+    version. outputs.step stays null; inspect the candidate, then use promote.
 
     New projects use build123d. CadQuery scripts remain supported in projects
     explicitly pinned to the compatibility runtime or through
@@ -1355,6 +1361,7 @@ def run(
             no_daemon=no_daemon,
             checks_file=ctx.meta.get("change_checks_file"),
             defer_checks=ctx.meta.get("change_defer_checks", False),
+            stage=ctx.meta.get("change_stage", False),
         )
         return
 
@@ -1930,7 +1937,7 @@ def _run_impl(
     if blocked:
         _discard_staged_step()
         _emit_run(blocked)
-        sys.exit(1)
+        sys.exit(0 if blocked["status"] == "staged" else 1)
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:

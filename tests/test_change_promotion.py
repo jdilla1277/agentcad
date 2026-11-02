@@ -415,3 +415,93 @@ def test_corrupt_ledger_is_not_replaced(tmp_path):
     with pytest.raises(ValueError):
         promotions.begin(attempt.revision_id, request_key="new")
     assert path.read_bytes() == before
+
+
+def test_explicit_promotion_materializes_only_saved_bytes_and_replays(tmp_path):
+    store = project(tmp_path)
+    attempt = candidate(store, mode="staged")
+    promotions = promotion_store(tmp_path)
+    result = promotions.promote(attempt.revision_id, request_key="explicit")
+    assert result["promotion"]["outcome"] == "promoted"
+    assert result["replayed"] is False
+    operation = promotions.read("explicit")
+    path = tmp_path / operation["accepted_version"]["path"]
+    assert (path / "output.step").read_bytes() == (
+        attempt.directory / "geometry/output.step"
+    ).read_bytes()
+    assert (path / "script.py").read_bytes() == attempt.source_path.read_bytes()
+    assert promotions.promote(attempt.revision_id, request_key="explicit") == {
+        "promotion": result["promotion"],
+        "replayed": True,
+    }
+
+
+def test_interrupted_materialization_reuses_reserved_version(tmp_path, monkeypatch):
+    import agentcad.change_promotion as module
+
+    store = project(tmp_path)
+    attempt = candidate(store, mode="staged")
+    promotions = promotion_store(tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module,
+            "_write_bytes_once",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("copy interrupted")),
+        )
+        with pytest.raises(OSError):
+            promotions.promote(attempt.revision_id, request_key="resume")
+    operation = promotions.read("resume")
+    assert operation["result"]["lifecycle"] == "pending"
+    directory = operation["materialization"]["dir_name"]
+    assert (
+        json.loads((tmp_path / directory / "meta.json").read_text())["status"]
+        == "pending_promotion"
+    )
+    assert json.loads((tmp_path / "agentcad.json").read_text())["current"] == "accepted"
+    assert (
+        promotions.promote(attempt.revision_id, request_key="resume")["promotion"][
+            "outcome"
+        ]
+        == "promoted"
+    )
+    assert promotions.read("resume")["accepted_version"]["path"] == directory + "/"
+    assert len(list(tmp_path.glob("v2_*"))) == 1
+
+
+def test_killed_explicit_materialization_resumes_after_restart(tmp_path):
+    store = project(tmp_path)
+    attempt = candidate(store, mode="staged")
+    script = """
+import os, sys
+import agentcad.change_promotion as module
+module._write_bytes_once = lambda *a, **k: os._exit(29)
+module.PromotionStore(sys.argv[1]).promote(sys.argv[2], request_key='killed-explicit')
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path), attempt.revision_id], timeout=20
+    )
+    assert child.returncode == 29
+    promotions = promotion_store(tmp_path)
+    operation = promotions.read("killed-explicit")
+    assert operation["result"]["lifecycle"] == "pending"
+    result = promotions.promote(attempt.revision_id, request_key="killed-explicit")
+    assert result["promotion"]["outcome"] == "promoted"
+    assert promotions.read("killed-explicit")["accepted_version"]["version"] == 2
+
+
+def test_concurrent_explicit_promotion_has_one_version_and_one_first_response(tmp_path):
+    store = project(tmp_path)
+    attempt = candidate(store, mode="staged")
+    promotions = promotion_store(tmp_path)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(
+            pool.map(
+                lambda _: promotions.promote(
+                    attempt.revision_id, request_key="duplicate-explicit"
+                ),
+                range(4),
+            )
+        )
+    assert sum(not row["replayed"] for row in results) == 1
+    assert len({row["promotion"]["content_sha256"] for row in results}) == 1
+    assert len(json.loads((tmp_path / "agentcad.json").read_text())["versions"]) == 2

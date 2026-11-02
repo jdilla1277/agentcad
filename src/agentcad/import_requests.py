@@ -258,7 +258,7 @@ class ImportRequest:
                     payload["idempotency"]["replayed"] = True
                 else:
                     payload = self.recover()
-                    exit_code = 0 if payload.get("status") == "success" else 1
+                    exit_code = 0 if payload.get("status") in ("success", "staged") else 1
                     payload = self.complete(payload, exit_code)
                 if "viewer_opened" in payload:
                     payload["viewer_opened"] = False
@@ -287,7 +287,7 @@ class ImportRequest:
                 else:
                     payload = self.recover()
                     payload.setdefault("warnings", []).append(f"Import stopped: {type(exc).__name__}: {exc}")
-                ctx.meta["import_exit_code"] = 0 if payload.get("status") == "success" else 1
+                ctx.meta["import_exit_code"] = 0 if payload.get("status") in ("success", "staged") else 1
                 click.echo(json.dumps(payload))
                 raise SystemExit(ctx.meta["import_exit_code"])
 
@@ -305,7 +305,7 @@ def finish_response(payload):
     if (not request or ctx.meta.get("import_replay") or ctx.meta.get("import_request_closed")
             or payload.get("command") != "import"):
         return payload
-    exit_code = ctx.meta.get("import_exit_code", 0 if payload.get("status") == "success" else 1)
+    exit_code = ctx.meta.get("import_exit_code", 0 if payload.get("status") in ("success", "staged") else 1)
     try:
         return request.complete(payload, exit_code)
     except OSError as exc:

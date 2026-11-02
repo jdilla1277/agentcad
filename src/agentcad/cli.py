@@ -26,6 +26,7 @@ from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.recover import recover
+from agentcad.commands.promote import promote
 from agentcad.commands.review import review_cmd
 from agentcad.commands.run import _OUTPUT_DEPRECATION, candidate_scripts, run
 from agentcad.commands.skill import skill
@@ -149,10 +150,12 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
                          outputs.glb; viewer_glb normally generates separately.
-                         STEP is always produced; read outputs.step.
+                         Normal mode: STEP is always produced; read outputs.step.
+                         With --stage, prepare diagnostics from change.geometry.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
+                         Staged candidates prepare views separately.
     --view / --no-view   Open or reuse the live project after success (default on).
                          From v2, previous/current comparison is preloaded.
     --diff / --no-diff   Generate or skip automatic comparison with the prior
@@ -344,6 +347,12 @@ JSON RESPONSE CONTRACT
   Inspect/reconcile before rerunning the current script or import. This conflict
   is separate from a measured geometry failure. See `agentcad docs check-spec`
   for retained requirements, receipts, and deferred-check limitations.
+
+  Use run/import --stage to save a checked experiment without replacing the
+  accepted model. Open it with view REVISION, then accept its saved bytes with
+  promote REVISION --idempotency-key KEY. Read promote --idempotency-key KEY
+  --status after interruption; repeat the same key to resume/replay safely.
+  See `agentcad docs promote`.
 
 SPEC AND MEASUREMENT CHECKS
   When requirements include explicit holes, bores, diameters, counts, or
@@ -865,6 +874,7 @@ class _LoggingGroup(click.Group):
         checks_blocked = result.get("status") in {
             "checks_failed", "checks_pending", "checks_unavailable",
             "not_promoted",
+            "staged",
         }
         failed = checks_blocked or result.get("status") in {
             "error", "failed", "validation_error", "invalid_geometry", "timeout",
@@ -937,6 +947,7 @@ cli.add_command(measure)
 cli.add_command(parts_cmd)
 cli.add_command(render)
 cli.add_command(recover)
+cli.add_command(promote)
 cli.add_command(review_cmd)
 cli.add_command(run)
 cli.add_command(skill)
