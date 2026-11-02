@@ -11,7 +11,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-
 _VERSION_DIR_RE = re.compile(r"^v(\d+)(?:_|$)")
 _LOCK_TIMEOUT_S = 10.0
 _STALE_LOCK_S = 120.0
@@ -65,39 +64,86 @@ def atomic_write_json(path: Path, payload: dict, *, overwrite: bool = True) -> N
 
 
 @contextmanager
+def _file_lock(path: Path):
+    """OS-owned lock: process death releases it without a stale timeout."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            if path.stat().st_size == 0:
+                handle.write(b"\0")
+                handle.flush()
+
+            def acquire():
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+
+            def release():
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+        else:
+            import fcntl
+
+            def acquire():
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            def release():
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + _LOCK_TIMEOUT_S
+        while True:
+            try:
+                acquire()
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for version lock at {path}")
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            release()
+
+
+@contextmanager
 def _version_lock(project_dir: Path):
-    """Portable lock directory protecting reservation and manifest updates."""
+    """Serialize current writers, retaining the directory bridge for older CLIs."""
     project_dir = Path(project_dir)
     state_dir = project_dir / ".agentcad"
     state_dir.mkdir(parents=True, exist_ok=True)
     lock_dir = state_dir / "version.lock"
-    deadline = time.monotonic() + _LOCK_TIMEOUT_S
-
-    while True:
-        try:
-            lock_dir.mkdir()
-            break
-        except FileExistsError:
-            try:
-                age = time.time() - lock_dir.stat().st_mtime
-                if age > _STALE_LOCK_S:
-                    lock_dir.rmdir()
-                    continue
-            except (FileNotFoundError, OSError):
-                pass
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"Timed out waiting for version lock at {lock_dir}"
-                )
-            time.sleep(0.01)
-
-    try:
-        yield
-    finally:
-        try:
+    marker = lock_dir / "os-owned"
+    with _file_lock(state_dir / "version-write.lock"):
+        # Having the OS lock proves no current writer owns this marker. An
+        # older writer uses an empty directory and follows the original rules.
+        if marker.is_file():
+            marker.unlink()
             lock_dir.rmdir()
-        except FileNotFoundError:
-            pass
+        deadline = time.monotonic() + _LOCK_TIMEOUT_S
+        while True:
+            try:
+                lock_dir.mkdir()
+                break
+            except FileExistsError:
+                try:
+                    if time.time() - lock_dir.stat().st_mtime > _STALE_LOCK_S:
+                        lock_dir.rmdir()
+                        continue
+                except (FileNotFoundError, OSError):
+                    pass
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Timed out waiting for version lock at {lock_dir}"
+                    )
+                time.sleep(0.01)
+        try:
+            marker.write_text(str(os.getpid()))
+            yield
+        finally:
+            marker.unlink(missing_ok=True)
+            lock_dir.rmdir()
 
 
 def _used_version_numbers(project_dir: Path, manifest: dict) -> set[int]:
@@ -125,6 +171,7 @@ def reserve_version(
     project_dir = Path(project_dir)
     manifest_path = project_dir / "agentcad.json"
     from agentcad.project import validate_version_label
+
     validate_version_label(label)
     with _version_lock(project_dir):
         manifest = json.loads(manifest_path.read_text())
@@ -149,27 +196,50 @@ def commit_version(
     """Atomically write metadata, then merge the reservation into the manifest."""
     project_dir = reservation.path.parent
     manifest_path = project_dir / "agentcad.json"
+    revision_id = (meta.get("change") or {}).get("revision_id")
+    if advance_current and revision_id:
+        from agentcad.change_promotion import PromotionRefused, PromotionStore
+
+        promotions = PromotionStore(project_dir)
+        request_key = "auto:" + revision_id
+        promotions.begin(revision_id, request_key=request_key)
+        result = promotions.commit(request_key, reservation, meta, manifest_entry)
+        if result["outcome"] != "promoted":
+            raise PromotionRefused(result)
+        return promotions._manifest()
     with _version_lock(project_dir):
         manifest = json.loads(manifest_path.read_text())
-        conflict = next((
-            entry for entry in manifest.get("versions", [])
-            if entry.get("version") == reservation.number
-            and str(entry.get("path", "")).rstrip("/") != reservation.dir_name
-        ), None)
-        if conflict is not None:
-            raise VersionConflictError(
-                reservation.number,
-                str(conflict.get("path", "")),
-            )
+        _merge_version_entry(
+            manifest, reservation, manifest_entry, advance_current=advance_current
+        )
         atomic_write_json(reservation.path / "meta.json", meta)
-        versions = [
-            entry for entry in manifest.get("versions", [])
-            if entry.get("version") != reservation.number
-        ]
-        versions.append(manifest_entry)
-        versions.sort(key=lambda entry: entry.get("version", 0))
-        manifest["versions"] = versions
-        if advance_current:
-            manifest["current"] = reservation.label
         atomic_write_json(manifest_path, manifest)
     return manifest
+
+
+def _merge_version_entry(manifest, reservation, manifest_entry, *, advance_current):
+    """Merge into an in-memory manifest while the caller holds the root lock."""
+    conflict = next(
+        (
+            entry
+            for entry in manifest.get("versions", [])
+            if entry.get("version") == reservation.number
+            and str(entry.get("path", "")).rstrip("/") != reservation.dir_name
+        ),
+        None,
+    )
+    if conflict is not None:
+        raise VersionConflictError(
+            reservation.number,
+            str(conflict.get("path", "")),
+        )
+    versions = [
+        entry
+        for entry in manifest.get("versions", [])
+        if entry.get("version") != reservation.number
+    ]
+    versions.append(manifest_entry)
+    versions.sort(key=lambda entry: entry.get("version", 0))
+    manifest["versions"] = versions
+    if advance_current:
+        manifest["current"] = reservation.label

@@ -17,7 +17,7 @@ show_object(rib, id="rib", options={"color":"coral"})
 
 
 @pytest.mark.browser
-def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, isolated_dir):
+def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, isolated_dir, monkeypatch):
     if os.environ.get("AGENTCAD_BROWSER_SMOKE") != "1":
         pytest.skip("set AGENTCAD_BROWSER_SMOKE=1")
     from playwright.sync_api import sync_playwright
@@ -76,6 +76,29 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
                     assert page.locator("iframe").count() == 1
                     assert page.locator("#snapshot").get_attribute("href") == snapshot
                     assert frame.evaluate("window.agentcadViewer.debugState().ready")
+            # A passing but superseded build is an operation conflict. Its
+            # retained geometry must not replace the accepted iframe either.
+            from agentcad.change_promotion import PromotionStore
+            original_commit = PromotionStore.commit
+            def supersede(self, *args, **kwargs):
+                self.changes.begin(command="run", label="newer", source=SCRIPT.encode(),
+                                   source_name="model.py", model={"runtime": "build123d"})
+                return original_commit(self, *args, **kwargs)
+            monkeypatch.setattr(PromotionStore, "commit", supersede)
+            requirements.write_text(json.dumps({"schema_version": 1, "checks": [{
+                "check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 60,
+            }], "actor": "test", "rationale": "Exercise superseded valid geometry."}))
+            refused = runner.invoke(cli, ["run", str(script), "--label", "selection-conflict",
+                                          "--checks", str(requirements), "--no-preview", "--no-view",
+                                          "--no-diff", "--no-daemon"])
+            assert refused.exit_code == 1, refused.output
+            assert json.loads(refused.stdout)["status"] == "not_promoted"
+            page.wait_for_function("document.querySelector('#status').textContent.includes('selection-conflict')")
+            assert "not accepted; selection or evidence changed" in page.locator("#status").inner_text()
+            assert "Showing v1 · accepted" in page.locator("#status").inner_text()
+            assert element.evaluate("element => element.isConnected")
+            assert page.locator("iframe").count() == 1
+            assert page.locator("#snapshot").get_attribute("href") == snapshot
             assert not errors
         finally:
             browser.close()

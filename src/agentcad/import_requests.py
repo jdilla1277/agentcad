@@ -169,6 +169,13 @@ class ImportRequest:
                     raise ProjectError("import_request_unavailable", "Committed version metadata does not match its import request.",
                                        "Restore the original metadata; no import was started.")
                 result = deepcopy(meta)
+                if meta.get("promotion_request_key"):
+                    # Core metadata precedes the authoritative acceptance
+                    # write. A stopped response can recover the exact terminal
+                    # receipt from the manifest without moving either selection.
+                    from agentcad.change_promotion import PromotionStore
+                    result.update(PromotionStore(self.layout.build_root).response_fields(
+                        meta["promotion_request_key"]))
                 interrupted = False
                 for artifact in result.get("artifacts", {}).values():
                     if artifact.get("status") == "pending":

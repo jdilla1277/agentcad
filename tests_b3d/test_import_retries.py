@@ -91,6 +91,77 @@ def test_lost_response_replays_without_new_version_or_side_effects(runner, isola
     assert geometry.manifest_id == replay["geometry_manifest"]["manifest_id"]
 
 
+@pytest.mark.parametrize("stop_after", ["core", "optional_metadata"])
+@pytest.mark.parametrize("legacy_baseline", [False, True])
+def test_interrupted_import_recovers_original_promotion_without_moving_selection(
+    runner, isolated_dir, monkeypatch, stop_after, legacy_baseline
+):
+    import agentcad.versioning as versioning
+    from agentcad.change_promotion import PromotionStore
+    from agentcad.core_build import ArtifactLifecycle
+
+    if legacy_baseline:
+        initialized = runner.invoke(cli, ["init", "--name", "legacy"])
+        assert initialized.exit_code == 0, initialized.output
+        legacy = isolated_dir / "v1_legacy"
+        legacy.mkdir()
+        (legacy / "output.step").write_bytes(REAL_SOURCE.read_bytes())
+        manifest_path = isolated_dir / "agentcad.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update(current="legacy", versions=[{
+            "version": 1, "label": "legacy", "status": "success", "path": "v1_legacy/",
+        }])
+        versioning.atomic_write_json(manifest_path, manifest)
+    baseline_count = int(legacy_baseline)
+
+    original = versioning.commit_version
+    original_persist = ArtifactLifecycle.persist
+    def stop_after_core(*args, **kwargs):
+        original(*args, **kwargs)
+        raise KeyboardInterrupt("stopped after acceptance, before optional artifacts/response")
+    def stop_after_optional_metadata(self):
+        original_persist(self)
+        raise KeyboardInterrupt("stopped after the first optional metadata write")
+    with monkeypatch.context() as patch:
+        if stop_after == "core":
+            patch.setattr(versioning, "commit_version", stop_after_core)
+        else:
+            patch.setattr(ArtifactLifecycle, "persist", stop_after_optional_metadata)
+        first = runner.invoke(cli, _args())
+    assert first.exit_code != 0 and first.stdout == ""
+    assert len(_history(isolated_dir)) == baseline_count + 1
+    promotions = PromotionStore(isolated_dir)
+    revision = promotions.accepted("cad")["revision_id"]
+    operation = promotions.read("auto:" + revision)
+    receipt = operation["result"]
+    # A newer accepted import must remain selected while the old one replays.
+    newer, second = _invoke(runner, _args(key="newer"))
+    assert newer.exit_code == 0, newer.output
+    newer_step = isolated_dir / second["outputs"]["step"]
+    newer_step_bytes = newer_step.read_bytes()
+    manifest_before = (isolated_dir / "agentcad.json").read_bytes()
+    working = isolated_dir / ".agentcad/changes/working.json"
+    selection_before = working.read_bytes()
+    result, replay = _invoke(runner, _args())
+    assert result.exit_code == 0, result.output
+    assert replay["promotion"] == receipt
+    assert replay["idempotency"]["replayed"] is True
+    assert replay["current_advanced"] is True  # The original acceptance decision.
+    assert replay["accepted_version_before"] == operation["legacy_before"]["version"]
+    assert replay["accepted_version_after"] == operation["accepted_version"]
+    assert replay["accepted_version_after"]["version"] == baseline_count + 1
+    if legacy_baseline:
+        assert receipt["promoted_revision_before"] is None
+        assert replay["accepted_version_before"]["version"] == 1
+    original_meta = isolated_dir / operation["accepted_version"]["path"] / "meta.json"
+    assert json.loads(original_meta.read_text())["promotion_request_key"] == receipt["request_key"]
+    assert (isolated_dir / "agentcad.json").read_bytes() == manifest_before
+    assert working.read_bytes() == selection_before
+    assert len(_history(isolated_dir)) == baseline_count + 2
+    assert len(_attempts(isolated_dir)) == 2
+    assert newer_step.read_bytes() == newer_step_bytes
+
+
 @pytest.mark.parametrize("change", ["bytes", "filename", "label", "profile", "runtime", "images", "text", "diff", "view"])
 def test_conflicting_key_never_changes_history(runner, isolated_dir, change):
     source = isolated_dir / "supplier.step"
