@@ -1,16 +1,51 @@
 import json
+import subprocess
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 
+def test_version_lock_is_released_when_its_process_is_killed(tmp_path):
+    from agentcad.versioning import _version_lock
+
+    script = """
+import sys, time
+from pathlib import Path
+from agentcad.versioning import _version_lock
+with _version_lock(Path(sys.argv[1])):
+    print('locked', flush=True)
+    time.sleep(120)
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path)], stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert child.stdout.readline().strip() == "locked"
+        child.kill()
+        child.wait(timeout=10)
+        started = time.monotonic()
+        with _version_lock(tmp_path):
+            assert time.monotonic() - started < 2
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+        child.stdout.close()
+
+
 def test_concurrent_reservations_get_unique_numbers_and_directories(tmp_path):
     from agentcad.versioning import reserve_version
 
-    (tmp_path / "agentcad.json").write_text(json.dumps({
-        "name": "concurrent",
-        "versions": [],
-    }))
+    (tmp_path / "agentcad.json").write_text(
+        json.dumps(
+            {
+                "name": "concurrent",
+                "versions": [],
+            }
+        )
+    )
 
     def reserve(index):
         return reserve_version(tmp_path, f"part-{index}")
@@ -43,14 +78,15 @@ def test_concurrent_core_commits_merge_manifest_entries(tmp_path):
     from agentcad.versioning import commit_version, reserve_version
 
     manifest_path = tmp_path / "agentcad.json"
-    manifest_path.write_text(json.dumps({
-        "name": "concurrent",
-        "versions": [],
-    }))
-    reservations = [
-        reserve_version(tmp_path, f"part-{index}")
-        for index in range(8)
-    ]
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "name": "concurrent",
+                "versions": [],
+            }
+        )
+    )
+    reservations = [reserve_version(tmp_path, f"part-{index}") for index in range(8)]
 
     def commit(reservation):
         meta = {
@@ -78,8 +114,7 @@ def test_concurrent_core_commits_merge_manifest_entries(tmp_path):
     assert [entry["version"] for entry in manifest["versions"]] == list(range(1, 9))
     assert len({entry["path"] for entry in manifest["versions"]}) == 8
     assert all(
-        json.loads((reservation.path / "meta.json").read_text())["status"]
-        == "success"
+        json.loads((reservation.path / "meta.json").read_text())["status"] == "success"
         for reservation in reservations
     )
 
@@ -92,15 +127,21 @@ def test_commit_version_conflict_does_not_overwrite_metadata(tmp_path):
     )
 
     manifest_path = tmp_path / "agentcad.json"
-    manifest_path.write_text(json.dumps({
-        "name": "conflict",
-        "versions": [{
-            "version": 1,
-            "label": "registered",
-            "status": "success",
-            "path": "v1_registered/",
-        }],
-    }))
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "name": "conflict",
+                "versions": [
+                    {
+                        "version": 1,
+                        "label": "registered",
+                        "status": "success",
+                        "path": "v1_registered/",
+                    }
+                ],
+            }
+        )
+    )
     orphan = tmp_path / "v1_orphan"
     orphan.mkdir()
     reservation = VersionReservation(1, "orphan", "v1_orphan", orphan)

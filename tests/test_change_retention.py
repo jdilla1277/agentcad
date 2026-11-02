@@ -7,6 +7,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,133 @@ def run(runner, label="bracket", **kwargs):
         args += ["--build-dir", str(kwargs["build_dir"])]
     result = runner.invoke(cli, args)
     return result, json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("command", ["run", "import"])
+def test_success_commits_durable_promotion_receipt(runner, isolated_dir, command):
+    from agentcad.change_promotion import PromotionStore
+
+    init(runner)
+    (isolated_dir / "script.py").write_text(BRACKET)
+    result, baseline = run(runner, "accepted")
+    assert result.exit_code == 0, result.output
+    if command == "run":
+        (isolated_dir / "script.py").write_text(BRACKET.replace("60, 30, 6", "80, 30, 6"))
+        result, payload = run(runner, "longer")
+    else:
+        result = runner.invoke(cli, ["import", baseline["outputs"]["step"], "--label", "imported",
+                                     "--no-view", "--no-diff", "--no-daemon"])
+        payload = json.loads(result.stdout)
+    assert result.exit_code == 0, result.output
+    receipt = payload["promotion"]
+    assert receipt["outcome"] == "promoted"
+    assert receipt["promoted_revision_before"] == baseline["change"]["revision_id"]
+    assert receipt["promoted_revision_after"] == payload["change"]["revision_id"]
+    assert PromotionStore(isolated_dir).read(receipt["request_key"])["result"] == receipt
+    assert payload["current_advanced"] is True
+    assert Path(payload["outputs"]["step"]).read_bytes() == Path(payload["change"]["geometry"]).read_bytes()
+
+
+def test_late_build_cannot_replace_a_newer_working_selection(runner, isolated_dir, monkeypatch):
+    from agentcad.change_promotion import PromotionStore
+
+    init(runner)
+    (isolated_dir / "script.py").write_text(BRACKET)
+    result, baseline = run(runner, "accepted")
+    assert result.exit_code == 0, result.output
+    before = (isolated_dir / baseline["outputs"]["step"]).read_bytes()
+    original = PromotionStore.commit
+    def supersede(self, *args, **kwargs):
+        self.changes.begin(command="run", label="newer", source=BRACKET.encode(), source_name="script.py",
+                           model={"runtime": "build123d"})
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(PromotionStore, "commit", supersede)
+    (isolated_dir / "script.py").write_text(BRACKET.replace("60, 30, 6", "80, 30, 6"))
+    result, payload = run(runner, "late")
+    assert result.exit_code == 1, result.output
+    assert payload["status"] == "not_promoted"
+    assert payload["promotion"]["reason_codes"] == ["selection_changed"]
+    assert payload["outputs"]["step"] is None
+    assert payload["current_advanced"] is False
+    assert Path(payload["change"]["geometry"]).is_file()
+    manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+    assert manifest["current"] == "accepted"
+    assert len(manifest["versions"]) == 1
+    assert Path(baseline["outputs"]["step"]).read_bytes() == before
+
+
+def test_overlapping_processes_keep_the_newer_accepted_bracket(runner, isolated_dir):
+    init(runner)
+    slow = isolated_dir / "slow.py"
+    slow.write_text("""import time
+from pathlib import Path
+Path('ready').touch()
+while not Path('continue').exists():
+    time.sleep(0.01)
+""" + BRACKET.replace("60, 30, 6", "80, 30, 6"))
+    child = subprocess.Popen([sys.executable, "-m", "agentcad", "run", str(slow),
+                              "--label", "slow", *QUIET], cwd=isolated_dir,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 30
+        while not (isolated_dir / "ready").exists():
+            assert child.poll() is None, child.communicate()
+            assert time.monotonic() < deadline, "The slow build did not reach its barrier."
+            time.sleep(0.02)
+        (isolated_dir / "script.py").write_text(BRACKET.replace("60, 30, 6", "100, 30, 6"))
+        result, newer = run(runner, "newer")
+        assert result.exit_code == 0, result.output
+        accepted_bytes = Path(newer["outputs"]["step"]).read_bytes()
+        (isolated_dir / "continue").touch()
+        stdout, stderr = child.communicate(timeout=30)
+        assert child.returncode == 1, (stdout, stderr)
+        older = json.loads(stdout)
+        assert older["status"] == "not_promoted"
+        assert "selection_changed" in older["promotion"]["reason_codes"]
+        assert older["promotion"]["validation_state"] == "valid"
+        assert older["outputs"]["step"] is None
+        assert Path(older["change"]["geometry"]).is_file()
+        manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+        assert manifest["current"] == "newer"
+        assert len(manifest["versions"]) == 1
+        assert Path(newer["outputs"]["step"]).read_bytes() == accepted_bytes
+    finally:
+        (isolated_dir / "continue").touch()
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=10)
+
+
+def test_recover_cannot_accept_a_superseded_interrupted_promotion(runner, isolated_dir, monkeypatch):
+    import agentcad.change_promotion as module
+
+    init(runner)
+    (isolated_dir / "script.py").write_text(BRACKET)
+    result, baseline = run(runner, "accepted")
+    assert result.exit_code == 0, result.output
+    original = module.atomic_write_json
+    def interrupt_acceptance(path, payload, **kwargs):
+        if path.name == "agentcad.json" and payload.get("current") == "interrupted":
+            raise OSError("interrupted before acceptance")
+        return original(path, payload, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "atomic_write_json", interrupt_acceptance)
+        result, failed = run(runner, "interrupted")
+    assert result.exit_code == 1, result.output
+    assert failed["promotion"]["lifecycle"] == "pending"
+    assert failed["current_advanced"] is False
+    assert (isolated_dir / "v2_interrupted/meta.json").exists()
+    (isolated_dir / "script.py").write_text(BRACKET.replace("60, 30, 6", "100, 30, 6"))
+    result, newer = run(runner, "newer")
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(cli, ["recover", "v2_interrupted", "--make-current"])
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "not_promoted"
+    assert "selection_changed" in payload["promotion"]["reason_codes"]
+    manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+    assert manifest["current"] == "newer"
+    assert len(manifest["versions"]) == 2
 
 
 @pytest.mark.parametrize("command", ["run", "import"])

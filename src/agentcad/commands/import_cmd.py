@@ -363,7 +363,7 @@ def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
     from agentcad.change_retention import current_attempt
     attempt = current_attempt()
     diagnostic = None
-    if attempt and attempt._read("request.json", "attempt_request").get("check_policy"):
+    if attempt:
         diagnostic = attempt.directory / "import-normalized.step"
         from agentcad.change_retention import capture_geometry
         try:
@@ -487,14 +487,20 @@ def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
     except Exception:
         shutil.rmtree(version_dir, ignore_errors=True)
         raise
-    commit_version(reservation, meta, {
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "source": "import",
-        "path": f"{dir_name}/",
-        **({"import_request": meta["import_request"]} if "import_request" in meta else {}),
-    }, advance_current=True)
+    from agentcad.change_promotion import PromotionRefused
+    try:
+        commit_version(reservation, meta, {
+            "version": version_num,
+            "label": label,
+            "status": "success",
+            "source": "import",
+            "path": f"{dir_name}/",
+            **({"import_request": meta["import_request"]} if "import_request" in meta else {}),
+        }, advance_current=True)
+    except PromotionRefused as exc:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        _emit({**exc.payload("import"), "label": label}, exit_code=1)
+        return
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     if assembly_warning:
         lifecycle.add_warning(assembly_warning)
