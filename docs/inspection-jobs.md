@@ -43,7 +43,9 @@ agentcad inspect v1_part/output.step --report --job inspection_RETURNED_ID --job
 Copy the actual `inspection_job.actions` commands. They contain the complete
 ID, absolute STEP path and selected build root, so they work from a project
 subdirectory too. `--job` uses the saved image configuration; omit
-`--no-images` and `--max-images`. To request a different image configuration,
+`--no-images` and `--max-images`. Controls also reopen standalone jobs beside
+an external baseline, keeping their original output location when the returned
+command makes the build root explicit. To request a different image configuration,
 start a report without `--job`. `--text-budget` changes report delivery without
 creating another job. Plain `inspect --report` retains its existing flat,
 synchronous response and can regenerate missing derived image caches.

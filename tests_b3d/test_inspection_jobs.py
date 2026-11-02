@@ -411,3 +411,87 @@ def test_missing_request_is_not_silently_reissued(isolated_dir):
     (job.directory / "request.json").unlink()
     with pytest.raises(JobError, match="request is missing"):
         InspectionJob.prepare(step, isolated_dir, layout, images=False, max_images=2)
+
+
+@pytest.mark.parametrize("real", [False, True])
+@pytest.mark.parametrize("configured", [False, True])
+def test_external_baseline_returned_actions_keep_original_job_root(runner, isolated_dir, monkeypatch, real, configured):
+    caller, source = isolated_dir / "caller A", isolated_dir / "geometry B"
+    caller.mkdir()
+    source.mkdir()
+    step, saved = _baseline(source, REAL if real else None)
+    monkeypatch.chdir(caller)
+    args = ["inspect", str(step), "--report", "--no-images", "--wait-timeout", "30"]
+    if configured:
+        args.extend(["--build-dir", str(caller)])
+    invoked, first = _invoke(runner, args)
+    assert invoked.exit_code == 0, first
+    job = first["inspection_job"]
+    request_path = Path(job["request"])
+    expected_root = request_path.parents[3]
+    assert expected_root != source if configured else expected_root == source
+    protected = {p: p.read_bytes() for p in [step, step.with_name("geometry_manifest.json"), request_path]}
+    protected.update({p: p.read_bytes() for p in expected_root.joinpath("inspection").glob("*.json")})
+
+    def unexpected(*a, **kw):
+        pytest.fail("A completed external job repeated analysis")
+
+    monkeypatch.setattr("agentcad.inspection_report._analysis", unexpected)
+    for action in ("status", "wait", "cancel", "resume"):
+        command = shlex.split(job["actions"][action])
+        assert command[command.index("--build-dir") + 1] == str(caller)
+        result, payload = _invoke(runner, command[1:])
+        assert result.exit_code == 0, payload
+        assert payload["inspection_job"]["id"] == job["id"]
+        assert payload["inspection_job"]["request"] == str(request_path)
+        assert payload["inspection_job"]["status"] == "complete"
+        if action in {"wait", "resume"}:
+            assert Path(payload["inspection"]["inventory"]["image_root"]) == expected_root / "inspection"
+            assert payload["inspection"]["manifest_id"] == saved["manifest_id"]
+        else:
+            assert "inspection" not in payload
+    # A registered MCP call uses that same explicit root/location too.
+    response = asyncio.run(server.mcp.call_tool("inspect", {
+        "file": str(step), "cwd": str(caller), "report": True,
+        "job_id": job["id"], "job_action": "wait", "build_dir": str(caller),
+    }))
+    assert not isinstance(response, CallToolResult)  # Image-free job.
+    mcp_payload = json.loads(response[0].text)
+    assert mcp_payload["_exit_code"] == 0
+    assert mcp_payload["inspection_job"]["request"] == str(request_path)
+    assert mcp_payload["inspection_job"]["id"] == job["id"]
+    assert {p: p.read_bytes() for p in protected} == protected
+    assert len(list(isolated_dir.rglob("request.json"))) == 1
+
+
+def test_stopped_external_job_actions_resume_and_preserve_bindings(runner, isolated_dir, monkeypatch):
+    caller, source = isolated_dir / "caller", isolated_dir / "external"
+    caller.mkdir()
+    source.mkdir()
+    step, _ = _baseline(source, REAL)
+    monkeypatch.chdir(caller)
+    layout = ProjectLayout(caller, caller)
+    job = InspectionJob.prepare(step, source, layout, images=False)
+    actions = job.status()["actions"]
+    protected = {p: p.read_bytes() for p in [step, step.with_name("geometry_manifest.json"), job.directory / "request.json"]}
+    for action, state, exit_code in [("status", "stopped", 0), ("wait", "stopped", 1),
+                                     ("cancel", "canceled", 0), ("resume", "complete", 0)]:
+        result, payload = _invoke(runner, shlex.split(actions[action])[1:])
+        assert result.exit_code == exit_code, payload
+        assert payload["inspection_job"]["status"] == state
+        assert payload["inspection_job"]["id"] == job.job_id
+    assert {p: p.read_bytes() for p in protected} == protected
+    assert len(list(isolated_dir.rglob("request.json"))) == 1
+    absent_derived = caller / "derived" / "inspect" / "missing"
+    # The standalone fallback must still reject another source project/build
+    # root or a different baseline, even if it can find this valid request.
+    with pytest.raises(JobError, match="another baseline or project/build root"):
+        InspectionJob.open(step, absent_derived, ProjectLayout(source, source), job.job_id)
+    with pytest.raises(JobError, match="another baseline or project/build root"):
+        InspectionJob.open(step.with_name("different.step"), absent_derived, layout, job.job_id)
+    # A valid copy in an incorrect output location cannot override the original.
+    misplaced = absent_derived / "inspection" / "jobs" / job.job_id
+    misplaced.mkdir(parents=True)
+    (misplaced / "request.json").write_bytes((job.directory / "request.json").read_bytes())
+    with pytest.raises(JobError, match="another baseline or project/build root"):
+        InspectionJob.open(step, absent_derived, layout, job.job_id)

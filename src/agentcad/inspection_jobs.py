@@ -117,9 +117,20 @@ class InspectionJob:
     def open(cls, step, output_root, layout, job_id):
         if not _JOB.fullmatch(job_id):
             raise JobError("Use the inspection job ID returned by import or inspect --report.")
-        job = cls(Path(output_root) / "inspection" / "jobs" / job_id, job_id)
+        # Standalone reports live beside the baseline. Returned actions make
+        # the build root explicit, which can change derived_dir for external
+        # inputs. Check that original location too, without moving the job.
+        roots = dict.fromkeys((Path(output_root).resolve(), Path(step).resolve().parent))
+        for root in roots:
+            directory = root / "inspection" / "jobs" / job_id
+            if directory.exists():
+                break
+        else:
+            directory = Path(output_root) / "inspection" / "jobs" / job_id
+            root = Path(output_root).resolve()
+        job = cls(directory, job_id)
         identity = job.request["identity"]
-        if (identity["step"] != str(Path(step).resolve()) or identity["output_root"] != str(Path(output_root).resolve())
+        if (identity["step"] != str(Path(step).resolve()) or identity["output_root"] != str(root)
                 or identity["project_root"] != str(layout.project_root) or identity["build_root"] != str(layout.build_root)):
             raise JobError("Inspection job belongs to another baseline or project/build root.")
         return job
