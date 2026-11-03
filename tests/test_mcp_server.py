@@ -141,6 +141,7 @@ def test_import_cad_forwards_cli_controls(monkeypatch):
         report=False, report_images=False, max_images=2, text_budget=1500,
         build_dir="artifacts with spaces", idempotency_key="supplier:1",
         checks_file="requirements with spaces.json", defer_checks=True,
+        inspection_wait_timeout=0.5,
     )
     assert result["status"] == "success"
     assert calls == [([
@@ -148,6 +149,7 @@ def test_import_cad_forwards_cli_controls(monkeypatch):
         "--validation-profile", "kernel", "--no-view", "--no-diff", "--no-report",
         "--no-inspection-image", "--max-images", "2", "--text-budget", "1500",
         "--checks", "requirements with spaces.json", "--defer-checks",
+        "--inspection-wait-timeout", "0.5",
         "--build-dir", "artifacts with spaces",
     ], "/tmp/project")]
 

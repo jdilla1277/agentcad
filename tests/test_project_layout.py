@@ -592,3 +592,23 @@ def test_help_and_installed_guidance_explain_build_roots(runner, isolated_dir):
         assert "agentcad docs artifacts" in contents
     for section in ("quickstart", "commands", "editing", "schema"):
         assert "docs artifacts" in invoke(runner, "docs", section)["content"]
+
+
+def test_absolute_build_root_recovers_unmarked_source_owner_from_child(isolated_dir):
+    from agentcad.project import ProjectError, resolve_project
+
+    build = isolated_dir / "CAD artifacts"
+    build.mkdir()
+    (build / "agentcad.json").write_text(json.dumps({"project_root": str(isolated_dir), "versions": []}))
+    child = isolated_dir / "caller"
+    child.mkdir()
+    layout = resolve_project(str(build), start=child)
+    assert layout.project_root == isolated_dir
+    assert layout.build_root == build
+    assert layout.read_manifest()["project_root"] == str(isolated_dir)
+    # An independently initialized child cannot adopt its parent's history.
+    (child / "agentcad.json").write_text(json.dumps({"versions": []}))
+    other = resolve_project(str(build), start=child)
+    assert other.project_root == child
+    with pytest.raises(ProjectError, match="belongs to source project"):
+        other.read_manifest()
