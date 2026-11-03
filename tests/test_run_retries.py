@@ -236,6 +236,73 @@ def test_requirements_content_is_bound_and_staged_replay_stays_staged(
     )
 
 
+@pytest.mark.parametrize("runtime,source", SOURCES)
+@pytest.mark.parametrize("lose_cache", [False, True])
+def test_deferred_run_recovery_keeps_original_checks_after_completion(
+    runner, isolated_dir, monkeypatch, runtime, source, lose_cache
+):
+    import agentcad.run_requests as requests
+
+    setup(runner, isolated_dir, runtime, source)
+    checks = {
+        "schema_version": 1,
+        "checks": [
+            {"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 60}
+        ],
+    }
+    (isolated_dir / "checks.json").write_text(json.dumps(checks))
+    invocation = args("deferred:1", "--checks", "checks.json", "--defer-checks")
+    original_save = requests._save
+    original_response = {}
+
+    def stop_before_cache(path, body):
+        if path.name == "response.json":
+            original_response.update(body["payload"])
+            raise KeyboardInterrupt("lost before response cache")
+        return original_save(path, body)
+
+    if lose_cache:
+        with monkeypatch.context() as patch:
+            patch.setattr(requests, "_save", stop_before_cache)
+            stopped = runner.invoke(cli, invocation)
+        assert stopped.exit_code != 0 and not stopped.stdout
+        assert (
+            not Path(original_response["idempotency"]["request"])
+            .with_name("response.json")
+            .exists()
+        )
+    else:
+        original_response = invoke(runner, invocation, 1)
+    revision = original_response["change"]["revision_id"]
+    original_checks = original_response["change"]["validation_checks"]
+    assert original_checks["validation_state"] == "pending"
+    before_completion = status(runner, "deferred:1", 1)
+    assert before_completion["change"]["validation_checks"] == original_checks
+    completed = invoke(runner, ["check-spec", revision, "--complete"])
+    assert completed["validation_state"] == "valid"
+    protected = [
+        isolated_dir / "agentcad.json",
+        isolated_dir / ".agentcad/changes/working.json",
+    ]
+    protected.extend(Path(original_response["change"]["request"]).parent.glob("*.json"))
+    before = {p: p.read_bytes() for p in protected}
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "agentcad.commands.run._run_impl", lambda *a, **kw: pytest.fail("reran CAD")
+        )
+        for recovered in (
+            status(runner, "deferred:1", 1),
+            invoke(runner, invocation, 1),
+            status(runner, "deferred:1", 1),
+        ):
+            assert recovered["status"] == "checks_pending"
+            assert recovered["change"]["validation_checks"] == original_checks
+            assert recovered["change"] == original_response["change"]
+            assert recovered["current_advanced"] is False
+    assert {p: p.read_bytes() for p in protected} == before
+    assert invoke(runner, ["check-spec", revision])["validation_state"] == "valid"
+
+
 def test_execution_uses_the_source_saved_before_work_begins(
     runner, isolated_dir, monkeypatch
 ):

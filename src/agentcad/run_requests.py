@@ -121,7 +121,10 @@ class RunRequest:
             attempt = Attempt(self.store, binding["revision_id"])
             saved = self.store.read(binding["revision_id"])
             if saved["outcome"]:
-                return {**saved["outcome"]["response"], "change": attempt.reference()}
+                return {
+                    **saved["outcome"]["response"],
+                    "change": attempt.reference(original_checks=True),
+                }
         tag = {"request_id": self.request_id, "fingerprint": self.fingerprint}
         for entry in self.layout.read_manifest().get("versions", []):
             if entry.get("run_request") != tag:
@@ -154,7 +157,7 @@ class RunRequest:
                 "Recovered the existing version. CAD and optional artifact work were not rerun."
             )
             if attempt:
-                result["change"] = attempt.reference()
+                result["change"] = attempt.reference(original_checks=True)
             return result
         result = {
             "command": "run",
@@ -166,7 +169,7 @@ class RunRequest:
             "outputs": {"step": None},
         }
         if attempt:
-            result["change"] = attempt.reference()
+            result["change"] = attempt.reference(original_checks=True)
         return result
 
     def _load_response(self):
