@@ -99,6 +99,18 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
             assert element.evaluate("element => element.isConnected")
             assert page.locator("iframe").count() == 1
             assert page.locator("#snapshot").get_attribute("href") == snapshot
+            monkeypatch.setattr(PromotionStore, "commit", original_commit)
+            staged = runner.invoke(cli, ["run", str(script), "--label", "staged-review", "--stage",
+                                         "--checks", str(requirements), "--no-preview", "--no-view", "--no-diff", "--no-daemon"])
+            assert staged.exit_code == 0, staged.output
+            revision = json.loads(staged.stdout)["change"]["revision_id"]
+            page.wait_for_function("document.querySelector('#status').textContent.includes('staged; checks passed')")
+            assert element.evaluate("element => element.isConnected")
+            promoted = runner.invoke(cli, ["promote", revision, "--idempotency-key", "human-reviewed"])
+            assert promoted.exit_code == 0, promoted.output
+            page.wait_for_function("document.querySelector('#status').textContent.includes('Accepted')")
+            assert "showing previous model" in page.locator("#status").inner_text()
+            assert element.evaluate("element => element.isConnected")
             assert not errors
         finally:
             browser.close()

@@ -13,6 +13,7 @@ import copy
 import hashlib
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agentcad import change_contract as contract
@@ -22,12 +23,15 @@ from agentcad.change_store import (
     ChangeStoreError,
     _digest,
     _sealed,
+    _write_bytes_once,
 )
 from agentcad.project import ProjectError
 from agentcad.versioning import (
     VersionReservation,
     _merge_version_entry,
     _version_lock,
+    _file_lock,
+    _reserve_version_unlocked,
     atomic_write_json,
 )
 
@@ -262,7 +266,11 @@ class PromotionStore:
             return copy.deepcopy(request)
 
     def commit(
-        self, request_key: str, reservation: VersionReservation, meta: dict, entry: dict
+        self,
+        request_key: str,
+        reservation: VersionReservation | None,
+        meta: dict,
+        entry: dict,
     ) -> dict:
         """Recheck pinned evidence/selection and atomically accept or refuse.
 
@@ -361,6 +369,10 @@ class PromotionStore:
                 operation_diagnostics=diagnostics,
             )
             if promote:
+                if reservation is None:
+                    reservation, meta, entry = self._materialize(
+                        manifest, state, operation, saved
+                    )
                 self._verify_materialized(reservation, meta, entry, saved)
                 _merge_version_entry(manifest, reservation, entry, advance_current=True)
                 # Metadata is not acceptance authority. If the process dies
@@ -380,6 +392,126 @@ class PromotionStore:
             self._write(manifest, state)
             meta["promotion"] = copy.deepcopy(result)
             return result
+
+    def promote(
+        self, revision_id: str, *, request_key: str, target_id: str = "cad"
+    ) -> dict:
+        """Accept retained bytes, resuming the same reservation after interruption."""
+        key = _key(request_key)
+        lock = self.changes._path(".agentcad/promotions/" + key + ".lock")
+        with _file_lock(lock):
+            known = self.find(request_key)
+            if known and (
+                known["request"]["candidate"]["revision_id"] != revision_id
+                or known["request"]["target_id"] != target_id
+            ):
+                raise ProjectError(
+                    "promotion_request_conflict",
+                    "This key already identifies a different revision or target.",
+                    "Use the original revision/target to replay, or a new key for another promotion.",
+                )
+            if known and known["result"]["kind"] == "promotion_receipt":
+                return {"promotion": known["result"], "replayed": True}
+            self.begin(revision_id, request_key=request_key, target_id=target_id)
+            result = self.commit(request_key, None, {}, {})
+            return {"promotion": result, "replayed": False}
+
+    def _materialize(self, manifest, state, operation, saved):
+        """Persist a reservation before copying bytes; never execute source CAD.
+
+        Only local verified file I/O runs under the root lock. Kernel work and
+        optional rendering do not run in this transaction.
+        """
+        attempt = Attempt(self.changes, saved["request"]["revision_id"])
+        plan = operation.get("materialization")
+        if plan is None:
+            reservation = _reserve_version_unlocked(
+                self.root, manifest, saved["request"]["label"]
+            )
+            prefix = reservation.dir_name + "/"
+            source_name = (
+                "script.py"
+                if saved["request"]["command"] == "run"
+                else "source" + attempt.source_path.suffix
+            )
+            from agentcad import __version__
+
+            core = attempt._read("core.json", "attempt_core")["response"]
+            meta = {
+                "command": "promote",
+                "status": "success",
+                "version": reservation.number,
+                "label": reservation.label,
+                "source": "script" if source_name == "script.py" else "import",
+                "runtime": saved["request"]["model"].get("runtime"),
+                "tool_version": __version__,
+                "created": datetime.now(timezone.utc).isoformat(),
+                "core": {"status": "success"},
+                "change": {"revision_id": attempt.revision_id},
+                "metrics": core.get("metrics"),
+                "validation": core.get("validation"),
+                "validation_profile": saved["request"]["model"].get(
+                    "validation_profile", "deliverable"
+                ),
+                "outputs": {
+                    "step": prefix + "output.step",
+                    "script" if source_name == "script.py" else "source": prefix
+                    + source_name,
+                },
+                "promotion_request_key": operation["request"]["request_key"],
+            }
+            # Use only model metadata sealed before staging returned; optional
+            # viewer/render artifacts and mutable working source are not inputs.
+            for field in ("parts", "groups", "params"):
+                if field in core:
+                    meta[field] = copy.deepcopy(core[field])
+            entry = {
+                "version": reservation.number,
+                "label": reservation.label,
+                "status": "success",
+                "source": meta["source"],
+                "path": prefix,
+            }
+            plan = {
+                "number": reservation.number,
+                "label": reservation.label,
+                "dir_name": reservation.dir_name,
+                "meta": meta,
+                "entry": entry,
+            }
+            operation["materialization"] = plan
+            # Interrupted requests must resume this directory, not reserve a
+            # second one. The accepted pointer and terminal result stay put.
+            self._write(manifest, state)
+        path = self.changes._path(plan["dir_name"])
+        if path.parent != self.root or not path.is_dir():
+            raise ChangeStoreError(
+                "The promotion's reserved directory is missing or invalid; restore it before retrying this key."
+            )
+        reservation = VersionReservation(
+            plan["number"], plan["label"], plan["dir_name"], path
+        )
+        meta, entry = copy.deepcopy(plan["meta"]), copy.deepcopy(plan["entry"])
+        # Mark unaccepted files before exposing output.step to legacy recovery.
+        atomic_write_json(
+            path / "meta.json",
+            {**meta, "status": "pending_promotion", "current_advanced": False},
+        )
+        source_name = (
+            "script.py"
+            if saved["request"]["command"] == "run"
+            else "source" + attempt.source_path.suffix
+        )
+        _write_bytes_once(
+            self.changes._path(plan["dir_name"] + "/" + source_name),
+            attempt.source_path.read_bytes(),
+        )
+        (artifact,) = saved["candidate"]["deliverables"]["cad"]
+        _write_bytes_once(
+            self.changes._path(plan["dir_name"] + "/output.step"),
+            attempt._verify(artifact).read_bytes(),
+        )
+        return reservation, meta, entry
 
     def _verify_materialized(self, reservation, meta, entry, saved):
         if (

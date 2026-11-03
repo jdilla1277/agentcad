@@ -92,6 +92,20 @@ def context():
         "agent_setup": agent_setup,
         **reviews,
     }
+    if (get_project().build_root / ".agentcad/changes/working.json").exists():
+        from agentcad.change_store import ChangeStore
+        try:
+            changes = ChangeStore(get_project().build_root)
+            saved = changes.read(changes.working_revision_id)
+            checked = changes.read_checks(changes.working_revision_id)
+            response["working_change"] = {
+                "revision_id": saved["request"]["revision_id"],
+                "promotion_mode": saved["request"]["promotion_mode"],
+                "status": saved["status"],
+                "validation_state": checked["receipt"]["validation_state"] if checked["receipt"] else "pending",
+            }
+        except (OSError, ValueError) as exc:
+            response["working_change"] = {"status": "unavailable", "message": str(exc)}
     if setup_actions:
         response["next_actions"] = setup_actions
     if reviews["open_review_comments"]:

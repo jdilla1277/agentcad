@@ -91,6 +91,9 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
                show_report, max_images, text_budget, idempotency_key, inspection_background, inspection_wait_timeout):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
+    With --stage, retain and check the candidate without accepting a baseline.
+    Inspect change.geometry or view its revision, then explicitly promote it.
+
     The imported file becomes v_N in the manifest with full provenance
     tracking. Every other command (run, diff, render, view) works on it
     just like a scripted version.
@@ -155,6 +158,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             semantic["requirements"] = ctx.meta["change_requirements"]
         if ctx.meta.get("change_defer_checks"):
             semantic["defer_checks"] = True
+        if ctx.meta.get("change_stage"):
+            semantic["stage"] = True
         ImportRequest(idempotency_key, file=file, semantic=semantic).run(execute)
         # Fork only after the request's execution lock has been released.
         maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
@@ -393,7 +398,7 @@ def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
                                  "validation": validation, "validation_profile": validation_profile}, diagnostic)
         if blocked:
             diagnostic.unlink(missing_ok=True)
-            _emit(blocked, exit_code=1)
+            _emit(blocked, exit_code=0 if blocked["status"] == "staged" else 1)
             return
 
     reservation = reserve_version(get_project().build_root, label)
