@@ -437,6 +437,11 @@ def test_process_death_never_reexecutes_or_reselects_older_work(
     assert lookup["status"] == replay["status"]
     if code:
         assert replay["reason"] == "run_interrupted"
+        assert (
+            lookup["idempotency"]["state"]
+            == replay["idempotency"]["state"]
+            == "interrupted"
+        )
         assert replay["outputs"]["step"] is None
     else:
         assert replay["version"] == 1

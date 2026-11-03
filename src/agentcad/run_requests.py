@@ -179,8 +179,11 @@ class RunRequest:
     def _emit_saved(self, payload, code, *, status_only=False, state=None):
         payload = deepcopy(payload)
         original = payload.get("idempotency", {})
+        recovered_state = (
+            "interrupted" if payload.get("reason") == "run_interrupted" else "recovered"
+        )
         payload["idempotency"] = {
-            **self.reference(state or original.get("state", "recovered")),
+            **self.reference(state or original.get("state", recovered_state)),
             "status_only": status_only,
         }
         payload["current_advanced"] = False
