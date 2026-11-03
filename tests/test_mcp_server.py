@@ -19,7 +19,7 @@ from agentcad.mcp.server import (
 
 EXPECTED_TOOLS = {
     "import_cad", "run", "render", "export", "measure", "inspect", "check_spec",
-    "docs", "context", "recover", "diff", "view",
+    "docs", "context", "recover", "diff", "view", "promote",
 }
 
 
@@ -152,6 +152,20 @@ def test_import_cad_forwards_cli_controls(monkeypatch):
         "--inspection-wait-timeout", "0.5",
         "--build-dir", "artifacts with spaces",
     ], "/tmp/project")]
+
+
+@pytest.mark.parametrize("name,arguments,required", [
+    ("promote", {"cwd": "/tmp", "idempotency_key": "x", "unknown": True}, {"cwd", "idempotency_key"}),
+    ("run", {"cwd": "/tmp", "script": "part.py", "staged": True}, {"cwd", "script"}),
+])
+def test_acceptance_tool_schema_rejects_unknown_arguments_before_work(monkeypatch, name, arguments, required):
+    import asyncio
+    tool = next(t for t in asyncio.run(mcp.list_tools()) if t.name == name)
+    assert tool.inputSchema["additionalProperties"] is False
+    assert set(tool.inputSchema["required"]) == required
+    monkeypatch.setattr(server, "_invoke", lambda *a, **k: pytest.fail("Invalid arguments started promotion"))
+    with pytest.raises(ValueError, match=f"Invalid {name} arguments"):
+        asyncio.run(mcp.call_tool(name, arguments))
 
 
 def test_import_cad_schema_is_closed_and_rejects_unknown_options(monkeypatch, tmp_path):

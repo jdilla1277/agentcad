@@ -22,14 +22,14 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name.startswith("cloud_") or tool.name == "import_cad":
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "run", "promote"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
     async def call_tool(self, name, arguments):
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name == "import_cad":
+        if name.startswith("cloud_") or name in {"import_cad", "run", "promote"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -38,7 +38,7 @@ class AgentCADMCP(FastMCP):
                     jsonschema.validate(arguments, {**tool.parameters, "additionalProperties": False})
                 except jsonschema.ValidationError:
                     message = ("Invalid cloud arguments. Use the tool's declared parameters; local-only options are unavailable."
-                               if name.startswith("cloud_") else "Invalid import_cad arguments. Use the tool's declared parameters.")
+                               if name.startswith("cloud_") else f"Invalid {name} arguments. Use the tool's declared parameters.")
                     raise ValueError(message) from None
         return await super().call_tool(name, arguments)
 
@@ -322,6 +322,7 @@ def import_cad(
     idempotency_key: str | None = None,
     checks_file: str | None = None,
     defer_checks: bool = False,
+    stage: bool = False,
     inspection_background: bool = False,
     inspection_wait_timeout: float | None = None,
 ) -> Any:
@@ -366,6 +367,10 @@ def import_cad(
     geometry with pending checks without advancing current. Failed checks also
     leave current unchanged; check_spec(file=revision_id, complete=True) records
     deferred evidence without changing current.
+    stage=True saves a checked candidate without accepting it, including when
+    checks pass. Inspect it with view(file=revision_id), then explicitly promote
+    it using a caller-known idempotency key. Staging prepares source/STEP/checks;
+    optional inspection media can be prepared later with inspect.
     """
     args = ["import", file]
     if idempotency_key is not None:
@@ -390,6 +395,8 @@ def import_cad(
         args.extend(["--checks", checks_file])
     if defer_checks:
         args.append("--defer-checks")
+    if stage:
+        args.append("--stage")
     if inspection_background:
         args.append("--inspection-background")
     if inspection_wait_timeout is not None:
@@ -415,6 +422,7 @@ def run(
     build_dir: str | None = None,
     checks_file: str | None = None,
     defer_checks: bool = False,
+    stage: bool = False,
 ) -> dict:
     """Execute a build123d script and produce a versioned STEP file with metrics.
 
@@ -435,6 +443,9 @@ def run(
         preview: Render a quick 256x256 iso preview. Default True — pass False to suppress.
         params: Parameter overrides as key=value,key=value.
         dry_run: Compute metrics without creating a version.
+        stage: Save and check a candidate without accepting it. Open the saved
+            revision with view, then use promote to accept exact saved bytes.
+            Render/export diagnostics separately from change.geometry.
         checks_file: Optional JSON dimension/preservation requirements. Repairs
             inherit the selected policy when omitted. See docs check-spec.
         defer_checks: Retain pending declared checks instead of evaluating them
@@ -469,6 +480,8 @@ def run(
         args.extend(["--checks", checks_file])
     if defer_checks:
         args.append("--defer-checks")
+    if stage:
+        args.append("--stage")
     return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
@@ -684,6 +697,31 @@ def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, 
         args.append(spec_file)
     if complete:
         args.append("--complete")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def promote(idempotency_key: str, cwd: str, revision: str | None = None,
+            status: bool = False, target: Literal["cad"] = "cad",
+            build_dir: str | None = None) -> dict:
+    """Accept an exact saved CAD revision or read its durable operation status.
+
+    Save idempotency_key before sending. revision is a returned retained ID;
+    omit it with status=True to read the original decision without mutation.
+    Retrying the same revision/key resumes copying or replays its saved receipt.
+    A key cannot name another revision/target. Failed checks and changed selection
+    refuse acceptance; complete evidence or repair, then use a new key.
+    No CAD source is executed. Staged candidates remain unaccepted until this
+    explicit call. Replay/status reports current_advanced=False and separately
+    identifies the original receipt versus the currently accepted revision.
+    build_dir selects the same artifact/history root used to stage the candidate.
+    """
+    args = ["promote"]
+    if revision is not None:
+        args.append(revision)
+    args.extend(["--idempotency-key", idempotency_key, "--target", target])
+    if status:
+        args.append("--status")
     return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 

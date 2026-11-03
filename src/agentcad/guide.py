@@ -104,6 +104,11 @@ Turn the request into a concrete geometry contract before building.
 - For retained dimension and preservation checks that gate normal acceptance,
   use `--checks requirements.json`. Read `agentcad docs check-spec` for its
   declaration schema and inherited repair requirements.
+- To inspect an experiment before replacing the accepted model, use
+  add `--stage` to run or import, inspect `change.revision_id` with `agentcad view`,
+  then accept that saved revision with `agentcad promote REVISION --idempotency-key KEY`.
+  Save the key before sending; reuse it for status or
+  retries. Read `agentcad docs promote` for staged results and recovery.
 - Declare structural intent when known, for example with
   `show_object(part, options={"expect_solids": 1})`. Use named parts and
   `floating: true` when separated bodies are intentional.

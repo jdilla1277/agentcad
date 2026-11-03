@@ -670,7 +670,7 @@ class Attempt:
             "receipt": str(self.directory / "receipt.json") if saved["receipt"] else None,
             "diagnostics": str(self.directory / "outcome.json") if saved["outcome"] else None,
         }
-        if saved["request"].get("check_policy") and saved["receipt"]:
+        if (saved["request"].get("check_policy") or saved["request"]["promotion_mode"] == "staged") and saved["receipt"]:
             checked = self.store.read_checks(self.revision_id)
             receipt = checked["receipt"]
             reference["validation_checks"] = {
