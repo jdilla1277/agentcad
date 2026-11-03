@@ -68,12 +68,17 @@ def delivery_options(function):
             policy = policy_values(**values)
         except ValueError as exc:
             raise ProjectError("invalid_delivery_budget", str(exc), "Use agentcad docs editing for inspection budget controls.") from exc
+        if policy is None:
+            return function(*args, **kwargs)
         ctx = click.get_current_context()
-        if policy is not None:
-            if ctx.command.name == "inspect" and not kwargs.get("with_report"):
-                raise click.UsageError("Caller delivery budgets require --report.")
-            ctx.meta["inspection_delivery_policy"] = policy
-        ctx.meta["inspection_delivery_source"] = str(Path(kwargs["file"]).resolve())
+        if ctx.command.name == "inspect" and not kwargs.get("with_report"):
+            raise click.UsageError("Caller delivery budgets require --report.")
+        try:
+            source = str(Path(kwargs["file"]).resolve())
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise ProjectError("invalid_delivery_source", str(exc), "Use a readable local CAD path.") from exc
+        ctx.meta["inspection_delivery_policy"] = policy
+        ctx.meta["inspection_delivery_source"] = source
         ctx.meta["inspection_delivery_argument"] = kwargs["file"]
         return function(*args, **kwargs)
     return wrapped

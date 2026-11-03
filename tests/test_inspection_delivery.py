@@ -162,3 +162,21 @@ def test_daemon_projection_preserves_original_full_snapshot(response, tmp_path, 
     _assert_budget(result)
     assert result["response_snapshot"] == REF
     assert result["delivery"]["media"]["eligible"] == 9
+
+
+def test_no_policy_does_not_resolve_or_reinterpret_legacy_file_arguments():
+    import click
+    from click.testing import CliRunner
+    from agentcad.inspection_delivery import delivery_options
+
+    received = []
+
+    @click.command()
+    @click.argument("file")
+    @delivery_options
+    def command(file):
+        received.append(file)
+
+    result = CliRunner().invoke(command, ["invalid\0.step"])
+    assert result.exit_code == 0
+    assert received == ["invalid\0.step"]
