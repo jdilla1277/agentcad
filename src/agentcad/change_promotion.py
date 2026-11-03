@@ -460,6 +460,11 @@ class PromotionStore:
                 },
                 "promotion_request_key": operation["request"]["request_key"],
             }
+            # Use only model metadata sealed before staging returned; optional
+            # viewer/render artifacts and mutable working source are not inputs.
+            for field in ("parts", "groups", "params"):
+                if field in core:
+                    meta[field] = copy.deepcopy(core[field])
             entry = {
                 "version": reservation.number,
                 "label": reservation.label,

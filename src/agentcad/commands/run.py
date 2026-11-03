@@ -1932,8 +1932,22 @@ def _run_impl(
         )
 
     from agentcad.change_retention import assess_change
-    blocked = assess_change({"command": "run", "status": "success", "metrics": metrics,
-                             "validation": validation, "validation_profile": validation_profile}, staged_step)
+    # Seal the non-rendered model metadata with the checked geometry. Explicit
+    # promotion must preserve named handles and overrides without rerunning CAD.
+    checked_model = {
+        "command": "run",
+        "status": "success",
+        "metrics": metrics,
+        "validation": validation,
+        "validation_profile": validation_profile,
+    }
+    if parts_output:
+        checked_model["parts"] = parts_output
+    if groups_output:
+        checked_model["groups"] = groups_output
+    if parsed_params:
+        checked_model["params"] = parsed_params
+    blocked = assess_change(checked_model, staged_step)
     if blocked:
         _discard_staged_step()
         _emit_run(blocked)

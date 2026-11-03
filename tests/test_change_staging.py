@@ -127,6 +127,110 @@ def test_staged_import_is_keyed_separately_from_automatic_import(runner, isolate
     )
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize(
+    "runtime,geometry",
+    [
+        (
+            "build123d",
+            "plate = Box(length, 30, 6) - Pos(-20, 0, 0) * Cylinder(3, 12) - Pos(20, 0, 0) * Cylinder(3, 12)\n"
+            "bracket = fillet(plate.edges().filter_by(Axis.Z), radius=1)\n"
+            "pin = Pos(0, 50, 0) * Cylinder(2, 12)\n",
+        ),
+        pytest.param(
+            "cadquery",
+            "import cadquery as cq\n"
+            "plate = cq.Workplane('XY').box(length, 30, 6).faces('>Z').workplane().pushPoints([(-20, 0), (20, 0)]).hole(6)\n"
+            "bracket = plate.edges('|Z').fillet(1)\n"
+            "pin = cq.Workplane('XY').center(0, 50).circle(2).extrude(12)\n",
+            marks=pytest.mark.skipif(
+                importlib.util.find_spec("cadquery") is None,
+                reason="optional CadQuery extra",
+            ),
+        ),
+    ],
+)
+def test_staged_promotion_preserves_parts_groups_and_parameter_overrides(
+    runner, isolated_dir, runtime, geometry, deferred
+):
+    init(runner, runtime)
+    script = isolated_dir / "assembly.py"
+    script.write_text(
+        "length = 60\n"
+        + geometry
+        + 'show_object(bracket, options={"id": "bracket", "name": "Mounting Bracket", "part_of": "mount", "group_color": "steelblue"})\n'
+        + 'show_object(pin, options={"id": "pin", "name": "Pivot Pin", "part_of": "mount"})\n'
+    )
+    baseline = invoke(
+        runner,
+        ["run", "assembly.py", "--label", "accepted", "--params", "length=60", *QUIET],
+    )
+    options = []
+    if deferred:
+        (isolated_dir / "checks.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "checks": [
+                        {
+                            "check_id": "length",
+                            "kind": "dimension",
+                            "axis": "x",
+                            "expected_mm": 80,
+                        }
+                    ],
+                }
+            )
+        )
+        options = ["--checks", "checks.json", "--defer-checks"]
+    staged = invoke(
+        runner,
+        [
+            "run",
+            "assembly.py",
+            "--label",
+            "longer",
+            "--params",
+            "length=80",
+            "--stage",
+            *options,
+            *QUIET,
+        ],
+        exit_code=1 if deferred else 0,
+    )
+    revision = staged["change"]["revision_id"]
+    saved_step = Path(staged["change"]["geometry"]).read_bytes()
+    saved_source = script.read_bytes()
+    script.write_text("raise RuntimeError('promotion must use the saved candidate')\n")
+    if deferred:
+        invoke(runner, ["check-spec", revision, "--complete"])
+    accepted = promote(runner, revision, "accept-assembly")
+    parts = invoke(runner, ["parts", "list", "current"])
+    assert parts["part_count"] == 2
+    assert parts["group_count"] == 1
+    assert [p["id"] for p in parts["parts"]] == ["bracket", "pin"]
+    assert all(p["id_source"] == "explicit" for p in parts["parts"])
+    assert all(p["part_of"] == "mount" for p in parts["parts"])
+    assert parts["groups"] == baseline["groups"]
+    assert parts["groups"][0]["part_ids"] == ["bracket", "pin"]
+    assert parts["groups"][0]["color"] == "steelblue"
+    for part_id in ("bracket", "pin"):
+        shown = invoke(runner, ["parts", "show", "current", part_id])
+        assert shown["part"] == next(p for p in parts["parts"] if p["id"] == part_id)
+    meta_path = Path(accepted["outputs"]["step"]).parent / "meta.json"
+    meta = json.loads(meta_path.read_text())
+    assert meta["params"] == {"length": 80}
+    assert meta["parts"] == staged["parts"] == parts["parts"]
+    assert meta["groups"] == staged["groups"] == parts["groups"]
+    assert staged["params"] == {"length": 80}
+    assert Path(accepted["outputs"]["step"]).read_bytes() == saved_step
+    assert Path(accepted["outputs"]["script"]).read_bytes() == saved_source
+    saved_meta = meta_path.read_bytes()
+    replay = promote(runner, revision, "accept-assembly")
+    assert replay["promotion"] == accepted["promotion"]
+    assert meta_path.read_bytes() == saved_meta
+
+
 def test_failed_staged_check_requires_new_promotion_key_after_completion(
     runner, isolated_dir
 ):
