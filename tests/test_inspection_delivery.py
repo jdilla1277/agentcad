@@ -137,7 +137,7 @@ def test_snapshot_storage_failure_preserves_result_and_suppresses_images(respons
             raise ProjectError("artifact_path_escape", "snapshot directory points outside the build root", "Restore the cache directory.")
         raise OSError("disk full")
 
-    monkeypatch.setattr("agentcad.inspection_delivery.atomic_write_json", failed)
+    monkeypatch.setattr("agentcad.inspection_snapshots.atomic_write_json", failed)
     result = apply_delivery(response, ProjectLayout(tmp_path, tmp_path), ctx)
     assert result["status"] == result["core"]["status"] == "success"
     assert result["promotion"] == original["promotion"]

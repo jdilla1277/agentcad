@@ -9,15 +9,13 @@ import hashlib
 import json
 import math
 from pathlib import Path
-import re
 import shlex
 
 import click
 
-from agentcad.geometry_manifest import _digest
 from agentcad.inspection_report import compact_report, _estimated_tokens
+from agentcad.inspection_snapshots import SnapshotStore, SnapshotResourceLimit
 from agentcad.project import ProjectError, format_response, get_project
-from agentcad.versioning import atomic_write_json
 
 RESERVE = 32
 OPTIONS = {
@@ -25,7 +23,6 @@ OPTIONS = {
     "response_text_budget": "--response-text-budget", "image_budget": "--image-budget",
     "vision_profile": "--vision-profile",
 }
-_SNAPSHOT = re.compile(r"delivery_[0-9a-f]{64}\Z")
 
 
 def estimate(payload):
@@ -168,39 +165,22 @@ def save_snapshot(payload, layout, ctx):
     expected = (payload.get("geometry_manifest") or {}).get("baseline_sha256") or (_report(payload) or {}).get("baseline_sha256")
     if expected is not None and expected != body["baseline_sha256"]:
         raise ValueError("Baseline changed before response snapshot publication.")
-    snapshot_id = "delivery_" + _digest(body)
-    path = layout.artifact_path(".agentcad/inspection_delivery/" + snapshot_id + ".json")
-    if not path.exists():
-        try:
-            atomic_write_json(path, {"id": snapshot_id, **body}, overwrite=False)
-        except FileExistsError:
-            pass  # A concurrent identical response may have published it.
-    saved = json.loads(path.read_text())
-    saved_id = saved.pop("id")
-    if saved_id != snapshot_id or "delivery_" + _digest(saved) != snapshot_id:
-        raise ValueError("Existing response snapshot integrity check failed.")
-    return {"id": snapshot_id, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "retrieve": shlex.join(["agentcad", "inspect", baseline, "--report", "--response-snapshot", snapshot_id,
-                                     "--build-dir", str(layout.build_root)])}
+    reference = SnapshotStore(layout).publish(body)
+    reference["retrieve"] = shlex.join(["agentcad", "inspect", baseline, "--report", "--response-snapshot", reference["id"],
+                                       "--build-dir", str(layout.build_root)])
+    return reference
 
 
 def read_snapshot(snapshot_id, file, layout):
-    if not _SNAPSHOT.fullmatch(snapshot_id):
-        raise ValueError("Use the delivery snapshot ID returned by import or inspection.")
-    path = layout.artifact_path(".agentcad/inspection_delivery/" + snapshot_id + ".json")
-    body = json.loads(path.read_text())
-    saved_id = body.pop("id")
-    if saved_id != snapshot_id or "delivery_" + _digest(body) != snapshot_id or body["schema_version"] != 1:
-        raise ValueError("Response snapshot integrity check failed.")
+    body, reference = SnapshotStore(layout).read(snapshot_id)
     if (body["project_root"] != str(layout.project_root) or body["build_root"] != str(layout.build_root)
             or body["baseline"] != str(Path(file).resolve())):
         raise ValueError("Response snapshot belongs to another baseline or project/build root.")
     if body["baseline_sha256"] is not None and hashlib.sha256(Path(file).read_bytes()).hexdigest() != body["baseline_sha256"]:
         raise ValueError("Baseline changed since this response snapshot; restore the original geometry.")
     ctx = click.get_current_context()
-    reference = {"id": snapshot_id, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                 "retrieve": shlex.join(["agentcad", "inspect", body["baseline"], "--report", "--response-snapshot", snapshot_id,
-                                          "--build-dir", str(layout.build_root)])}
+    reference["retrieve"] = shlex.join(["agentcad", "inspect", body["baseline"], "--report", "--response-snapshot", snapshot_id,
+                                       "--build-dir", str(layout.build_root)])
     ctx.meta["inspection_delivery_snapshot"] = reference
     materialized = deepcopy(body["payload"])
     original_report = _report(materialized)
@@ -318,7 +298,7 @@ def _minimum(payload):
         payload["geometry_manifest"] = _keep(payload["geometry_manifest"], {"manifest_id", "baseline_sha256", "path", "counts", "recognition"})
     if isinstance(payload.get("outputs"), dict):
         payload["outputs"] = _keep(payload["outputs"], {"step"})
-    payload["response_snapshot"] = _keep(payload["response_snapshot"], {"id", "path", "retrieve"})
+    payload["response_snapshot"] = _keep(payload["response_snapshot"], {"id", "path", "retrieve", "retention"})
     for key in ("next_actions", "original_filename", "sha256", "import_request", "promotion_request_key", "build_root_source", "metrics", "validation"):
         payload.pop(key, None)
     report = _report(payload)
@@ -451,13 +431,14 @@ def apply_delivery(payload, layout, ctx):
                      and "response_snapshot" in payload else save_snapshot(payload, layout, ctx))
         return constrain(payload, requested, reference)
     except (OSError, ValueError, ProjectError, KeyError, TypeError) as exc:
+        status = "resource_limit" if isinstance(exc, SnapshotResourceLimit) else "snapshot_unavailable"
         report = _report(payload)
         media = report.get("media", []) if report else []
         result = {**payload, "delivery": {"scope": "complete_response", "requested": requested,
-                  "status": "snapshot_unavailable", "budget_satisfied": False, "message": str(exc),
+                  "status": status, "budget_satisfied": False, "message": str(exc),
                   "estimated_text_tokens": 0, "estimated_image_tokens": 0,
                   "media": {"eligible": len(media), "returned": 0, "omitted_ids": [row["id"] for row in media],
-                            "omission_reason": "snapshot_unavailable"}}}
+                            "omission_reason": status}}}
         return finalize_mcp(result)
 
 
@@ -465,7 +446,7 @@ def finalize_mcp(payload, *, delivered=True):
     audit = payload.get("delivery", {})
     if audit.get("scope") == "complete_response" and "response_snapshot" in payload:
         return constrain(payload, audit["requested"], payload["response_snapshot"], delivered=delivered)
-    if audit.get("status") == "snapshot_unavailable":
+    if audit.get("status") in {"snapshot_unavailable", "resource_limit"}:
         payload = deepcopy(payload)
         for _ in range(4):
             payload["delivery"]["estimated_text_tokens"] = estimate(payload)
