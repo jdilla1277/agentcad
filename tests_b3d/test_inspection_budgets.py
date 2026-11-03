@@ -122,7 +122,8 @@ def test_import_retry_new_delivery_limits_preserve_acceptance_and_job(runner, is
     face = next(entity["id"] for entity in manifest["entities"].values() if entity["kind"] == "face")
     protected.update({Path(response["response_snapshot"]["path"]): Path(response["response_snapshot"]["path"]).read_bytes()
                       for response in (first, second)})
-    protected.update({path: path.read_bytes() for path in root.rglob("analysis*.json")})
+    protected.update({path: path.read_bytes() for pattern in ("report_*.json", "bundle_*.json")
+                      for path in root.rglob(pattern)})
     for response in (first, second):
         retrieved, recovered = _invoke(runner, shlex.split(response["response_snapshot"]["retrieve"])[1:])
         assert retrieved.exit_code == 0
