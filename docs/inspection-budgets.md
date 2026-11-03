@@ -96,10 +96,53 @@ exit code through retries and snapshot retrieval, including preflight failures.
 Snapshots are hash-addressed JSON files under the selected build root's
 `.agentcad/inspection_delivery`. Retrieval checks their integrity, project/build
 root, baseline path and baseline bytes. Missing/changed evidence fails
-explicitly. Full snapshot retrieval is local; remote transfer, age/byte quotas
-and a possible migration of the legacy default to whole-response limits remain
-separate work. These controls can also be used with inspection jobs and import
+explicitly. Full snapshot retrieval is local; remote transfer and a possible
+migration of the legacy default to whole-response limits remain separate work.
+These controls can also be used with inspection jobs and import
 retries; new delivery limits are outside both identities.
+
+## Snapshot storage
+
+Complete response snapshots default to **30 days** and **64 MiB per selected
+build root**. Override positive integer limits in the source project's
+`agentcad.toml`:
+
+```toml
+[inspection.snapshots]
+max_age_seconds = 2592000
+max_bytes = 67108864
+```
+
+Every `response_snapshot.retention` gives its expiry deadline, applied limits,
+and `may_evict_earlier=true`: disk pressure can remove a snapshot before that
+deadline. Reading does not refresh its lifetime. Increasing the age limit does
+not extend a new snapshot's frozen deadline; reducing it can shorten retention.
+Snapshots created before this policy keep their original bytes and derive
+their age from the file's modification time.
+
+Publication and retrieval clean expired snapshots, then remove the oldest
+snapshots to meet the byte limit. An active read holds the same process lock
+as cleanup and copies its complete JSON before releasing it. A snapshot too
+large to fit returns `delivery.status=resource_limit`, no inline images and
+`budget_satisfied=false`, preserving the original import outcome and existing
+snapshots. Raise `max_bytes` and retry the same import key to obtain another
+response without importing again. Invalid storage settings similarly return
+`snapshot_unavailable`. No cleanup service runs in the background.
+
+An expired read returns `response_snapshot_expired`; a missing or evicted read
+returns `response_snapshot_unavailable`. Both fail explicitly and give a fresh
+inspection action. That action produces current evidence; it cannot recover
+the old response. Restoring the original file from backup can recover an
+evicted snapshot if it is still within its lifetime and passes integrity checks.
+Historical snapshots are never silently replaced by a new report.
+
+These limits cover `.agentcad/inspection_delivery/delivery_*.json` only.
+Cleanup preserves source and normalized geometry, issued geometry IDs, edit
+scripts, import retry records, job checkpoints and acceptance receipts. Job
+progress snapshots may expire while the job remains resumable: job records are
+independent evidence. Limits for cached analysis, images and future search pages
+remain separate work. Use only snapshots published by this installed version
+while cleanup runs; older AgentCAD processes do not share the retention lock.
 
 ## MCP
 
