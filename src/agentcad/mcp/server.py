@@ -22,14 +22,14 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "run", "run_status", "promote"}:
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
     async def call_tool(self, name, arguments):
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name in {"import_cad", "run", "run_status", "promote"}:
+        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -265,8 +265,23 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
 
 def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
     """Attach only the images named by the response, checking bytes at delivery."""
+    from agentcad.inspection_delivery import finalize_mcp
+
+    def package(payload, attachments=()):
+        # FastMCP pretty-prints bare dicts. Budgeted text must use the same
+        # serialization we measured, even when no image blocks are attached.
+        if attachments or payload.get("delivery", {}).get("scope") == "complete_response":
+            return CallToolResult(content=[TextContent(type="text", text=json.dumps(payload)), *attachments],
+                                  structuredContent=payload)
+        return payload
+
+    result = finalize_mcp(result)
+    if result.get("delivery", {}).get("scope") == "complete_response":
+        report = result.get("inspection", result)
+        media = report.get("media", []) if result["delivery"].get("budget_satisfied") else []
+        image_root = report.get("inventory", {}).get("image_root")
     if not media:
-        return result
+        return package(result)
     attachments = []
     try:
         for item in media:
@@ -290,18 +305,17 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
                     action.extend([option, str(budget[field])])
             if result.get("build_root"):
                 action.extend(["--build-dir", result["build_root"]])
-            return {
+            from agentcad.inspection_delivery import append_options
+            append_options(action, result.get("delivery", {}).get("requested"))
+            return package(finalize_mcp({
                 **result,
                 "warnings": [*result.get("warnings", []), "CAD import succeeded; inspection images could not be attached."],
                 "image_delivery": {"status": "failed", "attached": 0, "requested": len(media),
                                    "message": str(exc), "next_actions": [shlex.join(action)]},
-            }
-        return {**result, "status": "error", "_exit_code": 1,
-                "image": {"status": "failed", "message": str(exc)}}
-    return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(result)), *attachments],
-        structuredContent=result,
-    )
+            }, delivered=False))
+        return package(finalize_mcp({**result, "status": "error", "_exit_code": 1,
+                "image": {"status": "failed", "message": str(exc)}}, delivered=False))
+    return package(result, attachments)
 
 
 @mcp.tool()
@@ -325,6 +339,11 @@ def import_cad(
     stage: bool = False,
     inspection_background: bool = False,
     inspection_wait_timeout: float | None = None,
+    context_window: int | None = None,
+    response_budget: int | None = None,
+    response_text_budget: int | None = None,
+    image_budget: int | None = None,
+    vision_profile: dict[str, Any] | None = None,
 ) -> Any:
     """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
 
@@ -360,6 +379,15 @@ def import_cad(
     core import and legacy previews still complete. Neither changes retry
     identity. Retry responses describe the original wait; use the returned
     inspect job actions for current status, wait, resume or cancellation.
+
+    Optional context_window derives a 5% combined delivery target; response_budget
+    overrides it. response_text_budget bounds the complete JSON, including import
+    metadata/jobs. image_budget bounds selected image tokens. Supply vision_profile
+    as {"name":"host", "tokens_per_image":1000}, a caller estimate per 1024-square
+    sheet. Constrained images without a profile become references only. delivery
+    reports actual estimates/omissions and budget_satisfied; an impossible budget
+    preserves core success and provides a full response_snapshot retrieval action.
+    These controls change delivery only and are excluded from import retry identity.
 
     checks_file maps to CLI --checks, including on initialize=True imports.
     Requirements are inherited when omitted; changing them requires actor and
@@ -401,6 +429,9 @@ def import_cad(
         args.append("--inspection-background")
     if inspection_wait_timeout is not None:
         args.extend(["--inspection-wait-timeout", str(inspection_wait_timeout)])
+    from agentcad.inspection_delivery import append_options
+    append_options(args, dict(context_window=context_window, response_budget=response_budget,
+                             response_text_budget=response_text_budget, image_budget=image_budget, vision_profile=vision_profile))
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
     inspection = result.get("inspection", {})
     return _with_images(result, inspection.get("media", []), cwd=cwd,
@@ -626,6 +657,12 @@ def inspect(
     wait_timeout: float | None = None,
     job_id: str | None = None,
     job_action: Literal["status", "wait", "resume", "cancel"] | None = None,
+    response_snapshot: str | None = None,
+    context_window: int | None = None,
+    response_budget: int | None = None,
+    response_text_budget: int | None = None,
+    image_budget: int | None = None,
+    vision_profile: dict[str, Any] | None = None,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
@@ -650,6 +687,15 @@ def inspect(
         job_id: Saved inspection job for this file. Uses its original image configuration.
         job_action: status, wait (default with job_id), resume or cancel. Requires job_id/report.
             Cancellation stops between stages and preserves completed artifacts.
+        response_snapshot: Retrieve a complete saved delivery response with report=True,
+            without CAD work. Returns historical_response; current never advances.
+        context_window: Derive a 5% combined response target from caller context tokens.
+        response_budget: Override that target with a combined JSON/image estimated limit.
+        response_text_budget: Bound complete JSON text; default is combined limit when
+            known, otherwise 2000. Legacy text_budget still bounds the nested report.
+        image_budget: Inline image-token limit. Without vision_profile, omit constrained images.
+        vision_profile: Caller estimate {name: "host", tokens_per_image: 1000} per
+            1024-square sheet. Inspect delivery fields for applied estimates/omissions.
     """
     args = ["inspect", file]
     if report:
@@ -662,6 +708,8 @@ def inspect(
         args.extend(["--job", job_id])
     if job_action is not None:
         args.extend(["--job-action", job_action])
+    if response_snapshot is not None:
+        args.extend(["--response-snapshot", response_snapshot])
     if not report_images:
         args.append("--no-images")
     if report or max_images != 9:
@@ -682,6 +730,9 @@ def inspect(
         args.extend(["--limit", str(limit)])
     if no_limit:
         args.append("--no-limit")
+    from agentcad.inspection_delivery import append_options
+    append_options(args, dict(context_window=context_window, response_budget=response_budget,
+                             response_text_budget=response_text_budget, image_budget=image_budget, vision_profile=vision_profile))
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
     report_payload = result.get("inspection", result)
     media = report_payload.get("media", []) if report else []

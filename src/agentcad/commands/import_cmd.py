@@ -30,6 +30,7 @@ from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import MANIFEST_FILE
 from agentcad.native_io import silence_native_stdout
 from agentcad.change_retention import change_options
+from agentcad.inspection_delivery import delivery_options, forward_options
 
 
 @click.command("import", short_help="Import a CAD file as a versioned baseline.")
@@ -84,6 +85,7 @@ from agentcad.change_retention import change_options
 @click.option("--inspection-background", is_flag=True, help="Run inspection analysis in a detached local worker; core import still completes before returning.")
 @click.option("--inspection-wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for inspection after these seconds; its worker continues. Does not limit core import or legacy preview work.")
 @project_options
+@delivery_options
 @change_options
 def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image,
                show_report, max_images, text_budget, idempotency_key, inspection_background, inspection_wait_timeout):
@@ -130,6 +132,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         argv.extend(["--inspection-wait-timeout", str(inspection_wait_timeout)])
     from agentcad.change_retention import forward_check_options
     forward_check_options(argv)
+    forward_options(argv)
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     def execute():

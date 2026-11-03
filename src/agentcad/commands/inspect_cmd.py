@@ -17,6 +17,7 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.native_io import suppress_native_output
+from agentcad.inspection_delivery import delivery_options, forward_options, read_snapshot
 
 DEFAULT_ID_LIMIT = 100
 DEFAULT_VALIDATION_TIMEOUT_S = 90.0
@@ -199,6 +200,7 @@ def _clear_validation_timeout(previous_state) -> None:
 @click.option("--wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for --report after these seconds; its worker continues.")
 @click.option("--job", "job_id", default=None, help="Retrieve/control the durable inspection job for this FILE; requires --report.")
 @click.option("--job-action", type=click.Choice(["status", "wait", "resume", "cancel"]), default=None, help="Action on --job. Default: wait. Cancellation stops between stages.")
+@click.option("--response-snapshot", default=None, help="Retrieve a complete saved response by its delivery ID; requires --report. No CAD work.")
 @click.option(
     "--ids", "with_ids", is_flag=True,
     help="Include per-feature ID lists (solids, faces, edges) for use with "
@@ -251,6 +253,7 @@ def _clear_validation_timeout(previous_state) -> None:
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @project_options
+@delivery_options
 def inspect_cmd(
     file,
     entity_id,
@@ -264,6 +267,7 @@ def inspect_cmd(
     wait_timeout,
     job_id,
     job_action,
+    response_snapshot,
     with_ids,
     with_summary,
     id_limit,
@@ -302,6 +306,16 @@ def inspect_cmd(
         job_action = "wait"
     if background and job_action == "wait":
         raise click.UsageError("Use --job-action resume with --background to start a saved job.")
+    if response_snapshot:
+        if not with_report or job_id or background or wait_timeout is not None or no_images or max_images != 9 or text_budget != 2000:
+            raise click.UsageError("--response-snapshot requires --report and uses saved content; omit job/report preparation controls. Use --response-text-budget for a new delivery limit.")
+        try:
+            snapshot, exit_code = read_snapshot(response_snapshot, file, get_project())
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            _emit({"command": "inspect", "status": "error", "reason": "response_snapshot_unavailable", "message": str(exc)}, exit_code=1)
+            return
+        _emit(snapshot, exit_code=exit_code)
+        return
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
     if with_report:
@@ -333,6 +347,7 @@ def inspect_cmd(
     argv.extend(["--validation-timeout", str(validation_timeout)])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
+    forward_options(argv)
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     if with_report:
@@ -553,6 +568,7 @@ def inspect_cmd(
 
 
 def _emit(payload: dict, exit_code: int = 0) -> None:
+    click.get_current_context().meta["inspection_exit_code"] = exit_code
     click.echo(json.dumps(payload))
     if exit_code != 0:
         sys.exit(exit_code)
