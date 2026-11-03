@@ -233,6 +233,7 @@ class ImportRequest:
                                        "Retry with the original bytes/options, or choose a new key for a new import.")
                 ctx.meta["import_replay"] = True
                 self.replayed = True
+                ctx.meta["import_exit_code"] = 1
                 click.echo(json.dumps({"command": "import", "status": "in_progress",
                                        "message": "This import is still running. Retry the same key and original options; no second import was started.",
                                        "idempotency": self.reference("in_progress")}))
@@ -264,6 +265,7 @@ class ImportRequest:
                     payload["viewer_opened"] = False
                 if payload.get("project_viewer"):
                     payload["project_viewer"]["opened"] = False
+                ctx.meta["import_exit_code"] = exit_code
                 click.echo(json.dumps(payload))
                 raise SystemExit(exit_code)
 

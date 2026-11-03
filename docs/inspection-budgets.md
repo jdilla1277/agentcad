@@ -88,6 +88,10 @@ progress is historical too; follow the returned job status action for fresh
 progress. Snapshot retrieval expands the saved report allowance as needed to
 preserve its full selected records after path formatting. Add new caller
 limits to request another bounded projection of the same snapshot.
+Recovered inspection, measurement and view actions resolve their CAD file from
+the saved response's directory and include the selected build root, so they can
+be followed from another working directory. Failed imports retain their nonzero
+exit code through retries and snapshot retrieval, including preflight failures.
 
 Snapshots are hash-addressed JSON files under the selected build root's
 `.agentcad/inspection_delivery`. Retrieval checks their integrity, project/build

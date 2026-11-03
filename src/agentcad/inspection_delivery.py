@@ -104,6 +104,35 @@ def _report(payload):
     return None
 
 
+def _canonical_action(action, layout, baseline, origin, source_argument):
+    lexer = shlex.shlex(action, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        program, verb, operand = (lexer.get_token() for _ in range(3))
+        if program != "agentcad" or verb not in {"inspect", "measure", "view"} or not operand:
+            return action
+        target = (Path(origin) / operand).resolve()
+        if target not in {Path(baseline).resolve(), (Path(origin) / source_argument).resolve()}:
+            return action
+        # Capture the original suffix before reading flags, retaining quoted
+        # arguments and human annotations exactly. Only the operand changes.
+        suffix = action[lexer.instream.tell():].lstrip()
+        has_build_root = False
+        for token in lexer:
+            if token == "—":
+                break
+            if token == "--build-dir" or token.startswith("--build-dir="):
+                has_build_root = True
+                break
+    except (OSError, ValueError, RuntimeError):
+        return action
+    command = f"agentcad {verb} {shlex.quote(str(target))}"
+    if not has_build_root:
+        command += " --build-dir " + shlex.quote(str(layout.build_root))
+    return command + (" " + suffix if suffix else "")
+
+
 def _canonical(payload, layout, baseline, origin, source_argument):
     result = format_response(payload, replace(layout, source="command"))
     report = _report(result)
@@ -115,17 +144,10 @@ def _canonical(payload, layout, baseline, origin, source_argument):
     for container in (result, report):
         if not container or "next_actions" not in container:
             continue
-        actions = []
-        for action in container["next_actions"]:
-            for previous in (str(Path(baseline)), source_argument):
-                for verb in ("inspect", "measure", "view"):
-                    prefix = "agentcad " + verb + " " + shlex.quote(previous)
-                    if previous and (action == prefix or action.startswith(prefix + " ")):
-                        action = "agentcad " + verb + " " + shlex.quote(baseline) + action[len(prefix):]
-            if action.startswith("agentcad ") and "--build-dir" not in action:
-                action += " --build-dir " + shlex.quote(str(layout.build_root))
-            actions.append(action)
-        container["next_actions"] = actions
+        container["next_actions"] = [
+            _canonical_action(action, layout, baseline, origin, source_argument)
+            for action in container["next_actions"]
+        ]
     return result
 
 
@@ -139,7 +161,7 @@ def save_snapshot(payload, layout, ctx):
         "schema_version": 1, "project_root": str(layout.project_root), "build_root": str(layout.build_root),
         "baseline": baseline,
         "baseline_sha256": hashlib.sha256(Path(baseline).read_bytes()).hexdigest() if Path(baseline).is_file() else None,
-        "exit_code": ctx.meta.get("import_exit_code", ctx.meta.get("inspection_exit_code", 0)),
+        "exit_code": ctx.meta.get("command_exit_code", ctx.meta.get("import_exit_code", ctx.meta.get("inspection_exit_code", 0))),
         "response_path_base": str(Path.cwd()), "source_argument": ctx.meta["inspection_delivery_argument"],
         "payload": deepcopy(payload),
     }

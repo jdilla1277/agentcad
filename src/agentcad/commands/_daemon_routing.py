@@ -122,6 +122,9 @@ def maybe_route_through_daemon(argv: list[str], no_daemon: bool = False) -> None
 
     output_str = result.get("output", "")
     stderr_str = result.get("stderr", "")
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None:
+        ctx.meta["command_exit_code"] = result.get("exit_code", 0)
     try:
         data = json.loads(output_str)
         data["via"] = "daemon"

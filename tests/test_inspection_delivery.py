@@ -180,3 +180,29 @@ def test_no_policy_does_not_resolve_or_reinterpret_legacy_file_arguments():
     result = CliRunner().invoke(command, ["invalid\0.step"])
     assert result.exit_code == 0
     assert received == ["invalid\0.step"]
+
+
+@pytest.mark.parametrize("verb", ["inspect", "measure", "view"])
+def test_saved_actions_resolve_relative_operands_and_preserve_suffix(tmp_path, verb):
+    import shlex
+    from types import SimpleNamespace
+    from agentcad.inspection_delivery import _canonical_action
+
+    origin = tmp_path / "original caller"
+    baseline = tmp_path / "CAD — owner's files" / "v1_part" / "output.step"
+    source = tmp_path / "supplier's file.step"
+    layout = SimpleNamespace(build_root=baseline.parent.parent)
+    operand = "../CAD — owner's files/v1_part/output.step"
+    suffix = "--id face_v1_1 --image — inspect this face"
+    action = f"agentcad {verb} {shlex.quote(operand)} {suffix}"
+    result = _canonical_action(action, layout, baseline, origin, str(source))
+    tokens = shlex.split(result)
+    assert tokens[:3] == ["agentcad", verb, str(baseline)]
+    assert tokens[3:5] == ["--build-dir", str(layout.build_root)]
+    assert result.endswith(suffix)
+    existing = action.replace(suffix, f"--build-dir {shlex.quote(str(layout.build_root))} {suffix}")
+    assert shlex.split(_canonical_action(existing, layout, baseline, origin, str(source))).count("--build-dir") == 1
+    supplier = f"agentcad {verb} {shlex.quote(str(source))} --report"
+    assert shlex.split(_canonical_action(supplier, layout, baseline, origin, str(source)))[2] == str(source)
+    unrelated = f"agentcad {verb} other.step --report"
+    assert _canonical_action(unrelated, layout, baseline, origin, str(source)) == unrelated

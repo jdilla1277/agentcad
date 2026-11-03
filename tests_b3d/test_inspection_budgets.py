@@ -114,6 +114,29 @@ def test_import_retry_new_delivery_limits_preserve_acceptance_and_job(runner, is
     assert full["recorded_current_advanced"] is True and full["current_advanced"] is False
     from agentcad.change_promotion import PromotionStore
     assert full["promotion"] == PromotionStore(root).read(first["promotion"]["request_key"])["result"]
+    # Retrieval alone is insufficient: follow the actions from a third cwd.
+    elsewhere = isolated_dir / "other caller"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    manifest = json.loads(Path(first["geometry_manifest"]["path"]).read_text())
+    face = next(entity["id"] for entity in manifest["entities"].values() if entity["kind"] == "face")
+    protected.update({Path(response["response_snapshot"]["path"]): Path(response["response_snapshot"]["path"]).read_bytes()
+                      for response in (first, second)})
+    protected.update({path: path.read_bytes() for path in root.rglob("analysis*.json")})
+    for response in (first, second):
+        retrieved, recovered = _invoke(runner, shlex.split(response["response_snapshot"]["retrieve"])[1:])
+        assert retrieved.exit_code == 0
+        for action in recovered["inspection"]["next_actions"]:
+            if "--report" not in action and "--image" not in action:
+                continue
+            arguments = shlex.split(action)
+            if "—" in arguments:
+                arguments = arguments[:arguments.index("—")]
+            arguments = [face if argument == "ID" else argument for argument in arguments]
+            followed, details = _invoke(runner, arguments[1:])
+            assert followed.exit_code == 0, (action, details)
+        assert any("--report" in action for action in recovered["inspection"]["next_actions"])
+        assert any("--image" in action for action in recovered["inspection"]["next_actions"])
     assert {p: p.read_bytes() for p in protected} == protected
     assert len(list(root.glob("v*_*/output.step"))) == 1
 
@@ -203,12 +226,86 @@ def test_mcp_attachment_failure_remains_bounded_and_successful(isolated_dir, mon
 def test_snapshot_keeps_failed_import_exit_code(runner, isolated_dir):
     source = isolated_dir / "bad.step"
     source.write_text("not CAD")
-    failed, response = _invoke(runner, ["import", str(source), "--init", "--no-view", "--response-text-budget", "3000"])
-    assert failed.exit_code == 1 and response["status"] == "malformed"
+    args = ["import", str(source), "--init", "--no-view", "--idempotency-key", "failed", "--response-text-budget", "6000"]
+    for replay in (False, True):
+        failed, response = _invoke(runner, args)
+        assert failed.exit_code == 1 and response["status"] == "malformed"
+        assert response["idempotency"]["replayed"] is replay
+        _assert_failed_snapshot(runner, isolated_dir, response, "malformed")
+    # A busy reply is a failed call, even though it describes ongoing work.
+    from agentcad.import_requests import _locked
+    request_dir = Path(response["idempotency"]["request"]).parent
+    with _locked(request_dir / "execution.lock") as acquired:
+        assert acquired
+        from unittest.mock import patch
+        with patch("agentcad.import_requests._LOCK_WAIT_SECONDS", 0):
+            busy, response = _invoke(runner, args)
+        assert busy.exit_code == 1 and response["status"] == "in_progress"
+    _assert_failed_snapshot(runner, isolated_dir, response, "in_progress")
+    # Recovery without the cached response must also publish the actual exit.
+    (request_dir / "response.json").unlink()
+    recovered, response = _invoke(runner, args)
+    assert recovered.exit_code == 1
+    _assert_failed_snapshot(runner, isolated_dir, response, response["status"])
+
+
+def _assert_failed_snapshot(runner, cwd, response, status):
+    snapshot = json.loads(Path(response["response_snapshot"]["path"]).read_text())
+    assert snapshot["exit_code"] == 1
     restored, historical = _invoke(runner, shlex.split(response["response_snapshot"]["retrieve"])[1:])
     assert restored.exit_code == 1
-    assert historical["status"] == "malformed" and historical["historical_response"]
-    assert historical["snapshot_command"] == "import"
+    assert historical["status"] == status and historical["historical_response"]
+    result = asyncio.run(server.mcp.call_tool("inspect", {
+        "file": snapshot["baseline"], "cwd": str(cwd), "report": True,
+        "build_dir": snapshot["build_root"], "response_snapshot": snapshot["id"],
+        "response_text_budget": 6000, "image_budget": 0,
+    }))
+    payload = _payload(result)
+    assert payload["_exit_code"] == 1 and payload["status"] == status
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_outer_import_errors_keep_snapshot_exit_code(runner, isolated_dir, monkeypatch, unexpected):
+    args = ["import", str(REAL), "--init", "--no-view", "--response-text-budget", "6000"]
+    if unexpected:
+        def fail(*a, **kw):
+            raise RuntimeError("metric failure")
+        monkeypatch.setattr("agentcad.core_build.validated_metrics", fail)
+    else:
+        checks = isolated_dir / "checks.json"
+        checks.write_text("invalid JSON")
+        args += ["--checks", str(checks)]
+    failed, response = _invoke(runner, args)
+    assert failed.exit_code == 1, response
+    if not unexpected:
+        assert response["reason"] == "invalid_checks"
+    _assert_failed_snapshot(runner, isolated_dir, response, response["status"])
+
+
+def test_daemon_failure_keeps_snapshot_exit_code(runner, isolated_dir, monkeypatch):
+    monkeypatch.delenv("AGENTCAD_DAEMON", raising=False)
+    monkeypatch.setattr("agentcad.daemon.daemon_supported", lambda: True)
+    monkeypatch.setattr("agentcad.commands._daemon_routing._route_through_daemon", lambda *a, **kw: {
+        "output": json.dumps({"command": "import", "status": "error", "reason": "invalid_checks"}), "exit_code": 1,
+    })
+    failed = runner.invoke(cli, ["import", str(REAL), "--init", "--no-view", "--response-text-budget", "6000"])
+    assert failed.exit_code == 1, failed.output
+    response = json.loads(failed.stdout)
+    _assert_failed_snapshot(runner, isolated_dir, response, "error")
+
+
+def test_stopped_job_status_snapshot_keeps_successful_poll_exit(runner, isolated_dir):
+    from agentcad.inspection_jobs import InspectionJob
+    from agentcad.project import ProjectLayout
+
+    step, _ = _baseline(isolated_dir)
+    job = InspectionJob.prepare(step, isolated_dir, ProjectLayout(isolated_dir, isolated_dir), images=False)
+    result, response = _invoke(runner, [*shlex.split(job.status()["actions"]["status"])[1:],
+                                      "--response-text-budget", "6000"])
+    assert result.exit_code == 0 and response["inspection_job"]["status"] == "stopped"
+    assert json.loads(Path(response["response_snapshot"]["path"]).read_text())["exit_code"] == 0
+    restored, historical = _invoke(runner, shlex.split(response["response_snapshot"]["retrieve"])[1:])
+    assert restored.exit_code == 0 and historical["inspection_job"]["status"] == "stopped"
 
 
 def test_budgeted_job_wait_and_historical_pending_snapshot(runner, isolated_dir):

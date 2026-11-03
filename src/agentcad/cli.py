@@ -829,6 +829,7 @@ class _LoggingGroup(click.Group):
             return super().invoke(ctx)
         except ProjectError as exc:
             ctx.meta["project_error"] = True
+            ctx.meta["command_exit_code"] = 1
             payload = exc.payload(ctx.invoked_subcommand or "unknown")
             if ctx.invoked_subcommand == "run":
                 payload.update(label=ctx.meta.get("run_label"), artifact_created=False,
@@ -842,6 +843,7 @@ class _LoggingGroup(click.Group):
             attempt = ctx.meta.get("change_attempt")
             if attempt is None:
                 raise
+            ctx.meta["command_exit_code"] = 1
             click.echo(json.dumps({
                 "command": ctx.meta.get("change_command", ctx.invoked_subcommand),
                 "status": "error",
