@@ -807,7 +807,8 @@ class _LoggingGroup(click.Group):
                             if payload.get("command") == "import":
                                 from agentcad.import_requests import finish_response
                                 payload = finish_response(payload)
-                            message = json.dumps(format_response(payload, layout))
+                            from agentcad.inspection_delivery import apply_delivery
+                            message = json.dumps(apply_delivery(format_response(payload, layout), layout, ctx))
                     except (TypeError, json.JSONDecodeError):
                         pass
             if message is not None:

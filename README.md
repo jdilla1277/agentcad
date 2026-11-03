@@ -338,6 +338,13 @@ follow the returned status/wait/resume/cancel actions. These wait controls do
 not change import retry identity. See [inspection jobs](docs/inspection-jobs.md)
 for CLI/MCP examples, checkpoints and cancellation behavior.
 
+Agents can supply `--context-window`, `--response-budget`,
+`--response-text-budget`, `--image-budget` and a caller-estimated
+`--vision-profile` to bound complete inspection delivery. Limited responses
+include a full saved response and an executable retrieval action. See
+[inspection budgets](docs/inspection-budgets.md) for estimates, CLI/MCP parity
+and the distinction between whole-response limits and the legacy report cap.
+
 ### Cloud projects
 
 For setup and a complete agent build-and-edit loop, see the
