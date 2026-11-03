@@ -331,6 +331,13 @@ stay unchanged. If required references cannot fit, `inspection_delivery` reports
 the omission and provides a retrieval action with a larger allowance.
 Deleting `.agentcad/import_requests` deletes retry protection for those keys.
 
+Imports now return a durable `inspection_job` and wait for inspection by
+default. Use `--inspection-background` or `--inspection-wait-timeout SECONDS`
+to return before analysis finishes. A wait deadline leaves the worker running;
+follow the returned status/wait/resume/cancel actions. These wait controls do
+not change import retry identity. See [inspection jobs](docs/inspection-jobs.md)
+for CLI/MCP examples, checkpoints and cancellation behavior.
+
 ### Cloud projects
 
 For setup and a complete agent build-and-edit loop, see the

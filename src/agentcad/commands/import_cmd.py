@@ -8,6 +8,7 @@ view, inspect) works unchanged on imported versions.
 """
 import hashlib
 import json
+import math
 import shutil
 import shlex
 import sys
@@ -80,10 +81,12 @@ from agentcad.change_retention import change_options
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum inspection images to prepare, including the overall sheet.")
 @click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated token allowance for the inline inspection report, excluding legacy import fields.")
 @click.option("--idempotency-key", default=None, help="Reuse this key and identical source/options to recover an import without creating another version. Scoped to the selected build root.")
+@click.option("--inspection-background", is_flag=True, help="Run inspection analysis in a detached local worker; core import still completes before returning.")
+@click.option("--inspection-wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for inspection after these seconds; its worker continues. Does not limit core import or legacy preview work.")
 @project_options
 @change_options
 def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image,
-               show_report, max_images, text_budget, idempotency_key):
+               show_report, max_images, text_budget, idempotency_key, inspection_background, inspection_wait_timeout):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
 
     The imported file becomes v_N in the manifest with full provenance
@@ -91,6 +94,10 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     just like a scripted version.
     """
     # Try routing through daemon. Exits before returning if reachable.
+    if inspection_background and inspection_wait_timeout is not None:
+        raise click.UsageError("Choose --inspection-background or --inspection-wait-timeout.")
+    if inspection_wait_timeout is not None and not math.isfinite(inspection_wait_timeout):
+        raise click.BadParameter("Use a finite number of seconds.", param_hint="--inspection-wait-timeout")
     argv = ["import", file]
     if label:
         argv.extend(["--label", label])
@@ -114,6 +121,10 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         argv.extend(["--validation-profile", validation_profile])
     if idempotency_key is not None:
         argv.extend(["--idempotency-key", idempotency_key])
+    if inspection_background:
+        argv.append("--inspection-background")
+    if inspection_wait_timeout is not None:
+        argv.extend(["--inspection-wait-timeout", str(inspection_wait_timeout)])
     from agentcad.change_retention import forward_check_options
     forward_check_options(argv)
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
@@ -121,7 +132,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     def execute():
         return _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
                             validation_profile, no_daemon, inspection_image,
-                            show_report, max_images, text_budget)
+                            show_report, max_images, text_budget, inspection_background, inspection_wait_timeout)
 
     if idempotency_key is not None:
         from agentcad.import_requests import ImportRequest
@@ -150,7 +161,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
 
 def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
                  validation_profile, no_daemon, inspection_image,
-                 show_report, max_images, text_budget):
+                 show_report, max_images, text_budget, inspection_background=False, inspection_wait_timeout=None):
     # --runtime pins only the manifest that --init creates. Refuse it when a
     # manifest already exists even if --init was also passed: --init is a
     # no-op in that case, so accepting the flag would silently ignore the
@@ -578,16 +589,32 @@ def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
     # are recorded individually and cannot undo the committed core/scaffold.
     inspection_payload = None
     if manifest_ok:
-        from agentcad.inspection_report import inspection_report
+        from agentcad.inspection_jobs import request_report
 
-        report_ok, report_result = _attempt_artifact(
-            "inspection_report", lambda: inspection_report(
-                version_dir / "output.step", version_dir, images=inspection_image,
+        def publish_job(job):
+            # Recovery must discover the same job even if the caller dies
+            # during analysis, before any report can be returned.
+            lifecycle.meta["inspection_job"] = job
+            lifecycle.persist()
+
+        report_ok, job_result = _attempt_artifact(
+            "inspection_report", lambda: request_report(
+                version_dir / "output.step", version_dir, get_project(), images=inspection_image,
                 max_images=max_images, text_budget=text_budget if show_report else 2000,
-                meta=lifecycle.meta, response_path=get_project().response_path,
+                meta=lifecycle.meta, background=inspection_background, wait_timeout=inspection_wait_timeout,
+                on_prepared=publish_job,
             ),
         )
+        report_result = None
         if report_ok:
+            job, report_result, wait_expired = job_result
+            lifecycle.meta["inspection_job"] = job
+            lifecycle.meta["inspection_wait_expired"] = wait_expired
+            if report_result is None:
+                lifecycle.set_artifact("inspection_report", job["status"], message="Use inspection_job.actions to wait, resume or cancel analysis.")
+                lifecycle.set_artifact("inspection_image", job["status"], message="Inspection images are managed by the durable job.")
+                lifecycle.persist()
+        if report_result is not None:
             inspection_payload, prepared = report_result
 
             def relative(path):
@@ -614,7 +641,7 @@ def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
             else:
                 lifecycle.set_artifact("inspection_image", "failed", message="Overall image unavailable; see inspection bundle omissions.")
             lifecycle.persist()
-        else:
+        elif not report_ok:
             lifecycle.set_artifact("inspection_image", "skipped", message="Inspection analysis unavailable.")
     else:
         lifecycle.set_artifact("inspection_report", "skipped", message="Geometry manifest was unavailable.")

@@ -322,6 +322,8 @@ def import_cad(
     idempotency_key: str | None = None,
     checks_file: str | None = None,
     defer_checks: bool = False,
+    inspection_background: bool = False,
+    inspection_wait_timeout: float | None = None,
 ) -> Any:
     """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
 
@@ -352,6 +354,11 @@ def import_cad(
     Replay actions target the caller directory; inline report/media may shrink
     to respect text_budget after formatting. Saved analysis and IDs stay fixed.
     Explicit checks JSON content and defer_checks must match on retries too.
+    inspection_background returns a durable inspection_job while its worker
+    continues. inspection_wait_timeout only limits waiting for inspection;
+    core import and legacy previews still complete. Neither changes retry
+    identity. Retry responses describe the original wait; use the returned
+    inspect job actions for current status, wait, resume or cancellation.
 
     checks_file maps to CLI --checks, including on initialize=True imports.
     Requirements are inherited when omitted; changing them requires actor and
@@ -383,6 +390,10 @@ def import_cad(
         args.extend(["--checks", checks_file])
     if defer_checks:
         args.append("--defer-checks")
+    if inspection_background:
+        args.append("--inspection-background")
+    if inspection_wait_timeout is not None:
+        args.extend(["--inspection-wait-timeout", str(inspection_wait_timeout)])
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
     inspection = result.get("inspection", {})
     return _with_images(result, inspection.get("media", []), cwd=cwd,
@@ -581,6 +592,10 @@ def inspect(
     report_images: bool = True,
     max_images: int = 9,
     text_budget: int = 2000,
+    background: bool = False,
+    wait_timeout: float | None = None,
+    job_id: str | None = None,
+    job_action: Literal["status", "wait", "resume", "cancel"] | None = None,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
@@ -600,10 +615,23 @@ def inspect(
         report_images: Prepare/deliver report images; false keeps the same analysis without images.
         max_images: Maximum distinct report images, 0..9; overall then alternating part/face-edge samples.
         text_budget: Estimated token allowance for the report JSON (compact UTF-8 bytes / 3).
+        background: Start report in a detached local worker; return inspection_job.
+        wait_timeout: Seconds to wait for report; deadline does not cancel its worker.
+        job_id: Saved inspection job for this file. Uses its original image configuration.
+        job_action: status, wait (default with job_id), resume or cancel. Requires job_id/report.
+            Cancellation stops between stages and preserves completed artifacts.
     """
     args = ["inspect", file]
     if report:
         args.append("--report")
+    if background:
+        args.append("--background")
+    if wait_timeout is not None:
+        args.extend(["--wait-timeout", str(wait_timeout)])
+    if job_id is not None:
+        args.extend(["--job", job_id])
+    if job_action is not None:
+        args.extend(["--job-action", job_action])
     if not report_images:
         args.append("--no-images")
     if report or max_images != 9:
@@ -625,11 +653,12 @@ def inspect(
     if no_limit:
         args.append("--no-limit")
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
-    media = result.get("media", []) if report else []
+    report_payload = result.get("inspection", result)
+    media = report_payload.get("media", []) if report else []
     if image and result.get("image", {}).get("status") == "success":
         media = [{"png": result["image"]["png"], "sha256": result["image"]["png_sha256"]}]
     return _with_images(result, media, cwd=cwd,
-                        image_root=result["inventory"]["image_root"] if report and media else None)
+                        image_root=report_payload["inventory"]["image_root"] if report and media else None)
 
 
 @mcp.tool()
