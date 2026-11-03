@@ -423,7 +423,7 @@ def apply_delivery(payload, layout, ctx):
         reference = (payload["response_snapshot"] if payload.get("delivery", {}).get("scope") == "complete_response"
                      and "response_snapshot" in payload else save_snapshot(payload, layout, ctx))
         return constrain(payload, requested, reference)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, ProjectError, KeyError, TypeError) as exc:
         report = _report(payload)
         media = report.get("media", []) if report else []
         result = {**payload, "delivery": {"scope": "complete_response", "requested": requested,

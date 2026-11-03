@@ -119,10 +119,11 @@ def test_invalid_policy_is_rejected(bad):
         policy_values(**bad)
 
 
-def test_snapshot_storage_failure_preserves_result_and_suppresses_images(response, tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["disk", "layout"])
+def test_snapshot_storage_failure_preserves_result_and_suppresses_images(response, tmp_path, monkeypatch, failure):
     from types import SimpleNamespace
     from agentcad.inspection_delivery import apply_delivery
-    from agentcad.project import ProjectLayout
+    from agentcad.project import ProjectLayout, ProjectError
 
     step = tmp_path / "output.step"
     step.write_bytes(b"retained baseline")
@@ -132,6 +133,8 @@ def test_snapshot_storage_failure_preserves_result_and_suppresses_images(respons
                               "inspection_delivery_source": str(step), "inspection_delivery_argument": str(step)})
 
     def failed(*a, **kw):
+        if failure == "layout":
+            raise ProjectError("artifact_path_escape", "snapshot directory points outside the build root", "Restore the cache directory.")
         raise OSError("disk full")
 
     monkeypatch.setattr("agentcad.inspection_delivery.atomic_write_json", failed)
