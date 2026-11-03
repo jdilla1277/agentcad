@@ -168,7 +168,8 @@ def test_corrupt_snapshot_counts_toward_quota_and_never_returns_data(store):
     assert not path.exists() and sum(p.stat().st_size for p in _files(store)) <= 2000
 
 
-@pytest.mark.parametrize("corrupt", ["[]", "null", "42", "invalid JSON", json.dumps({"snapshot_retention": {"created_at": 2 ** 2000}})])
+@pytest.mark.parametrize("corrupt", ["[]", "null", "42", "invalid JSON", "[" * 2000 + "]" * 2000,
+                                   json.dumps({"snapshot_retention": {"created_at": 2 ** 2000}})])
 def test_corrupt_json_is_unavailable_and_does_not_poison_other_publications(store, corrupt):
     ref = store.publish(_body())
     Path(ref["path"]).write_text(corrupt)

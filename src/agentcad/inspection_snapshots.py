@@ -100,7 +100,7 @@ class SnapshotStore:
             try:
                 body = json.loads(path.read_bytes()) if stat.st_size <= self.max_bytes else {}
                 created, expires = self._timing(body, stat)
-            except (ValueError, TypeError, AttributeError, OverflowError):
+            except (ValueError, TypeError, AttributeError, OverflowError, RecursionError):
                 # Corrupt cache files still count and can be evicted. Reads
                 # validate integrity before returning any response.
                 created, expires = stat.st_mtime, stat.st_mtime + self.max_age_seconds
@@ -135,7 +135,7 @@ class SnapshotStore:
             raise SnapshotUnavailable("Response snapshot is missing or evicted. Request a fresh report for new evidence; the historical response cannot be regenerated.") from exc
         try:
             body = json.loads(raw)
-        except (ValueError, UnicodeDecodeError) as exc:
+        except (ValueError, RecursionError) as exc:
             raise SnapshotUnavailable("Response snapshot integrity check failed.") from exc
         if (not isinstance(body, dict) or body.pop("id", None) != path.stem
                 or "delivery_" + _digest(body) != path.stem or body.get("schema_version") != 1):
