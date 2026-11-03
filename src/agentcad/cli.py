@@ -816,7 +816,8 @@ class _LoggingGroup(click.Group):
                             if payload.get("command") == "import":
                                 from agentcad.import_requests import finish_response
                                 payload = finish_response(payload)
-                            message = json.dumps(format_response(payload, layout))
+                            from agentcad.inspection_delivery import apply_delivery
+                            message = json.dumps(apply_delivery(format_response(payload, layout), layout, ctx))
                     except (TypeError, json.JSONDecodeError):
                         pass
             if message is not None:
@@ -828,6 +829,7 @@ class _LoggingGroup(click.Group):
             return super().invoke(ctx)
         except ProjectError as exc:
             ctx.meta["project_error"] = True
+            ctx.meta["command_exit_code"] = 1
             payload = exc.payload(ctx.invoked_subcommand or "unknown")
             if ctx.invoked_subcommand == "run":
                 payload.update(label=ctx.meta.get("run_label"), artifact_created=False,
@@ -841,6 +843,7 @@ class _LoggingGroup(click.Group):
             attempt = ctx.meta.get("change_attempt")
             if attempt is None:
                 raise
+            ctx.meta["command_exit_code"] = 1
             click.echo(json.dumps({
                 "command": ctx.meta.get("change_command", ctx.invoked_subcommand),
                 "status": "error",
