@@ -266,13 +266,22 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
 def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
     """Attach only the images named by the response, checking bytes at delivery."""
     from agentcad.inspection_delivery import finalize_mcp
+
+    def package(payload, attachments=()):
+        # FastMCP pretty-prints bare dicts. Budgeted text must use the same
+        # serialization we measured, even when no image blocks are attached.
+        if attachments or payload.get("delivery", {}).get("scope") == "complete_response":
+            return CallToolResult(content=[TextContent(type="text", text=json.dumps(payload)), *attachments],
+                                  structuredContent=payload)
+        return payload
+
     result = finalize_mcp(result)
     if result.get("delivery", {}).get("scope") == "complete_response":
         report = result.get("inspection", result)
         media = report.get("media", []) if result["delivery"].get("budget_satisfied") else []
         image_root = report.get("inventory", {}).get("image_root")
     if not media:
-        return result
+        return package(result)
     attachments = []
     try:
         for item in media:
@@ -298,18 +307,15 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
                 action.extend(["--build-dir", result["build_root"]])
             from agentcad.inspection_delivery import append_options
             append_options(action, result.get("delivery", {}).get("requested"))
-            return finalize_mcp({
+            return package(finalize_mcp({
                 **result,
                 "warnings": [*result.get("warnings", []), "CAD import succeeded; inspection images could not be attached."],
                 "image_delivery": {"status": "failed", "attached": 0, "requested": len(media),
                                    "message": str(exc), "next_actions": [shlex.join(action)]},
-            }, delivered=False)
-        return finalize_mcp({**result, "status": "error", "_exit_code": 1,
-                "image": {"status": "failed", "message": str(exc)}}, delivered=False)
-    return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(result)), *attachments],
-        structuredContent=result,
-    )
+            }, delivered=False))
+        return package(finalize_mcp({**result, "status": "error", "_exit_code": 1,
+                "image": {"status": "failed", "message": str(exc)}}, delivered=False))
+    return package(result, attachments)
 
 
 @mcp.tool()

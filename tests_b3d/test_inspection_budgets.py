@@ -186,9 +186,9 @@ def test_mcp_attachment_failure_remains_bounded_and_successful(isolated_dir, mon
         return result
 
     monkeypatch.setattr(server, "_invoke", tamper)
-    result = server.import_cad(str(REAL), str(isolated_dir), initialize=True, view=False, diff=False,
+    result = _payload(server.import_cad(str(REAL), str(isolated_dir), initialize=True, view=False, diff=False,
                               max_images=1, response_text_budget=6000,
-                              response_budget=8000, vision_profile={"name": "host", "tokens_per_image": 1000})
+                              response_budget=8000, vision_profile={"name": "host", "tokens_per_image": 1000}))
     assert isinstance(result, dict)
     assert result["status"] == result["core"]["status"] == "success" and result["_exit_code"] == 0
     assert result["image_delivery"]["status"] == "failed"
@@ -259,3 +259,21 @@ def test_registered_inspect_rejects_unknown_budget_fields_before_execution(isola
     with pytest.raises(ValueError, match="Invalid inspect arguments"):
         asyncio.run(server.mcp.call_tool("inspect", {"file": "missing.step", "cwd": str(isolated_dir),
                                                      "report": True, "response_buget": 1000}))
+
+
+@pytest.mark.parametrize("prepare_images", [False, True])
+def test_text_only_mcp_serializes_exactly_what_was_measured(isolated_dir, prepare_images):
+    import math
+    step, _ = _baseline(isolated_dir)
+    response = asyncio.run(server.mcp.call_tool("inspect", {
+        "file": str(step), "cwd": str(isolated_dir), "report": True,
+        "report_images": prepare_images, "image_budget": 0, "response_text_budget": 3000,
+    }))
+    assert isinstance(response, CallToolResult)
+    assert [block.type for block in response.content] == ["text"]
+    text = response.content[0].text
+    payload = json.loads(text)
+    _assert_budget(payload)
+    assert math.ceil(len(text.encode("utf-8")) / 3) == payload["delivery"]["estimated_text_tokens"]
+    assert payload["delivery"]["media"]["returned"] == 0
+    assert payload["inspection"]["counts"]["faces"] > 0
