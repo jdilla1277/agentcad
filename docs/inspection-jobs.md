@@ -56,6 +56,8 @@ nested `inspection` report when ready. Polling (`status`) returns progress
 without attaching a gallery. A wait deadline stops only that caller's wait;
 the detached worker continues after the CLI or MCP call ends. No background
 service or open-source-external dependency is required.
+Full waits finish after the worker releases execution ownership. A deadline can
+return earlier with `wait_expired=true` and the current `worker_running` value.
 
 Cancellation is cooperative. During a native stage, `cancel_requested` can be
 true while `worker_running` remains true. The current stage may finish; the

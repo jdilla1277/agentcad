@@ -300,7 +300,7 @@ class InspectionJob:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             snapshot = self.status()
-            if snapshot["status"] not in {"queued", "running"}:
+            if snapshot["status"] not in {"queued", "running"} and not snapshot["worker_running"]:
                 return snapshot, False
             if deadline is not None and time.monotonic() >= deadline:
                 return snapshot, True
@@ -367,7 +367,8 @@ def request_report(step, output_root, layout, *, images=True, max_images=9, text
     else:
         snapshot = job.status()
     result = None
-    if snapshot["status"] in {"complete", "failed"} and action not in {"status", "cancel"}:
+    if (snapshot["status"] in {"complete", "failed"} and action not in {"status", "cancel"}
+            and not (snapshot["worker_running"] and (background or expired))):
         result = job.result(text_budget=text_budget, response_path=layout.response_path, response_extra=response_extra)
     return snapshot, result, expired
 
