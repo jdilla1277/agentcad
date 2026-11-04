@@ -489,6 +489,29 @@ module.PromotionStore(sys.argv[1]).promote(sys.argv[2], request_key='killed-expl
     assert promotions.read("killed-explicit")["accepted_version"]["version"] == 2
 
 
+@pytest.mark.parametrize(
+    "root,path,expected",
+    [
+        (r"C:\build", r"\\?\C:\build\.agentcad\promotions\key.lock", True),
+        (r"\\?\C:\build", r"C:\build\.agentcad\promotions\key.lock", True),
+        (r"\\server\share\build", r"\\?\UNC\server\share\build\key.lock", True),
+        (r"\\?\UNC\server\share\build", r"\\server\share\build\key.lock", True),
+        (r"C:\build", r"\\?\C:\build-other\key.lock", False),
+        (r"C:\build", r"\\?\D:\build\key.lock", False),
+        (r"\\server\share\build", r"\\?\UNC\server\other\build\key.lock", False),
+    ],
+)
+def test_resolved_windows_namespace_aliases_preserve_root_boundary(
+    root, path, expected
+):
+    from pathlib import PureWindowsPath
+    from agentcad.change_store import _within_root
+
+    # realpath can retain the extended prefix if a concurrent lock changes the
+    # result of the second native lookup used to verify prefix removal.
+    assert _within_root(PureWindowsPath(path), PureWindowsPath(root)) is expected
+
+
 def test_concurrent_explicit_promotion_has_one_version_and_one_first_response(tmp_path):
     store = project(tmp_path)
     attempt = candidate(store, mode="staged")
