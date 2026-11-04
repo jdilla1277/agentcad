@@ -72,7 +72,14 @@ def _route_through_daemon(argv: list[str]):
         )
 
     return _daemon.send_request(
-        {"type": "run", "cwd": str(Path.cwd()), "argv": argv},
+        {
+            "type": "run",
+            "cwd": str(Path.cwd()),
+            "argv": argv,
+            # The daemon's own environment belongs to whichever command
+            # spawned it; the request must run with this caller's settings.
+            "env": _daemon.client_request_env(),
+        },
         socket_path=_socket_path(),
         progress_callback=show_progress,
     )
@@ -122,6 +129,9 @@ def maybe_route_through_daemon(argv: list[str], no_daemon: bool = False) -> None
 
     output_str = result.get("output", "")
     stderr_str = result.get("stderr", "")
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None:
+        ctx.meta["command_exit_code"] = result.get("exit_code", 0)
     try:
         data = json.loads(output_str)
         data["via"] = "daemon"

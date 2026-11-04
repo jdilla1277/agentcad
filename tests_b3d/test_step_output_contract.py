@@ -1,6 +1,7 @@
 """The public STEP contract: capture geometry and read outputs.step."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -29,7 +30,16 @@ def test_capture_writes_canonical_step(runner, b3d_project, construction, solids
     assert payload["artifact_created"] is True
     assert payload["outputs"]["step"] == "v1_capture/output.step"
     step = b3d_project / payload["outputs"]["step"]
-    assert list(b3d_project.rglob("*.step")) == [step]
+    retained_step = Path(payload["change"]["geometry"])
+    assert retained_step == (
+        b3d_project.resolve()
+        / ".agentcad/changes/attempts"
+        / payload["change"]["revision_id"]
+        / "geometry/output.step"
+    )
+    # The retained snapshot is expected; any third STEP is still a stray export.
+    assert set(b3d_project.rglob("*.step")) == {step, retained_step}
+    assert retained_step.read_bytes() == step.read_bytes()
     loaded = import_step(str(step))
     assert len(loaded.solids()) == solids
     assert loaded.volume == pytest.approx(volume)

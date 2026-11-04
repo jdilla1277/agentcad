@@ -7,6 +7,7 @@ installation; we never signal a PID obtained from a stale file.
 from __future__ import annotations
 
 import hashlib
+from http.client import HTTPException
 import hmac
 import json
 import os
@@ -169,7 +170,7 @@ def service_status():
             return {"running": True, "port": config["port"], **state}
         except ViewerUnavailable:
             raise
-        except (OSError, ValueError):
+        except (OSError, ValueError, HTTPException):
             pass
     return {"running": False, "port": config.get("port") if config else None}
 
