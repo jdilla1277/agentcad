@@ -316,3 +316,19 @@ def test_unmanaged_source_writer_coordinates_with_its_managed_reader(tmp_path):
             child.terminate()
             child.join(5)
     assert child.exitcode == 0
+
+
+def test_killed_index_publication_is_reclaimed_without_changing_artifacts(project):
+    layout, root = project
+    with cache_lease(root, layout=layout) as cache:
+        cache.publish_json(_report(root), {"original": "retained"})
+        directory = cache.directory
+    original = _report(root).read_bytes()
+    orphan = directory / '.index.json.killed.tmp'
+    orphan.write_bytes(b'partial unpublished index')
+    unrelated = directory / 'notes.tmp'
+    unrelated.write_bytes(b'unrelated')
+    with cache_lease(root, layout=layout, protect=[_report(root)]) as cache:
+        cache.validate([_report(root)])
+    assert not orphan.exists() and unrelated.read_bytes() == b'unrelated'
+    assert _report(root).read_bytes() == original

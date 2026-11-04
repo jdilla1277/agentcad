@@ -368,6 +368,9 @@ def cache_lease(output_root=None, *, layout=None, protect=()):
     with _locked(lock) as acquired:
         if not acquired:
             raise CacheResourceLimit("Inspection cache is busy; retry the same inspection request.")
+        for path in lease.directory.glob(".index.json.*.tmp"):
+            if path.is_file() or path.is_symlink():
+                path.unlink()
         lease.state = lease._read_index()
         lease._collect_roots()
         with ExitStack() as stack:
