@@ -54,9 +54,8 @@ historical payload. Retained payloads and ID mappings are never retargeted.
 Queued, running, stopped, failed, canceled and resource-limited jobs protect the
 completed artifacts needed to resume. Their bootstrap/checkpoint JSON also
 counts toward the quota. The protected state has no expiry until those jobs
-complete; its retention clock starts when that protection is released. An
-actual recorded completion time starts that clock, including after a restart.
-ordinary read does not release or renew a job's protection. The remaining job
+complete. Its retention clock starts at the recorded completion time, including
+after a restart. Ordinary reads do not release or renew a job's protection. The remaining job
 history is retained independently after completion; its derived result payload
 can be evicted.
 
