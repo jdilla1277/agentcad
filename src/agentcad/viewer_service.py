@@ -15,6 +15,7 @@ from agentcad import __version__
 from agentcad import project_viewer as live
 from agentcad.project_viewer_page import PAGE
 from agentcad.versioning import atomic_write_json
+from agentcad import reviews
 
 
 class Server(ThreadingHTTPServer):
@@ -97,6 +98,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(404, {"error": "Unknown project"})
             elif route == "":
                 self.reply(200, PAGE.encode(), "text/html; charset=utf-8")
+            elif route == "review/comments":
+                root = self.review_root(token, record)
+                if root is not None:
+                    self.reply(200, {"comments": reviews.list_comments(root)})
             elif route == "state":
                 client = parse_qs(urlsplit(self.path).query).get("client", [""])[0]
                 if re.fullmatch(r"[a-zA-Z0-9-]{1,64}", client):
@@ -127,6 +132,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self.allowed():
+            return
+        review = re.fullmatch(r"/projects/([a-f0-9]{64})/review/(.*)", urlsplit(self.path).path)
+        if review:
+            self.review_post(*review.groups())
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -172,6 +181,71 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(404, {"error": "Unknown operation"})
         except (ValueError, TypeError, AttributeError):
             self.reply(400, {"error": "Invalid request"})
+
+    def review_root(self, token, record):
+        # A project capability grants access only to that project's reviews.
+        if not secrets.compare_digest(self.headers.get("X-AgentCAD-Review-Token", ""), token):
+            self.reply(403, {"message": "Invalid review capability"})
+            return None
+        if not record:
+            self.reply(404, {"message": "Unknown project"})
+            return None
+        root = Path(record["root"])
+        if root.resolve() != root or not root.is_dir():
+            self.reply(403, {"message": "Project path changed"})
+            return None
+        for path in (
+            root / ".agentcad", root / ".agentcad/reviews",
+            root / ".agentcad/reviews/comments.json",
+            root / ".agentcad/reviews/screenshots", root / ".agentcad/reviews-write.lock",
+        ):
+            if path.resolve() != path:
+                self.reply(403, {"message": "Review path changed"})
+                return None
+        return root
+
+    def review_post(self, token, route):
+        try:
+            root = self.review_root(token, live.read_json(live.project_record(token)))
+            if root is None:
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 2_000_000:
+                raise ValueError("Review request is too large or empty")
+            payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise ValueError("Review request must be an object")
+            if route == "comments":
+                comment = reviews.create_comment(
+                    root, payload, status="open" if payload.get("send") is True else "draft"
+                )
+                self.reply(201, {"comment": comment})
+                return
+            if route == "submit":
+                self.reply(200, reviews.submit_drafts(root, payload.get("comment_ids")))
+                return
+            match = re.fullmatch(r"comments/(C\d+)/(update|delete|reply|resolve|reopen)", route)
+            if not match:
+                self.reply(404, {"message": "Unknown review operation"})
+                return
+            comment_id, action = match.groups()
+            if action == "update":
+                comment = reviews.update_draft_comment(root, comment_id, payload)
+            elif action == "delete":
+                comment = reviews.delete_draft_comment(root, comment_id)
+            elif action == "reply":
+                comment = reviews.reply_to_comment(root, comment_id, payload.get("message", ""), actor="human")
+            else:
+                comment = reviews.transition_comment(root, comment_id, action, actor="human", message=payload.get("message"))
+            self.reply(200, {"comment": comment})
+        except KeyError:
+            self.reply(404, {"message": "Comment not found"})
+        except ValueError as exc:
+            self.reply(400, {"message": str(exc)})
+        except TypeError:
+            self.reply(400, {"message": "Invalid comment request"})
+        except OSError:
+            self.reply(503, {"message": "Review unavailable; retry shortly"})
 
 
 def main():

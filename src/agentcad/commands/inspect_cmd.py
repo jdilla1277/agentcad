@@ -1,4 +1,5 @@
 import json
+import math
 import shlex
 import signal
 import sys
@@ -16,6 +17,7 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.native_io import suppress_native_output
+from agentcad.inspection_delivery import delivery_options, forward_options, read_snapshot
 
 DEFAULT_ID_LIMIT = 100
 DEFAULT_VALIDATION_TIMEOUT_S = 90.0
@@ -187,6 +189,18 @@ def _clear_validation_timeout(previous_state) -> None:
 
 @click.command("inspect")
 @click.argument("file")
+@click.option("--id", "entity_id", help="Retrieve one typed ID from an imported or run-generated baseline's saved geometry manifest.")
+@click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of a saved baseline or --id target.")
+@click.option("--isolate", is_flag=True, help="Show only the --id target; requires --image. Default images highlight it in context.")
+@click.option("--report", "with_report", is_flag=True, help="Prepare or reuse a compact report and ranked sample image bundle for an imported or run-generated baseline.")
+@click.option("--no-images", is_flag=True, help="Omit image preparation/delivery for --report; keep the same analysis and sample plan.")
+@click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum distinct --report images; overall first, then alternating part/face-edge samples.")
+@click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated text-token allowance for --report (compact JSON UTF-8 bytes / 3).")
+@click.option("--background", is_flag=True, help="Start --report analysis in a detached local worker and return its job.")
+@click.option("--wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for --report after these seconds; its worker continues.")
+@click.option("--job", "job_id", default=None, help="Retrieve/control the durable inspection job for this FILE; requires --report.")
+@click.option("--job-action", type=click.Choice(["status", "wait", "resume", "cancel"]), default=None, help="Action on --job. Default: wait. Cancellation stops between stages.")
+@click.option("--response-snapshot", default=None, help="Retrieve a complete saved response by its delivery ID; requires --report. No CAD work.")
 @click.option(
     "--ids", "with_ids", is_flag=True,
     help="Include per-feature ID lists (solids, faces, edges) for use with "
@@ -239,8 +253,21 @@ def _clear_validation_timeout(previous_state) -> None:
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @project_options
+@delivery_options
 def inspect_cmd(
     file,
+    entity_id,
+    with_image,
+    isolate,
+    with_report,
+    no_images,
+    max_images,
+    text_budget,
+    background,
+    wait_timeout,
+    job_id,
+    job_action,
+    response_snapshot,
     with_ids,
     with_summary,
     id_limit,
@@ -257,8 +284,60 @@ def inspect_cmd(
             "--validate-only cannot be combined with --ids or --summary; "
             "remove --validate-only to request deep feature extraction."
         )
+    if (entity_id or with_image) and (with_ids or with_summary or validate_only):
+        raise click.UsageError("--id/--image cannot be combined with --ids, --summary, or --validate-only.")
+    if isolate and not (entity_id and with_image):
+        raise click.UsageError("--isolate requires --id and --image.")
+    if with_report and (entity_id or with_image or with_ids or with_summary or validate_only or isolate):
+        raise click.UsageError("--report cannot be combined with --id, --image, --ids, --summary, or --validate-only.")
+    if not with_report and (no_images or max_images != 9 or text_budget != 2000):
+        raise click.UsageError("--no-images, --max-images and --text-budget require --report.")
+    if not with_report and (background or wait_timeout is not None or job_id or job_action):
+        raise click.UsageError("Inspection job controls require --report.")
+    if wait_timeout is not None and not math.isfinite(wait_timeout):
+        raise click.BadParameter("Use a finite number of seconds.", param_hint="--wait-timeout")
+    if job_action and not job_id:
+        raise click.UsageError("--job-action requires --job.")
+    if job_id and (no_images or max_images != 9):
+        raise click.UsageError("--job uses its saved image configuration; omit --no-images/--max-images.")
+    if background and (job_action in {"status", "wait", "cancel"} or wait_timeout is not None):
+        raise click.UsageError("--background cannot be combined with a wait deadline or status/wait/cancel action.")
+    if job_id and job_action is None:
+        job_action = "wait"
+    if background and job_action == "wait":
+        raise click.UsageError("Use --job-action resume with --background to start a saved job.")
+    if response_snapshot:
+        if not with_report or job_id or background or wait_timeout is not None or no_images or max_images != 9 or text_budget != 2000:
+            raise click.UsageError("--response-snapshot requires --report and uses saved content; omit job/report preparation controls. Use --response-text-budget for a new delivery limit.")
+        try:
+            snapshot, exit_code = read_snapshot(response_snapshot, file, get_project())
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            baseline = Path(file).resolve()
+            mode = ["--report"] if baseline.with_name("geometry_manifest.json").is_file() else ["--validate-only"]
+            _emit({"command": "inspect", "status": "error", "reason": getattr(exc, "reason", "response_snapshot_unavailable"),
+                   "message": str(exc), "suggestion": "Request fresh inspection evidence, or restore the original snapshot from backup. A fresh report does not recover the historical response.",
+                   "next_actions": [shlex.join(["agentcad", "inspect", str(baseline), *mode, "--build-dir", str(get_project().build_root)])]}, exit_code=1)
+            return
+        _emit(snapshot, exit_code=exit_code)
+        return
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
+    if with_report:
+        argv.extend(["--report", "--max-images", str(max_images), "--text-budget", str(text_budget)])
+        if background:
+            argv.append("--background")
+        if wait_timeout is not None:
+            argv.extend(["--wait-timeout", str(wait_timeout)])
+        if job_id:
+            argv.extend(["--job", job_id, "--job-action", job_action])
+    if no_images:
+        argv.append("--no-images")
+    if entity_id:
+        argv.extend(["--id", entity_id])
+    if with_image:
+        argv.append("--image")
+    if isolate:
+        argv.append("--isolate")
     if with_ids:
         argv.append("--ids")
     if with_summary:
@@ -272,7 +351,90 @@ def inspect_cmd(
     argv.extend(["--validation-timeout", str(validation_timeout)])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
+    forward_options(argv)
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    if with_report:
+        from agentcad.inspection_report import inspection_report, ReportBudgetError
+        from agentcad.inspection_jobs import request_report
+        from agentcad.project import derived_dir
+
+        try:
+            controlled = background or wait_timeout is not None or job_id is not None
+            if not controlled:
+                payload, _ = inspection_report(
+                    file, derived_dir("inspect", Path(file)), images=not no_images,
+                    max_images=max_images, text_budget=text_budget, response_path=get_project().response_path,
+                    response_extra=get_project().describe(),
+                )
+            else:
+                job, result, expired = request_report(
+                    file, derived_dir("inspect", Path(file)), get_project(), images=not no_images,
+                    max_images=max_images, text_budget=text_budget,
+                    background=background, wait_timeout=wait_timeout, job_id=job_id, action=job_action,
+                    response_extra=get_project().describe(),
+                )
+        except Exception as exc:
+            _emit({"command": "inspect", "status": "error", "message": str(exc),
+                   "error_kind": "report_budget_too_small" if isinstance(exc, ReportBudgetError) else "report_unavailable"}, exit_code=1)
+            return
+        if not controlled:
+            _emit(payload)
+            return
+        payload = {"command": "inspect", "status": "success" if job["status"] == "complete" else job["status"],
+                   "inspection_job": job, "wait_expired": expired}
+        if result:
+            payload["inspection"] = result[0]
+        _emit(payload, exit_code=1 if job_action not in {"status", "cancel"} and job["status"] in {"failed", "stopped", "canceled"} else 0)
+        return
+
+    if entity_id or with_image:
+        from agentcad.geometry_manifest import read_manifest, record, summary
+        try:
+            saved = read_manifest(file)
+            selected = record(saved, entity_id) if entity_id else None
+        except ValueError as exc:
+            _emit({"command": "inspect", "status": "error", "message": str(exc)}, exit_code=1)
+            return
+        payload = {
+            "command": "inspect", "status": "success",
+            "geometry_manifest": summary(file, saved), "entity": selected,
+            "selector": {
+                "backend": "build123d",
+                "call": f"geometry.pick_{selected['kind']}({entity_id!r})",
+            } if selected and selected["kind"] in ("face", "edge") and len(selected["occurrence_ids"]) <= 1 else None,
+            "next_actions": ["agentcad docs editing — load this baseline with load_geometry; part/occurrence records link to their members"],
+        }
+        image_action = f"agentcad inspect {shlex.quote(file)}" + (f" --id {entity_id}" if entity_id else "") + " --image"
+        payload["next_actions"].insert(0, image_action)
+        if with_image:
+            from agentcad.geometry_images import geometry_image
+            from agentcad.project import derived_dir
+            try:
+                image = geometry_image(file, derived_dir("inspect", Path(file)), object_id=entity_id, isolate=isolate)
+                for key in ("png", "metadata"):
+                    image[key] = get_project().response_path(Path(image[key]))
+                payload["image"] = {"status": "success", **image}
+                if entity_id and not isolate:
+                    payload["next_actions"][0] = image_action + " --isolate"
+                elif not entity_id and payload["geometry_manifest"]["sample_ids"]["face"]:
+                    sample = payload["geometry_manifest"]["sample_ids"]["face"]
+                    payload["next_actions"][0] = f"agentcad inspect {shlex.quote(file)} --id {sample} --image"
+            except Exception as exc:
+                payload.update(status="error", error_kind="image_unavailable")
+                payload["image"] = {"status": "failed", "message": str(exc)}
+                payload["next_actions"] = [
+                    image_action + (" --isolate" if isolate else ""),
+                    f"agentcad inspect {shlex.quote(file)}" + (f" --id {entity_id}" if entity_id else " --ids"),
+                ]
+                payload["suggestion"] = (
+                    "Resolve the reported image error and retry, or inspect the record without --image. "
+                    "Headless Linux PNG rendering requires X11/GLX, for example xvfb-run -a."
+                )
+                _emit(payload, exit_code=1)
+                return
+        _emit(payload)
+        return
 
     file_path = Path(file)
     detection = file_detect.detect_file_type(file_path)
@@ -410,6 +572,7 @@ def inspect_cmd(
 
 
 def _emit(payload: dict, exit_code: int = 0) -> None:
+    click.get_current_context().meta["inspection_exit_code"] = exit_code
     click.echo(json.dumps(payload))
     if exit_code != 0:
         sys.exit(exit_code)
@@ -685,6 +848,26 @@ def _inspect_tier0_impl(
                         with_summary=with_summary,
                     ),
                 }
+            if with_ids:
+                from agentcad.geometry_manifest import MANIFEST_NAME, read_manifest, summary
+                if Path(file_path).with_name(MANIFEST_NAME).is_file() and Path(file_path).name == "output.step":
+                    try:
+                        saved = read_manifest(file_path)
+                        for plural, kind in (("solids", "solid"), ("faces", "face"), ("edges", "edge")):
+                            for entry in payload[plural]:
+                                typed = f"{kind}_v{saved['version']}_{entry['id']}"
+                                issued = saved["entities"][typed]
+                                if any(issued.get(key) != value for key, value in entry.items() if key != "id"):
+                                    raise ValueError("Inspection loader disagrees with the saved ID map; use --id or re-import.")
+                                entry["object_id"] = typed
+                        payload["geometry_manifest"] = summary(file_path, saved)
+                    except (ValueError, KeyError) as exc:
+                        # Do not leave a partially annotated list that suggests
+                        # some selectors are safe against a mismatched baseline.
+                        for plural in ("solids", "faces", "edges"):
+                            for entry in payload[plural]:
+                                entry.pop("object_id", None)
+                        payload["geometry_manifest"] = {"status": "unavailable", "message": str(exc)}
         # When the agent has IDs (or summary IDs), the most-likely next
         # action shifts: they're here because they want to write an edit
         # script that targets specific features. Point them at the
@@ -702,6 +885,15 @@ def _inspect_tier0_impl(
                 "pick_face/pick_edge in edit.py",
             ]
         payload["more_at"] = "agentcad docs editing"
+        saved_summary = payload.get("geometry_manifest", {})
+        if saved_summary.get("manifest_id"):
+            payload.setdefault("notes", []).append(
+                "id is the legacy integer for pick_face/pick_edge; object_id is the typed baseline ID for geometry.pick_face/pick_edge after load_geometry."
+            )
+            payload["next_actions"] = [
+                saved_summary["lookup_example"],
+                "agentcad docs editing — use object_id strings with the baseline geometry selection context",
+            ]
     else:
         tracker.skip(
             "feature_extraction",

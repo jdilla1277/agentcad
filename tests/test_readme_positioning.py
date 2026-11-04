@@ -20,3 +20,12 @@ def test_readme_keeps_cadquery_as_explicit_compatibility_mode():
 def test_readme_preview_claim_matches_cli_behavior():
     assert "four-view PNG + turntable GIF" not in README
     assert "on-demand turntable GIF" in README
+
+
+def test_readme_organizes_capabilities_by_required_workflow():
+    assert "**Inspect → Specify → Build → Validate → Deliver**" in README
+    positions = [
+        README.index(f"### {stage}")
+        for stage in ("Inspect", "Specify", "Build", "Validate", "Deliver")
+    ]
+    assert positions == sorted(positions)

@@ -1,9 +1,12 @@
 import json
+import math
 import os
 
 import pytest
 
 from agentcad.cli import cli
+from agentcad import project_viewer as live
+from agentcad.reviews import create_comment, submit_drafts
 
 
 GROUPED_PARTS_SCRIPT = """\
@@ -62,6 +65,51 @@ def _canvas_pixel_summary(page):
           };
         }"""
     )
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+def test_retained_revision_viewer_shows_required_check_states(runner, isolated_dir, deferred):
+    sync_playwright = _require_playwright()
+    initialized = runner.invoke(cli, ["init", "--name", "checks", "--runtime", "build123d"])
+    assert initialized.exit_code == 0, initialized.output
+    (isolated_dir / "bracket.py").write_text(
+        "plate = Box(60, 30, 6) - Pos(-20, 0, 0) * Cylinder(3, 12) - Pos(20, 0, 0) * Cylinder(3, 12)\n"
+        "show_object(fillet(plate.edges().filter_by(Axis.Z), radius=1))\n"
+    )
+    (isolated_dir / "checks.json").write_text(json.dumps({"schema_version": 1, "checks": [
+        {"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 80},
+        {"check_id": "vendor", "kind": "external", "validator": "vendor"},
+    ]}))
+    built = runner.invoke(cli, ["run", "bracket.py", "--label", "wrong", "--checks", "checks.json",
+                               "--no-preview", "--no-diff", "--no-view", "--no-daemon"]
+                          + (["--defer-checks"] if deferred else []))
+    assert built.exit_code == 1, built.output
+    revision = json.loads(built.stdout)["change"]["revision_id"]
+    viewed = runner.invoke(cli, ["view", revision])
+    assert viewed.exit_code == 0, viewed.output
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto(json.loads(viewed.stdout)["url"], wait_until="domcontentloaded")
+            page.wait_for_selector("#spec-panel", state="visible", timeout=45_000)
+            assert page.locator("#review-heading").inner_text() == "Change checks"
+            assert page.locator("#review-pill").inner_text().lower() == ("pending" if deferred else "invalid")
+            rows = page.locator("#review-spec-rows").inner_text().lower()
+            assert "length (required)" in rows
+            assert "vendor (required)" in rows
+            assert ("pending" if deferred else "unavailable") in rows
+            assert "pass" in rows  # Core execution and written geometry remain visible.
+            if not deferred:
+                assert "80" in rows and "60" in rows and "fail" in rows
+            assert revision in page.locator("#review-subtitle").inner_text()
+            assert "Current" not in page.locator("#label-left").inner_text()
+            assert "Retained" in page.locator("#label-left").inner_text()
+            assert not errors
+        finally:
+            browser.close()
 
 
 def test_group_review_viewer_isolates_group_with_ghost_rest(runner, isolated_dir):
@@ -258,3 +306,557 @@ def test_previous_current_modes_preserve_camera_orientation(runner, isolated_dir
             assert label_b["x"] >= 712 / 2
         finally:
             browser.close()
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_viewer_pan_and_fit_controls(engine, runner, isolated_dir):
+    sync_playwright = _require_playwright()
+    assert runner.invoke(cli, ["init", "--name", "pan_smoke", "--runtime", "cadquery"]).exit_code == 0
+    (isolated_dir / "script.py").write_text(GROUPED_PARTS_SCRIPT)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "pan", "--no-preview", "--no-view", "--no-daemon",
+    ])
+    assert result.exit_code == 0, result.output
+
+    with sync_playwright() as playwright:
+        browser = getattr(playwright, engine).launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto((isolated_dir / "v1_pan" / "viewer.html").as_uri())
+            page.wait_for_function("() => window.agentcadViewer?.debugState().ready", timeout=45_000)
+            page.click("#pause-btn")
+
+            def state():
+                return page.evaluate("window.agentcadViewer.captureState()")
+
+            def offset(camera):
+                return [p - t for p, t in zip(camera["position"], camera["target"])]
+
+            def drag():
+                page.mouse.move(850, 430)
+                page.mouse.down()
+                page.mouse.move(1050, 330, steps=10)
+                page.mouse.up()
+                # Wait for OrbitControls damping to settle before comparing.
+                page.wait_for_timeout(1000)
+
+            initial = state()
+            page.click("#pan-btn")
+            assert page.locator("#pan-btn").get_attribute("aria-pressed") == "true"
+            drag()
+            panned = state()
+            assert panned["target"] != pytest.approx(initial["target"])
+            assert offset(panned) == pytest.approx(offset(initial))
+            assert panned["autoRotate"] is False
+
+            # Live snapshots retain the chosen drag mode as well as the camera.
+            page.click("#pan-btn")
+            page.evaluate("saved => window.agentcadViewer.restoreState(saved)", panned)
+            assert page.locator("#pan-btn").get_attribute("aria-pressed") == "true"
+            page.click("#fit-view-btn")
+            fitted = state()
+            assert fitted["target"] == pytest.approx(initial["target"])
+            assert offset(fitted) == pytest.approx(offset(initial))
+
+            page.click("#pan-btn")
+            page.keyboard.down("Shift")
+            drag()
+            page.keyboard.up("Shift")
+            assert state()["target"] != pytest.approx(fitted["target"])
+            assert offset(state()) == pytest.approx(offset(fitted))
+            page.click("#fit-view-btn")
+            drag()
+            assert state()["target"] == pytest.approx(fitted["target"])
+            assert offset(state()) != pytest.approx(offset(fitted))
+
+            # Fit also adjusts zoom for a narrow viewport, rather than cropping.
+            page.click("#fit-view-btn")
+            wide_distance = math.dist(state()["position"], state()["target"])
+            page.set_viewport_size({"width": 600, "height": 1000})
+            page.click("#fit-view-btn")
+            assert math.dist(state()["position"], state()["target"]) > wide_distance
+
+            # Hidden parts do not pull the fit away from the visible model.
+            page.click('#part-controls [data-part-id="center_rib"] [data-action="isolate"]')
+            page.click("#fit-view-btn")
+            isolated = state()
+            assert isolated["target"] != pytest.approx(initial["target"])
+            assert math.dist(isolated["position"], isolated["target"]) < wide_distance
+            assert not errors, errors
+        finally:
+            browser.close()
+
+
+def test_review_viewer_saves_submits_and_reloads_view_comment(runner, isolated_dir):
+    sync_playwright = _require_playwright()
+    assert runner.invoke(cli, ["init", "--name", "comment_smoke", "--runtime", "cadquery"]).exit_code == 0
+    script = isolated_dir / "script.py"
+    script.write_text(GROUPED_PARTS_SCRIPT)
+    run = runner.invoke(
+        cli,
+        ["run", "script.py", "--output", "commented", "--no-preview", "--no-view", "--no-daemon"],
+    )
+    assert run.exit_code == 0, run.output
+
+    project_url = live.open_project(isolated_dir, lambda _: True)["url"]
+    url = project_url + "artifacts/1/viewer.html"
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_function("() => window.agentcadViewer?.debugState().ready === true", timeout=45_000)
+                # Comments stay discoverable in the parts table and return to
+                # the 3D model when opened, without covering the model label.
+                page.click("#btn-parts")
+                page.get_by_role("button", name="Comments", exact=True).click()
+                assert page.evaluate("window.agentcadViewer.debugState().mode") == "single-a"
+                assert page.locator("#comment-toggle-btn").get_attribute("aria-expanded") == "true"
+                tools = page.locator("#viewer-tools").bounding_box()
+                label = page.locator("#label-left").bounding_box()
+                assert tools["y"] > label["y"] + label["height"]
+                assert page.locator("#new-comment-btn").is_visible()
+                page.click('#part-controls [data-part-id="base_plate"] .name')
+                point = page.evaluate("window.agentcadViewer.selectedPartScreenPoint()")
+                assert point is not None
+
+                page.click("#new-comment-btn")
+                page.mouse.click(point["x"], point["y"])
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().pending_anchor?.kind === 'surface'"
+                )
+                page.fill("#comment-text", "Make the overall silhouette less top-heavy.")
+                page.click("#send-comment-btn")
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments[0]?.status === 'open'"
+                )
+                agent_reply = runner.invoke(cli, [
+                    "review", "reply", "C1", "--message", "Agent is reviewing this.",
+                    "--version", "current",
+                ])
+                assert agent_reply.exit_code == 0, agent_reply.output
+                page.wait_for_function(
+                    """() => (
+                      window.agentcadViewer.reviewDebugState().comments[0]?.replies[0]?.actor
+                      === 'agent'
+                    )""",
+                    timeout=8_000,
+                )
+                assert "Agent is reviewing this." in page.locator(
+                    '.comment-row[data-comment-id="C1"]'
+                ).inner_text()
+
+                page.click("#new-comment-btn")
+                page.mouse.click(point["x"], point["y"])
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().pending_anchor?.kind === 'surface'"
+                )
+                page.select_option("#comment-part-select", "base_plate")
+                page.fill("#comment-text", "Make the base plate easier to mount.")
+                page.click("#save-comment-btn")
+                page.wait_for_function("() => window.agentcadViewer.reviewDebugState().comments.length === 2")
+                second_row = page.locator('.comment-row[data-comment-id="C2"]')
+                assert second_row.locator(".draft-note").inner_text() == "Not visible to the agent yet"
+                assert second_row.get_by_role("button", name="Send", exact=True).is_visible()
+                assert second_row.get_by_role("button", name="Edit", exact=True).is_visible()
+                assert second_row.get_by_role("button", name="Delete", exact=True).is_visible()
+                second_row.get_by_role("button", name="Edit", exact=True).click()
+                page.fill("#comment-text", "Make the base plate easier to mount and align.")
+                page.click("#save-comment-btn")
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments[1]?.text.endsWith('and align.')"
+                )
+
+                page.click("#new-comment-btn")
+                assert page.locator("body").evaluate("el => el.classList.contains('placing-comment')")
+                assert page.locator("#comment-placement-hud").is_visible()
+                page.mouse.move(point["x"], point["y"])
+                page.wait_for_function(
+                    "() => document.querySelector('#comment-target-preview').style.display === 'block'"
+                )
+                page.mouse.click(point["x"], point["y"])
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().pending_anchor?.kind === 'surface'"
+                )
+                assert page.locator("#comment-part-field").is_visible()
+                suggested_part = page.locator("#comment-part-select").input_value()
+                assert suggested_part
+                assert page.evaluate(
+                    "window.agentcadViewer.reviewDebugState().pending_anchor.part_id"
+                ) == suggested_part
+                page.select_option("#comment-part-select", "locator_pin")
+                assert page.evaluate(
+                    "window.agentcadViewer.reviewDebugState().pending_anchor.part_id"
+                ) == "locator_pin"
+                assert page.locator("#comment-target-preview").evaluate(
+                    "el => el.classList.contains('locked')"
+                )
+                page.fill("#comment-text", "Move this surface feature outward.")
+                page.click("#save-comment-btn")
+                page.wait_for_function("() => window.agentcadViewer.reviewDebugState().comments.length === 3")
+                assert not page.locator("#comment-target-preview").is_visible()
+
+                state = page.evaluate("window.agentcadViewer.reviewDebugState()")
+                assert [comment["anchor"]["kind"] for comment in state["comments"]] == [
+                    "surface", "surface", "surface"
+                ]
+                assert [comment["status"] for comment in state["comments"]] == [
+                    "open", "draft", "draft"
+                ]
+                assert state["comments"][2]["target"]["part_id"] == "locator_pin"
+                x, y, z = state["comments"][2]["anchor"]["point_mm"]
+                assert -11 <= x <= 11
+                assert -8 <= y <= 8
+                assert -2 <= z <= 8
+                assert len(state["comments"][2]["anchor"]["part_relative"]) == 3
+                page.click("#submit-review-btn")
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments.every(c => c.status === 'open')"
+                )
+                first_row = page.locator(".comment-row").first
+                first_row.get_by_role("button", name="Reply…").click()
+                first_row = page.locator(".comment-row").first
+                first_row.locator(".comment-reply-text").fill("One more detail from the human.")
+                first_row.get_by_role("button", name="Send reply").click()
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments[0]?.replies.length === 2"
+                )
+                first_row = page.locator(".comment-row").first
+                first_row.locator(".comment-reply-text").fill("Closing this thread now.")
+                first_row.get_by_role("button", name="Resolve").click()
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments[0]?.status === 'resolved'"
+                )
+                assert page.evaluate(
+                    "window.agentcadViewer.reviewDebugState().comments[0].replies.at(-1).action"
+                ) == "resolve"
+                first_row = page.locator(".comment-row").first
+                first_row.locator(".comment-reply-text").fill("Actually, this still needs work.")
+                first_row.get_by_role("button", name="Reopen", exact=True).click()
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments[0]?.status === 'open'"
+                )
+                assert page.evaluate(
+                    "window.agentcadViewer.reviewDebugState().comments[0].replies.at(-1).action"
+                ) == "reopen"
+
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments.length === 3"
+                )
+                assert page.locator(".comment-row").count() == 3
+                assert page.locator(".comment-pin").count() == 3
+
+                second = runner.invoke(
+                    cli,
+                    ["run", "script.py", "--output", "revised", "--no-preview", "--no-view", "--no-daemon"],
+                )
+                assert second.exit_code == 0, second.output
+                page.goto(
+                    project_url + "artifacts/2/viewer.html",
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_function(
+                    "() => window.agentcadViewer?.debugState().ready === true",
+                    timeout=45_000,
+                )
+                page.click("#btn-side")
+                page.wait_for_timeout(100)
+                pin_layout = page.evaluate(
+                    """() => Object.fromEntries(
+                      [...document.querySelectorAll('.comment-pin')].map(pin => [
+                        pin.dataset.commentId,
+                        {
+                          display: pin.style.display,
+                          x: Number.parseFloat(pin.style.left),
+                          y: Number.parseFloat(pin.style.top),
+                        },
+                      ])
+                    )"""
+                )
+                assert pin_layout["C1"]["display"] == "block"
+                assert pin_layout["C2"]["display"] == "block"
+                assert pin_layout["C3"]["display"] == "block"
+                assert pin_layout["C2"]["x"] > 1280 / 2
+                assert pin_layout["C3"]["x"] > 1280 / 2
+                page.click("#btn-agent")
+                assert page.locator("#comment-toggle-btn").is_visible()
+                assert not page.locator("#pan-btn").is_visible()
+                assert not page.locator("#fit-view-btn").is_visible()
+                assert all(
+                    pin["display"] == "none"
+                    for pin in page.evaluate(
+                        """() => [...document.querySelectorAll('.comment-pin')].map(pin => ({
+                          display: pin.style.display,
+                        }))"""
+                    )
+                )
+                page.click("#btn-parts")
+                assert page.locator("#comment-toggle-btn").is_visible()
+                locator_badge = page.locator(
+                    '#parts-list [data-part-id="locator_pin"] .part-comment-badge'
+                )
+                assert locator_badge.is_visible()
+                assert "C3" in locator_badge.inner_text()
+                page.click("#btn-side")
+                page.click("#comment-toggle-btn")
+                page.click("#new-comment-btn")
+                page.wait_for_timeout(100)
+                # Opening the sidebar resizes both viewports. Sample the pin
+                # after layout, then target the same point on Previous.
+                placement_point = page.locator('.comment-pin[data-comment-id="C2"]').evaluate(
+                    "pin => ({x: parseFloat(pin.style.left) - document.querySelector('#canvas').clientWidth / 2, y: parseFloat(pin.style.top)})"
+                )
+                page.mouse.click(placement_point["x"], placement_point["y"])
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().pending_anchor?.kind === 'surface'"
+                )
+                assert page.evaluate(
+                    "window.agentcadViewer.reviewDebugState().pending_anchor.role"
+                ) == "a"
+                assert page.locator("#comment-scope-field").is_visible()
+                assert page.locator('[data-comment-scope="a"]').inner_text() == "Previous"
+                assert page.locator('[data-comment-scope="b"]').inner_text() == "Current"
+                assert page.locator('[data-comment-scope="both"]').inner_text() == "Both"
+                page.click('[data-comment-scope="both"]')
+                assert page.evaluate(
+                    "window.agentcadViewer.reviewDebugState().pending_anchor.scope"
+                ) == "both"
+                page.fill("#comment-text", "Keep this feature aligned across both revisions.")
+                page.click("#send-comment-btn")
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments[3]?.status === 'open'"
+                )
+                both_comment = page.evaluate(
+                    "window.agentcadViewer.reviewDebugState().comments[3]"
+                )
+                assert both_comment["target"]["model"] == "both"
+                assert both_comment["target"]["source_model"] == "a"
+                assert page.locator('.comment-pin[data-comment-id="C4"]').count() == 2
+                assert page.locator('.comment-pin[data-comment-id="C4"]').first.inner_text() == "C4 · Both"
+
+                page.click("#new-comment-btn")
+                page.mouse.click(placement_point["x"], placement_point["y"])
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().pending_anchor?.kind === 'surface'"
+                )
+                page.fill("#comment-text", "Temporary draft")
+                page.click("#save-comment-btn")
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments.length === 5"
+                )
+                page.on("dialog", lambda dialog: dialog.accept())
+                page.locator('.comment-row[data-comment-id="C5"]').get_by_role(
+                    "button", name="Delete", exact=True
+                ).click()
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments.length === 4"
+                )
+
+                third = runner.invoke(
+                    cli,
+                    ["run", "script.py", "--output", "new-current", "--no-preview", "--no-view", "--no-daemon"],
+                )
+                assert third.exit_code == 0, third.output
+                page.goto(
+                    project_url + "artifacts/3/viewer.html",
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_function(
+                    "() => window.agentcadViewer?.debugState().ready === true",
+                    timeout=45_000,
+                )
+                page.click("#btn-side")
+                page.wait_for_timeout(100)
+                carried_pins = page.evaluate(
+                    """() => [...document.querySelectorAll('.comment-pin')]
+                      .filter(pin => pin.style.display === 'block')
+                      .map(pin => ({
+                        id: pin.dataset.commentId,
+                        role: pin.dataset.role,
+                        x: Number.parseFloat(pin.style.left),
+                      }))"""
+                )
+                for comment_id in ("C1", "C2", "C3"):
+                    matches = [pin for pin in carried_pins if pin["id"] == comment_id]
+                    assert len(matches) == 1
+                    assert matches[0]["role"] == "b"
+                    assert matches[0]["x"] > 1280 / 2
+                both_pins = [pin for pin in carried_pins if pin["id"] == "C4"]
+                assert {pin["role"] for pin in both_pins} == {"a", "b"}
+                assert any(pin["x"] < 1280 / 2 for pin in both_pins)
+                assert any(pin["x"] > 1280 / 2 for pin in both_pins)
+
+                agent_comment = runner.invoke(cli, [
+                    "review", "comment",
+                    "--message", "Could the locator pin use a larger lead-in?",
+                    "--part", "locator_pin",
+                ])
+                assert agent_comment.exit_code == 0, agent_comment.output
+                agent_payload = json.loads(agent_comment.stdout)["comment"]
+                assert agent_payload["author"] == "agent"
+                agent_id = agent_payload["id"]
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments.length === 5",
+                    timeout=8_000,
+                )
+                agent_row = page.locator(f'.comment-row[data-comment-id="{agent_id}"]')
+                assert agent_row.locator(".author").inner_text().lower() == "agent"
+                assert "Open · Human response needed" in agent_row.inner_text()
+                agent_pin = page.locator(f'.comment-pin[data-comment-id="{agent_id}"]')
+                assert agent_pin.count() == 1
+                assert agent_pin.get_attribute("data-role") == "b"
+
+                page.click("#comment-toggle-btn")
+                agent_row.get_by_role("button", name="Reply…").click()
+                agent_row.locator(".comment-reply-text").fill("Yes, please add one.")
+                agent_row.get_by_role("button", name="Send reply").click()
+                page.wait_for_function(
+                    "() => window.agentcadViewer.reviewDebugState().comments[4]?.replies[0]?.actor === 'human'"
+                )
+            finally:
+                browser.close()
+    finally:
+        live.stop_service()
+
+    listed = runner.invoke(cli, ["review", "list", "--status", "open"])
+    assert listed.exit_code == 0, listed.output
+    comments = json.loads(listed.stdout)["comments"]
+    assert [comment["anchor"]["kind"] for comment in comments] == [
+        "surface", "surface", "surface", "surface", "part"
+    ]
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_comment_pins_follow_part_visibility(engine, runner, isolated_dir):
+    sync_playwright = _require_playwright()
+    assert runner.invoke(cli, ["init", "--name", "pin_visibility", "--runtime", "cadquery"]).exit_code == 0
+    (isolated_dir / "script.py").write_text(GROUPED_PARTS_SCRIPT)
+    result = runner.invoke(cli, [
+        "run", "script.py", "--output", "current", "--no-preview", "--no-view", "--no-daemon",
+    ])
+    assert result.exit_code == 0, result.output
+    anchors = [
+        {"kind": "part"},
+        {"kind": "surface", "point_mm": [0, 0, 6.5]},
+        {"kind": "view", "screen": [0.5, 0.5]},
+        {"kind": "view", "screen": [0.6, 0.6]},
+    ]
+    for index, anchor in enumerate(anchors):
+        create_comment(isolated_dir, {
+            "text": f"Visibility check {index}",
+            "source_version": 1,
+            "target": {"model": "a", "part_id": "cover_panel" if index < 3 else None},
+            "anchor": anchor,
+            "view": {"mode": "single-a"},
+        })
+    submit_drafts(isolated_dir)
+    url = live.open_project(isolated_dir, lambda _: True)["url"] + "artifacts/1/viewer.html"
+    try:
+        with sync_playwright() as playwright:
+            browser = getattr(playwright, engine).launch(headless=True)
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            try:
+                page.goto(url)
+                page.wait_for_function(
+                    "() => window.agentcadViewer?.debugState().ready && window.agentcadViewer.reviewDebugState().comments.length === 4",
+                    timeout=45_000,
+                )
+                page.click("#pause-btn")
+                page.click("#comment-toggle-btn")
+
+                def check_pins(visible):
+                    page.wait_for_function(
+                        """visible => ['C1', 'C2', 'C3'].every(id => {
+                          const pin = document.querySelector(`.comment-pin[data-comment-id="${id}"]`);
+                          return pin && (getComputedStyle(pin).display !== 'none') === visible;
+                        })""", arg=visible,
+                    )
+                    assert page.locator('.comment-pin[data-comment-id="C4"]').is_visible()
+                    assert page.locator(".comment-row").count() == 4
+                    for row in page.locator(".comment-row").all():
+                        assert row.is_visible()
+                        assert row.locator(".comment-unplaced").count() == 0
+
+                check_pins(True)
+                for selector in (
+                    '#part-controls [data-part-id="cover_panel"] [data-action="hide"]',
+                    '#part-controls [data-group-id="cover"] [data-action="hide"]',
+                ):
+                    page.click(selector)
+                    check_pins(False)
+                    page.click(selector)
+                    check_pins(True)
+
+                page.click('#part-controls [data-group-id="frame"] [data-action="isolate"]')
+                check_pins(False)
+                # Ghosted geometry is still shown, so its comment pins remain.
+                page.click("#ghost-rest-btn")
+                check_pins(True)
+                page.click("#ghost-rest-btn")
+                check_pins(False)
+                page.click('#part-controls [data-group-id="frame"] [data-action="isolate"]')
+                check_pins(True)
+            finally:
+                browser.close()
+    finally:
+        live.stop_service()
+
+
+def test_carried_surface_comment_maps_by_part_and_missing_part_is_unplaced(runner, isolated_dir):
+    sync_playwright = _require_playwright()
+    assert runner.invoke(cli, ["init", "--name", "carry_smoke", "--runtime", "cadquery"]).exit_code == 0
+    script = isolated_dir / "script.py"
+    script.write_text(GROUPED_PARTS_SCRIPT)
+    run = runner.invoke(
+        cli,
+        ["run", "script.py", "--output", "current", "--no-preview", "--no-view", "--no-daemon"],
+    )
+    assert run.exit_code == 0, run.output
+
+    def carried_payload(part_id, text):
+        return {
+            "text": text,
+            "source_version": 0,
+            "source_label": "older",
+            "target": {"model": "a", "part_id": part_id},
+            "anchor": {
+                "kind": "surface",
+                "point_mm": [0, 0, 0],
+                "normal": [0, 0, 1],
+                "part_relative": [0.5, 0.5, 0.5],
+            },
+            "view": {"mode": "single-a", "position": [30, 30, 30], "target": [0, 0, 0]},
+        }
+
+    create_comment(isolated_dir, carried_payload("base_plate", "Still applies to the plate."))
+    create_comment(isolated_dir, carried_payload("removed_part", "This part no longer exists."))
+    submit_drafts(isolated_dir)
+
+    project_url = live.open_project(isolated_dir, lambda _: True)["url"]
+    url = project_url + "artifacts/1/viewer.html"
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_function(
+                    "() => window.agentcadViewer?.debugState().ready === true && window.agentcadViewer.reviewDebugState().comments.length === 2",
+                    timeout=45_000,
+                )
+                assert page.locator('.comment-pin[data-comment-id="C1"]').evaluate(
+                    "el => getComputedStyle(el).display !== 'none'"
+                )
+                assert page.locator('.comment-pin[data-comment-id="C2"]').evaluate(
+                    "el => getComputedStyle(el).display === 'none'"
+                )
+                assert page.locator(".comment-row").count() == 2
+            finally:
+                browser.close()
+    finally:
+        live.stop_service()

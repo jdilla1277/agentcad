@@ -19,7 +19,9 @@ from agentcad.commands.measure import measure_tier0_payload, validity_from_metri
 
 @click.command("check-spec")
 @click.argument("file")
-@click.argument("spec_file")
+@click.argument("spec_file", required=False)
+@click.option("--complete", "complete", is_flag=True, default=False,
+              help="Complete pending declared checks on a retained revision; does not accept it.")
 @click.option(
     "--no-daemon",
     is_flag=True,
@@ -27,7 +29,7 @@ from agentcad.commands.measure import measure_tier0_payload, validity_from_metri
     help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.",
 )
 @project_options
-def check_spec(file, spec_file, no_daemon):
+def check_spec(file, spec_file, no_daemon, complete=False):
     """Check a STEP/BREP file against a JSON feature spec.
 
     SPEC_FILE example:
@@ -36,7 +38,49 @@ def check_spec(file, spec_file, no_daemon):
 
     A failed spec still means the command ran successfully: status remains
     "success" and the comparison result is in passed/matched_features.
+    With a retained revision ID, omit SPEC_FILE to read its pinned receipt;
+    --complete performs deferred checks without accepting the model.
     """
+    if file.startswith("r_") and not Path(file).exists():
+        from agentcad.change_store import ChangeStore
+        from agentcad.project import get_project
+
+        if spec_file:
+            _emit({
+                "command": "check-spec", "status": "error",
+                "message": "A retained revision uses its pinned requirements; create a successor to change them.",
+            }, exit_code=1)
+            return
+        store = ChangeStore(get_project().build_root)
+        try:
+            checked = store.complete_checks(file) if complete else store.read_checks(file)
+            receipt = checked["receipt"]
+            saved = store.read(file)
+            geometry = next((
+                str(store.root / a["path"])
+                for a in (saved["candidate"] or {}).get("inputs", []) if a["role"] == "geometry"
+            ), None)
+            _emit({
+                "command": "check-spec", "status": "success", **checked,
+                "validation_state": receipt["validation_state"] if receipt else "pending",
+                "passed": receipt["promotion_ready"] if receipt else False,
+                "current_advanced": False, "geometry": geometry,
+                "notes": ["Checks report evidence for this retained revision; completing them does not change current."],
+                "more_at": "agentcad docs check-spec",
+            })
+        except Exception as exc:
+            _emit({
+                "command": "check-spec", "status": "error", "message": str(exc),
+                "revision_id": file,
+                "suggestion": "Use a returned revision ID and its selected build directory. Interrupted checks can retry --complete.",
+            }, exit_code=1)
+        return
+    if complete or spec_file is None:
+        _emit({
+            "command": "check-spec", "status": "error",
+            "message": "Use FILE SPEC_FILE, or a retained REVISION_ID with optional --complete.",
+        }, exit_code=1)
+        return
     argv = ["check-spec", file, spec_file]
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 

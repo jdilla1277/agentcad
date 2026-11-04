@@ -198,6 +198,46 @@ def test_lock_contender_waits_without_reading_owned_bytes(service):
         assert future.result(timeout=2)
 
 
+def test_service_status_waits_for_config_write(service):
+    attempted = Event()
+
+    def read_status():
+        attempted.set()
+        return live.service_status()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with live.locked():
+            future = executor.submit(read_status)
+            assert attempted.wait(timeout=2)
+            time.sleep(.1)
+            assert not future.done()
+        assert future.result(timeout=2)["running"] is False
+
+
+def test_shutdown_handles_health_response_truncated_by_disconnect(tmp_path, monkeypatch):
+    from http.client import IncompleteRead
+
+    monkeypatch.setenv("AGENTCAD_VIEWER_HOME", str(tmp_path / "runtime"))
+    config = {**live.configuration(), "port": 12345}
+    live.atomic_write_json(live.runtime_dir() / "config.json", config)
+    routes = []
+
+    def interrupted_health(_config, route, payload=None):
+        routes.append(route)
+        if routes == ["health"]:
+            return {"protocol": live.PROTOCOL}
+        if route == "stop":
+            return {"status": "stopping"}
+        # During stop polling, the HTTP headers arrived but the service
+        # closed its connection before writing the declared response body.
+        raise IncompleteRead(b"", 104)
+
+    monkeypatch.setattr(live, "request", interrupted_health)
+    assert live.stop_service() == {"status": "stopped", "running": False}
+    assert routes == ["health", "stop", "health"]
+    assert live.configuration() == config
+
+
 def test_service_crash_releases_ownership_and_keeps_url(service, tmp_path):
     root = tmp_path / "model"
     live.publish(root, version(root, 1), started_ns=1)

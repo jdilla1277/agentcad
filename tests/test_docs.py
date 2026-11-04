@@ -121,6 +121,7 @@ def test_docs_lists_sections(runner):
     assert "daemon" in sections
     assert "inspect" in sections
     assert "parts" in sections
+    assert "review" in sections
     assert "feedback" in sections
     assert "recovery" in sections
 
@@ -132,7 +133,7 @@ def test_docs_commands_section(runner):
     content = data["content"]
     for cmd in [
         "init", "run", "render", "measure", "check-spec", "parts",
-        "context", "recover", "docs", "diff", "feedback",
+        "context", "recover", "review", "docs", "diff", "feedback",
     ]:
         assert cmd in content
     assert "part review viewers" in content
@@ -265,6 +266,26 @@ def test_docs_workflow_section(runner):
     assert "opens automatically" in content
 
 
+def test_default_docs_follow_required_workflow_order(runner):
+    result = runner.invoke(cli, ["docs"])
+    assert result.exit_code == 0
+    content = json.loads(result.stdout)["content"]
+
+    headings = [
+        "=== Inspect ===",
+        "=== Specify ===",
+        "=== Build ===",
+        "=== Validate ===",
+        "=== Deliver ===",
+    ]
+    positions = [content.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+
+    assert content.index("Inspecting shape topology") < content.index("Measurement workflow")
+    assert content.index("Spec checks") < content.index("Quickstart")
+    assert content.index("Geometry validation") < content.index("Exporting mesh formats")
+
+
 def test_docs_and_skill_present_viewer_as_default_review_path(runner):
     commands = json.loads(runner.invoke(cli, ["docs", "commands"]).stdout)["content"]
     parts = json.loads(runner.invoke(cli, ["docs", "parts"]).stdout)["content"]
@@ -365,7 +386,7 @@ def test_docs_parts_mentions_review_viewers(runner):
     assert "temporary=true" in content
     assert "persisted=false" in content
     assert "saved-views catalog" in content
-    assert "browser changes are not saved" in content.lower()
+    assert "use agentcad viewer open for" in content.lower()
 
 
 def test_docs_runtimes_dispatch_precedence_matches_dispatcher(runner):

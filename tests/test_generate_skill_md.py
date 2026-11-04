@@ -28,4 +28,5 @@ def test_generate_skill_md_uses_canonical_guide_and_package_version():
     assert frontmatter["version"] == project["version"]
     assert frontmatter["metadata"]["openclaw"]["requires"]["bins"] == ["agentcad"]
     assert body.startswith("# agentcad — CAD tool for AI agents\n")
-    assert "## Core workflow" in body
+    assert "## Required workflow" in body
+    assert "**Inspect -> Specify -> Build -> Validate -> Deliver**" in body

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentcad"
-version = "0.6.0"
+version = "0.7.1"
 description = "CLI CAD tool for AI agents. Write build123d scripts, with optional CadQuery compatibility, and get STEP files, renders, and metrics."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -58,7 +58,8 @@ cadquery = [
     # resolves the teardown regression; other platforms can use 3.8+.
     "casadi<3.8; sys_platform == 'win32'",
 ]
-mcp = ["mcp>=1.0.0,<2.0"]
+cloud = ["httpx>=0.27,<1"]
+mcp = ["mcp>=1.0.0,<2.0", "httpx>=0.27,<1", "jsonschema>=4.20,<5"]
 # pyyaml: tests/test_generate_skill_md.py parses SKILL.md frontmatter. It
 # used to arrive transitively through CadQuery's trame dependency; the
 # default profile has no CadQuery, so declare it.

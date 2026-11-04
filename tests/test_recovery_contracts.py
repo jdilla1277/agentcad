@@ -45,7 +45,7 @@ def test_static_validation_points_to_fix_and_rerun(
 def test_script_failure_points_to_fix_and_rerun(runner, isolated_dir):
     _init(runner)
     (isolated_dir / "edit.py").write_text(
-        'raise RuntimeError("boom")\nshow_object(Box(1, 1, 1))\n'
+        'show_object(Box(1, 1, 1))\nraise RuntimeError("boom")\n'
     )
 
     result = runner.invoke(

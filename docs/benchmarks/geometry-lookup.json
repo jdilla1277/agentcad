@@ -1,0 +1,242 @@
+{
+  "scope": "read_manifest -> record -> summary; CLI dispatch; MCP tool; fresh CLI processes",
+  "timing_note": "Entry-point imports excluded except cli_fresh_process; every request rereads and verifies both files. First request is process-local, not a cold filesystem guarantee.",
+  "memory_note": "Each mode has an isolated worker; RSS includes imports and all its requests, not fixture construction. RSS is null where resource is unavailable. Fresh CLI subprocess RSS is not measured.",
+  "excluded": [
+    "fixture setup",
+    "import/report generation",
+    "selection-context construction",
+    "MCP transport/client overhead",
+    "daemon routing",
+    "cold filesystem guarantees"
+  ],
+  "python": "3.12.12",
+  "platform": "macOS-15.6-arm64-arm-64bit",
+  "versions": {
+    "build123d": "0.10.0",
+    "cadquery-ocp": "7.8.1.1.post1",
+    "mcp": "1.30.0"
+  },
+  "measurements": [
+    {
+      "fixture": "cadgenbench_101_agentcad.step",
+      "counts": {
+        "solids": 1,
+        "faces": 150,
+        "edges": 427,
+        "part_definitions": 1,
+        "assembly_definitions": 0,
+        "part_occurrences": 1,
+        "assembly_occurrences": 0
+      },
+      "lookup_id": "face_v1_150",
+      "step_bytes": 551155,
+      "manifest_bytes": 295713,
+      "requests": {
+        "verified_path": {
+          "first_request_s": 0.0039706660027150065,
+          "subsequent_median_s": 0.0027824999997392297,
+          "subsequent_max_s": 0.002963749982882291,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 27721728
+        },
+        "cli_dispatch": {
+          "first_request_s": 0.005831333983223885,
+          "subsequent_median_s": 0.004504083015490323,
+          "subsequent_max_s": 0.0048422499967273325,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 34324480
+        },
+        "mcp_tool": {
+          "first_request_s": 0.0051719579787459224,
+          "subsequent_median_s": 0.0042630829848349094,
+          "subsequent_max_s": 0.004451457993127406,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 65044480
+        },
+        "cli_fresh_process": {
+          "first_request_s": 0.07308570801978931,
+          "subsequent_median_s": 0.07017949997680262,
+          "subsequent_max_s": 0.07158766701468267,
+          "subsequent_samples": 3
+        }
+      }
+    },
+    {
+      "fixture": "pump_manifold.step",
+      "counts": {
+        "solids": 1,
+        "faces": 118,
+        "edges": 334,
+        "part_definitions": 1,
+        "assembly_definitions": 0,
+        "part_occurrences": 1,
+        "assembly_occurrences": 0
+      },
+      "lookup_id": "face_v1_118",
+      "step_bytes": 1573868,
+      "manifest_bytes": 239292,
+      "requests": {
+        "verified_path": {
+          "first_request_s": 0.004281292000086978,
+          "subsequent_median_s": 0.0029502079996746033,
+          "subsequent_max_s": 0.002966333006042987,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 29933568
+        },
+        "cli_dispatch": {
+          "first_request_s": 0.00571749999653548,
+          "subsequent_median_s": 0.004264416988007724,
+          "subsequent_max_s": 0.004390457994304597,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 33128448
+        },
+        "mcp_tool": {
+          "first_request_s": 0.005144333001226187,
+          "subsequent_median_s": 0.004520916991168633,
+          "subsequent_max_s": 0.004707000014605001,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 66863104
+        },
+        "cli_fresh_process": {
+          "first_request_s": 0.07125337497564033,
+          "subsequent_median_s": 0.08328195899957791,
+          "subsequent_max_s": 0.08510412499890663,
+          "subsequent_samples": 3
+        }
+      }
+    },
+    {
+      "fixture": "repeated_100.step",
+      "counts": {
+        "solids": 100,
+        "faces": 600,
+        "edges": 1200,
+        "part_definitions": 1,
+        "assembly_definitions": 1,
+        "part_occurrences": 100,
+        "assembly_occurrences": 1
+      },
+      "lookup_id": "face_v1_600",
+      "step_bytes": 73800,
+      "manifest_bytes": 1054884,
+      "requests": {
+        "verified_path": {
+          "first_request_s": 0.010218249983154237,
+          "subsequent_median_s": 0.008455834002234042,
+          "subsequent_max_s": 0.008785959013039246,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 34324480
+        },
+        "cli_dispatch": {
+          "first_request_s": 0.011986666009761393,
+          "subsequent_median_s": 0.010151042020879686,
+          "subsequent_max_s": 0.010311916994396597,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 42598400
+        },
+        "mcp_tool": {
+          "first_request_s": 0.011216458020498976,
+          "subsequent_median_s": 0.010269207996316254,
+          "subsequent_max_s": 0.010301000002073124,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 73220096
+        },
+        "cli_fresh_process": {
+          "first_request_s": 0.07882724999217317,
+          "subsequent_median_s": 0.07944041601149365,
+          "subsequent_max_s": 0.08184466601232998,
+          "subsequent_samples": 3
+        }
+      }
+    },
+    {
+      "fixture": "repeated_1000.step",
+      "counts": {
+        "solids": 1000,
+        "faces": 6000,
+        "edges": 12000,
+        "part_definitions": 1,
+        "assembly_definitions": 1,
+        "part_occurrences": 1000,
+        "assembly_occurrences": 1
+      },
+      "lookup_id": "face_v1_6000",
+      "step_bytes": 608823,
+      "manifest_bytes": 10668401,
+      "requests": {
+        "verified_path": {
+          "first_request_s": 0.13443662502686493,
+          "subsequent_median_s": 0.13924083398887888,
+          "subsequent_max_s": 0.17851070800679736,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 120356864
+        },
+        "cli_dispatch": {
+          "first_request_s": 0.17128675000276417,
+          "subsequent_median_s": 0.13958379201358184,
+          "subsequent_max_s": 0.1751272919937037,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 127844352
+        },
+        "mcp_tool": {
+          "first_request_s": 0.14006116698146798,
+          "subsequent_median_s": 0.12393545798840933,
+          "subsequent_max_s": 0.14372466699569486,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 151683072
+        },
+        "cli_fresh_process": {
+          "first_request_s": 0.22731116699287668,
+          "subsequent_median_s": 0.2221068329818081,
+          "subsequent_max_s": 0.24266349998652004,
+          "subsequent_samples": 3
+        }
+      }
+    },
+    {
+      "fixture": "high_face_900.step",
+      "counts": {
+        "solids": 150,
+        "faces": 900,
+        "edges": 1800,
+        "part_definitions": 1,
+        "assembly_definitions": 0,
+        "part_occurrences": 1,
+        "assembly_occurrences": 0
+      },
+      "lookup_id": "face_v1_900",
+      "step_bytes": 2280983,
+      "manifest_bytes": 1447304,
+      "requests": {
+        "verified_path": {
+          "first_request_s": 0.019937167002353817,
+          "subsequent_median_s": 0.020020416006445885,
+          "subsequent_max_s": 0.021800957998493686,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 50855936
+        },
+        "cli_dispatch": {
+          "first_request_s": 0.03075570799410343,
+          "subsequent_median_s": 0.0217607090016827,
+          "subsequent_max_s": 0.022586375009268522,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 56115200
+        },
+        "mcp_tool": {
+          "first_request_s": 0.021856000006664544,
+          "subsequent_median_s": 0.021909500006586313,
+          "subsequent_max_s": 0.02633645900641568,
+          "subsequent_samples": 3,
+          "peak_process_rss_bytes": 84656128
+        },
+        "cli_fresh_process": {
+          "first_request_s": 0.10393779200967401,
+          "subsequent_median_s": 0.0960661249991972,
+          "subsequent_max_s": 0.10881912501645274,
+          "subsequent_samples": 3
+        }
+      }
+    }
+  ]
+}

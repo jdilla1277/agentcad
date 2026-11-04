@@ -13,6 +13,7 @@ from agentcad.project import ProjectError, format_response, get_project
 
 from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
+from agentcad.commands.cloud import cloud
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
@@ -27,6 +28,8 @@ from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.recover import recover
+from agentcad.commands.promote import promote
+from agentcad.commands.review import review_cmd
 from agentcad.commands.run import _OUTPUT_DEPRECATION, candidate_scripts, run
 from agentcad.commands.skill import skill
 from agentcad.commands.subscribe import subscribe
@@ -54,15 +57,24 @@ _SCRIPT_EDIT_HELPERS = {
 _GUIDE_TEMPLATE = """\
 __AUTHORING_GUIDE__
 
-QUICK START WORKFLOW
-  1. Write script.py using the authoring API above and surface geometry with
+REQUIRED WORKFLOW: INSPECT -> SPECIFY -> BUILD -> VALIDATE -> DELIVER
+  1. Inspect every drawing, image, requirement, unit, view, or source CAD file.
+     For edits, start with `agentcad inspect FILE --summary` and
+     `agentcad measure FILE`; request --ids only when topology IDs are needed.
+  2. Specify features, dimensions, counts, relationships, body expectations,
+     assumptions, and deliverables before modeling. For edits, also specify the
+     exact target, expected delta, and geometry that must stay unchanged.
+  3. Build script.py using the authoring API above and surface geometry with
      show_object(). Check metrics without consuming a version:
        $ agentcad run script.py --label test --dry-run
-  2. Run for real. The live project viewer opens automatically:
+     Then run for real. The live project viewer opens automatically:
        $ agentcad run script.py --label first --render iso
-  3. Verify dimensions and feature sizes from the generated STEP:
-       $ agentcad measure v1_first/output.step
-  4. Iterate with a new label and review the automatic previous/current diff.
+  4. Validate the returned outputs.step: read preview.png, measure dimensions
+     and features, run check-spec when specified, and require top-level
+     metrics.is_valid=true. For edits, prove the requested change and preserved
+     geometry with the automatic previous/current comparison and numeric diff.
+  5. Deliver only outputs.step and requested exports that passed validation.
+     If a check fails, return to the earliest incorrect stage and iterate.
 
 NAMED PARTS AND GROUPS
   Named outputs become stable reviewable parts:
@@ -75,7 +87,7 @@ EXAMPLE SESSION
   $ agentcad init --name myproject__INIT_RUNTIME__
   {"command": "init", "status": "success", "project": "myproject",
    "runtime": "__RUNTIME__"}
-  # Write script.py (see `agentcad docs quickstart`), then:
+  # Follow Inspect -> Specify -> Build (see `agentcad docs workflow`), then:
   $ agentcad run script.py --label first --render iso
   {"command": "run", "status": "success", "runtime": "__RUNTIME__",
    "output_type": "single_part", "version": 1, "label": "first",
@@ -140,10 +152,12 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
                          outputs.glb; viewer_glb normally generates separately.
-                         STEP is always produced; read outputs.step.
+                         Normal mode: STEP is always produced; read outputs.step.
+                         With --stage, prepare diagnostics from change.geometry.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
+                         Staged candidates prepare views separately.
     --view / --no-view   Open or reuse the live project after success (default on).
                          From v2, previous/current comparison is preloaded.
     --diff / --no-diff   Generate or skip automatic comparison with the prior
@@ -220,7 +234,21 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     Create a temporary part review handoff viewer. Repeat --isolate/--hide for parts,
     or --isolate-group/--hide-group for groups; use --ghost-rest, --focus,
     --focus-group, --label, --note, and --no-open as needed.
-    Browser changes are not saved; generate another viewer to change the state.
+    Browser changes are not saved. Use `agentcad viewer open` for comments.
+
+  agentcad review list [--status open]
+  agentcad review show COMMENT_ID
+  agentcad review comment --message TEXT --part PART_ID [--version REF]
+                          [--scope current|previous|both] [--point-mm X,Y,Z]
+  agentcad review reply COMMENT_ID --message TEXT [--version REF]
+  agentcad review resolve COMMENT_ID [--message TEXT] [--version REF]
+  agentcad review reopen COMMENT_ID [--message TEXT]
+    Read and participate in spatial review threads. Agents may initiate an open
+    thread on a named part; humans and agents may both
+    reply, resolve, and reopen; actor, message, timestamp, and revision history
+    are retained. `mark-addressed` remains available for compatibility.
+    Use `agentcad viewer open` for comments in the live project viewer.
+    `agentcad review --build-dir PATH ...` selects an independent build history.
 
 COMMAND REFERENCE: VERIFY AND DEBUG
   agentcad measure FILE [OPTIONS]
@@ -239,6 +267,13 @@ COMMAND REFERENCE: VERIFY AND DEBUG
 
   agentcad inspect FILE [--validate-only] [--validation-timeout SECONDS]
                         [--ids] [--summary] [--limit N|--no-limit]
+  agentcad inspect IMPORTED_STEP [--id TYPED_ID] --image [--isolate]
+    Retrieve an overall or ID-targeted four-view PNG with dimensions and labels.
+    --isolate requires --id. Images and build123d selectors use the same IDs.
+  agentcad inspect IMPORTED_STEP --report [--no-images] [--max-images 0..9]
+                        [--text-budget N]
+    Bounded quality/inventory report and ranked part/face-edge sample bundle.
+    Context window and image-token cost remain explicitly unknown.
     Report recognized format and, for STEP/STP/BREP, solids, shells, face
     orientations, edges, free edges, and validity. --summary clusters topology;
     --ids returns 1-indexed feature IDs used by editing helpers. Lists are capped
@@ -249,8 +284,8 @@ COMMAND REFERENCE: VERIFY AND DEBUG
 
 COMMAND REFERENCE: PROJECT AND INTEGRATIONS
   agentcad context
-    Return project name, current version, version history, tool version, and any
-    interrupted version directories that need explicit recovery.
+    Return project name, current version, version history, pending review
+    feedback, tool version, and interrupted versions needing recovery.
 
   agentcad recover VERSION_DIR [--make-current]
     Validate an interrupted directory's output.step and safely restore its
@@ -307,6 +342,19 @@ JSON RESPONSE CONTRACT
   success, unavailable, timeout, failed, or skipped; a non-success artifact does
   not reverse core success or remove the registered STEP. Keep and use that STEP;
   retry only the optional render/view work if you need it.
+
+  Normal acceptance returns a durable `promotion` receipt for the exact checked
+  revision. `not_promoted` with selection_changed means a newer edit superseded
+  this build; its diagnostic geometry remains retained and current is unchanged.
+  Inspect/reconcile before rerunning the current script or import. This conflict
+  is separate from a measured geometry failure. See `agentcad docs check-spec`
+  for retained requirements, receipts, and deferred-check limitations.
+
+  Use run/import --stage to save a checked experiment without replacing the
+  accepted model. Open it with view REVISION, then accept its saved bytes with
+  promote REVISION --idempotency-key KEY. Read promote --idempotency-key KEY
+  --status after interruption; repeat the same key to resume/replay safely.
+  See `agentcad docs promote`.
 
 SPEC AND MEASUREMENT CHECKS
   When requirements include explicit holes, bores, diameters, counts, or
@@ -446,7 +494,14 @@ class _InvocationOutput:
                 try:
                     payload = json.loads(message)
                     if isinstance(payload, dict) and "command" in payload:
-                        message = json.dumps(format_response(payload, layout))
+                        from agentcad.change_retention import attach_change
+
+                        payload = attach_change(payload)
+                        if payload.get("command") == "import":
+                            from agentcad.import_requests import finish_response
+                            payload = finish_response(payload)
+                        from agentcad.inspection_delivery import apply_delivery
+                        message = json.dumps(apply_delivery(format_response(payload, layout), layout, self.ctx))
                 except (TypeError, json.JSONDecodeError):
                     pass
         if message is not None:
@@ -821,11 +876,26 @@ class _LoggingGroup(click.Group):
             return super().invoke(ctx)
         except ProjectError as exc:
             ctx.meta["project_error"] = True
+            ctx.meta["command_exit_code"] = 1
             payload = exc.payload(ctx.invoked_subcommand or "unknown")
             if ctx.invoked_subcommand == "run":
                 payload.update(label=ctx.meta.get("run_label"), artifact_created=False,
                                outputs={"step": None})
             click.echo(json.dumps(payload))
+            sys.exit(1)
+        except Exception as exc:
+            # Import has no run-style outer recovery boundary. Once its source
+            # is retained, preserve unexpected parser/metric failures as a
+            # structured terminal attempt rather than leaving an empty stdout.
+            attempt = ctx.meta.get("change_attempt")
+            if attempt is None:
+                raise
+            ctx.meta["command_exit_code"] = 1
+            click.echo(json.dumps({
+                "command": ctx.meta.get("change_command", ctx.invoked_subcommand),
+                "status": "error",
+                "message": f"Internal error: {type(exc).__name__}: {exc}",
+            }))
             sys.exit(1)
         finally:
             _INVOCATION_OUTPUT.reset(token)
@@ -833,7 +903,7 @@ class _LoggingGroup(click.Group):
             self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
 
     def _record_live_build(self, ctx, captured, root, exception=None):
-        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
+        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay"):
             return
         layout = ctx.meta.get("project_layout")
         if layout is not None:
@@ -851,15 +921,25 @@ class _LoggingGroup(click.Group):
                 continue
         if result.get("via") == "daemon":
             return  # The child already recorded the attempt with its own start time.
-        failed = result.get("status") in {"error", "failed", "validation_error", "invalid_geometry", "timeout"}
+        checks_blocked = result.get("status") in {
+            "checks_failed", "checks_pending", "checks_unavailable",
+            "not_promoted",
+            "staged",
+        }
+        failed = checks_blocked or result.get("status") in {
+            "error", "failed", "validation_error", "invalid_geometry", "timeout",
+        }
         if not result and exception is not None:
             failed = not isinstance(exception, SystemExit) or exception.code not in (0, None)
         unavailable = result.get("status") == "success" and result.get("version") and not result.get("viewer")
         if failed or unavailable:
             try:
                 from agentcad.project_viewer import record_failure
+                attempt_status = result["status"] if checks_blocked else (
+                    "failed" if failed else "preview_unavailable"
+                )
                 record_failure(root, result.get("label") or "unlabeled",
-                               "failed" if failed else "preview_unavailable",
+                               attempt_status,
                                started_ns=ctx.meta["viewer_started_ns"])
             except Exception:
                 pass  # Optional UI state must never replace the command result.
@@ -875,7 +955,7 @@ class _LoggingGroup(click.Group):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
-        if not cmd_name or cmd_name in ("feedback", "subscribe"):
+        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud"):
             return
         # Parse the last JSON output (commands may echo multiple things)
         result = {}
@@ -909,6 +989,7 @@ def cli():
 
 cli.add_command(context)
 cli.add_command(check_spec)
+cli.add_command(cloud)
 cli.add_command(daemon)
 cli.add_command(diff)
 cli.add_command(docs)
@@ -922,6 +1003,8 @@ cli.add_command(measure)
 cli.add_command(parts_cmd)
 cli.add_command(render)
 cli.add_command(recover)
+cli.add_command(promote)
+cli.add_command(review_cmd)
 cli.add_command(run)
 cli.add_command(skill)
 cli.add_command(subscribe)

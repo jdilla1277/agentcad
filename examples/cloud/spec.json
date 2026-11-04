@@ -1,0 +1,6 @@
+{
+  "expect_solids": 2,
+  "features": [
+    {"name": "base_holes", "type": "cylinder", "diameter_mm": 10, "count": 2}
+  ]
+}

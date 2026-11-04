@@ -27,8 +27,17 @@ function showStatus() {
   const failed = attempt && attempt.status !== 'success';
   const label = current ? `Showing v${current.version} · ${current.label}` : 'Waiting for a completed viewer';
   const newer = latestState?.latest?.version !== current?.version;
+  const checkStatus = {
+    checks_failed: 'blocked by failed checks',
+    checks_pending: 'awaiting checks',
+    checks_unavailable: 'blocked by unavailable checks',
+    not_promoted: 'not accepted; selection or evidence changed',
+    staged: 'staged; checks passed',
+  }[attempt?.status];
   status.textContent = label + (reconnecting ? ' — Disconnected; reconnecting…'
     : attempt?.status === 'preview_unavailable' ? ' — Latest build succeeded; preview unavailable'
+    : attempt?.status === 'accepted_without_viewer' ? ` — Accepted ${attempt.label}; showing previous model. Open the accepted STEP to review.`
+    : checkStatus ? ` — Latest edit ${checkStatus} (${attempt.label || 'unlabeled'}); keeping last accepted model`
     : failed ? ` — Latest build failed (${attempt.label || 'unlabeled'}); keeping last good model`
     : newer ? ' — Loading latest build…' : ' — Up to date') + restoreWarning;
   status.classList.toggle('warning', reconnecting || Boolean(failed) || Boolean(restoreWarning));
@@ -57,10 +66,15 @@ window.addEventListener('message', event => {
   const fromPending = event.source === pending.element.contentWindow;
   const fromCurrent = current && event.source === current.element.contentWindow;
   if (fromPending && data.type === 'agentcad:ready') {
+    pending.ready = true;
+    clearTimeout(pending.timer);
     if (current) send(current, 'agentcad:capture');
     else send(pending, 'agentcad:restore', {state:null});
   } else if (fromCurrent && data.type === 'agentcad:state') {
-    if (data.busy) { discardPending(' — Waiting for GIF export'); return; }
+    if (data.busy) {
+      restoreWarning = ' — ' + (data.busyReason || 'Waiting for GIF export');
+      showStatus(); return;
+    }
     send(pending, 'agentcad:restore', {state:data.state});
   } else if (fromPending && data.type === 'agentcad:restored') {
     const old = current;
@@ -81,7 +95,9 @@ async function poll() {
     if (!response.ok) throw new Error('unavailable');
     latestState = await response.json(); reconnecting = false;
     const latest = latestState.latest;
+    if (pending && latest && pending.version !== latest.version) discardPending('');
     if (latest && latest.version !== current?.version && !pending) load(latest);
+    else if (pending?.ready && current) send(current, 'agentcad:capture');
   } catch (_) { reconnecting = true; }
   showStatus();
   setTimeout(poll, document.hidden ? 10000 : 1000);

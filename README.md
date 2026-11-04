@@ -22,6 +22,13 @@ A coding agent designing in agentcad, live. See more at [agentcad.dev](https://a
 
 In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
 
+The v0.7.0 release brings the five-stage workflow below to the installed guide
+and built-in help. In its [Candidate L CADGenBench run](https://huggingai4engineering-cadgenbench.hf.space/reports/james-dillard_gpt-5-nano-candidate-l-pi-harness-five-s_20261001-001100.html),
+GPT-5 Nano scored .245 overall (.175 generation, .353 editing) with 80 of 81
+valid outputs. That is a single run, not a new matched direct-build123d
+comparison; see the [experiment closeout](docs/product-plans/agentcad-performance-next-steps.md)
+for the baseline, caveats, and next evaluations.
+
 ## Quick start
 
 Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
@@ -36,6 +43,12 @@ Design me a phone stand: a simple angled cradle that holds a phone
 at 60 degrees. About 80mm wide, 50mm deep, with a 5mm lip at the bottom
 to keep the phone from sliding. Show me a preview when you're done.
 ```
+
+To install the reusable agent skill separately, use
+[`npx skills add jdilla1277/agentcad-skill`](https://skills.sh/jdilla1277/agentcad-skill/agentcad)
+or [`clawhub install agentcad`](https://clawhub.ai/jdilla1277/skills/agentcad).
+Both install guidance, not the CAD executable; install `agentcad` with pip as
+shown above. For a project-local guide, run `agentcad skill install` instead.
 
 ### Keep generated files in a build directory
 
@@ -57,30 +70,118 @@ the project root, not the caller's working directory. Existing projects keep
 their current layout unless configured. `--output` remains a deprecated version
 label, never a destination. See `agentcad docs artifacts` for the full contract.
 
-## What it does
+## Required agent workflow
 
-- **`agentcad run script.py --label label`** — execute a build123d script, producing a versioned STEP file + geometric metrics (volume, dimensions, validity, face/edge counts)
+`agentcad init` installs a guide that requires the same workflow for new models
+and edits:
+
+> **Inspect → Specify → Build → Validate → Deliver**
+
+- **Inspect:** understand drawings, requirements, orientation, dimensions, and
+  any source geometry before writing a model.
+- **Specify:** record measurable requirements and assumptions. For edits, also
+  identify the target, expected change, and geometry that must remain stable.
+- **Build:** create the simplest geometry that can satisfy the specification;
+  use the smallest bounded operation for an edit.
+- **Validate:** inspect visual, dimensional, difference, and structural evidence.
+  If a check fails, return to the earliest incorrect stage and iterate.
+- **Deliver:** hand off only the exact STEP and requested exports that passed.
+
+## Capabilities by workflow stage
+
+### Inspect
+
+- **`agentcad inspect output.step`** — bounded topology, orientation, addressable
+  IDs, edit risk, and structural evidence
+- **`agentcad measure output.step`** — dimensions, edge lengths, face areas, and
+  circular/cylindrical feature measurements
+- **`agentcad render output.step --view top,front,right,iso`** — visual evidence
+  for orientation and feature location
+- **`agentcad parts list REF` / `parts show REF ID`** — inspect named parts and
+  isolate one versioned part
+
+### Specify
+
+- **`spec.json`** — records supported cylindrical-feature and structure
+  requirements before modeling
+- **`agentcad check-spec output.step spec.json`** — evaluates that contract
+  during validation
+
+### Build
+
+- **`agentcad run script.py --label label`** — execute a build123d script,
+  producing a versioned STEP file and geometric metrics
+- **Pre-injected helpers** — build primitives, import existing STEP geometry,
+  select features, and perform bounded or validated editing operations
+
+### Validate
+
+- **`agentcad run ... --preview`** — four-view PNG for visual verification; the
+  browser viewer can export an on-demand turntable GIF
+- **`agentcad diff 1 2`** — compare versions, including actual
+  shared/reference-only/candidate-only source-frame volume for valid closed solids
+- **`agentcad view old.step new.step`** — open a synchronized A/B comparison
+  with separate centered projection and source-frame 3D volume artifacts
 - **Live project viewer** — successful runs open one stable local project URL
   and refresh it after subsequent completed builds. Leave the tab open while
   iterating; camera and compatible review settings survive updates. Failed
   builds leave the last successful model visible. Versioned `viewer.html`
   snapshots remain available; from v2,
-  A=previous and B=current are preloaded for A/B, side-by-side, overlay, and
+  previous and current are preloaded for side-by-side, overlay, and
   Parts-tab change review (`--no-view` opts out)
-- **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
-- **`agentcad run ... --render iso,front`** — high-quality PNG views
-- **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
-- **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
-- **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
-- **`agentcad inspect output.step`** — bounded topology deep-dive with observable loading, validity, and extraction phases
-- **`agentcad parts list REF`** — list named/captured parts for a version
-- **`agentcad parts show REF ID`** — show one versioned part by stable id
+- **Spatial review comments** — pin human feedback to a surface and named part;
+  comments persist locally for the agent's next revision
+- **`agentcad review list --status open`** — read shared review threads; humans
+  and agents can reply, resolve, and reopen with an auditable history
 - **`agentcad parts view REF`** — hand off an isolated, focused, or grouped part review viewer
-- **`agentcad diff 1 2`** — compare versions, including actual shared/reference-only/candidate-only source-frame volume for valid closed solids
-- **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
+
+### Deliver
+
+- **`agentcad run ... --export stl,glb`** or **`agentcad export`** — write mesh
+  deliverables and report validation for each written format
 - **`agentcad viewer [open|status|stop]`** — open the live project or manage its
   lightweight local service; `open` is the default
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
+
+## Spatial review comments
+
+Live project viewers opened after a run or with `agentcad viewer open` use the existing service bound to
+`127.0.0.1`. Click **Comments** in the bottom-left viewer controls, then **+ New comment**
+(or press `C`). Click the model, confirm the inferred named part and
+revision scope, then choose **Send comment**. To hold feedback back, choose
+**Save draft** instead; unsent drafts can be edited, deleted, sent individually,
+or submitted together with **Send all drafts**.
+
+Comments are plain local JSON under the selected build root's `.agentcad/reviews`—there is no database or
+hosted account. On its next turn, an agent can discover and reply to the review:
+
+```bash
+agentcad context
+agentcad review list --status open
+agentcad review comment --message "Could this rib be thinner?" --part support_rib --version current
+agentcad review reply C1 --message "Increased the clearance to 4 mm." --version current
+agentcad review resolve C1 --message "Implemented in the current revision." --version current
+```
+
+Agents can also initiate an immediately-open thread on a named part. Add
+`--scope previous|both` to target comparison sides or `--point-mm X,Y,Z` to
+place its pin more precisely. Humans and agents can both reply, resolve, or
+reopen. Every action records its
+actor, timestamp, optional message, and associated revision. The older
+`mark-addressed` command remains available for compatibility.
+
+New builds wait while you write or send a comment or reply, then update the
+model once you send, save, or cancel. Current/Previous/Both follow the displayed
+revision sides; the original source version stays in the thread. If a part
+disappears, its comment remains in the list as unplaced. Hiding a part hides its
+comment pins in the 3D view; its threads stay in the sidebar. Showing the part
+restores its pins. Comments become
+available to the agent on its next turn; they do not start a new agent run.
+File viewers and temporary part/diff viewers remain read-only.
+
+To reposition the model, click **Pan** and drag, or hold **Shift** while dragging.
+Click **Pan** again to return to orbiting. **Fit view** centers the visible model
+and adjusts the zoom to fit it on screen.
 
 `--label` names the version; the JSON response returns the actual file under
 `outputs.step`. The older `--output LABEL` spelling remains a deprecated
@@ -199,6 +300,97 @@ Add to `.mcp.json`:
 ```json
 {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
 ```
+
+For local STEP/STP/BREP files, call `import_cad` with `file`, `cwd`, and
+`initialize=True` to start a project. The default response includes the import
+JSON and up to nine inspection PNG attachments. Use `report_images=False` for
+an image-free report or `report=False` to keep the bundle on disk. Follow the
+returned IDs and paths with `inspect` and `run`. Local paths refer to the MCP
+execution filesystem. See `agentcad docs mcp` for controls.
+
+For retry-safe imports, pass `idempotency_key="supplier-001"` (CLI:
+`agentcad import supplier.step --init --idempotency-key supplier-001`). Preserve
+the key and identical source/options after a lost response: retries return the
+original version without importing or opening the viewer again. A different
+source, label, runtime request, validation profile, report/image limits or
+viewer/diff options conflicts with that key. Explicit checks JSON content and
+`--defer-checks` must also match. Use a new key for an intentional
+new import. Keys are scoped to the selected build directory; the original file
+must remain readable with identical bytes.
+
+A contended retry waits up to ten seconds, then reports `in_progress` if the
+original process still owns execution; retry the same request later. A stopped
+process releases ownership automatically. Retrying recovers a committed version
+and marks unfinished artifacts interrupted, or explicitly reports that execution
+stopped before commit. Optional analysis is not automatically resumed. Saved
+responses describe the original attempt; use `inspect` for fresh inspection.
+When retrying from another project subdirectory, returned actions target the
+selected baseline from that caller directory. Inline detail/media may be trimmed
+further to keep the final report within its text budget; saved analysis and IDs
+stay unchanged. If required references cannot fit, `inspection_delivery` reports
+the omission and provides a retrieval action with a larger allowance.
+Deleting `.agentcad/import_requests` deletes retry protection for those keys.
+
+Imports now return a durable `inspection_job` and wait for inspection by
+default. Use `--inspection-background` or `--inspection-wait-timeout SECONDS`
+to return before analysis finishes. A wait deadline leaves the worker running;
+follow the returned status/wait/resume/cancel actions. These wait controls do
+not change import retry identity. See [inspection jobs](docs/inspection-jobs.md)
+for CLI/MCP examples, checkpoints and cancellation behavior.
+
+Agents can supply `--context-window`, `--response-budget`,
+`--response-text-budget`, `--image-budget` and a caller-estimated
+`--vision-profile` to bound complete inspection delivery. Limited responses
+include a full saved response and an executable retrieval action. See
+[inspection budgets](docs/inspection-budgets.md) for estimates, CLI/MCP parity
+and the distinction between whole-response limits and the legacy report cap.
+Saved response snapshots default to 30 days and 64 MiB per build root, with
+configurable limits and explicit expiry/eviction responses. Cleanup preserves
+geometry, issued IDs, import retry records and resumable jobs.
+
+### Cloud projects
+
+For setup and a complete agent build-and-edit loop, see the
+[cloud workflow guide](docs/cloud-workflow.md).
+
+If your host supplies a hosted MCP URL, a supported agent can connect directly
+with the issued key pair, without installing AgentCAD locally. Call `cloud_help`
+for remote tools and explicit content uploads. The guide covers URL setup and
+retrieving private evidence through MCP.
+
+If your host has issued an AgentCAD API address and key pair, the same local
+MCP server also offers `cloud_run`, `cloud_import`, `cloud_measure`,
+`cloud_inspect`, `cloud_check_spec`, `cloud_render`, and `cloud_diff`. Project,
+job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
+`AGENTCAD_KEY_ID`, and `AGENTCAD_KEY_SECRET` in the server process environment.
+Keep credentials in a password manager, outside project files and agent prompts.
+
+The bounded CLI adapter is available in AgentCAD 0.7.1. Install it with
+`pip install 'agentcad[cloud]==0.7.1'` (also included in `agentcad[mcp]`),
+as shown in the guide above:
+
+```bash
+agentcad cloud projects create --name Bracket
+agentcad cloud run PROJECT examples/cloud/bracket.py --label first
+agentcad cloud job PROJECT JOB --wait
+agentcad cloud measure PROJECT 1
+agentcad cloud inspect PROJECT 1 --summary
+agentcad cloud check-spec PROJECT 1 examples/cloud/spec.json
+agentcad cloud render PROJECT 1
+agentcad cloud download PROJECT iso.png --job RENDER_JOB --kind render
+```
+
+Replace `PROJECT` and `JOB` with the returned IDs. Submissions return immediately;
+poll the same job until it completes. Keep its `idempotency_key` for an identical
+retry after a lost response. Upload an edited script with a new key and label to
+create another version, then compare with `agentcad cloud diff PROJECT 1 2`.
+
+Only the named script, STEP, or spec file is uploaded. No local project is needed.
+Downloads require an explicit destination and preserve existing files by default.
+Job completion, geometry validity, spec verdicts, and human approval remain
+separate. Run `agentcad docs cloud` for all commands, limits, and MCP tool names.
+Cloud access uses your host's installed CAD engine and credentials; it is not a
+hosted remote MCP endpoint or a general remote mode for local commands.
 
 ## Requirements
 
