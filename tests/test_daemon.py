@@ -494,7 +494,7 @@ class TestDaemonServer:
         monkeypatch.setattr(
             click.testing.CliRunner,
             "invoke",
-            lambda self, cli, argv: FakeResult(),
+            lambda self, cli, argv, **kwargs: FakeResult(),
         )
 
         server = _bare_server()

@@ -16,7 +16,7 @@ import re
 import tempfile
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from agentcad import change_contract as contract
 from agentcad.versioning import _version_lock, atomic_write_json
@@ -27,6 +27,27 @@ _REVISION = re.compile(r"r_[0-9a-f]{32}\Z")
 
 class ChangeStoreError(ValueError):
     """Retention failed or a retained record/input is no longer trustworthy."""
+
+
+def _within_root(path, root):
+    r"""Compare resolved paths using one spelling of the Windows namespace.
+
+    ntpath.realpath performs a second native lookup before removing \\?\.
+    A concurrent lock can make that lookup fail and leave the prefix on only
+    one side of a containment check. Normalize aliases for comparison only;
+    keep actual I/O paths and the existing symlink checks intact.
+    """
+
+    def comparable(value):
+        if isinstance(value, PureWindowsPath):
+            text = value.as_posix()
+            if text.lower().startswith("//?/unc/"):
+                return PureWindowsPath("//" + text[8:])
+            if re.match(r"^//\?/[A-Za-z]:/", text):
+                return PureWindowsPath(text[4:])
+        return value
+
+    return comparable(path).is_relative_to(comparable(root))
 
 
 def _safe_json(value):
@@ -88,8 +109,9 @@ class ChangeStore:
 
     def _path(self, relative: str | Path) -> Path:
         path = self.root / relative
-        if not path.resolve().is_relative_to(self.root):
-            raise ChangeStoreError("Change history path escapes the selected build root.")
+        resolved = path.resolve()
+        if not _within_root(resolved, self.root):
+            raise ChangeStoreError(f"Change history path escapes the selected build root: {resolved} (root: {self.root}).")
         for item in (path, *path.parents):
             if item == self.root:
                 break

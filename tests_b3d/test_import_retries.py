@@ -16,6 +16,7 @@ import click
 import pytest
 from mcp.types import CallToolResult
 
+from agentcad import cli as cli_mod
 from agentcad.cli import cli
 from agentcad.geometry_manifest import load_geometry
 from agentcad.mcp import server
@@ -53,14 +54,16 @@ def _history(root):
 
 
 def test_lost_response_replays_without_new_version_or_side_effects(runner, isolated_dir, monkeypatch):
-    original_echo = click.echo
+    # Lose the reply at the output sink, after formatting and durable caching.
+    # Replacing click.echo itself would bypass those steps in the dispatcher.
+    original_echo = cli_mod._CLICK_ECHO
 
     def lose_response(message=None, **kwargs):
         if message and not kwargs.get("err") and json.loads(message).get("command") == "import":
             raise KeyboardInterrupt("caller lost response")
         original_echo(message, **kwargs)
 
-    monkeypatch.setattr(click, "echo", lose_response)
+    monkeypatch.setattr(cli_mod, "_CLICK_ECHO", lose_response)
     first = runner.invoke(cli, _args())
     assert first.exit_code != 0 and first.stdout == ""
     assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 1
@@ -69,7 +72,7 @@ def test_lost_response_replays_without_new_version_or_side_effects(runner, isola
     manifest_before = (isolated_dir / "agentcad.json").read_bytes()
     working = isolated_dir / ".agentcad/changes/working.json"
     working_before = working.read_bytes()
-    monkeypatch.setattr(click, "echo", original_echo)
+    monkeypatch.setattr(cli_mod, "_CLICK_ECHO", original_echo)
 
     def unexpected(*a, **kw):
         pytest.fail("Replay attempted new CAD/viewer work")
