@@ -208,6 +208,40 @@ def test_protected_corrupt_artifact_is_not_replaced(project):
     assert path.read_bytes() == b"corrupted retained checkpoint"
 
 
+@pytest.mark.parametrize("image", [False, True])
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_foreign_source_writer_cannot_replace_protected_checkpoint(project, tmp_path, image, damage):
+    layout, root = project
+    path = (root / "inspection/face_v1_1_highlighted_123456789abcdef0.png") if image else _report(root)
+    temporary = tmp_path / "render.png"
+    temporary.write_bytes(b"original PNG")
+    with cache_lease(root, layout=layout) as cache:
+        if image:
+            cache.publish_image(temporary, path, path.with_suffix('.json'), {"sha": "original"})
+        else:
+            cache.publish_json(path, {"original": True})
+    # Pin just the sidecar for the image case: either member must protect
+    # publication of the pair, even if the other member is missing.
+    checkpoint = path.with_suffix('.json') if image else path
+    _job(root, [checkpoint], "resource_limit")
+    if damage == "missing":
+        path.unlink()
+    else:
+        path.write_bytes(b"corrupt checkpoint")
+    before = {p: p.read_bytes() if p.exists() else None for p in {path, checkpoint}}
+    foreign = tmp_path.parent / (tmp_path.name + '_caller')
+    foreign.mkdir()
+    with cache_lease(root, layout=ProjectLayout(foreign, foreign)) as cache:
+        assert not cache.managed
+        with pytest.raises(CacheUnavailable, match="--build-dir"):
+            if image:
+                temporary.write_bytes(b"replacement PNG")
+                cache.publish_image(temporary, path, checkpoint, {"sha": "replacement"})
+            else:
+                cache.publish_json(path, {"original": True})
+    assert {p: p.read_bytes() if p.exists() else None for p in before} == before
+
+
 def test_abandoned_scratch_is_removed_without_touching_foreign_names(project):
     layout, root = project
     directory = root / 'inspection'

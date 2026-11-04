@@ -77,6 +77,9 @@ Selecting `--build-dir` contains derived artifacts for an external standalone
 STEP inside that build root. A legacy standalone request that writes beside a
 file outside the selected build root returns `retention.state=unmanaged` with
 this guidance. Its shared source-side cache is outside this project's cleanup.
+It still respects the owning project's resumable checkpoints: a caller from
+another project cannot replace missing or corrupt protected reports or images.
+Use `--build-dir` to create a separate cache without altering that evidence.
 Run the same installed AgentCAD version for cooperating cache writers; older
 processes do not participate in the retention lock.
 

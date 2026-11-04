@@ -281,8 +281,35 @@ class CacheLease:
         if self.managed:
             self.used.update(self._relative(p) for p in paths)
 
+    def _check_source_publication(self, paths):
+        # The shared access lock also covers the owning project's checkpoint
+        # publication. A foreign caller must respect those records even though
+        # it cannot apply the owning project's retention policy.
+        wanted = {os.path.abspath(p) for p in paths}
+        for directory in (self.root / "jobs").glob("inspection_*"):
+            try:
+                if directory.is_symlink() or (directory / "state.json").is_symlink():
+                    raise ValueError("job state must not be a symlink")
+                state = json.loads((directory / "state.json").read_bytes())
+                checksum = state.pop("checksum")
+                if checksum != _digest(state) or state["job_id"] != directory.name:
+                    raise ValueError("job state identity or checksum mismatch")
+                if state["status"] == "complete":
+                    continue
+                artifacts = [artifact for stage in state["stages"].values()
+                             for artifact in stage.get("artifacts", [])]
+                if state.get("result"):
+                    artifacts.append(state["result"])
+                if any(os.path.abspath(row["path"]) in wanted for row in artifacts):
+                    raise CacheUnavailable("Protected inspection checkpoint belongs to another project; restore its original bytes there or use --build-dir for a separate cache.")
+            except FileNotFoundError:
+                continue  # A job being prepared has no checkpoints yet.
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
+                raise CacheUnavailable(f"Cannot establish source-side checkpoint protection at {directory}; use --build-dir for a separate cache: {exc}") from exc
+
     def publish_json(self, path, body):
         if not self.managed:
+            self._check_source_publication([path])
             atomic_write_json(path, body)
             return
         self.use([path])
@@ -299,6 +326,8 @@ class CacheLease:
         self._save()
 
     def publish_image(self, temporary, png, metadata, body):
+        if not self.managed:
+            self._check_source_publication([png, metadata])
         if self.managed:
             self.use([png, metadata])
             self._protection()

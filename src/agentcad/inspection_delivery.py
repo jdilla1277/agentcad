@@ -237,7 +237,7 @@ def _summarize(payload):
     job = payload.get("inspection_job")
     if job:
         payload["inspection_job"] = _keep(job, {"id", "version", "status", "worker_running", "cancel_requested", "manifest_id", "analysis_revision", "recognition", "request", "checkpoints", "stages", "actions"})
-        selected = "wait" if job["status"] in {"running", "queued"} else "resume" if job["status"] in {"failed", "stopped", "canceled"} else "status"
+        selected = "wait" if job["status"] in {"running", "queued"} else "resume" if job["status"] in {"failed", "stopped", "canceled", "resource_limit"} else "status"
         payload["inspection_job"]["actions"] = _keep(job.get("actions", {}), {selected})
         payload["inspection_job"]["stages"] = {name: row for name, row in job.get("stages", {}).items() if row["status"] != "complete"}
     for key in ("artifacts", "viewer_context", "viewer_glb", "viewer", "project_viewer", "preview", "diff", "comparison_phases", "created", "tool_version", "source", "scaffold", "hint", "inspection_image"):
