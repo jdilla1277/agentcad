@@ -445,7 +445,7 @@ def render_geometry_sheet(shape, output_path, *, annotations, dimensions, title,
     )
     projections = []
     try:
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir=Path(output_path).parent) as temp:
             for i, name in enumerate(("iso", "top", "front", "right")):
                 view.SetProj(VIEWS[name])
                 view.FitAll(0.18)

@@ -24,6 +24,8 @@ from agentcad.inspection_report import (
 )
 from agentcad.geometry_images import IMAGE_REVISION
 from agentcad.versioning import atomic_write_json
+from agentcad.inspection_cache import cache_lease, CacheResourceLimit
+from agentcad.project import ProjectLayout
 
 STARTUP_SECONDS = 30
 _JOB = re.compile(r"inspection_[0-9a-f]{64}\Z")
@@ -225,28 +227,30 @@ class InspectionJob:
                 identity = self.request["identity"]
                 # This is a saved presentation template, not inline delivery.
                 # Caller-specific text budgets are applied only when retrieved.
-                payload, prepared = inspection_report(
-                    identity["step"], identity["output_root"], images=identity["images"],
-                    max_images=identity["max_images"], text_budget=1_000_000,
-                    meta=self.request["meta"], _checkpoint=self._checkpoint,
-                )
-                result = {"schema_version": 1, "job_id": self.job_id,
-                          "payload": payload, "prepared": {**prepared, "report": str(prepared["report"]), "bundle": str(prepared["bundle"])}}
-                with self._state() as state:
-                    if state["cancel_requested"]:
-                        raise _Canceled()
-                    result_path = self.directory / ("result_" + _digest(result)[:16] + ".json")
-                    _write(result_path, result)
-                    state["result"] = _artifact(result_path)
-                    state["status"] = "failed" if prepared["omitted"] and any(row["reason"] == "image_failed" for row in prepared["omitted"]) else "complete"
-                    if state["status"] == "failed":
-                        state["message"] = "Some inspection images failed; the report remains available. Resume this job to retry unfinished images."
+                layout = ProjectLayout(Path(identity["project_root"]), Path(identity["build_root"]))
+                with cache_lease(identity["output_root"], layout=layout) as cache:
+                    payload, prepared = inspection_report(
+                        identity["step"], identity["output_root"], images=identity["images"],
+                        max_images=identity["max_images"], text_budget=1_000_000,
+                        meta=self.request["meta"], _checkpoint=self._checkpoint,
+                    )
+                    result = {"schema_version": 1, "job_id": self.job_id,
+                              "payload": payload, "prepared": {**prepared, "report": str(prepared["report"]), "bundle": str(prepared["bundle"])}}
+                    with self._state() as state:
+                        if state["cancel_requested"]:
+                            raise _Canceled()
+                        result_path = self.directory / ("result_" + _digest(result)[:16] + ".json")
+                        cache.publish_json(result_path, {**result, "checksum": _digest(result)})
+                        state["result"] = _artifact(result_path)
+                        state["status"] = "failed" if prepared["omitted"] and any(row["reason"] == "image_failed" for row in prepared["omitted"]) else "complete"
+                        if state["status"] == "failed":
+                            state["message"] = "Some inspection images failed; the report remains available. Resume this job to retry unfinished images."
             except _Canceled:
                 with self._state() as state:
                     state["status"] = "canceled"
             except Exception as exc:
                 with self._state() as state:
-                    state.update(status="failed", message=f"{type(exc).__name__}: {exc}")
+                    state.update(status="resource_limit" if isinstance(exc, CacheResourceLimit) else "failed", message=f"{type(exc).__name__}: {exc}")
                     for stage in state["stages"].values():
                         if stage["status"] == "running":
                             stage.update(status="failed", message=str(exc))
@@ -257,7 +261,7 @@ class InspectionJob:
         with self._state() as state:
             if self._owned() or state["status"] in {"complete", "queued"}:
                 return
-            if state["status"] in {"canceled", "failed"} and not resume:
+            if state["status"] in {"canceled", "failed", "resource_limit"} and not resume:
                 return
             token = uuid.uuid4().hex
             state.update(status="queued", run_token=token, cancel_requested=False,
@@ -299,6 +303,21 @@ class InspectionJob:
             time.sleep(0.05)
 
     def result(self, *, text_budget=DEFAULT_TEXT_BUDGET, response_path=str, response_extra=None):
+        identity = self.request["identity"]
+        with self._state() as state:
+            paths = [Path(a["path"]) for stage in state["stages"].values() for a in stage.get("artifacts", [])]
+            if state.get("result"):
+                paths.append(Path(state["result"]["path"]))
+        layout = ProjectLayout(Path(identity["project_root"]), Path(identity["build_root"]))
+        with cache_lease(identity["output_root"], layout=layout, protect=paths) as cache:
+            result = self._result(text_budget=text_budget, response_path=response_path, response_extra=response_extra)
+            if result is not None:
+                cache.validate(paths)
+                result[0]["retention"] = cache.reference()
+                return compact_report(result[0]), result[1]
+            return None
+
+    def _result(self, *, text_budget=DEFAULT_TEXT_BUDGET, response_path=str, response_extra=None):
         self._validate()
         with self._state() as state:
             if "result" not in state:

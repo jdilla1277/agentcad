@@ -140,8 +140,9 @@ These limits cover `.agentcad/inspection_delivery/delivery_*.json` only.
 Cleanup preserves source and normalized geometry, issued geometry IDs, edit
 scripts, import retry records, job checkpoints and acceptance receipts. Job
 progress snapshots may expire while the job remains resumable: job records are
-independent evidence. Limits for cached analysis, images and future search pages
-remain separate work. Use only snapshots published by this installed version
+independent evidence. Cached analysis and images have independent
+[cache limits](inspection-cache.md); future search-page limits remain separate
+work. Use only snapshots published by this installed version
 while cleanup runs; older AgentCAD processes do not share the retention lock.
 
 ## MCP

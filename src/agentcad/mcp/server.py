@@ -284,18 +284,27 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
         return package(result)
     attachments = []
     try:
+        paths = []
         for item in media:
             path = Path(item["png"])
             if image_root is not None:
                 path = Path(image_root) / path
             if not path.is_absolute():
                 path = Path(cwd) / path
-            png = path.read_bytes()
-            if hashlib.sha256(png).hexdigest() != item["sha256"]:
-                raise ValueError("Image changed before attachment; retry the image request.")
-            if not png.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise ValueError("Inspection image is not a PNG; retry the image request.")
-            attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
+            paths.append(path.resolve())
+        from agentcad.inspection_cache import cache_lease
+        from agentcad.project import ProjectLayout
+        layout = ProjectLayout(Path(result.get("project_root", cwd)), Path(result.get("build_root", cwd)))
+        declared = result.get("inspection", result).get("retention") or result.get("image", {}).get("retention")
+        with cache_lease(paths[0].parent.parent, layout=layout, protect=paths) as cache:
+            cache.validate(paths, declared)
+            for path, item in zip(paths, media):
+                png = path.read_bytes()
+                if hashlib.sha256(png).hexdigest() != item["sha256"]:
+                    raise ValueError("Image changed before attachment; retry the image request.")
+                if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+                    raise ValueError("Inspection image is not a PNG; retry the image request.")
+                attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
     except (OSError, ValueError) as exc:
         if keep_core and result.get("core", {}).get("status") == "success":
             action = ["agentcad", "inspect", result["outputs"]["step"], "--report"]
@@ -393,6 +402,10 @@ def import_cad(
     agentcad.toml; references report retention/expiry. This never evicts geometry,
     IDs, import retry evidence or job checkpoints. An oversized snapshot reports
     delivery.status=resource_limit while preserving the import outcome.
+    Reports/images and completed job results share a separate 30-day/512 MiB
+    cache per build root, configured under [inspection.cache]. Resumable job
+    checkpoints are protected; a resource_limit job has stopped. Raise the
+    quota and use its resume action. retention states expiry/protected bytes.
 
     checks_file maps to CLI --checks, including on initialize=True imports.
     Requirements are inherited when omitted; changing them requires actor and
@@ -667,6 +680,10 @@ def inspect(
         image: Return a labeled four-view PNG attachment plus its JSON record.
         isolate: Show only the selected entity; requires image and entity_id.
         report: Return the saved compact inspection report and ranked sample bundle.
+            retention reports the 30-day/512 MiB cache policy, expiry and protected
+            checkpoint bytes. Configure [inspection.cache] in agentcad.toml.
+            Expired job results fail explicitly with a fresh inspection action;
+            resource_limit jobs stop and can resume after raising their quota.
         report_images: Prepare/deliver report images; false keeps the same analysis without images.
         max_images: Maximum distinct report images, 0..9; overall then alternating part/face-edge samples.
         text_budget: Estimated token allowance for the report JSON (compact UTF-8 bytes / 3).
