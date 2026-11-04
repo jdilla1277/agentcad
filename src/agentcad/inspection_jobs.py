@@ -245,6 +245,10 @@ class InspectionJob:
                         state["status"] = "failed" if prepared["omitted"] and any(row["reason"] == "image_failed" for row in prepared["omitted"]) else "complete"
                         if state["status"] == "failed":
                             state["message"] = "Some inspection images failed; the report remains available. Resume this job to retry unfinished images."
+                        else:
+                            cache.mark_completed(state)
+                    if state["status"] == "complete" and cache.managed:
+                        cache.enforce()
             except _Canceled:
                 with self._state() as state:
                     state["status"] = "canceled"

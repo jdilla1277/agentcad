@@ -195,6 +195,9 @@ class CacheLease:
 
     def _protection(self):
         self.pins, self.job_bytes = set(), 0
+        completed = {}
+        releasing = {os.path.abspath(self._path(p)): p for entry in self.state["groups"].values()
+                     if entry["pinned"] for p in entry["paths"]}
         for root in self.state["roots"]:
             for directory in (self._path(root) / "jobs").glob("inspection_*"):
                 if directory.is_symlink():
@@ -205,6 +208,16 @@ class CacheLease:
                     if checksum != _digest(state) or state["job_id"] != directory.name:
                         raise ValueError("job state identity or checksum mismatch")
                     if state["status"] == "complete":
+                        finished = state.get("completed_at", (directory / "state.json").stat().st_mtime)
+                        for stage in state["stages"].values():
+                            for artifact in stage.get("artifacts", []):
+                                value = releasing.get(os.path.abspath(artifact["path"]))
+                                if value is not None:
+                                    completed[value] = max(completed.get(value, finished), finished)
+                        if state.get("result"):
+                            value = releasing.get(os.path.abspath(state["result"]["path"]))
+                            if value is not None:
+                                completed[value] = max(completed.get(value, finished), finished)
                         continue
                     for stage in state["stages"].values():
                         for artifact in stage.get("artifacts", []):
@@ -219,12 +232,15 @@ class CacheLease:
                     self.job_bytes += sum(p.stat().st_size for p in directory.glob("*.json") if p.is_file())
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
                     raise CacheUnavailable(f"Cannot establish protected inspection checkpoints at {directory}: {exc}") from exc
-        now = _now()
         for entry in self.state["groups"].values():
             pinned = bool(self.pins.intersection(entry["paths"]))
             if entry["pinned"] and not pinned:
-                entry.update(released_at=now, expires_at=now + self.max_age_seconds)
+                released = max((completed[p] for p in entry["paths"] if p in completed), default=entry["created_at"])
+                entry.update(released_at=released, expires_at=released + self.max_age_seconds)
             entry["pinned"] = pinned
+
+    def mark_completed(self, state):
+        state["completed_at"] = _now()
 
     def _expiry(self, entry):
         return min(entry["expires_at"], entry.get("released_at", entry["created_at"]) + self.max_age_seconds)

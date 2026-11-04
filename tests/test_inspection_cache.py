@@ -85,6 +85,7 @@ def test_resumable_checkpoints_survive_age_and_quota_and_release_once(project, m
             cache.publish_json(_report(root, 2), {"data": "z" * 2000})
     assert path.read_bytes() == before
     state["status"] = "complete"
+    state["completed_at"] = 2000
     atomic_write_json(directory / "state.json", {**state, "checksum": _digest(state)})
     with cache_lease(root, layout=layout, protect=[path]) as cache:
         released = cache.reference()
@@ -332,3 +333,21 @@ def test_killed_index_publication_is_reclaimed_without_changing_artifacts(projec
         cache.validate([_report(root)])
     assert not orphan.exists() and unrelated.read_bytes() == b'unrelated'
     assert _report(root).read_bytes() == original
+
+
+def test_delayed_first_read_does_not_renew_a_completed_jobs_lifetime(project, monkeypatch):
+    layout, root = project
+    _config(layout, max_age_seconds=10)
+    path = _report(root)
+    with cache_lease(root, layout=layout) as cache:
+        cache.publish_json(path, {"original": True})
+    directory, state = _job(root, [path])
+    with cache_lease(root, layout=layout, protect=[path]) as cache:
+        assert cache.reference()["state"] == "protected"
+    state.update(status="complete", completed_at=1010)
+    atomic_write_json(directory / 'state.json', {**state, 'checksum': _digest(state)})
+    # The worker might die after committing completion but before refreshing
+    # the cache index. A later reader must use the original completion time.
+    monkeypatch.setattr('agentcad.inspection_cache._now', lambda: 5000)
+    with cache_lease(root, layout=layout):
+        assert not path.exists()
