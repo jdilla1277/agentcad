@@ -344,6 +344,9 @@ Agents can supply `--context-window`, `--response-budget`,
 include a full saved response and an executable retrieval action. See
 [inspection budgets](docs/inspection-budgets.md) for estimates, CLI/MCP parity
 and the distinction between whole-response limits and the legacy report cap.
+Saved response snapshots default to 30 days and 64 MiB per build root, with
+configurable limits and explicit expiry/eviction responses. Cleanup preserves
+geometry, issued IDs, import retry records and resumable jobs.
 
 ### Cloud projects
 

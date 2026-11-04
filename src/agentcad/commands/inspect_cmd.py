@@ -312,7 +312,11 @@ def inspect_cmd(
         try:
             snapshot, exit_code = read_snapshot(response_snapshot, file, get_project())
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            _emit({"command": "inspect", "status": "error", "reason": "response_snapshot_unavailable", "message": str(exc)}, exit_code=1)
+            baseline = Path(file).resolve()
+            mode = ["--report"] if baseline.with_name("geometry_manifest.json").is_file() else ["--validate-only"]
+            _emit({"command": "inspect", "status": "error", "reason": getattr(exc, "reason", "response_snapshot_unavailable"),
+                   "message": str(exc), "suggestion": "Request fresh inspection evidence, or restore the original snapshot from backup. A fresh report does not recover the historical response.",
+                   "next_actions": [shlex.join(["agentcad", "inspect", str(baseline), *mode, "--build-dir", str(get_project().build_root)])]}, exit_code=1)
             return
         _emit(snapshot, exit_code=exit_code)
         return

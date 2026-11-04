@@ -388,6 +388,11 @@ def import_cad(
     reports actual estimates/omissions and budget_satisfied; an impossible budget
     preserves core success and provides a full response_snapshot retrieval action.
     These controls change delivery only and are excluded from import retry identity.
+    Full response snapshots expire after 30 days and may be evicted earlier under
+    the default 64 MiB per-build-root quota. Configure [inspection.snapshots] in
+    agentcad.toml; references report retention/expiry. This never evicts geometry,
+    IDs, import retry evidence or job checkpoints. An oversized snapshot reports
+    delivery.status=resource_limit while preserving the import outcome.
 
     checks_file maps to CLI --checks, including on initialize=True imports.
     Requirements are inherited when omitted; changing them requires actor and
@@ -689,6 +694,10 @@ def inspect(
             Cancellation stops between stages and preserves completed artifacts.
         response_snapshot: Retrieve a complete saved delivery response with report=True,
             without CAD work. Returns historical_response; current never advances.
+            References report expiry and possible earlier byte-quota eviction.
+            Default retention is 30 days/64 MiB per build root; configure
+            [inspection.snapshots] in agentcad.toml. Expired or evicted evidence
+            fails explicitly with a fresh inspection action, never a substituted report.
         context_window: Derive a 5% combined response target from caller context tokens.
         response_budget: Override that target with a combined JSON/image estimated limit.
         response_text_budget: Bound complete JSON text; default is combined limit when
