@@ -27,6 +27,9 @@ from agentcad.daemon import DaemonServer
 
 B3D_BOX = "from build123d import Box\nshow_object(Box(20, 30, 10))\n"
 RUN_FLAGS = ["--no-view", "--no-diff", "--no-preview"]
+requires_daemon = pytest.mark.skipif(
+    not daemon_mod.daemon_supported(), reason="Requires POSIX daemon support"
+)
 
 
 def _init_project(runner, path, monkeypatch):
@@ -91,6 +94,7 @@ def _spawn_hook_serving(request, record):
     return fake_spawn
 
 
+@requires_daemon
 def test_daemon_spawned_by_run_reports_other_projects_paths_in_their_project(
     runner, two_projects, monkeypatch
 ):
@@ -126,6 +130,7 @@ def test_daemon_spawned_by_run_reports_other_projects_paths_in_their_project(
     assert record["spawning_output_gained"] == []
 
 
+@requires_daemon
 def test_daemon_spawned_by_render_reports_other_projects_renders_in_their_project(
     runner, two_projects, monkeypatch
 ):
@@ -175,11 +180,16 @@ ENV_PROBE = (
 )
 
 
+@requires_daemon
 def test_daemon_request_uses_client_agentcad_environment(
     runner, tmp_path, monkeypatch
 ):
     """The daemon keeps the environment of whoever spawned it; a request must
     run with the *client's* AGENTCAD_* settings instead."""
+    # The exact forwarded keys belong to this test, regardless of the shell
+    # running pytest. Monkeypatch restores inherited settings after the test.
+    for key in daemon_mod.client_request_env():
+        monkeypatch.delenv(key)
     b = tmp_path / "project_b"
     _init_project(runner, b, monkeypatch)
     (b / "model.py").write_text(ENV_PROBE)
@@ -252,6 +262,7 @@ def test_client_request_env_keeps_daemon_settings_daemon_side():
     }
 
 
+@requires_daemon
 def test_daemon_routed_command_is_session_logged_once_with_client_argv(
     runner, tmp_path, monkeypatch
 ):
@@ -289,6 +300,7 @@ def test_daemon_routed_command_is_session_logged_once_with_client_argv(
     assert runs[0]["result"]["via"] == "daemon"
 
 
+@requires_daemon
 def test_daemon_usage_error_does_not_reach_spawning_commands_output(
     runner, two_projects, monkeypatch
 ):
@@ -325,6 +337,7 @@ def test_daemon_usage_error_does_not_reach_spawning_commands_output(
     )
 
 
+@requires_daemon
 def test_daemon_request_survives_deleted_spawning_directory(
     runner, tmp_path, monkeypatch
 ):
