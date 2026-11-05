@@ -677,7 +677,8 @@ class Attempt:
                 unavailable.append({"name": name, "path": value, "reason": str(exc)})
         return artifacts, unavailable
 
-    def reference(self) -> dict:
+    def reference(self, *, original_checks: bool = False) -> dict:
+        """Describe an attempt, optionally pinning checks to its original core receipt."""
         saved = self.store.read(self.revision_id)
         geometry = (saved["candidate"] or {}).get("deliverables", {}).get("cad", [])
         reference = {
@@ -693,7 +694,20 @@ class Attempt:
             "diagnostics": str(self.directory / "outcome.json") if saved["outcome"] else None,
         }
         if (saved["request"].get("check_policy") or saved["request"]["promotion_mode"] == "staged") and saved["receipt"]:
-            checked = self.store.read_checks(self.revision_id)
+            if original_checks:
+                # Retry recovery describes the original run. Later completed
+                # checks have their own receipt and must not replace this one.
+                checked = {
+                    "receipt": saved["receipt"],
+                    "receipt_path": reference["receipt"],
+                    "lifecycle": (
+                        "pending"
+                        if any(row["state"] == "pending" for row in saved["receipt"]["checks"])
+                        else "completed"
+                    ),
+                }
+            else:
+                checked = self.store.read_checks(self.revision_id)
             receipt = checked["receipt"]
             reference["validation_checks"] = {
                 "lifecycle": checked["lifecycle"],

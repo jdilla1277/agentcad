@@ -148,6 +148,10 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          Required unless --dry-run.
     --output LABEL       Deprecated compatibility alias for --label. It never
                          denotes an output path.
+    --idempotency-key KEY Save before sending; retry identical source/options
+                         without executing again. Repairs need a new key.
+    --status             Read a run by key without SCRIPT or --label, including
+                         after source edits/removal. See docs run-retries.
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
@@ -499,6 +503,9 @@ class _InvocationOutput:
                         payload = attach_change(payload)
                         if payload.get("command") == "import":
                             from agentcad.import_requests import finish_response
+                            payload = finish_response(payload)
+                        elif payload.get("command") == "run":
+                            from agentcad.run_requests import finish_response
                             payload = finish_response(payload)
                         from agentcad.inspection_delivery import apply_delivery
                         message = json.dumps(apply_delivery(format_response(payload, layout), layout, self.ctx))
@@ -903,7 +910,7 @@ class _LoggingGroup(click.Group):
             self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
 
     def _record_live_build(self, ctx, captured, root, exception=None):
-        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay"):
+        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay") or ctx.meta.get("run_replay"):
             return
         layout = ctx.meta.get("project_layout")
         if layout is not None:

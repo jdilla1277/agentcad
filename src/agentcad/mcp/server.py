@@ -22,14 +22,14 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "promote"}:
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
     async def call_tool(self, name, arguments):
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "promote"}:
+        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -472,6 +472,7 @@ def run(
     checks_file: str | None = None,
     defer_checks: bool = False,
     stage: bool = False,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Execute a build123d script and produce a versioned STEP file with metrics.
 
@@ -495,6 +496,9 @@ def run(
         stage: Save and check a candidate without accepting it. Open the saved
             revision with view, then use promote to accept exact saved bytes.
             Render/export diagnostics separately from change.geometry.
+        idempotency_key: Save before sending. Identical source/options replay the
+            original result without execution. Edits need a new key. Use
+            run_status with only key/cwd/build_dir after source changes/removal.
         checks_file: Optional JSON dimension/preservation requirements. Repairs
             inherit the selected policy when omitted. See docs check-spec.
         defer_checks: Retain pending declared checks instead of evaluating them
@@ -531,7 +535,20 @@ def run(
         args.append("--defer-checks")
     if stage:
         args.append("--stage")
+    if idempotency_key is not None:
+        args.extend(["--idempotency-key", idempotency_key])
     return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def run_status(idempotency_key: str, cwd: str, build_dir: str | None = None) -> dict:
+    """Read the original authored run by key without executing source or selecting work.
+
+    Works after the working script is edited or removed. Returned artifacts and
+    check results belong to the original run; they may differ from current work.
+    In-progress or interrupted results never authorize an automatic second run.
+    """
+    return _invoke(_build_args(["run", "--idempotency-key", idempotency_key, "--status"], build_dir), cwd=cwd)
 
 
 @mcp.tool()

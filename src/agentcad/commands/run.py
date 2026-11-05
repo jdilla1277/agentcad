@@ -178,6 +178,7 @@ def _run_retry_command(ctx, *, script=None, omit=(), **overrides):
         ("--checks", values.get("checks_file")),
         ("--defer-checks", values.get("defer_checks", False)),
         ("--stage", values.get("stage", False)),
+        ("--idempotency-key", values.get("idempotency_key") if not ctx.meta.get("run_request") else None),
         ("--dry-run", values.get("dry_run", False)),
         ("--runtime", values.get("runtime")),
         ("--validation-profile", values.get("validation_profile")
@@ -1193,13 +1194,15 @@ def _assign_part_identity(raw_parts):
 
 
 @click.command()
-@click.argument("script")
+@click.argument("script", required=False)
+@click.option("--idempotency-key", default=None, help="Save one key per intended run; retry identical source/options to recover its result without executing again.")
+@click.option("--status", "request_status", is_flag=True, default=False, help="Read the saved run by --idempotency-key without reading or executing SCRIPT. No --label needed.")
 @click.option(
     "--label",
     default=None,
     help=(
         "Label for this version. The STEP path is returned in outputs.step. "
-        "Required unless --dry-run."
+        "Required unless --dry-run or --status."
     ),
 )
 @click.option(
@@ -1268,6 +1271,7 @@ def _assign_part_identity(raw_parts):
 def run(
     ctx, script, label, legacy_output, render, export, preview, auto_diff,
     open_view, params, dry_run, runtime, validation_profile, no_daemon,
+    idempotency_key, request_status,
 ):
     """Execute the project's CAD script and produce a versioned STEP file.
 
@@ -1287,6 +1291,22 @@ def run(
     ctx.meta["run_label"] = output
     ctx.meta["run_legacy_output"] = legacy_output is not None
     ctx.meta["viewer_dry_run"] = dry_run
+    if request_status:
+        if not idempotency_key:
+            raise ProjectError("run_key_required", "Run status requires --idempotency-key.",
+                               "Read a saved run with agentcad run --idempotency-key KEY --status.")
+        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon"}
+        if any(name not in allowed and ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE for name in ctx.params):
+            raise ProjectError("run_status_options", "Status accepts only a key and optional build directory.",
+                               "Omit SCRIPT and build options when reading a saved run.")
+        from agentcad.run_requests import RunRequest
+        RunRequest(idempotency_key).lookup()
+        return
+    if script is None:
+        raise click.MissingParameter(ctx=ctx, param_hint="'SCRIPT'", param_type="argument")
+    if idempotency_key is not None and dry_run:
+        raise ProjectError("run_key_needs_retention", "Retry keys require a retained run, not --dry-run.",
+                           "Remove --dry-run to save the attempt, or omit the key for a dry run.")
     if label is not None and legacy_output is not None:
         raise click.UsageError(
             "Use --label or the deprecated --output alias, not both.",
@@ -1362,9 +1382,34 @@ def run(
             checks_file=ctx.meta.get("change_checks_file"),
             defer_checks=ctx.meta.get("change_defer_checks", False),
             stage=ctx.meta.get("change_stage", False),
+            idempotency_key=idempotency_key,
         )
         return
 
+    def execute():
+        return _execute_run(
+            ctx, script, output, render, export, preview, auto_diff, open_view,
+            params, dry_run, runtime, no_daemon or idempotency_key is not None,
+            validation_profile,
+        )
+
+    if idempotency_key is not None:
+        from agentcad.run_requests import RunRequest
+        semantic = {
+            "label": output, "render": render, "export": export,
+            "preview": preview, "auto_diff": auto_diff, "open_view": open_view,
+            "params": params, "runtime": runtime,
+            "validation_profile": validation_profile,
+            "requirements": ctx.meta.get("change_requirements"),
+            "defer_checks": ctx.meta.get("change_defer_checks", False),
+            "stage": ctx.meta.get("change_stage", False),
+        }
+        return RunRequest(idempotency_key, script=script, semantic=semantic).run(execute)
+    return execute()
+
+
+def _execute_run(ctx, script, output, render, export, preview, auto_diff, open_view,
+                 params, dry_run, runtime, no_daemon, validation_profile):
     # Run the actual work inside a try/except so internal exceptions
     # (e.g. `Bnd_Box is void` from compute_metrics on a degenerate
     # shape) surface as JSON on stdout — preserving the docs' "All
@@ -1513,7 +1558,9 @@ def _run_impl(
     from agentcad.runners import dispatch
 
     try:
-        source_bytes = script_path.read_bytes()
+        source_bytes = ctx.meta.get("run_request_source_bytes")
+        if source_bytes is None:
+            source_bytes = script_path.read_bytes()
         ctx.meta["change_run_source"] = (source_bytes, script_path.name)
         raw_source = source_bytes.decode("utf-8")
     except (OSError, UnicodeError) as exc:
