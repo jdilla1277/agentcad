@@ -72,7 +72,14 @@ def _route_through_daemon(argv: list[str]):
         )
 
     return _daemon.send_request(
-        {"type": "run", "cwd": str(Path.cwd()), "argv": argv},
+        {
+            "type": "run",
+            "cwd": str(Path.cwd()),
+            "argv": argv,
+            # The daemon's own environment belongs to whichever command
+            # spawned it; the request must run with this caller's settings.
+            "env": _daemon.client_request_env(),
+        },
         socket_path=_socket_path(),
         progress_callback=show_progress,
     )
