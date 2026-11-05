@@ -70,6 +70,8 @@ def skill_status(cwd: Path, runtime: str) -> dict:
         return {"state": "missing", "path": str(skill_path)}
     try:
         installed = read_text_file(skill_path)
+    except UnicodeDecodeError:
+        return {"state": "stale", "path": str(skill_path)}
     except OSError:
         return {"state": "missing", "path": str(skill_path)}
     state = "current" if installed == _skill_content(runtime) else "stale"

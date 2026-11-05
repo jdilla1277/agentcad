@@ -648,14 +648,14 @@ def guide_fingerprint(runtime: str) -> str:
 
 
 def read_text_file(path: Path) -> str:
-    """Read a managed text file as UTF-8, falling back to cp1252.
+    """Read UTF-8 or the legacy locale encoding without replacing characters.
 
     Earlier releases wrote these files with the platform default encoding, so
-    copies installed on Windows may be cp1252 and invalid UTF-8. Decoding them
-    as cp1252 recovers the original characters so a reinstall can rewrite the
-    file as UTF-8.
+    non-UTF-8 files must use that locale, which can be cp1251, cp1252, or another
+    code page. Explicit 'locale' also works when Python's UTF-8 mode is enabled.
+    If neither encoding works, raise before an installer can overwrite notes.
     """
     try:
         return Path(path).read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return Path(path).read_text(encoding="cp1252", errors="replace")
+        return Path(path).read_text(encoding="locale")

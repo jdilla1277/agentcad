@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 import click
-from agentcad.project import get_project, project_options
+from agentcad.project import ProjectError, get_project, project_options
 
 from agentcad.guide import effective_runtime, guide_body, guide_fingerprint, read_text_file
 
@@ -72,9 +72,21 @@ def install_instructions(cwd: Path, target: str, runtime: str) -> dict:
     marked block is replaced.
     """
     block = instructions_block(runtime)
-    written = []
+    originals = []
     for path in _target_paths(target, cwd):
-        original = read_text_file(path) if path.exists() else ""
+        try:
+            original = read_text_file(path) if path.exists() else ""
+        except UnicodeDecodeError as exc:
+            raise ProjectError(
+                "instructions_encoding_error",
+                f"Cannot decode {path.name} as UTF-8 or the current locale encoding.",
+                f"Convert {path} from its original encoding to UTF-8, then retry.",
+            ) from exc
+        originals.append((path, original))
+
+    # Decode every target before updating any of them.
+    written = []
+    for path, original in originals:
         path.write_text(_replace_or_append(original, block), encoding="utf-8")
         written.append(str(path))
     return {
@@ -94,6 +106,9 @@ def instructions_status(cwd: Path, runtime: str) -> dict:
             continue
         try:
             content = read_text_file(path)
+        except UnicodeDecodeError:
+            files[path.name] = "stale"
+            continue
         except OSError:
             continue
         if START_MARKER not in content:
