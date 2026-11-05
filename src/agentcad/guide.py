@@ -113,6 +113,10 @@ Turn the request into a concrete geometry contract before building.
 - Declare structural intent when known, for example with
   `show_object(part, options={"expect_solids": 1})`. Use named parts and
   `floating: true` when separated bodies are intentional.
+- For a real run, save `--idempotency-key KEY` before sending so a lost response
+  can be recovered without executing CAD again. Repeat identical source/options,
+  or use `agentcad run --idempotency-key KEY --status` without the working script.
+  Use a new key for a repair or intended new build. See `agentcad docs run-retries`.
 
 Specification is complete when the result could be judged without relying on
 the same reasoning that constructs it. When a requirement cannot be checked

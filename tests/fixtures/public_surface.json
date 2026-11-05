@@ -50,6 +50,7 @@
     "recovery",
     "render",
     "review",
+    "run-retries",
     "runtimes",
     "schema",
     "validation",
