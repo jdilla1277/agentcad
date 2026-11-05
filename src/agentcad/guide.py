@@ -12,6 +12,7 @@ content hash, not a manually bumped version, so it can never be forgotten.
 """
 
 import hashlib
+from pathlib import Path
 
 from agentcad.runners import dispatch
 
@@ -648,3 +649,17 @@ def guide_fingerprint(runtime: str) -> str:
     """Short content hash identifying this package's rendered guide."""
     digest = hashlib.sha256(guide_body(runtime).encode("utf-8")).hexdigest()
     return digest[:12]
+
+
+def read_text_file(path: Path) -> str:
+    """Read UTF-8 or the legacy locale encoding without replacing characters.
+
+    Earlier releases wrote these files with the platform default encoding, so
+    non-UTF-8 files must use that locale, which can be cp1251, cp1252, or another
+    code page. Explicit 'locale' also works when Python's UTF-8 mode is enabled.
+    If neither encoding works, raise before an installer can overwrite notes.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return Path(path).read_text(encoding="locale")
