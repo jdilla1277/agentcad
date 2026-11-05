@@ -201,6 +201,9 @@ def commit_version(
     advance_current: bool,
 ) -> dict:
     """Atomically write metadata, then merge the reservation into the manifest."""
+    from agentcad.run_requests import mark_core
+
+    mark_core(meta, manifest_entry)
     project_dir = reservation.path.parent
     manifest_path = project_dir / "agentcad.json"
     revision_id = (meta.get("change") or {}).get("revision_id")
