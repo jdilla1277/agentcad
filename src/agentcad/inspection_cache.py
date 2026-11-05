@@ -308,13 +308,15 @@ class CacheLease:
                 raise CacheUnavailable(f"Cannot establish source-side checkpoint protection at {directory}; use --build-dir for a separate cache: {exc}") from exc
 
     def publish_json(self, path, body):
+        self.use([path])
+        encoded = (json.dumps(body, indent=2) + "\n").replace("\n", os.linesep).encode("utf-8")
+        # Reusing verified bytes is safe for source-side checkpoints too. In
+        # particular, resuming a job republishes its unchanged catalogue.
+        if Path(path).is_file() and Path(path).read_bytes() == encoded:
+            return
         if not self.managed:
             self._check_source_publication([path])
             atomic_write_json(path, body)
-            return
-        self.use([path])
-        encoded = (json.dumps(body, indent=2) + "\n").replace("\n", os.linesep).encode("utf-8")
-        if Path(path).is_file() and Path(path).read_bytes() == encoded:
             return
         self._protection()
         if self._relative(path) in self.pins:

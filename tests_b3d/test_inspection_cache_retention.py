@@ -172,6 +172,48 @@ def test_expired_complete_job_fails_with_fresh_report_action(runner, isolated_di
     assert fresh.exit_code == 0 and current['manifest_id'] == saved['manifest_id']
 
 
+def test_external_job_canceled_after_catalogue_resumes_with_unchanged_checkpoints(runner, isolated_dir, monkeypatch):
+    caller, source = isolated_dir / 'caller', isolated_dir / 'supplier'
+    caller.mkdir()
+    source.mkdir()
+    step, saved = _baseline(source, REAL)
+    monkeypatch.chdir(caller)
+    job = InspectionJob.prepare(step, source, ProjectLayout(caller, caller), max_images=1)
+    checkpoint = job._checkpoint
+
+    def cancel_after_catalogue(name, status, paths):
+        checkpoint(name, status, paths)
+        if name == 'catalogue' and status == 'complete':
+            job.cancel()
+
+    with monkeypatch.context() as phase:
+        phase.setattr(job, '_checkpoint', cancel_after_catalogue)
+        job.start()
+    canceled = job.status()
+    assert canceled['status'] == 'canceled' and not canceled['worker_running']
+    state = json.loads(Path(canceled['checkpoints']).read_bytes())
+    assert state['stages']['catalogue']['status'] == 'complete' and 'result' not in state
+    paths = [step, step.with_name('geometry_manifest.json'), Path(canceled['request'])]
+    paths += [Path(row['path']) for stage in state['stages'].values() for row in stage.get('artifacts', [])]
+    before = _hashes(paths)
+    mtimes = {p: p.stat().st_mtime_ns for p in paths}
+
+    def unexpected(*a, **kw):
+        pytest.fail('Resume repeated completed native work')
+
+    monkeypatch.setattr('agentcad.inspection_report.BaselineGeometry', unexpected)
+    monkeypatch.setattr('agentcad.geometry_images.BaselineGeometry', unexpected)
+    invoked, resumed = _invoke(runner, shlex.split(canceled['actions']['resume'])[1:])
+    assert invoked.exit_code == 0 and resumed['inspection_job']['status'] == 'complete', resumed
+    assert resumed['inspection_job']['id'] == job.job_id
+    assert resumed['inspection']['manifest_id'] == saved['manifest_id']
+    assert resumed['inspection']['retention']['state'] == 'unmanaged'
+    assert len(resumed['inspection']['media']) == 1
+    assert _hashes(before) == before
+    assert {p: p.stat().st_mtime_ns for p in paths} == mtimes
+    assert len(list(isolated_dir.rglob('request.json'))) == 1
+
+
 def test_id_image_retention_and_mcp_record_agree(runner, isolated_dir):
     step, saved = _baseline(isolated_dir)
     face = next(e['id'] for e in saved['entities'].values() if e['kind'] == 'face')

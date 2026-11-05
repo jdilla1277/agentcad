@@ -242,6 +242,29 @@ def test_foreign_source_writer_cannot_replace_protected_checkpoint(project, tmp_
     assert {p: p.read_bytes() if p.exists() else None for p in before} == before
 
 
+def test_source_side_protected_json_reuse_is_a_byte_identical_noop(project, tmp_path, monkeypatch):
+    layout, root = project
+    path = root / 'inspection/bundle_123456789abcdef0.json'
+    body = {"media": [], "omitted": [], "overall_reused_for": None}
+    with cache_lease(root, layout=layout) as cache:
+        cache.publish_json(path, body)
+    _job(root, [path], "canceled")
+    before, stat = path.read_bytes(), path.stat()
+    foreign = tmp_path.parent / (tmp_path.name + '_caller')
+    foreign.mkdir()
+    with cache_lease(root, layout=ProjectLayout(foreign, foreign)) as cache:
+        assert not cache.managed
+        with monkeypatch.context() as phase:
+            phase.setattr('agentcad.inspection_cache.atomic_write_json',
+                          lambda *a, **kw: pytest.fail('Reused checkpoint was rewritten'))
+            cache.publish_json(path, body)
+        assert path.read_bytes() == before
+        assert path.stat().st_mtime_ns == stat.st_mtime_ns
+        with pytest.raises(CacheUnavailable, match="--build-dir"):
+            cache.publish_json(path, {**body, "changed": True})
+    assert path.read_bytes() == before
+
+
 def test_abandoned_scratch_is_removed_without_touching_foreign_names(project):
     layout, root = project
     directory = root / 'inspection'
