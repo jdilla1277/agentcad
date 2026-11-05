@@ -352,7 +352,7 @@ JSON RESPONSE CONTRACT
   this build; its diagnostic geometry remains retained and current is unchanged.
   Inspect/reconcile before rerunning the current script or import. This conflict
   is separate from a measured geometry failure. See `agentcad docs check-spec`
-  for retained requirements, receipts, and deferred-check limitations.
+  for retained requirements, receipts, and delayed automatic acceptance.
 
   Use run/import --stage to save a checked experiment without replacing the
   accepted model. Open it with view REVISION, then accept its saved bytes with

@@ -1,9 +1,10 @@
 """Retain immutable source, core geometry, and diagnostics for each attempt.
 
-This store does not replace version directories or perform promotion. An
+This store retains attempts separately from accepted version directories. An
 attempt request is saved before execution; core records are sealed once their
 inputs are known, and the final command response is a separate immutable record.
 An interrupted attempt stays addressable without pretending it completed.
+Completing deferred checks delegates saved automatic intent to PromotionStore.
 """
 
 from __future__ import annotations
@@ -215,6 +216,13 @@ class ChangeStore:
                     baseline_errors[check_id] = str(exc)
             source_path = attempt.directory / ("source" + Path(source_name).suffix.lower())
             _write_bytes_once(source_path, source)
+            from agentcad.change_promotion import PromotionStore
+
+            promotions = PromotionStore(self.root)
+            automatic = (
+                promotions.automatic_seed(revision_id)
+                if defer_checks and promotion_mode == "automatic" else None
+            )
             request = _sealed(
                 "attempt_request",
                 revision_id=revision_id,
@@ -231,6 +239,7 @@ class ChangeStore:
                 check_inputs=baseline_inputs,
                 baseline_errors=baseline_errors,
                 defer_checks=bool(defer_checks),
+                **({"automatic_promotion": automatic} if automatic else {}),
             )
             _write_json_once(attempt.directory / "request.json", request)
             atomic_write_json(
@@ -241,6 +250,7 @@ class ChangeStore:
                     "selection_generation": request["selection_generation"],
                 },
             )
+            promotions.cancel_superseded()
         return attempt
 
     def read(self, revision_id: str) -> dict:
@@ -372,6 +382,12 @@ class ChangeStore:
         }
 
     def complete_checks(self, revision_id: str) -> dict:
+        checked = self._complete_checks(revision_id)
+        from agentcad.change_promotion import PromotionStore
+
+        return {**checked, **PromotionStore(self.root).complete_automatic(revision_id)}
+
+    def _complete_checks(self, revision_id: str) -> dict:
         # Validate before creating even a lock directory for an unknown ID.
         observed = self.read_checks(revision_id)
         if observed["lifecycle"] == "completed":
@@ -473,6 +489,9 @@ class Attempt:
                     != expected[0]["sha256"]
                 ):
                     raise ChangeStoreError("A prepared geometry snapshot cannot be replaced.")
+            from agentcad.change_promotion import PromotionStore
+
+            PromotionStore(self.store.root).ensure_automatic(self.revision_id)
             return self.reference()
         inputs = [request["source"], *request.get("check_inputs", [])]
         for artifact in inputs:
@@ -567,6 +586,9 @@ class Attempt:
                 response=response,
             ),
         )
+        from agentcad.change_promotion import PromotionStore
+
+        PromotionStore(self.store.root).ensure_automatic(self.revision_id)
         return self.reference()
 
     def _evaluate(self, candidate, policy, response):

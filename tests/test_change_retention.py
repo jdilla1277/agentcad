@@ -217,8 +217,23 @@ def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
     assert after["attempt"]["label"] == label
     assert after["latest"] == before["latest"]
     assert accepted_step.read_bytes() == accepted_bytes
-    assert (isolated_dir / "agentcad.json").read_bytes() == accepted_manifest
+    current_manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+    previous = json.loads(accepted_manifest)
+    assert current_manifest["versions"] == previous["versions"]
+    assert current_manifest["promotion_state"]["targets"] == previous["promotion_state"]["targets"]
+    if status == "checks_pending":
+        assert json.loads(blocked.stdout)["promotion"]["lifecycle"] == "pending"
+    else:
+        assert (isolated_dir / "agentcad.json").read_bytes() == accepted_manifest
     assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == "accepted"
+    if status == "checks_pending":
+        completed = runner.invoke(cli, ["check-spec", json.loads(blocked.stdout)["change"]["revision_id"], "--complete"])
+        assert completed.exit_code == 0, completed.output
+        assert json.loads(completed.stdout)["current_advanced"] is True
+        with urlopen(url + "state", timeout=3) as response:
+            accepted_after_checks = json.load(response)
+        assert accepted_after_checks["attempt"]["status"] == "accepted_without_viewer"
+        assert accepted_after_checks["latest"] == before["latest"]
 
 
 @pytest.mark.parametrize(
@@ -606,7 +621,7 @@ def test_declared_failure_preserves_current_and_repair_inherits_checks(runner, i
     assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == "repaired"
 
 
-def test_deferred_check_cli_completes_without_accepting_and_mcp_reads_receipt(runner, isolated_dir):
+def test_deferred_check_cli_accepts_current_intent_and_mcp_reads_receipt(runner, isolated_dir):
     from agentcad.mcp import server
 
     init(runner)
@@ -643,7 +658,9 @@ def test_deferred_check_cli_completes_without_accepting_and_mcp_reads_receipt(ru
     completed = runner.invoke(cli, ["check-spec", revision, "--complete", "--no-daemon"])
     assert completed.exit_code == 0, completed.output
     assert json.loads(completed.stdout)["validation_state"] == "valid"
-    assert json.loads((isolated_dir / "agentcad.json").read_text()).get("current") is None
+    assert json.loads(completed.stdout)["current_advanced"] is True
+    assert json.loads(completed.stdout)["promotion"]["outcome"] == "promoted"
+    assert json.loads((isolated_dir / "agentcad.json").read_text()).get("current") == "later"
     result = server.check_spec(revision, None, str(isolated_dir))
     assert result["validation_state"] == "valid"
     assert result["current_advanced"] is False

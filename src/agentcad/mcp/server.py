@@ -398,8 +398,9 @@ def import_cad(
     Requirements are inherited when omitted; changing them requires actor and
     rationale in the checks JSON. defer_checks maps to --defer-checks: retain
     geometry with pending checks without advancing current. Failed checks also
-    leave current unchanged; check_spec(file=revision_id, complete=True) records
-    deferred evidence without changing current.
+    leave current unchanged; check_spec(file=revision_id, complete=True) settles
+    still-current automatic acceptance after recording deferred evidence.
+    Superseded automatic intent stays cancelled, even after selection back.
     stage=True saves a checked candidate without accepting it, including when
     checks pass. Inspect it with view(file=revision_id), then explicitly promote
     it using a caller-known idempotency key. Staging prepares source/STEP/checks;
@@ -490,7 +491,8 @@ def run(
             inherit the selected policy when omitted. See docs check-spec.
         defer_checks: Retain pending declared checks instead of evaluating them
             now. Complete with check_spec(revision_id, complete=True); completion
-            records evidence without changing current.
+            accepts a still-current normal-run intent if checks pass. Staged or
+            superseded work stays unaccepted; reads never change current.
         diff: Compare automatically with the prior successful version. Pass
             False to skip it; explicit diff remains available.
         view: Open or reuse the live project viewer. Share project_viewer.url
@@ -763,8 +765,10 @@ def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, 
         file: STEP/STP/BREP path, or a returned retained revision ID.
         spec_file: JSON cylindrical-feature spec for file checks. Omit for a
             retained revision: its requirements are already pinned.
-        complete: Complete deferred checks on a retained revision; never changes
-            current or accepts an older candidate. A normal read is read-only.
+        complete: Complete deferred checks and settle the original automatic
+            acceptance if still current. Staged/superseded work stays unaccepted.
+            current_advanced reports a fresh acceptance; promotion is its durable
+            decision, separate from passed/validation_state. Reads are read-only.
         cwd: Source project directory (or a subdirectory); defaults to current.
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Use returned artifact paths.
