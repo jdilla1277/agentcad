@@ -1,13 +1,23 @@
-# Caller budgets for inspection delivery
+# Default budgets for inspection delivery
 
-Import and report inspection accept optional budgets for the **complete JSON
-response and selected image bundle**, including import metadata and job fields.
-They change delivery without importing again, restarting analysis or changing
-geometry IDs. Existing calls without these controls keep the legacy 2000-token
-nested-report allowance and image caps.
-With caller budgets, report responses use an outer `delivery` audit and nested
-`inspection` report. This keeps the whole-response and report estimates separate;
-ordinary report calls without caller limits retain their existing flat shape.
+Import and `inspect --report` bound the **complete JSON response** by default,
+including import metadata and job fields. With no context size supplied, the
+fallback is **2,000 estimated text tokens**, plus the existing image count and
+resolution caps. Image-token cost remains unknown. The response uses an outer
+`delivery` audit and nested `inspection` report, with a complete saved response
+available through `response_snapshot.retrieve`.
+
+Caller budgets override these defaults without importing again, restarting
+analysis or changing geometry IDs. Plain entity lookup, individual images and
+legacy topology inspection keep their existing response shapes.
+Compacting the reply does not change the live viewer's build status or its
+saved model.
+
+Use `--full-response` (MCP `full_response=True`) for uncompacted command records
+and the previous flat report shape. It cannot be combined with whole-response
+budget options. `--text-budget` still limits report preparation; use a larger
+value when more report detail is needed. `--no-report` still omits inline
+inspection while keeping bounded import status and saved artifact references.
 
 ```sh
 agentcad import supplier.step --init --idempotency-key supplier-001 \
@@ -63,6 +73,10 @@ The nested report retains its preparation budget; `delivery` contains the
 caller-specific image estimates. Acceptance receipts and verbose
 checks can be summarized with their decision/revision keys intact. The full
 original response remains available through `response_snapshot`.
+Under tight limits, repeated job/manifest fields and passing validation-layer
+details can be omitted. Completed jobs need no recovery action; unfinished jobs
+retain the applicable wait or resume action. Snapshot references always retain
+their ID, retrieval command and retention; the local path may be omitted.
 
 An allowance smaller than required status/identity/retrieval returns
 `delivery.status=budget_unavailable` and `budget_satisfied=false`, with no inline
@@ -72,7 +86,7 @@ similarly reports `snapshot_unavailable`; the original command result survives.
 
 ## Retrieve the full response
 
-Every budgeted response references a complete pre-budget snapshot containing
+Every bounded response references a complete pre-budget snapshot containing
 the original JSON and its original path base. Copy its exact retrieval action:
 
 ```sh
@@ -88,6 +102,12 @@ progress is historical too; follow the returned job status action for fresh
 progress. Snapshot retrieval expands the saved report allowance as needed to
 preserve its full selected records after path formatting. Add new caller
 limits to request another bounded projection of the same snapshot.
+Saved-response retrieval is complete by default, so copying the retrieval
+command does not return the same shortened response again. It does not need
+`--full-response`.
+This restores the original command reply, whose prepared report may already
+have omitted tail records under `--text-budget`. Read the saved analysis report
+or geometry manifest for the complete part and topology inventories.
 Recovered inspection, measurement and view actions resolve their CAD file from
 the saved response's directory and include the selected build root, so they can
 be followed from another working directory. Failed imports retain their nonzero
@@ -96,8 +116,8 @@ exit code through retries and snapshot retrieval, including preflight failures.
 Snapshots are hash-addressed JSON files under the selected build root's
 `.agentcad/inspection_delivery`. Retrieval checks their integrity, project/build
 root, baseline path and baseline bytes. Missing/changed evidence fails
-explicitly. Full snapshot retrieval is local; remote transfer and a possible
-migration of the legacy default to whole-response limits remain separate work.
+explicitly. Full snapshot retrieval is local; remote transfer remains separate
+work.
 These controls can also be used with inspection jobs and import
 retries; new delivery limits are outside both identities.
 

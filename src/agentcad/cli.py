@@ -490,6 +490,7 @@ class _InvocationOutput:
     def __init__(self, ctx):
         self.ctx = ctx
         self.captured = []
+        self.complete_result = None
 
     def process(self, message, err):
         if message is not None and not err:
@@ -508,7 +509,12 @@ class _InvocationOutput:
                             from agentcad.run_requests import finish_response
                             payload = finish_response(payload)
                         from agentcad.inspection_delivery import apply_delivery
-                        message = json.dumps(apply_delivery(format_response(payload, layout), layout, self.ctx))
+                        formatted = format_response(payload, layout)
+                        if self.ctx.meta.get("inspection_delivery_policy") is not None:
+                            # Presentation may omit viewer fields; lifecycle
+                            # decisions must still use the complete outcome.
+                            self.complete_result = formatted
+                        message = json.dumps(apply_delivery(formatted, layout, self.ctx))
                 except (TypeError, json.JSONDecodeError):
                     pass
         if message is not None:
@@ -907,9 +913,10 @@ class _LoggingGroup(click.Group):
         finally:
             _INVOCATION_OUTPUT.reset(token)
             self._log_session(ctx, captured)
-            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
+            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1],
+                                    complete_result=output.complete_result)
 
-    def _record_live_build(self, ctx, captured, root, exception=None):
+    def _record_live_build(self, ctx, captured, root, exception=None, *, complete_result=None):
         if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay") or ctx.meta.get("run_replay"):
             return
         layout = ctx.meta.get("project_layout")
@@ -917,8 +924,8 @@ class _LoggingGroup(click.Group):
             root = layout.build_root
         if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
             return
-        result = {}
-        for line in reversed(captured):
+        result = complete_result or {}
+        for line in reversed(captured) if complete_result is None else ():
             try:
                 candidate = json.loads(line)
                 if isinstance(candidate, dict):

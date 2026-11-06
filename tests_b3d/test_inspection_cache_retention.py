@@ -39,7 +39,7 @@ def test_cache_expiry_preserves_ids_and_expired_snapshot_images_are_not_replaced
     recovered = asyncio.run(server.mcp.call_tool('inspect', {
         'file': str(step), 'cwd': str(isolated_dir), 'report': True,
         'response_snapshot': report['response_snapshot']['id'], 'response_text_budget': 6000,
-    }))
+}))
     historical = _payload(recovered)
     assert historical['historical_response'] and historical['_exit_code'] == 1
     assert historical['status'] == 'error' and 'expired' in historical['image']['message']
@@ -76,7 +76,7 @@ def test_import_resource_limit_resumes_same_job_without_another_version(runner, 
     result = asyncio.run(server.mcp.call_tool('inspect', {
         'file': str(step), 'cwd': str(isolated_dir), 'report': True,
         'job_id': job['id'], 'job_action': 'wait', 'response_text_budget': 6000,
-    }))
+}))
     resumed = _payload(result)
     assert resumed['_exit_code'] == 0 and resumed['inspection_job']['status'] == 'complete', resumed
     assert resumed['inspection_job']['id'] == job['id']
