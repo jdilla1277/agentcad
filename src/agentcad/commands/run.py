@@ -543,6 +543,8 @@ def _record_failure(
         "error": error_msg,
         "script": f"{dir_name}/script.py",
     }
+    from agentcad.experiments import add_experiment_metadata
+    add_experiment_metadata(meta)
     if runtime is not None:
         meta["runtime"] = runtime
     if guidance:
@@ -601,6 +603,8 @@ def _record_invalid_geometry(
         "created": datetime.now(timezone.utc).isoformat(),
         "script": f"{dir_name}/script.py",
     }
+    from agentcad.experiments import add_experiment_metadata
+    add_experiment_metadata(meta)
     if parts:
         meta["parts"] = parts
     if groups:
@@ -1259,6 +1263,8 @@ def _run_impl(
         "completed_phases": list(_phase_tracker.completed),
         "phase_timings": dict(_timings),
     }
+    from agentcad.experiments import add_experiment_metadata
+    add_experiment_metadata(meta)
     if parts_output:
         meta["parts"] = parts_output
     if groups_output:

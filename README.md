@@ -63,6 +63,30 @@ to keep the phone from sliding. Show me a preview when you're done.
 - **`agentcad view old.step new.step`** — open a synchronized A/B comparison with separate centered projection and source-frame 3D volume artifacts
 - **`agentcad docs [section]`** — runtime-aware built-in documentation and worked examples
 
+## Experimental features
+
+Unfinished features may ship dormant in a normal release. They remain off
+unless someone deliberately enables them for the current project:
+
+```bash
+agentcad experiments list
+agentcad experiments enable FEATURE --acknowledge-unstable
+agentcad experiments disable FEATURE
+```
+
+Opt-ins are stored in the gitignored `.agentcad/experiments.json`. Agents must
+obtain explicit user approval before enabling an experiment. Active experiments
+are reported by `agentcad context` and recorded with version metadata.
+
+When PyPI has a newer agentcad release, command JSON may include an additive
+`_meta.notices` update notice. The notice is advisory and requires user approval;
+agentcad never upgrades itself during another command. Checks are cached for 24
+hours, fail silently when offline, and can be disabled with
+`AGENTCAD_NO_UPDATE_CHECK=1`. The same available release is shown at most once
+every three days so routine agent commands do not repeatedly nag the user. If
+an environment is upgraded underneath a long-lived MCP process, the notice asks
+for that integration to be restarted instead of recommending another upgrade.
+
 ## No boilerplate
 
 Scripts need zero imports. By default, build123d primitives, `show_object`, and agentcad edit helpers are pre-injected:

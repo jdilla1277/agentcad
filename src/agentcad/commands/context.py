@@ -4,6 +4,7 @@ from pathlib import Path
 import click
 
 from agentcad import __version__
+from agentcad.experiments import experiment_status
 from agentcad.manifest import load_manifest
 from agentcad.recovery import recovery_summary
 
@@ -39,4 +40,5 @@ def context():
         "version_count": len(versions),
         "versions": versions_summary,
         "recovery": recovery,
+        "experiments": experiment_status(),
     }))

@@ -38,6 +38,12 @@ def _no_daemon(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_update_check(monkeypatch):
+    """Unit tests opt into update checking explicitly and never contact PyPI."""
+    monkeypatch.setenv("AGENTCAD_NO_UPDATE_CHECK", "1")
+
+
+@pytest.fixture(autouse=True)
 def _no_remote_feedback(monkeypatch):
     """Stub the feedback remote POST so pytest never hits the production endpoint."""
     from agentcad.commands import feedback as feedback_mod

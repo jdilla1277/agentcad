@@ -100,6 +100,15 @@ agentcad --help   # Read the built-in how-to guide and command reference
    context`, existing outputs, and `agentcad daemon status` before retrying; the
    original command may already have completed.
 
+   Read additive `_meta` guidance in command responses. If
+   `_meta.notices` reports an available update or required integration restart,
+   tell the user and obtain their approval before following its action;
+   agentcad never authorizes an agent to modify the environment implicitly. If
+   `_meta.active_experiments`
+   is present, remember that those paths are unfinished. Never enable an
+   experiment without an explicit user request and approval. The activation
+   command is `agentcad experiments enable NAME --acknowledge-unstable`.
+
 4. **Review with the user.** The generated viewer opens automatically. On v2+
    start with its previous/current comparison, then use A/B, Overlay, and Parts
    without selecting files manually. Use `agentcad view old.step new.step` only
@@ -200,6 +209,7 @@ agentcad --help   # Read the built-in how-to guide and command reference
 | `agentcad parts show REF ID` | Show one versioned part by stable id |
 | `agentcad diff REF1 REF2` | Compare versions |
 | `agentcad context` | Project state and interrupted-version recovery candidates |
+| `agentcad experiments list` | List unfinished features and project-local opt-ins |
 | `agentcad recover VERSION_DIR` | Validate and reconcile interrupted history without deleting files |
 | `agentcad docs [SECTION]` | Runtime-aware built-in documentation |
 | `agentcad instructions install` | Record a short project note so future agents read `agentcad --help` |

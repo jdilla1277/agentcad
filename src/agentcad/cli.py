@@ -12,6 +12,7 @@ from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
 from agentcad.commands.docs import docs
 from agentcad.commands.export_cmd import export_cmd
+from agentcad.commands.experiments import experiments
 from agentcad.commands.feedback import feedback
 from agentcad.commands.import_cmd import import_cmd
 from agentcad.commands.init import init
@@ -205,7 +206,14 @@ COMMAND REFERENCE: VERIFY AND DEBUG
 COMMAND REFERENCE: PROJECT AND INTEGRATIONS
   agentcad context
     Return project name, current version, version history, tool version, and any
-    interrupted version directories that need explicit recovery.
+    interrupted version directories that need explicit recovery. Also reports
+    project-local experimental feature opt-ins.
+
+  agentcad experiments list
+  agentcad experiments enable NAME --acknowledge-unstable
+  agentcad experiments disable NAME
+    Inspect or change unfinished features for this project. Experiments are off
+    by default, stored under .agentcad/, and require explicit user approval.
 
   agentcad recover VERSION_DIR [--make-current]
     Validate an interrupted directory's output.step and safely restore its
@@ -236,6 +244,9 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
 
 JSON RESPONSE CONTRACT
   Agent-facing command results are JSON with "command" and "status" keys.
+  `_meta` contains additive guidance that does not change command success,
+  including active experiments and cached update notices. Update actions always
+  require user approval; never upgrade agentcad implicitly.
   Successful `run` results also include "runtime". Run-specific statuses:
     "success"          primary command work completed; inspect artifact statuses
     "failed"           script execution failed; consumes a version and creates
@@ -390,6 +401,10 @@ class _LoggingGroup(click.Group):
         original_echo = click.echo
 
         def _capturing_echo(message=None, **kwargs):
+            if message is not None and not kwargs.get("err", False):
+                from agentcad.response_metadata import augment_json_response
+
+                message = augment_json_response(message)
             if message is not None:
                 captured.append(str(message))
             original_echo(message, **kwargs)
@@ -440,6 +455,7 @@ cli.add_command(daemon)
 cli.add_command(diff)
 cli.add_command(docs)
 cli.add_command(export_cmd)
+cli.add_command(experiments)
 cli.add_command(feedback)
 cli.add_command(import_cmd)
 cli.add_command(init)

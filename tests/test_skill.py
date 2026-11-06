@@ -106,6 +106,10 @@ def test_skill_show_content_mentions_commands(runner):
     assert "`retry_safe: false`" in content
     assert "agentcad context" in content
     assert "before retrying" in content
+    assert "_meta.notices" in content
+    assert "approval before following its action" in content
+    assert "agentcad experiments enable" in content
+    assert "without an explicit user request and approval" in content
 
 
 def test_skill_install_creates_file(runner, isolated_dir):

@@ -195,7 +195,9 @@ class DaemonServer:
         argv = request.get("argv", [])
         original_cwd = os.getcwd()
         original_env = os.environ.get("AGENTCAD_DAEMON")
+        original_child_env = os.environ.get("AGENTCAD_DAEMON_CHILD")
         os.environ["AGENTCAD_DAEMON"] = "1"
+        os.environ["AGENTCAD_DAEMON_CHILD"] = "1"
         try:
             if cwd:
                 os.chdir(cwd)
@@ -247,6 +249,10 @@ class DaemonServer:
                 os.environ.pop("AGENTCAD_DAEMON", None)
             else:
                 os.environ["AGENTCAD_DAEMON"] = original_env
+            if original_child_env is None:
+                os.environ.pop("AGENTCAD_DAEMON_CHILD", None)
+            else:
+                os.environ["AGENTCAD_DAEMON_CHILD"] = original_child_env
 
     def serve(self):
         """Run the accept-and-fork loop until ``shutdown`` arrives."""

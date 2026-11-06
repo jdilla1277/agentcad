@@ -213,6 +213,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
             "created": datetime.now(timezone.utc).isoformat(),
             "outputs": {"source": f"{invalid_dir_name}/source{ext}"},
         }
+        from agentcad.experiments import add_experiment_metadata
+        add_experiment_metadata(invalid_meta)
         commit_version(reservation, invalid_meta, {
             "version": version_num,
             "label": label,
@@ -311,6 +313,8 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, no_daemon)
             "edit_scaffold": {"status": "pending"},
         },
     }
+    from agentcad.experiments import add_experiment_metadata
+    add_experiment_metadata(meta)
     comparison_enabled = auto_diff and has_previous_step
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
