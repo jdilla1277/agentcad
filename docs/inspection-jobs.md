@@ -101,6 +101,6 @@ delete job records as a recovery strategy. Jobs and logs currently remain on
 the execution filesystem. [Cache limits](inspection-cache.md) protect resumable
 checkpoints, stop workers with `resource_limit` when protected bytes fill the
 quota, and allow completed derived results to expire. Increase the quota and
-follow the same resume action. [Caller budgets](inspection-budgets.md) bound
-full responses when requested; the legacy 2,000-token default bounds the nested
+follow the same resume action. [Delivery budgets](inspection-budgets.md) bound
+full import/report responses by default; `--text-budget` separately bounds the nested
 report. Remote artifact transfer remains separate work.

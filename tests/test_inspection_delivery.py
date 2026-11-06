@@ -61,7 +61,7 @@ def test_limits_preserve_identity_and_priority(response, kwargs):
     assert response == before
     assert delivered["core"] == before["core"]
     assert delivered["current_advanced"] is True
-    assert delivered["promotion"] == before["promotion"]
+    assert all(delivered["promotion"][key] == value for key, value in before["promotion"].items())
     assert delivered["change"]["revision_id"] == "r_original"
     report = delivered["inspection"]
     ids = [row["id"] for row in report["media"]]
@@ -91,7 +91,8 @@ def test_too_small_is_explicit_and_core_success_survives(response):
     assert result["delivery"]["budget_satisfied"] is False
     assert result["delivery"]["status"] == "budget_unavailable"
     assert result["core"]["status"] == result["status"] == "success"
-    assert result["response_snapshot"] == REF
+    assert result["response_snapshot"]["id"] == REF["id"]
+    assert result["response_snapshot"]["retrieve"] == REF["retrieve"]
     assert result["inspection"]["media"] == []
     _assert_budget(result)
 

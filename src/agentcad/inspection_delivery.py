@@ -1,4 +1,4 @@
-"""Caller-supplied budgets for complete local inspection response delivery."""
+"""Default and caller-supplied budgets for complete inspection responses."""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ def policy_values(**values):
 
 
 def delivery_options(function):
+    @click.option("--full-response", is_flag=True, help="Skip whole-response compaction. Report preparation limits still apply; saved response snapshots are complete by default.")
     @click.option("--context-window", type=click.IntRange(min=1), default=None, help="Caller context tokens; derive a 5% combined response target unless --response-budget overrides it.")
     @click.option("--response-budget", type=click.IntRange(min=1), default=None, help="Combined estimated token limit for the complete JSON response and inline images.")
     @click.option("--response-text-budget", type=click.IntRange(min=1), default=None, help="Estimated token limit for complete JSON, including metadata/jobs. Defaults to the combined limit if known, otherwise 2000.")
@@ -60,20 +61,36 @@ def delivery_options(function):
     @click.option("--vision-profile", default=None, help='Caller estimate as JSON: {"name":"host","tokens_per_image":1000} for each 1024-square sheet.')
     @wraps(function)
     def wrapped(*args, **kwargs):
+        full_response = kwargs.pop("full_response", False)
         values = {key: kwargs.pop(key, None) for key in OPTIONS}
         try:
             policy = policy_values(**values)
         except ValueError as exc:
             raise ProjectError("invalid_delivery_budget", str(exc), "Use agentcad docs editing for inspection budget controls.") from exc
+        ctx = click.get_current_context()
+        eligible = ctx.command.name == "import" or ctx.command.name == "inspect" and kwargs.get("with_report")
+        if full_response and policy is not None:
+            raise click.UsageError("--full-response cannot be combined with caller delivery budgets.")
+        if not eligible and policy is not None:
+            raise click.UsageError("Caller delivery budgets require --report.")
+        if full_response:
+            ctx.meta["inspection_delivery_full_response"] = True
+        # Historical retrieval expands the recorded response unless a caller
+        # explicitly requests a new bounded projection of that same snapshot.
+        if policy is None and eligible and not full_response and not kwargs.get("response_snapshot"):
+            policy = {}
         if policy is None:
             return function(*args, **kwargs)
-        ctx = click.get_current_context()
-        if ctx.command.name == "inspect" and not kwargs.get("with_report"):
-            raise click.UsageError("Caller delivery budgets require --report.")
         try:
             source = str(Path(kwargs["file"]).resolve())
         except (OSError, ValueError, RuntimeError) as exc:
-            raise ProjectError("invalid_delivery_source", str(exc), "Use a readable local CAD path.") from exc
+            if not values or all(value is None for value in values.values()):
+                # Preserve the command's own file diagnostics. A malformed
+                # path cannot supply a snapshot, but must not become a new
+                # budget-validation failure merely because budgets default on.
+                source = kwargs["file"]
+            else:
+                raise ProjectError("invalid_delivery_source", str(exc), "Use a readable local CAD path.") from exc
         ctx.meta["inspection_delivery_policy"] = policy
         ctx.meta["inspection_delivery_source"] = source
         ctx.meta["inspection_delivery_argument"] = kwargs["file"]
@@ -90,6 +107,8 @@ def append_options(args, values):
 
 
 def forward_options(args):
+    if click.get_current_context().meta.get("inspection_delivery_full_response"):
+        args.append("--full-response")
     return append_options(args, click.get_current_context().meta.get("inspection_delivery_policy"))
 
 
@@ -236,7 +255,9 @@ def _summarize(payload):
                                                          "details_at": change.get("receipt")}
     job = payload.get("inspection_job")
     if job:
-        payload["inspection_job"] = _keep(job, {"id", "version", "status", "worker_running", "cancel_requested", "manifest_id", "analysis_revision", "recognition", "request", "checkpoints", "stages", "actions"})
+        payload["inspection_job"] = _keep(job, {"id", "version", "status", "worker_running", "cancel_requested", "manifest_id", "analysis_revision", "recognition", "request", "checkpoints", "stages", "actions", "message"})
+        if isinstance(job.get("message"), str) and len(job["message"]) > 240:
+            payload["inspection_job"].update(message=job["message"][:240], message_truncated=True)
         selected = "wait" if job["status"] in {"running", "queued"} else "resume" if job["status"] in {"failed", "stopped", "canceled", "resource_limit"} else "status"
         payload["inspection_job"]["actions"] = _keep(job.get("actions", {}), {selected})
         payload["inspection_job"]["stages"] = {name: row for name, row in job.get("stages", {}).items() if row["status"] != "complete"}
@@ -291,7 +312,9 @@ def _minimum(payload):
         payload["change"] = _keep(change, keys)
     job = payload.get("inspection_job")
     if job:
-        payload["inspection_job"] = _keep(job, {"id", "version", "manifest_id", "analysis_revision", "recognition", "status", "worker_running", "cancel_requested", "actions", "stages"})
+        payload["inspection_job"] = _keep(job, {"id", "version", "manifest_id", "analysis_revision", "recognition", "status", "worker_running", "cancel_requested", "actions", "stages", "message", "message_truncated"})
+        payload["inspection_job"]["stages"] = {name: _keep(row, {"status", "completed_artifacts"})
+                                               for name, row in job.get("stages", {}).items()}
     if isinstance(payload.get("idempotency"), dict):
         payload["idempotency"] = _keep(payload["idempotency"], {"key", "request_id", "state", "replayed"})
     if isinstance(payload.get("geometry_manifest"), dict):
@@ -303,6 +326,30 @@ def _minimum(payload):
         payload.pop(key, None)
     report = _report(payload)
     if report:
+        # The report already carries these identities and counts. Repeat
+        # neither in the job/manifest summaries under a tight whole-response
+        # budget; the complete original records remain in the snapshot.
+        job = payload.get("inspection_job")
+        if job:
+            for key in ("version", "manifest_id", "analysis_revision", "recognition"):
+                if job.get(key) == report.get(key):
+                    job.pop(key, None)
+            if job.get("status") == "complete":
+                job["actions"] = {}  # No unfinished work needs recovery.
+        geometry = payload.get("geometry_manifest")
+        if isinstance(geometry, dict):
+            for key in ("counts", "recognition"):
+                if geometry.get(key) == report.get(key):
+                    geometry.pop(key, None)
+        quality = report.get("quality", {})
+        if isinstance(quality.get("layers"), dict):
+            layers = quality["layers"]
+            quality["layers_omitted"] = quality.get("layers_omitted", 0) + sum(value == "pass" for value in layers.values())
+            quality["layers"] = {key: value for key, value in layers.items() if value != "pass"}
+        # ID + executable retrieval + retention are sufficient to retrieve the
+        # full response. Avoid repeating its long local path in the same reply.
+        if payload["response_snapshot"].get("retrieve"):
+            payload["response_snapshot"].pop("path", None)
         keep = {"report"}
         if not payload.get("geometry_manifest"):
             keep.add("manifest")
@@ -395,11 +442,11 @@ def constrain(payload, requested, reference, *, delivered=True):
                 _summarize(result)
                 summarized = True
                 continue
-            if _trim_report(result):
-                continue
             if not minimized:
                 _minimum(result)
                 minimized = True
+                continue
+            if _trim_report(result):
                 continue
             if count:
                 count -= 1
