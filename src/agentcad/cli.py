@@ -326,8 +326,9 @@ JSON RESPONSE CONTRACT
     "success"          primary command work completed; inspect artifact statuses
     "failed"           script execution failed; consumes a version and creates
                        v{N}_{label}_failed/ with the script and metadata
-    "error"            CLI/input error; no version or artifacts
-    "validation_error" static script check failed; no version or artifacts
+    "error"            CLI/input error; no accepted CAD output
+    "validation_error" static script check failed; no numbered version;
+                       source and diagnostics may be retained under change
     "invalid_geometry" script/import produced an invalid final B-rep; records
                        a numbered diagnostic attempt unless --dry-run, writes no
                        STEP, and does not advance current; see
@@ -352,7 +353,7 @@ JSON RESPONSE CONTRACT
   this build; its diagnostic geometry remains retained and current is unchanged.
   Inspect/reconcile before rerunning the current script or import. This conflict
   is separate from a measured geometry failure. See `agentcad docs check-spec`
-  for retained requirements, receipts, and deferred-check limitations.
+  for retained requirements, receipts, and delayed automatic acceptance.
 
   Use run/import --stage to save a checked experiment without replacing the
   accepted model. Open it with view REVISION, then accept its saved bytes with

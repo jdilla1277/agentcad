@@ -80,7 +80,7 @@ def assess_change(payload, geometry):
     if not request.get("check_policy") and not staged:
         return None
     prepare_change(payload, geometry=geometry)
-    reference = attempt.reference()
+    reference = attempt.reference(original_checks=True)
     checked = reference["validation_checks"]
     if checked["promotion_ready"] and not staged:
         return None
@@ -240,7 +240,13 @@ def attach_change(payload: dict) -> dict:
         # even when optional work failed after the core commit.
         from agentcad.change_promotion import PromotionStore
         promotions = PromotionStore(attempt.store.root)
-        payload.update(promotions.response_fields("auto:" + attempt.revision_id))
+        if payload.get("status") == "checks_pending":
+            payload.update(promotions.automatic_fields(attempt.revision_id, original=True))
+            if payload.get("promotion"):
+                payload["notes"] = [*payload.get("notes", []),
+                    "This deferred execution response keeps the original pending snapshot; check-spec reads the separate live check and acceptance decision."]
+        else:
+            payload.update(promotions.response_fields("auto:" + attempt.revision_id))
         # A prepared core may already carry the reference; do not retain a
         # recursive or stale response reference as the operation's diagnostics.
         response = {k: v for k, v in payload.items() if k != "change"}
@@ -256,6 +262,8 @@ def attach_change(payload: dict) -> dict:
             ]
         payload = response
         reference = attempt.finish(response)
+        if response.get("status") == "checks_pending":
+            reference = attempt.reference(original_checks=True)
     except Exception as exc:
         reference = {
             "revision_id": attempt.revision_id,
