@@ -157,6 +157,27 @@ class TestCheckSpecCommand:
         assert any("name" in error for error in parsed["errors"])
         assert any("type" in error for error in parsed["errors"])
 
+    @pytest.mark.parametrize("coordinate", [float("nan"), float("inf"), 10**1000])
+    def test_check_spec_rejects_non_finite_hole_positions(
+        self, runner, isolated_dir, coordinate
+    ):
+        spec = _write_spec(isolated_dir, {
+            "features": [{
+                "name": "mounts",
+                "type": "hole",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[coordinate, 0]],
+            }]
+        })
+
+        result = runner.invoke(cli, ["check-spec", "missing.step", str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("positions_mm[0]" in error for error in parsed["errors"])
+
     def test_check_spec_missing_spec_error(self, runner, isolated_dir):
         step = _plate_with_two_holes_step(isolated_dir)
 

@@ -11,6 +11,7 @@ from agentcad.change_checks import (
     measure_geometry,
     probe_boxes_for_policy,
 )
+from agentcad.feature_checks import check_holes
 
 
 def declaration(*checks, **extra):
@@ -357,6 +358,22 @@ def test_positioned_holes_match_one_to_one_and_report_missing_and_extra():
     result = evaluate_checks(candidate(policy), policy, measured)[0]
     assert result["state"] == "pass"
     assert result["observed"]["max_position_error_mm"] == 0
+
+
+def test_hole_summary_uses_assigned_error_and_keeps_nearest_diagnostic():
+    cylinders = [z_cylinder(3, 0.04, 0, 1), z_cylinder(3, -0.1, 0, 2)]
+
+    passed, observed = check_holes(
+        cylinders,
+        axis="z",
+        diameter_mm=3,
+        positions_mm=[[0, 0], [0.1, 0]],
+        position_tolerance_mm=0.2,
+    )
+
+    assert passed is True
+    assert observed["max_position_error_mm"] == pytest.approx(0.1)
+    assert observed["max_nearest_position_error_mm"] == pytest.approx(0.06)
 
 
 def test_holes_ignore_cylinders_outside_the_diameter_and_axis_selection():

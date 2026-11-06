@@ -222,7 +222,7 @@ def check_holes(
     nearest_errors = [min(row) if row else None for row in costs]
     matches = []
     missing = []
-    max_matched_error = 0.0
+    matched_errors = []
     for expected_index, position in enumerate(positions):
         candidate_index = by_expected.get(expected_index)
         if candidate_index is None:
@@ -238,7 +238,7 @@ def check_holes(
             continue
         candidate = candidates[candidate_index]
         error = costs[expected_index][candidate_index]
-        max_matched_error = max(max_matched_error, error)
+        matched_errors.append(error)
         matches.append(
             {
                 "expected_mm": position,
@@ -256,11 +256,20 @@ def check_holes(
         for candidate_index, candidate in enumerate(candidates)
         if candidate_index not in matched_candidates
     ]
-    observed_position_errors = [e for e in nearest_errors if e is not None]
+    max_matched_error = max(matched_errors) if matched_errors else None
+    position_errors = [
+        match["error_mm"]
+        if match["measured_mm"] is not None
+        else match["nearest_error_mm"]
+        for match in matches
+    ]
+    position_errors = [error for error in position_errors if error is not None]
+    nearest_errors = [error for error in nearest_errors if error is not None]
     passed = (
         not missing
         and not extra
         and len(candidates) == len(positions)
+        and max_matched_error is not None
         and max_matched_error <= float(position_tolerance_mm) + 1e-9
     )
     observed = {
@@ -274,9 +283,12 @@ def check_holes(
         "missing_positions_mm": missing,
         "extra_holes": extra,
         "max_position_error_mm": (
-            max(observed_position_errors) if observed_position_errors else None
+            max(position_errors) if position_errors else None
         ),
-        "max_matched_position_error_mm": max_matched_error if matches else None,
+        "max_nearest_position_error_mm": (
+            max(nearest_errors) if nearest_errors else None
+        ),
+        "max_matched_position_error_mm": max_matched_error,
         "affected_face_indices": sorted(
             index
             for candidate in candidates
