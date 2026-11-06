@@ -346,12 +346,14 @@ follow the returned status/wait/resume/cancel actions. These wait controls do
 not change import retry identity. See [inspection jobs](docs/inspection-jobs.md)
 for CLI/MCP examples, checkpoints and cancellation behavior.
 
-Agents can supply `--context-window`, `--response-budget`,
+Import and `inspect --report` default to a 2,000-estimated-token limit for the
+complete JSON response, with bounded image samples and a full-response retrieval
+action. `--full-response` opts out of whole-response compaction. Agents can supply `--context-window`, `--response-budget`,
 `--response-text-budget`, `--image-budget` and a caller-estimated
 `--vision-profile` to bound complete inspection delivery. Limited responses
 include a full saved response and an executable retrieval action. See
 [inspection budgets](docs/inspection-budgets.md) for estimates, CLI/MCP parity
-and the distinction between whole-response limits and the legacy report cap.
+and the distinction between whole-response limits and report preparation.
 Saved response snapshots default to 30 days and 64 MiB per build root, with
 configurable limits and explicit expiry/eviction responses. Cleanup preserves
 geometry, issued IDs, import retry records and resumable jobs.
