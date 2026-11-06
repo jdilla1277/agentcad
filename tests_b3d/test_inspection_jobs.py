@@ -495,3 +495,45 @@ def test_stopped_external_job_actions_resume_and_preserve_bindings(runner, isola
     (misplaced / "request.json").write_bytes((job.directory / "request.json").read_bytes())
     with pytest.raises(JobError, match="another baseline or project/build root"):
         InspectionJob.open(step, absent_derived, layout, job.job_id)
+
+
+@pytest.mark.parametrize('terminal', ['complete', 'resource_limit'])
+def test_full_wait_finishes_execution_handoff_but_deadline_returns_early(isolated_dir, terminal):
+    from concurrent.futures import ThreadPoolExecutor
+
+    job, _, _ = _job(isolated_dir, images=False)
+    with job._state() as state:
+        state['status'] = terminal
+    ready, release = isolated_dir / 'owner-ready', isolated_dir / 'owner-release'
+    holder = r'''
+import sys, time
+from pathlib import Path
+from agentcad.import_requests import _locked
+with _locked(Path(sys.argv[1]) / 'execution.lock') as owned:
+    assert owned
+    Path(sys.argv[2]).write_text('owned')
+    while not Path(sys.argv[3]).exists():
+        time.sleep(0.01)
+'''
+    child = subprocess.Popen([sys.executable, '-c', holder, str(job.directory), str(ready), str(release)],
+                             env={**os.environ, 'PYTHONPATH': str(REPO / 'src')},
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        _until(ready.exists)
+        early, expired = job.wait(0)
+        assert expired and early['worker_running'] and early['status'] == terminal
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            full = pool.submit(job.wait, 5)
+            try:
+                with pytest.raises(TimeoutError):
+                    full.result(timeout=0.2)
+            finally:
+                release.write_text('finish')
+            finished, expired = full.result(timeout=10)
+        assert not expired and finished['status'] == terminal and not finished['worker_running']
+    finally:
+        release.write_text('finish')
+        child.wait(timeout=10)
+        if child.stderr:
+            child.stderr.close()
+    assert child.returncode == 0

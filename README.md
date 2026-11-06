@@ -347,6 +347,10 @@ and the distinction between whole-response limits and the legacy report cap.
 Saved response snapshots default to 30 days and 64 MiB per build root, with
 configurable limits and explicit expiry/eviction responses. Cleanup preserves
 geometry, issued IDs, import retry records and resumable jobs.
+Analysis, image sheets and completed job results also have shared
+[cache limits](docs/inspection-cache.md), defaulting to 30 days/512 MiB per build
+root. Resumable checkpoints remain protected; a full quota stops enrichment
+with a resume action while preserving the imported model.
 
 ### Cloud projects
 

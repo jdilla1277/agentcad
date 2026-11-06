@@ -17,7 +17,8 @@ agentcad import supplier.step --init --idempotency-key supplier-001 --inspection
 These are alternative wait controls. They do not limit parsing, validation,
 STEP export or legacy preview/viewer/diff work. A successful import remains
 successful if inspection is unfinished or failed. Its `inspection_job` tells
-you whether work is queued, running, stopped, failed, canceled or complete.
+you whether work is queued, running, stopped, failed, canceled, resource-limited
+or complete.
 The report/gallery is included only when available. Recognition currently
 reports `not_available`, with a null recognized-feature count.
 
@@ -55,12 +56,14 @@ nested `inspection` report when ready. Polling (`status`) returns progress
 without attaching a gallery. A wait deadline stops only that caller's wait;
 the detached worker continues after the CLI or MCP call ends. No background
 service or open-source-external dependency is required.
+Full waits finish after the worker releases execution ownership. A deadline can
+return earlier with `wait_expired=true` and the current `worker_running` value.
 
 Cancellation is cooperative. During a native stage, `cancel_requested` can be
 true while `worker_running` remains true. The current stage may finish; the
 worker then stops before further stages. Finished artifacts remain available,
 and explicit `resume` continues the same job. Status/cancel controls return
-exit code zero when successful; waiting for failed, stopped or canceled work
+exit code zero when successful; waiting for failed, stopped, canceled or resource-limited work
 returns nonzero. A partial image failure can return its useful report alongside
 a failed job and a resume action.
 
@@ -95,6 +98,9 @@ job. Request a new report after software/configuration changes; geometry IDs
 are never rewritten. Missing, altered or misplaced job/checkpoint records fail
 explicitly. Restore the original evidence before relying on that job; do not
 delete job records as a recovery strategy. Jobs and logs currently remain on
-the execution filesystem. Storage quotas, remote artifact transfer and full
-response/vision budgets are separate work; the existing 2,000-token default
-bounds the nested report, excluding job-control fields and import metadata.
+the execution filesystem. [Cache limits](inspection-cache.md) protect resumable
+checkpoints, stop workers with `resource_limit` when protected bytes fill the
+quota, and allow completed derived results to expire. Increase the quota and
+follow the same resume action. [Caller budgets](inspection-budgets.md) bound
+full responses when requested; the legacy 2,000-token default bounds the nested
+report. Remote artifact transfer remains separate work.
