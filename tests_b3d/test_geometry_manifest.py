@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.inspection_helpers import full_response_args
+
 from agentcad.cli import cli
 from agentcad.geometry_manifest import create_manifest, load_geometry, read_manifest
 from agentcad.step_assembly import read_step_assembly, write_step_assembly
@@ -12,13 +14,13 @@ from tests_b3d.test_step_assembly import _nested_step
 
 
 def _import(runner, path, label="baseline", *extra):
-    result = runner.invoke(cli, ["import", str(path), "--init", "--label", label, "--no-view", "--no-diff", *extra])
+    result = runner.invoke(cli, full_response_args(["import", str(path), "--init", "--label", label, "--no-view", "--no-diff", *extra]))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, full_response_args(args))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 

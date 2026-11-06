@@ -88,7 +88,7 @@ On import, `--no-report` omits inline report text while retaining saved
 analysis and the prepared bundle. `--no-inspection-image` skips inspection
 media while keeping the report. `--max-images 0..9` caps media preparation;
 later report/image retrieval can prepare omitted samples. A report-off import
-still returns its legacy import metadata and artifact references.
+still returns bounded import status and artifact references.
 
 MCP `inspect(report=True, report_images=False, max_images=..., text_budget=...)`
 exposes the same operation. Image-free requests retain the same analysis
@@ -105,7 +105,9 @@ The maximum is nine distinct image blocks. `initialize` maps to `--init`;
 controls. `report=False` omits inline inspection and its attachments while
 retaining prepared artifacts. `report_images=False` or `max_images=0` keeps
 the report without inspection image blocks. Legacy preview/viewer artifacts
-follow their existing controls. `text_budget` covers only nested `inspection`.
+follow their existing controls. `text_budget` covers only report preparation;
+whole-response delivery has its own default limit. `full_response=True` returns
+uncompacted command records without changing the import or image plan.
 
 Every attachment is checked against its declared hash and PNG signature.
 If delivery fails, the import response retains its successful core status,
@@ -117,22 +119,22 @@ separate hosted-project upload operation. Local import needs no account.
 
 ## Text and context limits
 
-The fallback text allowance is **2,000 estimated tokens**, using
-`ceil(compact UTF-8 JSON bytes / 3)`. This is an explicit estimate rather than
-model-specific tokenizer accounting. A small transport reserve accommodates
-MCP's exit-code field. Optional reasons/bounds and tail records are omitted
-before essential identity, status/counts, compact part names and retrieval
-references. Returned/total/truncation counts are explicit. Source names may be
-shortened; the saved report retains the originals. A budget too small for the
-minimum required response returns an actionable error.
+The fallback allowance is **2,000 estimated tokens for the complete JSON
+response**, using `ceil(emitted JSON UTF-8 bytes / 3)` plus a 32-token transport
+reserve. Both import and `inspect --report` return a nested `inspection` object
+and outer `delivery` audit. Repeated metadata, optional detail and tail records
+are omitted before essential status, counts, IDs and unfinished-job recovery.
+Returned/total/truncation counts are explicit. The complete pre-delivery command
+response remains available through the exact `response_snapshot.retrieve` action;
+the saved analysis and durable manifest contain the full inventories.
 
-The allowance covers the report object, including project metadata for a
-direct `inspect --report` response. Import preserves its existing metadata,
-validation and comparison envelope outside the nested `inspection` object;
-this slice does not compact that compatibility surface. Calling context-window
-size and image-token cost remain explicitly unknown. Count/resolution caps
-are enforced; no universal 5% context guarantee or combined vision-token
-budget is claimed.
+`--full-response` (MCP `full_response=True`) opts out of this projection and
+retains the earlier flat report shape. Saved response retrieval is complete by
+default. Image count/resolution caps still apply; unknown image cost is stated
+explicitly. Caller context and vision estimates can enable a 5% combined target.
+No universal context or vision-token guarantee is claimed. See
+[delivery budgets](../inspection-budgets.md) for the estimation and override
+contract, including explicit failure when minimum evidence cannot fit.
 
 ## Reuse and identity
 
@@ -153,6 +155,50 @@ changing the analysis revision or selected entities. Legacy and cloud-specific
 commands retain their existing behavior; this adds no hosted analysis service.
 
 ## Measured slice check
+
+### Default whole-response delivery check
+
+The default whole-response rollout compared the agreed sample bundle with an
+overall-only initial bundle on four paired targeting tasks, frozen before the
+evaluators saw them. Both conditions used the same 2,000-token JSON fallback,
+baseline IDs, and complete inventory retrieval. The tasks used CADGenBench 101,
+the pump manifold, a 12-definition component library and a rotated nested
+assembly. Targets included an unsampled small part and a particular placement.
+These were held-out tasks, not previously unseen benchmark model files.
+
+| Initial bundle | Correct targets | Follow-up information requests | Initial PNGs across four tasks |
+|---|---:|---:|---:|
+| Overall plus ranked samples, within the text limit | 4/4 | 14 | 21 |
+| Overall only | 4/4 | 17 | 4 |
+
+Both evaluators viewed the selected sheets and executed matching build123d or
+native baseline selectors without changing baseline bytes. Counts include
+selector verification, inventory retrieval and an unsuccessful `--full-response`
+ID lookup in each condition. That option now acts harmlessly on already
+unbounded ID lookup. The check also prompted clearer documentation: a response
+snapshot restores the original prepared reply, while the saved analysis and
+manifest hold the complete inventory. Parts/occurrences still require native
+selection; this rollout does not add named feature recognition or selectors.
+
+The sample is too small to establish superiority, and the extra images have an
+explicit context cost. Image-token cost was unknown; no combined-token or
+latency improvement is claimed. The unsampled and placement tasks passed in
+both conditions, with no wrong-target regression, so the agreed image caps
+remain unchanged. Callers can reduce initial images with `--max-images`.
+
+The actual default CLI `inspect --report --no-daemon` was also measured against
+a fresh copy of the existing 1,000-instance assembly (6,000 faces / 12,000 edges).
+In one Python process, the first call took **4.05 seconds** and cached replay
+**0.57 seconds**, within the predeclared 20s / 3s report smoke limits. Both
+returned five images and **1,940 estimated JSON text tokens**, plus the 32-token
+reserve. This includes default compaction and snapshot publication/retention;
+baseline and manifest hashes stayed unchanged. Observed peak process RSS was
+631 MiB, not a new memory pass/fail result. Environment: Apple M4, macOS 15.6,
+Python 3.12, build123d 0.10.0 and cadquery-ocp 7.8.1.1.post1. Fixture copying,
+initial source import/validation, MCP and cold-filesystem/cloud behavior were
+excluded. These observations do not establish complete-import release gates.
+
+### Initial report preparation
 
 On 2026-10-27, the report operation on an existing normalized 1,000-instance
 box assembly (6,000 faces, 12,000 edges) took **4.20 seconds** to create its

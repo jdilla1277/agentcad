@@ -14,6 +14,8 @@ import time
 
 import click
 import pytest
+
+from tests.inspection_helpers import full_response_args
 from mcp.types import CallToolResult
 
 from agentcad import cli as cli_mod
@@ -36,7 +38,7 @@ def _args(source=REAL_SOURCE, key="supplier:1", *options):
 
 
 def _invoke(runner, args):
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, full_response_args(args))
     assert result.stdout, (result.exit_code, result.exception)
     return result, json.loads(result.stdout)
 
@@ -64,7 +66,7 @@ def test_lost_response_replays_without_new_version_or_side_effects(runner, isola
         original_echo(message, **kwargs)
 
     monkeypatch.setattr(cli_mod, "_CLICK_ECHO", lose_response)
-    first = runner.invoke(cli, _args())
+    first = runner.invoke(cli, full_response_args(_args()))
     assert first.exit_code != 0 and first.stdout == ""
     assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 1
     request = _requests(isolated_dir)[0]
@@ -104,7 +106,7 @@ def test_interrupted_import_recovers_original_promotion_without_moving_selection
     from agentcad.core_build import ArtifactLifecycle
 
     if legacy_baseline:
-        initialized = runner.invoke(cli, ["init", "--name", "legacy"])
+        initialized = runner.invoke(cli, full_response_args(["init", "--name", "legacy"]))
         assert initialized.exit_code == 0, initialized.output
         legacy = isolated_dir / "v1_legacy"
         legacy.mkdir()
@@ -130,7 +132,7 @@ def test_interrupted_import_recovers_original_promotion_without_moving_selection
             patch.setattr(versioning, "commit_version", stop_after_core)
         else:
             patch.setattr(ArtifactLifecycle, "persist", stop_after_optional_metadata)
-        first = runner.invoke(cli, _args())
+        first = runner.invoke(cli, full_response_args(_args()))
     assert first.exit_code != 0 and first.stdout == ""
     assert len(_history(isolated_dir)) == baseline_count + 1
     promotions = PromotionStore(isolated_dir)
@@ -398,7 +400,7 @@ def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypa
     forwarded = requests[0]["argv"]
     assert forwarded[forwarded.index("--idempotency-key") + 1] == "supplier:1"
     if declared_checks:
-        assert forwarded[-3:] == ["--checks", str(checks), "--defer-checks"]
+        assert forwarded[-4:] == ["--checks", str(checks), "--defer-checks", "--full-response"]
     assert not _requests(isolated_dir)
 
 
@@ -460,6 +462,7 @@ def test_cli_and_registered_mcp_share_retry_and_checked_images(runner, isolated_
         "file": str(REAL_SOURCE), "cwd": str(project), "initialize": True,
         "view": False, "diff": False, "max_images": 1,
         "build_dir": "build files", "idempotency_key": "shared",
+        "full_response": True,
     }))
     assert isinstance(payload, CallToolResult) and len(payload.content) == 2
     replay = payload.structuredContent
@@ -479,7 +482,7 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
         (isolated_dir / "agentcad.toml").write_text("build_dir = " + json.dumps(build_dir) + "\n", encoding="utf-8")
     options = dict(initialize=True, view=False, diff=False, max_images=1,
                    text_budget=text_budget, idempotency_key="subdir", build_dir=build_dir, label=label)
-    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options)
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options, full_response=True)
     first = first_result.structuredContent if isinstance(first_result, CallToolResult) else first_result
     assert first["status"] == "success" and "inspection" in first
     root = isolated_dir / build_dir if build_dir else isolated_dir
@@ -501,7 +504,7 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
         guard.setattr("agentcad.commands.import_cmd._import_impl", unexpected)
         guard.setattr("agentcad.inspection_report._analysis", unexpected)
         guard.setattr("agentcad.geometry_images.geometry_image", unexpected)
-        replay_result = server.import_cad(str(REAL_SOURCE), str(subdir), **options)
+        replay_result = server.import_cad(str(REAL_SOURCE), str(subdir), **options, full_response=True)
     replay = replay_result.structuredContent if isinstance(replay_result, CallToolResult) else replay_result
     assert replay["idempotency"]["replayed"] and replay["version"] == 1
     assert replay["change"] == first["change"]
@@ -555,7 +558,7 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
     from agentcad import inspection_report as reports
 
     options = dict(initialize=True, view=False, diff=False, max_images=1, idempotency_key="budget_failure")
-    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options)
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options, full_response=True)
     first = first_result.structuredContent
     step = isolated_dir / first["outputs"]["step"]
     cache = Path(first["idempotency"]["request"]).with_name("response.json")
@@ -571,7 +574,7 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
 
     with monkeypatch.context() as guard:
         guard.setattr(reports, "compact_report", too_small)
-        replay = server.import_cad(str(REAL_SOURCE), str(subdir), **options)
+        replay = server.import_cad(str(REAL_SOURCE), str(subdir), **options, full_response=True)
     assert isinstance(replay, dict) and replay["_exit_code"] == 0
     assert replay["status"] == replay["core"]["status"] == "success"
     assert "inspection" not in replay

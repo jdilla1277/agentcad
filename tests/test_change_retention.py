@@ -57,7 +57,7 @@ def test_success_commits_durable_promotion_receipt(runner, isolated_dir, command
         result, payload = run(runner, "longer")
     else:
         result = runner.invoke(cli, ["import", baseline["outputs"]["step"], "--label", "imported",
-                                     "--no-view", "--no-diff", "--no-daemon"])
+                                     "--no-view", "--no-diff", "--no-daemon", "--full-response"])
         payload = json.loads(result.stdout)
     assert result.exit_code == 0, result.output
     receipt = payload["promotion"]
@@ -397,7 +397,7 @@ def test_import_uses_pinned_source_even_if_original_is_replaced(runner, isolated
     monkeypatch.setattr(step_assembly, "read_step_assembly", replacing_source)
     result = runner.invoke(
         cli,
-        ["import", str(original), "--no-view", "--no-diff", "--no-inspection-image", "--no-daemon"],
+        ["import", str(original), "--no-view", "--no-diff", "--no-inspection-image", "--no-daemon", "--full-response"],
     )
     assert result.exit_code == 0, result.output
     imported = json.loads(result.stdout)
@@ -680,6 +680,7 @@ def test_import_checks_measure_and_deliver_the_same_normalized_bytes(
             str(source),
             "--label",
             "checked-import",
+            "--full-response",
             "--checks",
             "checks.json",
             "--no-view",

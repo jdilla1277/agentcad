@@ -7,6 +7,8 @@ from pathlib import Path
 import shlex
 
 import pytest
+
+from tests.inspection_helpers import full_response_args, snapshot_path
 from mcp.types import CallToolResult
 
 from agentcad.cli import cli
@@ -23,7 +25,7 @@ def _payload(result):
 
 
 def _invoke(runner, args):
-    result = runner.invoke(cli, [*args, "--no-daemon"])
+    result = runner.invoke(cli, full_response_args([*args, "--no-daemon"]))
     assert result.stdout, (result.exit_code, result.exception)
     return result, json.loads(result.stdout)
 
@@ -49,7 +51,7 @@ def test_complete_cli_mcp_report_budgets_and_saved_full_retrieval(runner, isolat
     assert invoked.exit_code == 0, first
     _assert_budget(first)
     assert 0 < first["delivery"]["media"]["returned"] <= 2
-    before = {p: p.read_bytes() for p in [step, step.with_name("geometry_manifest.json"), Path(first["response_snapshot"]["path"])]}
+    before = {p: p.read_bytes() for p in [step, step.with_name("geometry_manifest.json"), snapshot_path(first)]}
     before.update({p: p.read_bytes() for p in step.parent.joinpath("inspection").glob("*.*") if p.is_file()})
     mcp = asyncio.run(server.mcp.call_tool("inspect", {
         "file": str(step), "cwd": str(isolated_dir), "report": True, "response_text_budget": 3000,
@@ -120,7 +122,7 @@ def test_import_retry_new_delivery_limits_preserve_acceptance_and_job(runner, is
     monkeypatch.chdir(elsewhere)
     manifest = json.loads(Path(first["geometry_manifest"]["path"]).read_text())
     face = next(entity["id"] for entity in manifest["entities"].values() if entity["kind"] == "face")
-    protected.update({Path(response["response_snapshot"]["path"]): Path(response["response_snapshot"]["path"]).read_bytes()
+    protected.update({snapshot_path(response): snapshot_path(response).read_bytes()
                       for response in (first, second)})
     protected.update({path: path.read_bytes() for pattern in ("report_*.json", "bundle_*.json")
                       for path in root.rglob(pattern)})
@@ -151,7 +153,7 @@ def test_unknown_vision_profile_and_tiny_limit_keep_core_success(runner, isolate
     assert payload["delivery"]["status"] == "budget_unavailable"
     assert not payload["delivery"]["budget_satisfied"]
     assert payload["inspection"]["media"] == []
-    assert Path(payload["response_snapshot"]["path"]).is_file()
+    assert snapshot_path(payload).is_file()
     recovered, full = _invoke(runner, shlex.split(payload["response_snapshot"]["retrieve"])[1:])
     assert recovered.exit_code == 0 and full["promotion"]["outcome"] == "promoted"
 
@@ -161,7 +163,7 @@ def test_snapshot_missing_corrupt_baseline_and_project_bindings(runner, isolated
     first, payload = _invoke(runner, ["inspect", str(step), "--report", "--no-images", "--response-text-budget", "4000"])
     assert first.exit_code == 0
     action = shlex.split(payload["response_snapshot"]["retrieve"])[1:]
-    path = Path(payload["response_snapshot"]["path"])
+    path = snapshot_path(payload)
     original = path.read_bytes()
     path.write_text("{}")
     error, bad = _invoke(runner, action)
@@ -251,7 +253,7 @@ def test_snapshot_keeps_failed_import_exit_code(runner, isolated_dir):
 
 
 def _assert_failed_snapshot(runner, cwd, response, status):
-    snapshot = json.loads(Path(response["response_snapshot"]["path"]).read_text())
+    snapshot = json.loads(snapshot_path(response).read_text())
     assert snapshot["exit_code"] == 1
     restored, historical = _invoke(runner, shlex.split(response["response_snapshot"]["retrieve"])[1:])
     assert restored.exit_code == 1
@@ -304,7 +306,7 @@ def test_stopped_job_status_snapshot_keeps_successful_poll_exit(runner, isolated
     result, response = _invoke(runner, [*shlex.split(job.status()["actions"]["status"])[1:],
                                       "--response-text-budget", "6000"])
     assert result.exit_code == 0 and response["inspection_job"]["status"] == "stopped"
-    assert json.loads(Path(response["response_snapshot"]["path"]).read_text())["exit_code"] == 0
+    assert json.loads(snapshot_path(response).read_text())["exit_code"] == 0
     restored, historical = _invoke(runner, shlex.split(response["response_snapshot"]["retrieve"])[1:])
     assert restored.exit_code == 0 and historical["inspection_job"]["status"] == "stopped"
 
