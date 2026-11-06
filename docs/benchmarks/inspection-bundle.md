@@ -186,6 +186,18 @@ latency improvement is claimed. The unsampled and placement tasks passed in
 both conditions, with no wrong-target regression, so the agreed image caps
 remain unchanged. Callers can reduce initial images with `--max-images`.
 
+The actual default CLI `inspect --report --no-daemon` was also measured against
+a fresh copy of the existing 1,000-instance assembly (6,000 faces / 12,000 edges).
+In one Python process, the first call took **4.05 seconds** and cached replay
+**0.57 seconds**, within the predeclared 20s / 3s report smoke limits. Both
+returned five images and **1,940 estimated JSON text tokens**, plus the 32-token
+reserve. This includes default compaction and snapshot publication/retention;
+baseline and manifest hashes stayed unchanged. Observed peak process RSS was
+631 MiB, not a new memory pass/fail result. Environment: Apple M4, macOS 15.6,
+Python 3.12, build123d 0.10.0 and cadquery-ocp 7.8.1.1.post1. Fixture copying,
+initial source import/validation, MCP and cold-filesystem/cloud behavior were
+excluded. These observations do not establish complete-import release gates.
+
 ### Initial report preparation
 
 On 2026-10-27, the report operation on an existing normalized 1,000-instance

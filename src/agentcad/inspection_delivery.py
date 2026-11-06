@@ -30,6 +30,14 @@ def estimate(payload):
     return math.ceil(len(json.dumps(payload).encode("utf-8")) / 3)
 
 
+def _file_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def policy_values(**values):
     if not any(value is not None for value in values.values()):
         return None
@@ -176,7 +184,7 @@ def save_snapshot(payload, layout, ctx):
     body = {
         "schema_version": 1, "project_root": str(layout.project_root), "build_root": str(layout.build_root),
         "baseline": baseline,
-        "baseline_sha256": hashlib.sha256(Path(baseline).read_bytes()).hexdigest() if Path(baseline).is_file() else None,
+        "baseline_sha256": _file_digest(baseline) if Path(baseline).is_file() else None,
         "exit_code": ctx.meta.get("command_exit_code", ctx.meta.get("import_exit_code", ctx.meta.get("inspection_exit_code", 0))),
         "response_path_base": str(Path.cwd()), "source_argument": ctx.meta["inspection_delivery_argument"],
         "payload": deepcopy(payload),
@@ -195,7 +203,7 @@ def read_snapshot(snapshot_id, file, layout):
     if (body["project_root"] != str(layout.project_root) or body["build_root"] != str(layout.build_root)
             or body["baseline"] != str(Path(file).resolve())):
         raise ValueError("Response snapshot belongs to another baseline or project/build root.")
-    if body["baseline_sha256"] is not None and hashlib.sha256(Path(file).read_bytes()).hexdigest() != body["baseline_sha256"]:
+    if body["baseline_sha256"] is not None and _file_digest(file) != body["baseline_sha256"]:
         raise ValueError("Baseline changed since this response snapshot; restore the original geometry.")
     ctx = click.get_current_context()
     reference["retrieve"] = shlex.join(["agentcad", "inspect", body["baseline"], "--report", "--response-snapshot", snapshot_id,

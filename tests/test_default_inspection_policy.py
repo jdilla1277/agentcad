@@ -62,3 +62,32 @@ def test_default_does_not_replace_the_commands_file_diagnostics():
     result = CliRunner().invoke(command('import'), ['bad\0.step'])
     assert result.exit_code == 0
     assert json.loads(result.output)['argument'] == 'bad\0.step'
+
+
+def test_default_snapshot_hashing_does_not_copy_the_input_file(tmp_path, monkeypatch):
+    import hashlib
+    from pathlib import Path
+    from agentcad.inspection_delivery import read_snapshot, save_snapshot
+    from agentcad.project import ProjectLayout
+
+    baseline = tmp_path / 'output.step'
+    content = b'original immutable baseline\n' * 100000
+    baseline.write_bytes(content)
+    expected = hashlib.sha256(content).hexdigest()
+    original = Path.read_bytes
+
+    def no_bulk_input_read(path):
+        assert path != baseline, 'Default delivery copied the entire CAD file just to hash it'
+        return original(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', no_bulk_input_read)
+    layout = ProjectLayout(tmp_path, tmp_path)
+    with click.Context(click.Command('inspect')) as ctx:
+        ctx.meta.update(inspection_delivery_source=str(baseline), inspection_delivery_argument=str(baseline))
+        reference = save_snapshot({'command': 'import', 'status': 'success',
+                                   'outputs': {'step': str(baseline)}}, layout, ctx)
+        stored = json.loads(Path(reference['path']).read_text())
+        assert stored['baseline_sha256'] == expected
+        restored, code = read_snapshot(reference['id'], str(baseline), layout)
+        assert code == 0 and restored['historical_response']
+        assert restored['outputs']['step'] == str(baseline)
