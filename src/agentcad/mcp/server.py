@@ -263,7 +263,7 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     )
 
 
-def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
+def _with_images(result, media, *, cwd, image_root=None, keep_core=False, full_response=False):
     """Attach only the images named by the response, checking bytes at delivery."""
     from agentcad.inspection_delivery import finalize_mcp
 
@@ -308,6 +308,8 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
     except (OSError, ValueError) as exc:
         if keep_core and result.get("core", {}).get("status") == "success":
             action = ["agentcad", "inspect", result["outputs"]["step"], "--report"]
+            if full_response:
+                action.append("--full-response")
             budget = result.get("inspection", {}).get("budget", {})
             for field, option in (("max_images", "--max-images"), ("text_tokens", "--text-budget")):
                 if field in budget:
@@ -353,6 +355,7 @@ def import_cad(
     response_text_budget: int | None = None,
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
+    full_response: bool = False,
 ) -> Any:
     """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
 
@@ -361,7 +364,9 @@ def import_cad(
     maps to CLI --init and can create the selected project/build root. New
     projects default to build123d; runtime only pins a newly initialized project.
 
-    Default: CLI import JSON, including quality, dimensions, saved inventories
+    Default: complete CLI JSON limited to 2000 estimated text tokens, including
+    import/job metadata, with nested inspection, a delivery audit and full saved
+    response_snapshot retrieval. Includes quality, dimensions, saved inventories
     and up to nine actual PNG image blocks (overall + up to four part/four raw
     face-edge samples). Images and selectors name the same version-local IDs.
     Named design-feature recognition is not available. Artifacts and edit.py
@@ -370,8 +375,11 @@ def import_cad(
     report=False omits inline inspection and attachments but retains the saved
     bundle. report_images=False skips inspection media while keeping the report;
     max_images (0..9) caps media. Neither disables legacy preview artifacts.
-    text_budget bounds the inspection object (default 2000 estimated tokens),
-    excluding legacy import metadata; image-token cost is unknown. view/diff
+    text_budget separately bounds report preparation (default 2000 estimated
+    tokens). Unknown context uses the whole-text fallback and image caps;
+    image-token cost is unknown. full_response=True skips whole-response
+    compaction and retains complete command fields, but report preparation
+    limits still apply. Do not combine full_response with caller budgets. view/diff
     match CLI defaults; set view=False for no browser handoff. build_dir selects
     the artifact/history root, relative to the project root. Attachment failure
     preserves successful core import and returns explicit image_delivery status.
@@ -419,6 +427,8 @@ def import_cad(
     optional inspection media can be prepared later with inspect.
     """
     args = ["import", file]
+    if full_response:
+        args.append("--full-response")
     if idempotency_key is not None:
         args.extend(["--idempotency-key", idempotency_key])
     if label is not None:
@@ -453,7 +463,8 @@ def import_cad(
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
     inspection = result.get("inspection", {})
     return _with_images(result, inspection.get("media", []), cwd=cwd,
-                        image_root=inspection.get("inventory", {}).get("image_root"), keep_core=True)
+                        image_root=inspection.get("inventory", {}).get("image_root"), keep_core=True,
+                        full_response=full_response)
 
 
 @mcp.tool()
@@ -681,6 +692,7 @@ def inspect(
     response_text_budget: int | None = None,
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
+    full_response: bool = False,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
@@ -696,7 +708,8 @@ def inspect(
         entity_id: Retrieve one typed ID from an imported or run-generated baseline's geometry manifest.
         image: Return a labeled four-view PNG attachment plus its JSON record.
         isolate: Show only the selected entity; requires image and entity_id.
-        report: Return the saved compact inspection report and ranked sample bundle.
+        report: Return nested inspection plus a whole-response delivery audit,
+            defaulting to 2000 estimated text tokens, and ranked image samples.
             retention reports the 30-day/512 MiB cache policy, expiry and protected
             checkpoint bytes. Configure [inspection.cache] in agentcad.toml.
             Expired job results fail explicitly with a fresh inspection action;
@@ -718,12 +731,18 @@ def inspect(
         context_window: Derive a 5% combined response target from caller context tokens.
         response_budget: Override that target with a combined JSON/image estimated limit.
         response_text_budget: Bound complete JSON text; default is combined limit when
-            known, otherwise 2000. Legacy text_budget still bounds the nested report.
+            known, otherwise 2000, including when no caller options are supplied.
+            text_budget separately bounds report preparation.
         image_budget: Inline image-token limit. Without vision_profile, omit constrained images.
         vision_profile: Caller estimate {name: "host", tokens_per_image: 1000} per
             1024-square sheet. Inspect delivery fields for applied estimates/omissions.
+        full_response: Skip whole-response compaction; a plain report has its
+            previous flat shape. Report preparation limits still apply. Cannot
+            combine with caller budgets. Harmless for already-unbounded ID lookups.
     """
     args = ["inspect", file]
+    if full_response:
+        args.append("--full-response")
     if report:
         args.append("--report")
     if background:

@@ -12,6 +12,8 @@ import sys
 import time
 
 import pytest
+
+from tests.inspection_helpers import full_response_args
 from mcp.types import CallToolResult
 
 from agentcad.cli import cli
@@ -33,7 +35,7 @@ def _job(root, *, real=False, images=True, max_images=2):
 
 
 def _invoke(runner, args):
-    result = runner.invoke(cli, [*args, "--no-daemon"])
+    result = runner.invoke(cli, full_response_args([*args, "--no-daemon"]))
     assert result.stdout, (result.exit_code, result.exception)
     return result, json.loads(result.stdout)
 
@@ -238,6 +240,7 @@ def test_import_deadline_retry_cli_mcp_and_executable_actions(runner, isolated_d
     mcp = asyncio.run(server.mcp.call_tool("inspect", {
         "file": imported["outputs"]["step"], "cwd": str(subdir), "report": True,
         "job_id": job_id, "job_action": "wait", "build_dir": str(root),
+        "full_response": True,
     }))
     blocks = mcp.content if isinstance(mcp, CallToolResult) else mcp
     mcp_payload = mcp.structuredContent if isinstance(mcp, CallToolResult) else json.loads(blocks[0].text)
@@ -256,7 +259,7 @@ def test_background_report_delivers_pngs_on_wait(runner, isolated_dir):
     assert first.exit_code == 0
     assert response["inspection_job"]["id"] == job.job_id
     output = server.inspect(str(step), str(isolated_dir), report=True,
-                            job_id=job.job_id, job_action="wait", wait_timeout=30)
+                            job_id=job.job_id, job_action="wait", wait_timeout=30, full_response=True)
     assert isinstance(output, CallToolResult), output
     assert output.structuredContent["inspection_job"]["status"] == "complete"
     assert [block.type for block in output.content] == ["text", "image"]
@@ -321,7 +324,7 @@ def test_partial_image_failure_resumes_only_missing_image(isolated_dir, monkeypa
 
 def test_script_generated_baseline_uses_same_jobs(runner, isolated_dir):
     (isolated_dir / "part.py").write_text("from build123d import Box\nshow_object(Box(10, 20, 30))\n", encoding="utf-8")
-    initialized = runner.invoke(cli, ["init", "--runtime", "build123d"])
+    initialized = runner.invoke(cli, full_response_args(["init", "--runtime", "build123d"]))
     assert initialized.exit_code == 0
     built, output = _invoke(runner, ["run", "part.py", "--label", "box", "--no-preview", "--no-view", "--no-diff"])
     assert built.exit_code == 0, output
@@ -344,7 +347,7 @@ def test_script_generated_baseline_uses_same_jobs(runner, isolated_dir):
     ["--report", "--job", "inspection_bad", "--background"],
 ])
 def test_invalid_job_controls_do_not_start_work(runner, isolated_dir, controls):
-    result = runner.invoke(cli, ["inspect", "missing.step", *controls, "--no-daemon"])
+    result = runner.invoke(cli, full_response_args(["inspect", "missing.step", *controls, "--no-daemon"]))
     assert result.exit_code != 0
     assert not list(isolated_dir.rglob("request.json"))
 
@@ -358,8 +361,8 @@ def test_mcp_job_controls_are_thin_cli_arguments(monkeypatch):
 
     monkeypatch.setattr(server, "_invoke", invoked)
     server.inspect("part.step", "/project", report=True, job_id="inspection_ID",
-                   job_action="resume", background=True, build_dir="CAD files")
-    assert calls == [(["inspect", "part.step", "--report", "--background", "--job", "inspection_ID",
+                   job_action="resume", background=True, build_dir="CAD files", full_response=True)
+    assert calls == [(["inspect", "part.step", "--full-response", "--report", "--background", "--job", "inspection_ID",
                        "--job-action", "resume", "--max-images", "9", "--text-budget", "2000",
                        "--build-dir", "CAD files"], "/project")]
 
@@ -381,7 +384,7 @@ def test_daemon_routes_job_controls_before_starting_work(runner, isolated_dir, m
 
     module = importlib.import_module("agentcad.commands." + ("import_cmd" if command == "import" else "inspect_cmd"))
     monkeypatch.setattr(module, "maybe_route_through_daemon", routed)
-    invoked = runner.invoke(cli, [command, "missing.step", *controls])
+    invoked = runner.invoke(cli, full_response_args([command, "missing.step", *controls]))
     assert invoked.exit_code == 0
     for value in controls:
         assert value in forwarded
@@ -454,6 +457,7 @@ def test_external_baseline_returned_actions_keep_original_job_root(runner, isola
     response = asyncio.run(server.mcp.call_tool("inspect", {
         "file": str(step), "cwd": str(caller), "report": True,
         "job_id": job["id"], "job_action": "wait", "build_dir": str(caller),
+        "full_response": True,
     }))
     assert not isinstance(response, CallToolResult)  # Image-free job.
     mcp_payload = json.loads(response[0].text)

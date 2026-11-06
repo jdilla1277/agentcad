@@ -80,7 +80,7 @@ from agentcad.inspection_delivery import delivery_options, forward_options
 @click.option("--inspection-image/--no-inspection-image", default=True, help="Prepare inspection image media (overall and ranked samples; default enabled). Retrieval remains available later.")
 @click.option("--report/--no-report", "show_report", default=True, help="Include the compact inspection report in the response. The saved report/bundle remain available when disabled.")
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum inspection images to prepare, including the overall sheet.")
-@click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated token allowance for the inline inspection report, excluding legacy import fields.")
+@click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Report preparation token allowance, separate from whole-response delivery limits.")
 @click.option("--idempotency-key", default=None, help="Reuse this key and identical source/options to recover an import without creating another version. Scoped to the selected build root.")
 @click.option("--inspection-background", is_flag=True, help="Run inspection analysis in a detached local worker; core import still completes before returning.")
 @click.option("--inspection-wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for inspection after these seconds; its worker continues. Does not limit core import or legacy preview work.")
