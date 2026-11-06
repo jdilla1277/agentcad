@@ -187,3 +187,47 @@ def test_default_snapshot_failure(isolated_dir, monkeypatch):
     assert len(result.content) == 1
     assert Path(data['outputs']['step']).is_file()
     assert read_manifest(data['outputs']['step'])['manifest_id'] == data['geometry_manifest']['manifest_id']
+
+
+def test_default_preserves_live_success(runner, isolated_dir, monkeypatch):
+    from agentcad import project_viewer as live
+
+    runtime = isolated_dir / 'viewer-runtime'
+    runtime.mkdir()
+    # A registered viewer can already exist without starting a browser or
+    # server in this test. This makes false failure recording observable.
+    monkeypatch.setenv('AGENTCAD_VIEWER_HOME', str(runtime))
+    live.configuration()
+    result, data = invoke(runner, ['import', str(REAL), '--init', '--no-view', '--no-diff'])
+    assert result.exit_code == 0
+    _assert_budget(data)
+    assert 'viewer' not in data
+    record = live.read_json(live.project_record(live.project_token(isolated_dir)))
+    assert record['attempt']['status'] == 'success'
+    assert record['latest']['version'] == 1
+    assert Path(record['versions']['1']).is_file()
+
+
+@pytest.mark.parametrize('stage', [False, True])
+def test_default_unaccepted_import(runner, isolated_dir, stage):
+    args = ['import', str(REAL), '--init', '--no-view', '--no-diff']
+    if stage:
+        args.append('--stage')
+    else:
+        checks = isolated_dir / 'checks.json'
+        checks.write_text(json.dumps({'schema_version': 1, 'checks': [
+            {'check_id': 'length', 'kind': 'dimension', 'axis': 'x', 'expected_mm': 999, 'tolerance_mm': 0.1},
+        ]}))
+        args += ['--checks', str(checks)]
+    result, data = invoke(runner, args)
+    assert result.exit_code == (0 if stage else 1), data
+    assert data['status'] == ('staged' if stage else 'checks_failed')
+    assert not data['current_advanced']
+    _assert_budget(data)
+    assert not json.loads((isolated_dir / 'agentcad.json').read_text())['versions']
+    recovered, full = invoke(runner, shlex.split(data['response_snapshot']['retrieve'])[1:])
+    assert recovered.exit_code == result.exit_code and full['historical_response']
+    assert Path(full['change']['geometry']).is_file()
+    if not stage:
+        checks = full['change']['validation_checks']['checks']
+        assert next(row for row in checks if row['check_id'] == 'length')['state'] == 'fail'

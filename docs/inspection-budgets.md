@@ -10,6 +10,8 @@ available through `response_snapshot.retrieve`.
 Caller budgets override these defaults without importing again, restarting
 analysis or changing geometry IDs. Plain entity lookup, individual images and
 legacy topology inspection keep their existing response shapes.
+Compacting the reply does not change the live viewer's build status or its
+saved model.
 
 Use `--full-response` (MCP `full_response=True`) for uncompacted command records
 and the previous flat report shape. It cannot be combined with whole-response

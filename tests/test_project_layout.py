@@ -210,6 +210,7 @@ def test_import_scaffold_and_recovery_use_external_root(
         "--no-view",
         "--no-diff",
         "--no-daemon",
+        "--full-response",
     )
     assert Path(data["viewer"]).is_file()
     assert (
@@ -556,7 +557,7 @@ def test_failure_and_invalid_import_keep_diagnostics_inside_build(runner, isolat
     assert Path(failed_data["path"]) == isolated_dir / "build/v2_bad_failed"
     invalid = Path(__file__).parent / "fixtures/validation/bowtie_prism_invalid.brep"
     result = runner.invoke(
-        cli, ["import", str(invalid), "--label", "invalid", "--no-daemon", "--no-view"]
+        cli, ["import", str(invalid), "--label", "invalid", "--no-daemon", "--no-view", "--full-response"]
     )
     assert result.exit_code == 1
     data = json.loads(result.stdout)

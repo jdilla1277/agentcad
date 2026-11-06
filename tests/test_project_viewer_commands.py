@@ -31,7 +31,7 @@ def test_service_failure_does_not_lose_successful_geometry(command, runner, proj
     monkeypatch.setattr(live, "ensure_service", unavailable)
     payload = build(runner)
     if command == "import":
-        result = runner.invoke(cli, ["import", payload["outputs"]["step"], "--label", "baseline", "--no-diff", "--no-daemon"])
+        result = runner.invoke(cli, ["import", payload["outputs"]["step"], "--label", "baseline", "--no-diff", "--no-daemon", "--full-response"])
         assert result.exit_code == 0, result.output
         payload = json.loads(result.stdout)
     assert payload["status"] == "success"
