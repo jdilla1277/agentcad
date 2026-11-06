@@ -376,6 +376,8 @@ def inspect_cmd(
                 )
         except Exception as exc:
             _emit({"command": "inspect", "status": "error", "message": str(exc),
+                   "reason": getattr(exc, "reason", "report_unavailable"),
+                   "next_actions": [shlex.join(["agentcad", "inspect", str(Path(file).resolve()), "--report", "--build-dir", str(get_project().build_root)])],
                    "error_kind": "report_budget_too_small" if isinstance(exc, ReportBudgetError) else "report_unavailable"}, exit_code=1)
             return
         if not controlled:
@@ -385,7 +387,7 @@ def inspect_cmd(
                    "inspection_job": job, "wait_expired": expired}
         if result:
             payload["inspection"] = result[0]
-        _emit(payload, exit_code=1 if job_action not in {"status", "cancel"} and job["status"] in {"failed", "stopped", "canceled"} else 0)
+        _emit(payload, exit_code=1 if job_action not in {"status", "cancel"} and job["status"] in {"failed", "stopped", "canceled", "resource_limit"} else 0)
         return
 
     if entity_id or with_image:
@@ -406,6 +408,8 @@ def inspect_cmd(
             "next_actions": ["agentcad docs editing — load this baseline with load_geometry; part/occurrence records link to their members"],
         }
         image_action = f"agentcad inspect {shlex.quote(file)}" + (f" --id {entity_id}" if entity_id else "") + " --image"
+        if get_project().configured:
+            image_action += " --build-dir " + shlex.quote(str(get_project().build_root))
         payload["next_actions"].insert(0, image_action)
         if with_image:
             from agentcad.geometry_images import geometry_image
@@ -422,6 +426,8 @@ def inspect_cmd(
                     payload["next_actions"][0] = f"agentcad inspect {shlex.quote(file)} --id {sample} --image"
             except Exception as exc:
                 payload.update(status="error", error_kind="image_unavailable")
+                if hasattr(exc, "reason"):
+                    payload["reason"] = exc.reason
                 payload["image"] = {"status": "failed", "message": str(exc)}
                 payload["next_actions"] = [
                     image_action + (" --isolate" if isolate else ""),
@@ -431,6 +437,8 @@ def inspect_cmd(
                     "Resolve the reported image error and retry, or inspect the record without --image. "
                     "Headless Linux PNG rendering requires X11/GLX, for example xvfb-run -a."
                 )
+                if getattr(exc, "reason", None) == "inspection_cache_resource_limit":
+                    payload["suggestion"] = "Increase inspection.cache.max_bytes in agentcad.toml and retry the same image request. The geometry record is available without --image."
                 _emit(payload, exit_code=1)
                 return
         _emit(payload)
