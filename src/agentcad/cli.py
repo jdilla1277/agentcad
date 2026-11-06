@@ -13,6 +13,7 @@ from agentcad.project import ProjectError, format_response, get_project
 
 from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
+from agentcad.commands.changes import changes
 from agentcad.commands.cloud import cloud
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
@@ -82,6 +83,13 @@ NAMED PARTS AND GROUPS
                 options={"color": "red", "part_of": "wheels"})
   Use `agentcad parts` after a run to list, isolate, hide, ghost, or focus
   captured parts and groups. Run `agentcad docs parts` for the full API.
+
+RETAINED CHANGE HISTORY
+  agentcad changes list                         # find failures and saved IDs
+  agentcad changes show working                 # source, checks and diagnostics
+  agentcad changes compare accepted working     # saved measurements/evidence
+  These reads never select, accept, complete checks, or execute CAD. Use the
+  returned r_ IDs for exact revisions; see `agentcad docs changes`.
 
 EXAMPLE SESSION
   $ agentcad init --name myproject__INIT_RUNTIME__
@@ -963,7 +971,7 @@ class _LoggingGroup(click.Group):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
-        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud"):
+        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "changes"):
             return
         # Parse the last JSON output (commands may echo multiple things)
         result = {}
@@ -997,6 +1005,7 @@ def cli():
 
 cli.add_command(context)
 cli.add_command(check_spec)
+cli.add_command(changes)
 cli.add_command(cloud)
 cli.add_command(daemon)
 cli.add_command(diff)

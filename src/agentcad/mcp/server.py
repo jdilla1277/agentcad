@@ -22,14 +22,14 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote"}:
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
     async def call_tool(self, name, arguments):
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote"}:
+        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -804,6 +804,52 @@ def promote(idempotency_key: str, cwd: str, revision: str | None = None,
     if status:
         args.append("--status")
     return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_list(cwd: str, build_dir: str | None = None, limit: int = 20, before: str | None = None) -> dict:
+    """Read retained CAD attempts, including failures and interrupted work.
+
+    Newest first, limit 1..100 (default 20). Continue with returned next_before.
+    Each row uses its immutable r_ revision ID, not a display label. Working and
+    accepted selections are separate. Damaged rows report integrity=unavailable;
+    other history stays readable. Never selects, accepts, checks or reruns CAD.
+    """
+    args = ["changes", "list", "--limit", str(limit)]
+    if before is not None:
+        args.extend(["--before", before])
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_show(revision: str, cwd: str, build_dir: str | None = None) -> dict:
+    """Read a retained revision's verified source, geometry, checks and diagnostics.
+
+    revision is a returned r_ ID, working, or accepted (resolved once per call).
+    Labels and paths are not accepted as IDs. Source/geometry/artifact paths name
+    immutable retained files; edited working scripts are not read. Checks are
+    latest saved evidence; promotion receipts preserve their original decisions.
+    Diagnostic text is capped at 2000 characters per field; use records.outcome
+    for full logs/artifact references. Artifacts/promotions are bounded with
+    omitted counts. No geometry is substituted for a no-output failed revision.
+    This is read-only and does not complete checks or accept the candidate.
+    """
+    return _invoke(_build_args(["changes", "show", revision], build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_compare(baseline: str, revision: str, cwd: str, build_dir: str | None = None) -> dict:
+    """Compare exact retained revisions' saved measurements, checks and policies.
+
+    Each reference is an r_ ID, working, or accepted, resolved once. Reports
+    policy/definition changes separately from pass/fail changes, so a relaxed
+    requirement cannot masquerade as preserved geometry. Numeric deltas use
+    stored execution metrics; they do not prove occupied-space equality. No CAD
+    executes, checks complete, selection changes or promotion occurs. For a new
+    geometric analysis use the returned diff action on the two verified STEPs;
+    missing geometry is explicit and never replaced by the accepted model.
+    """
+    return _invoke(_build_args(["changes", "compare", baseline, revision], build_dir), cwd=cwd)
 
 
 @mcp.tool()
