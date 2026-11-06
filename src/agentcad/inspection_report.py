@@ -204,7 +204,8 @@ def _inspection_report(step_path, output_root, *, images=True, max_images=MAX_IM
     # Publish the full delivery catalogue separately so budget truncation never
     # hides which samples were chosen or how to retrieve their images.
     reused = data["overall_reused_for"] if any(row["id"] == "overall" for row in media) else None
-    catalogue = {"analysis_revision": data["analysis_revision"], "media": media, "omitted": omitted,
+    catalogue = {"analysis_revision": data["analysis_revision"], "manifest_id": data["manifest_id"],
+                 "baseline_sha256": data["baseline_sha256"], "media": media, "omitted": omitted,
                  "overall_reused_for": reused}
     catalogue_id = _digest(catalogue)
     catalogue_path = output_root / "inspection" / f"bundle_{catalogue_id[:16]}.json"
@@ -225,6 +226,7 @@ def _inspection_report(step_path, output_root, *, images=True, max_images=MAX_IM
         "provenance": {**data["provenance"], "filename": str(data["provenance"].get("filename", ""))[:80]},
         "inventory": {"manifest": manifest_path, "report": report_path,
                       "bundle": response_path(catalogue_path), "parts_total": len(data["parts"]),
+                      "retrieve": {"artifact": "manifest"},
                       "image_root": response_path(output_root / "inspection")},
         "parts": deepcopy(data["parts"][:10]), "samples": deepcopy(data["samples"]),
         "sample_totals": {group: len(values) for group, values in data["samples"].items()},

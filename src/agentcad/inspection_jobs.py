@@ -339,6 +339,7 @@ class InspectionJob:
         if identity["build_root"] != identity["project_root"]:
             command += " --build-dir " + shlex.quote(identity["build_root"])
         payload["next_actions"] = [command + " --id ID --image", command + " --report --no-images"]
+        payload["inventory"]["retrieve"] = {"artifact": "manifest"}
         payload["budget"]["text_tokens"] = text_budget
         payload.update(response_extra or {})
         prepared["report"], prepared["bundle"] = Path(prepared["report"]), Path(prepared["bundle"])
