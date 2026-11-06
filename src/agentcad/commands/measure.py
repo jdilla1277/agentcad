@@ -294,6 +294,8 @@ def measure_tier0_payload(
     diameter_tolerance: float = 0.5,
     axis: str | None = None,
     feature_limit: int | None = DEFAULT_FEATURE_LIMIT,
+    probe_boxes: list | None = None,
+    precise_cylinders: bool = False,
 ) -> dict:
     from agentcad.core_build import validated_metrics
     from agentcad.step_io import load_cad_shape
@@ -331,6 +333,14 @@ def measure_tier0_payload(
         "next_actions": next_actions,
         "more_at": "agentcad docs measure",
     }
+    if precise_cylinders:
+        from agentcad.feature_checks import extract_cylinders
+
+        payload["precise_cylinders"] = extract_cylinders(topo_shape)
+    if probe_boxes:
+        from agentcad.feature_checks import material_volumes
+
+        payload["material_volumes"] = material_volumes(topo_shape, probe_boxes)
 
     # Flag high-risk edit inputs (invalid/large topology) so the agent gets
     # workflow guidance before committing to fragile load_step() + boolean

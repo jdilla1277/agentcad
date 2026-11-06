@@ -4,7 +4,8 @@ This example turns the measured PCB drawing into a two-part printed enclosure:
 
 - `board.json` — the board description used by the template.
 - `enclosure.py` — builds the tray and lid from that one spec.
-- `checks.json` — feature assertions for the exported STEP.
+- `checks.json` — standalone feature assertions for the exported STEP.
+- `requirements.json` — the same assertions as retained-change checks.
 
 The template exposes `BoardSpec`, `pcb_case`/`pcb_enclosure`, and
 `pcb_lid`/`pcb_enclosure_lid` through `agentcad.api`.
@@ -63,7 +64,27 @@ feature spec:
 agentcad check-spec <outputs.step> examples/pcb_enclosure/checks.json
 ```
 
-`checks.json` verifies that the four M2.5 lid clearance holes and four case
-pilot holes survived export, and that the assembly contains two solids. The
-same run demonstrates the template vocabulary: a spec drives the board
-outline, mounting holes, edge cutouts, lid window, keepout, and height stack.
+`checks.json` verifies the four M2.5 lid clearance holes and four case pilot
+holes by position and diameter, the four standoff bosses by diameter and count,
+that the USB opening is empty material, and that a standoff boss contains
+material. The same file demonstrates the template vocabulary: a spec drives the
+board outline, mounting holes, edge cutouts, lid window, keepout, and height
+stack.
+
+## Retained checks
+
+`requirements.json` declares the same assertions in the retained-change schema.
+Pass it to a build so the receipt pins the policy and ties each result to the
+written STEP hash:
+
+```console
+agentcad run examples/pcb_enclosure/enclosure.py --label pcb_checked \
+  --checks examples/pcb_enclosure/requirements.json
+```
+
+The `holes` checks prove that each declared position matches one measured
+cylinder axis, not merely that the required diameter exists somewhere. The
+`keepout` and `material` checks measure the material volume inside an explicit
+assembly-frame box. For Z-axis holes the position plane is `(x, y)`; X uses
+`(y, z)` and Y uses `(x, z)`. A probe measures volume only — it does not prove
+wall thickness or a minimum clearance.

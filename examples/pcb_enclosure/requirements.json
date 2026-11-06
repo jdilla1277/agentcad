@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "check_id": "lid_screw_clearance",
+      "kind": "holes",
+      "axis": "z",
+      "diameter_mm": 2.9,
+      "positions_mm": [[3, 3], [25.17, 3], [3, 48.31], [25.17, 48.31]],
+      "position_tolerance_mm": 0.05,
+      "tolerance_mm": 0.05
+    },
+    {
+      "check_id": "case_standoff_pilots",
+      "kind": "holes",
+      "axis": "z",
+      "diameter_mm": 2.05,
+      "positions_mm": [[3, 3], [25.17, 3], [3, 48.31], [25.17, 48.31]],
+      "position_tolerance_mm": 0.05,
+      "tolerance_mm": 0.05
+    },
+    {
+      "check_id": "case_standoff_bosses",
+      "kind": "cylinders",
+      "axis": "z",
+      "diameter_mm": 6,
+      "count": 4,
+      "tolerance_mm": 0.05
+    },
+    {
+      "check_id": "usb_opening",
+      "kind": "keepout",
+      "box_mm": [10.275, -2.3, 0, 17.895, -0.3, 4.65],
+      "max_volume_mm3": 0
+    },
+    {
+      "check_id": "standoff_boss",
+      "kind": "material",
+      "box_mm": [1.5, 1.5, -2, 4.5, 4.5, -0.2],
+      "min_volume_mm3": 1
+    }
+  ]
+}

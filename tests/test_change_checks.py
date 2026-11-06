@@ -5,7 +5,12 @@ import copy
 import pytest
 
 from agentcad import change_contract as contract
-from agentcad.change_checks import compile_policy, evaluate_checks, measure_geometry
+from agentcad.change_checks import (
+    compile_policy,
+    evaluate_checks,
+    measure_geometry,
+    probe_boxes_for_policy,
+)
 
 
 def declaration(*checks, **extra):
@@ -230,3 +235,250 @@ def test_matching_is_one_to_one_and_not_greedy_by_cylinder_order():
     )[0]
     assert result["state"] == "pass"
     assert result["observed"]["max_displacement_mm"] == pytest.approx(0.5)
+
+def z_cylinder(diameter, x, y, face):
+    return {
+        "diameter_mm": diameter,
+        "direction": [0, 0, 1],
+        "center_mm": [x, y, 0],
+        "face_indices": [face],
+    }
+
+
+def test_positioned_holes_and_probes_compile_with_signed_coordinates():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "holes",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[-5.5, 2], [3, 3]],
+                "position_tolerance_mm": 0.05,
+            },
+            {
+                "check_id": "under_board",
+                "kind": "keepout",
+                "box_mm": [-2, -2, -5, 2, 2, -1],
+            },
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": [-1, -1, -2, 1, 1, 0],
+                "min_volume_mm3": 0.5,
+            },
+        )
+    )
+    by_id = {spec["check_id"]: spec for spec in policy["checks"]}
+    assert by_id["mounts"]["settings"]["positions_mm"] == [[-5.5, 2.0], [3.0, 3.0]]
+    assert by_id["mounts"]["settings"]["tolerance_mm"] == 0.1
+    assert by_id["mounts"]["settings"]["position_tolerance_mm"] == 0.05
+    assert by_id["under_board"]["settings"]["max_volume_mm3"] == 0.0
+    assert by_id["boss"]["settings"]["box_mm"] == [-1.0, -1.0, -2.0, 1.0, 1.0, 0.0]
+    assert probe_boxes_for_policy(policy) == [
+        [-2.0, -2.0, -5.0, 2.0, 2.0, -1.0],
+        [-1.0, -1.0, -2.0, 1.0, 1.0, 0.0],
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {
+            "check_id": "mounts",
+            "kind": "holes",
+            "axis": "z",
+            "diameter_mm": 3,
+            "positions_mm": [[1, 2], [1, 2]],
+        },
+        {
+            "check_id": "mounts",
+            "kind": "holes",
+            "axis": "z",
+            "diameter_mm": 3,
+            "positions_mm": [[1, 2, 3]],
+        },
+        {
+            "check_id": "mounts",
+            "kind": "holes",
+            "axis": "z",
+            "diameter_mm": 3,
+            "positions_mm": [],
+        },
+        {
+            "check_id": "void",
+            "kind": "keepout",
+            "box_mm": [1, 1, 1, -1, 2, 2],
+        },
+        {
+            "check_id": "boss",
+            "kind": "material",
+            "box_mm": [0, 0, 0, 1, 1, 1],
+        },
+        {
+            "check_id": "boss",
+            "kind": "material",
+            "box_mm": [0, 0, 0, 1, 1, 1],
+            "min_volume_mm3": 0,
+        },
+    ],
+)
+def test_bad_position_and_probe_requirements_are_rejected(bad):
+    with pytest.raises(ValueError):
+        compile_policy(declaration(bad))
+
+
+def test_positioned_holes_match_one_to_one_and_report_missing_and_extra():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "holes",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0], [10, 0]],
+                "position_tolerance_mm": 0.1,
+            }
+        )
+    )
+    measured = {
+        "dimensions": {},
+        "cylinders": [z_cylinder(3, 0, 0, 1), z_cylinder(3, 11, 0, 2)],
+    }
+    result = evaluate_checks(candidate(policy), policy, measured)[0]
+    observed = result["observed"]
+    assert result["state"] == "fail"
+    assert observed["missing_positions_mm"] == [[10.0, 0.0]]
+    assert observed["extra_holes"][0]["position_mm"] == [11.0, 0.0]
+    assert observed["max_position_error_mm"] == pytest.approx(1.0)
+    assert observed["affected_face_indices"] == [1, 2]
+
+    measured["cylinders"][1]["center_mm"][0] = 10
+    result = evaluate_checks(candidate(policy), policy, measured)[0]
+    assert result["state"] == "pass"
+    assert result["observed"]["max_position_error_mm"] == 0
+
+
+def test_holes_ignore_cylinders_outside_the_diameter_and_axis_selection():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "holes",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0]],
+                "position_tolerance_mm": 0.1,
+                "tolerance_mm": 0.05,
+            }
+        )
+    )
+    measured = {
+        "dimensions": {},
+        "cylinders": [
+            z_cylinder(3.2, 0, 0, 1),
+            {
+                "diameter_mm": 3,
+                "direction": [1, 0, 0],
+                "center_mm": [0, 0, 0],
+                "face_indices": [2],
+            },
+        ],
+    }
+    result = evaluate_checks(candidate(policy), policy, measured)[0]
+    assert result["state"] == "fail"
+    assert result["observed"]["measured_count"] == 0
+    assert result["observed"]["missing_positions_mm"] == [[0.0, 0.0]]
+
+
+@pytest.mark.parametrize(
+    ("volume", "states"),
+    [(0.0, ["pass", "fail"]), (1.0, ["fail", "pass"])],
+)
+def test_keepout_and_material_probes_compare_volume(volume, states):
+    box = [0, 0, 0, 1, 1, 1]
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": box,
+                "max_volume_mm3": 0,
+            },
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": box,
+                "min_volume_mm3": 0.5,
+            },
+        )
+    )
+    measured = {
+        "dimensions": {},
+        "cylinders": [],
+        "material_volumes": [{"box_mm": box, "volume_mm3": volume}],
+    }
+    results = evaluate_checks(candidate(policy), policy, measured)
+    assert [result["state"] for result in results] == states
+    assert results[0]["observed"]["volume_mm3"] == volume
+    assert results[0]["observed"]["max_volume_mm3"] == 0
+    assert results[1]["observed"]["min_volume_mm3"] == 0.5
+
+
+def test_missing_probe_evidence_is_unavailable_not_a_pass():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": [0, 0, 0, 1, 1, 1],
+            }
+        )
+    )
+    result = evaluate_checks(
+        candidate(policy), policy, {"dimensions": {}, "cylinders": []}
+    )[0]
+    assert result["state"] == "unavailable"
+    assert "Material probe evidence" in result["observed"]["reason"]
+
+
+def test_written_geometry_reports_exact_probe_volumes(tmp_path):
+    from build123d import Box, export_step
+
+    part = Box(10, 10, 10)
+    path = tmp_path / "cube.step"
+    export_step(part, path)
+    measured = measure_geometry(
+        path, probe_boxes=[[0, 0, 0, 1, 1, 1], [0, 0, 0, 1, 1, 1]]
+    )
+    assert measured["cylinders"] == []
+    assert len(measured["material_volumes"]) == 1
+    assert measured["material_volumes"][0]["volume_mm3"] == pytest.approx(1.0)
+
+def test_probe_policy_flows_from_policy_to_measurement_to_result(tmp_path):
+    from build123d import Box, export_step
+
+    path = tmp_path / "cube.step"
+    export_step(Box(10, 10, 10), path)
+    box = [0, 0, 0, 1, 1, 1]
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": box,
+                "min_volume_mm3": 0.5,
+            },
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": box,
+                "max_volume_mm3": 0.5,
+            },
+        )
+    )
+    measured = measure_geometry(path, probe_boxes=probe_boxes_for_policy(policy))
+    results = evaluate_checks(candidate(policy), policy, measured)
+    assert [result["state"] for result in results] == ["pass", "fail"]
+    assert results[0]["observed"]["volume_mm3"] == pytest.approx(1.0)
+    assert results[1]["observed"]["volume_mm3"] == pytest.approx(1.0)
