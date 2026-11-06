@@ -7,13 +7,34 @@ import re
 from pathlib import Path
 
 from agentcad import change_contract as contract
+from agentcad.feature_checks import check_holes, check_probe, normalize_box
 
 CORE_IDS = {"execution", "written_geometry"}
 
 
 def _number(value, name, *, minimum=0):
-    if type(value) not in (int, float) or not math.isfinite(value) or value < minimum:
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number.")
+    if minimum is not None and value < minimum:
         raise ValueError(f"{name} must be a finite number >= {minimum}.")
+
+
+def _positions(value, name):
+    """Validate 2D hole positions used perpendicular to a declared axis."""
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{name} must be a non-empty array of [a, b] positions.")
+    if len(value) > 200:
+        raise ValueError(f"{name} may declare at most 200 positions.")
+    positions = []
+    for index, position in enumerate(value):
+        if not isinstance(position, (list, tuple)) or len(position) != 2:
+            raise ValueError(f"{name}[{index}] must be [a, b] in the plane perpendicular to the axis.")
+        _number(position[0], f"{name}[{index}][0]", minimum=None)
+        _number(position[1], f"{name}[{index}][1]", minimum=None)
+        positions.append([float(position[0]), float(position[1])])
+    if len({(a, b) for a, b in positions}) != len(positions):
+        raise ValueError(f"{name} must not repeat a position; holes are matched one-to-one.")
+    return positions
 
 
 def compile_policy(declaration, *, previous=None, core=False, profile="deliverable"):
@@ -69,6 +90,15 @@ def compile_policy(declaration, *, previous=None, core=False, profile="deliverab
             "dimension": {"axis", "expected_mm", "tolerance_mm"},
             "cylinders": {"axis", "diameter_mm", "count", "tolerance_mm"},
             "preserve_cylinders": {"axis", "diameter_mm", "tolerance_mm", "baseline_revision_id"},
+            "holes": {
+                "axis",
+                "diameter_mm",
+                "positions_mm",
+                "position_tolerance_mm",
+                "tolerance_mm",
+            },
+            "keepout": {"box_mm", "max_volume_mm3"},
+            "material": {"box_mm", "min_volume_mm3"},
             "external": {"validator"},
         }.get(kind)
         if fields is None or set(row) - fields - {"check_id", "kind", "required"}:
@@ -79,14 +109,23 @@ def compile_policy(declaration, *, previous=None, core=False, profile="deliverab
         if type(required) is not bool:
             raise ValueError("required must be a boolean.")
         settings = {k: v for k, v in row.items() if k not in ("check_id", "required")}
-        if kind != "external":
+        if kind in ("dimension", "cylinders", "preserve_cylinders", "holes"):
             if row.get("axis") not in ("x", "y", "z"):
                 raise ValueError("axis must be x, y, or z in the assembly frame.")
             settings.setdefault("tolerance_mm", 0.1)
             _number(settings["tolerance_mm"], "tolerance_mm", minimum=1e-6)
+        if kind == "dimension":
+            _number(row.get("expected_mm"), "expected_mm", minimum=1e-6)
+        elif kind in ("cylinders", "preserve_cylinders", "holes"):
+            _number(row.get("diameter_mm"), "diameter_mm", minimum=1e-6)
+        if kind == "holes":
+            settings["positions_mm"] = _positions(
+                row.get("positions_mm"), "positions_mm"
+            )
+            settings.setdefault("position_tolerance_mm", 0.1)
             _number(
-                row.get("expected_mm") if kind == "dimension" else row.get("diameter_mm"),
-                "expected_mm" if kind == "dimension" else "diameter_mm",
+                settings["position_tolerance_mm"],
+                "position_tolerance_mm",
                 minimum=1e-6,
             )
         if kind == "cylinders" and (
@@ -97,6 +136,17 @@ def compile_policy(declaration, *, previous=None, core=False, profile="deliverab
             r"r_[0-9a-f]{32}", str(row.get("baseline_revision_id"))
         ):
             raise ValueError("baseline_revision_id must identify a retained geometry revision.")
+        if kind in ("keepout", "material"):
+            settings["box_mm"] = list(normalize_box(row.get("box_mm")))
+            if kind == "keepout":
+                settings.setdefault("max_volume_mm3", 0.0)
+                _number(settings["max_volume_mm3"], "max_volume_mm3")
+            else:
+                _number(
+                    row.get("min_volume_mm3"),
+                    "min_volume_mm3",
+                    minimum=1e-6,
+                )
         if kind == "external" and (
             not isinstance(row.get("validator"), str) or not row["validator"].strip()
         ):
@@ -131,50 +181,33 @@ def compile_policy(declaration, *, previous=None, core=False, profile="deliverab
     )
 
 
-def measure_geometry(path: str | Path) -> dict:
+def measure_geometry(path: str | Path, probe_boxes=None) -> dict:
     """Measure the written STEP, retaining full precision and indexed face evidence."""
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.GeomAbs import GeomAbs_Cylinder
-    from OCP.TopAbs import TopAbs_FACE
-    from OCP.TopoDS import TopoDS
+
+    from agentcad.feature_checks import extract_cylinders, material_volumes
     from agentcad.step_io import load_cad_shape
-    from agentcad.topo_ids import _iter_indexed_map
 
     shape = load_cad_shape(path)
     bounds = Bnd_Box()
     BRepBndLib.AddOptimal_s(shape, bounds)
     values = bounds.Get()
-    cylinders = {}
-    for index, raw in enumerate(_iter_indexed_map(shape, TopAbs_FACE), 1):
-        adaptor = BRepAdaptor_Surface(TopoDS.Face_s(raw))
-        if adaptor.GetType() != GeomAbs_Cylinder:
-            continue
-        cylinder = adaptor.Cylinder()
-        axis = cylinder.Axis()
-        direction = list(axis.Direction().Coord())
-        if next((v for v in direction if abs(v) > 1e-12), 1) < 0:
-            direction = [-v for v in direction]
-        point = list(axis.Location().Coord())
-        projection = sum(p * d for p, d in zip(point, direction))
-        center = [p - projection * d for p, d in zip(point, direction)]
-        diameter = cylinder.Radius() * 2
-        key = tuple(round(v, 9) for v in [diameter, *direction, *center])
-        row = cylinders.setdefault(
-            key,
-            {
-                "diameter_mm": diameter,
-                "direction": direction,
-                "center_mm": center,
-                "face_indices": [],
-            },
-        )
-        row["face_indices"].append(index)
     return {
         "dimensions": {a: values[i + 3] - values[i] for i, a in enumerate("xyz")},
-        "cylinders": list(cylinders.values()),
+        "cylinders": extract_cylinders(shape),
+        "material_volumes": material_volumes(shape, probe_boxes or []),
     }
+
+
+def probe_boxes_for_policy(policy) -> list:
+    """Return the deduplicated material-probe boxes declared by a policy."""
+    boxes = []
+    for spec in (policy or {}).get("checks", []):
+        settings = spec.get("settings", {})
+        if settings.get("kind") in ("keepout", "material"):
+            boxes.append(settings["box_mm"])
+    return boxes
 
 
 def _selected(measured, settings, *, diameter=True):
@@ -246,8 +279,9 @@ def evaluate_checks(candidate, policy, measurements, *, baselines=None, reason=N
             }
         elif measurements is not None:
             try:
-                tolerance = settings["tolerance_mm"]
-                if settings["kind"] == "dimension":
+                kind = settings["kind"]
+                tolerance = settings.get("tolerance_mm")
+                if kind == "dimension":
                     value = measurements["dimensions"][settings["axis"]]
                     _number(value, "measured dimension")
                     observed = {
@@ -262,7 +296,7 @@ def evaluate_checks(candidate, policy, measurements, *, baselines=None, reason=N
                         if abs(value - settings["expected_mm"]) <= tolerance + 1e-9
                         else "fail"
                     )
-                else:
+                elif kind in ("cylinders", "preserve_cylinders"):
                     found = _selected(measurements, settings)
                     if len(found) > 200:
                         raise ValueError(
@@ -278,7 +312,7 @@ def evaluate_checks(candidate, policy, measurements, *, baselines=None, reason=N
                             i for c in found for i in c["face_indices"]
                         ),
                     }
-                    if settings["kind"] == "cylinders":
+                    if kind == "cylinders":
                         observed.update(
                             expected_diameter_mm=settings["diameter_mm"],
                             expected_count=settings["count"],
@@ -311,6 +345,32 @@ def evaluate_checks(candidate, policy, measurements, *, baselines=None, reason=N
                             and max(displacement, diameter_change) <= tolerance + 1e-9
                             else "fail"
                         )
+                elif kind == "holes":
+                    passed, observed = check_holes(
+                        measurements["cylinders"],
+                        axis=settings["axis"],
+                        diameter_mm=settings["diameter_mm"],
+                        diameter_tolerance_mm=settings["tolerance_mm"],
+                        positions_mm=settings["positions_mm"],
+                        position_tolerance_mm=settings["position_tolerance_mm"],
+                    )
+                    observed["tolerance_mm"] = settings["tolerance_mm"]
+                    state = "pass" if passed else "fail"
+                elif kind in ("keepout", "material"):
+                    threshold = (
+                        settings["max_volume_mm3"]
+                        if kind == "keepout"
+                        else settings["min_volume_mm3"]
+                    )
+                    passed, observed = check_probe(
+                        measurements.get("material_volumes", []),
+                        kind=kind,
+                        box_mm=settings["box_mm"],
+                        threshold_mm3=threshold,
+                    )
+                    state = "pass" if passed else "fail"
+                else:
+                    raise ValueError(f"Unsupported check kind '{kind}'.")
             except (KeyError, TypeError, ValueError, OverflowError) as exc:
                 observed = {"reason": str(exc)}
                 state = "unavailable"

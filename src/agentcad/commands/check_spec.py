@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.commands.measure import measure_tier0_payload, validity_from_metrics
+from agentcad.feature_checks import check_holes, check_probe, normalize_box
 
 
 @click.command("check-spec")
@@ -34,7 +36,12 @@ def check_spec(file, spec_file, no_daemon, complete=False):
 
     SPEC_FILE example:
 
-      {"features":[{"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4}]}
+      {"features":[
+        {"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4},
+        {"name":"mounts","type":"hole","axis":"z","diameter_mm":3,
+         "positions_mm":[[3,3],[25.17,3]]},
+        {"name":"usb","type":"keepout","box_mm":[10,-2,0,18,0,5]}
+      ]}
 
     A failed spec still means the command ran successfully: status remains
     "success" and the comparison result is in passed/matched_features.
@@ -147,6 +154,8 @@ def check_spec(file, spec_file, no_daemon, complete=False):
             str(file_path.resolve()),
             detection,
             with_features=False,
+            precise_cylinders=_needs_precise_cylinders(spec),
+            probe_boxes=_declared_probe_boxes(spec),
         )
     except Exception as exc:
         _emit({
@@ -198,37 +207,116 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
     total_abs_count_error = 0
 
     for feature in spec.get("features", []):
-        target = _target_from_feature(feature, spec)
-        match = _find_cylinder_bucket(measured_cylinders, target)
-        if match is None:
-            missing = {
+        feature_type = feature.get("type")
+        if feature_type == "cylinder":
+            target = _target_from_feature(feature, spec)
+            match = _find_cylinder_bucket(measured_cylinders, target)
+            if match is None:
+                missing = {
+                    "name": target["name"],
+                    "type": "cylinder",
+                    "target": target,
+                    "measured": None,
+                    "reason": "no_matching_cylinder_bucket",
+                }
+                missing_features.append(missing)
+                total_abs_count_error += target["count"]
+                continue
+
+            count_error = int(match["count"]) - target["count"]
+            diameter_error = _round_float(float(match["diameter_mm"]) - target["diameter_mm"])
+            passed = abs(count_error) <= target["count_tolerance"]
+            matched_features.append({
                 "name": target["name"],
                 "type": "cylinder",
                 "target": target,
-                "measured": None,
-                "reason": "no_matching_cylinder_bucket",
-            }
-            missing_features.append(missing)
-            total_abs_count_error += target["count"]
-            continue
+                "measured": {
+                    "diameter_mm": match["diameter_mm"],
+                    "count": match["count"],
+                    "axis": match["axis"],
+                },
+                "diameter_error_mm": diameter_error,
+                "count_error": count_error,
+                "passed": passed,
+            })
+            total_abs_count_error += abs(count_error)
+        elif feature_type == "hole":
+            target = _hole_target_from_feature(feature, spec)
+            cylinders = measurement.get("precise_cylinders")
+            if cylinders is None:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": "hole",
+                    "target": target,
+                    "measured": None,
+                    "reason": "precise_cylinder_evidence_missing",
+                })
+                total_abs_count_error += len(target["positions_mm"])
+                continue
 
-        count_error = int(match["count"]) - target["count"]
-        diameter_error = _round_float(float(match["diameter_mm"]) - target["diameter_mm"])
-        passed = abs(count_error) <= target["count_tolerance"]
-        matched_features.append({
-            "name": target["name"],
-            "type": "cylinder",
-            "target": target,
-            "measured": {
-                "diameter_mm": match["diameter_mm"],
-                "count": match["count"],
-                "axis": match["axis"],
-            },
-            "diameter_error_mm": diameter_error,
-            "count_error": count_error,
-            "passed": passed,
-        })
-        total_abs_count_error += abs(count_error)
+            passed, observed = check_holes(
+                cylinders,
+                axis=target["axis"],
+                diameter_mm=target["diameter_mm"],
+                diameter_tolerance_mm=target["diameter_tolerance_mm"],
+                positions_mm=target["positions_mm"],
+                position_tolerance_mm=target["position_tolerance_mm"],
+            )
+            count_error = observed["measured_count"] - observed["expected_count"]
+            total_abs_count_error += abs(count_error)
+            matched_features.append({
+                "name": target["name"],
+                "type": "hole",
+                "target": target,
+                "measured": observed,
+                "count_error": count_error,
+                "max_position_error_mm": observed["max_position_error_mm"],
+                "passed": passed,
+            })
+        elif feature_type in ("keepout", "material"):
+            target = _probe_target_from_feature(feature, spec)
+            rows = measurement.get("material_volumes")
+            if rows is None:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": feature_type,
+                    "target": target,
+                    "measured": None,
+                    "reason": "material_probe_evidence_missing",
+                })
+                continue
+
+            threshold = (
+                target["max_volume_mm3"]
+                if feature_type == "keepout"
+                else target["min_volume_mm3"]
+            )
+            passed, observed = check_probe(
+                rows,
+                kind=feature_type,
+                box_mm=target["box_mm"],
+                threshold_mm3=threshold,
+            )
+            matched_features.append({
+                "name": target["name"],
+                "type": feature_type,
+                "target": target,
+                "measured": observed,
+                "volume_margin_mm3": _round_float(
+                    threshold - observed["volume_mm3"]
+                    if feature_type == "keepout"
+                    else observed["volume_mm3"] - threshold
+                ),
+                "passed": passed,
+            })
+        else:
+            missing_features.append({
+                "name": feature.get("name"),
+                "type": feature_type,
+                "target": None,
+                "measured": None,
+                "reason": "unsupported_feature_type",
+            })
 
     passed = (not missing_features and all(f["passed"] for f in matched_features)
               and all(c["passed"] is True for c in checks))
@@ -282,11 +370,29 @@ def _load_spec(path: Path) -> dict | None:
             "suggestion": (
                 "Use features like "
                 "{\"name\":\"bolt_holes\",\"type\":\"cylinder\","
-                "\"diameter_mm\":12,\"count\":6}."
+                "\"diameter_mm\":12,\"count\":6}, "
+                "{\"name\":\"mounts\",\"type\":\"hole\",\"axis\":\"z\","
+                "\"diameter_mm\":3,\"positions_mm\":[[3,3],[25.17,3]]}, or "
+                "{\"name\":\"usb_keepout\",\"type\":\"keepout\","
+                "\"box_mm\":[10.275,-2.3,0,17.895,-0.3,4.65]}."
             ),
         }, exit_code=1)
         return None
     return data
+
+
+def _declared_probe_boxes(spec: dict) -> list:
+    return [
+        feature["box_mm"]
+        for feature in spec.get("features", [])
+        if feature.get("type") in ("keepout", "material")
+    ]
+
+
+def _needs_precise_cylinders(spec: dict) -> bool:
+    return any(
+        feature.get("type") == "hole" for feature in spec.get("features", [])
+    )
 
 
 def _validate_spec(data) -> list[str]:
@@ -297,6 +403,13 @@ def _validate_spec(data) -> list[str]:
     for key in ("expect_solids", "expect_shells"):
         if key in data and (type(data[key]) is not int or data[key] < 0):
             errors.append(f"{key} must be a non-negative integer")
+    for key in (
+        "diameter_tolerance_mm",
+        "position_tolerance_mm",
+        "keepout_max_volume_mm3",
+    ):
+        if key in data and (not _is_number(data[key]) or data[key] < 0):
+            errors.append(f"{key} must be a non-negative number")
     has_structure = any(key in data for key in ("expect_solids", "expect_shells"))
     features = data.get("features", [] if has_structure else None)
     if not isinstance(features, list):
@@ -316,34 +429,107 @@ def _validate_spec(data) -> list[str]:
         if not isinstance(feature.get("name"), str) or not feature["name"].strip():
             errors.append(f"{prefix}.name must be a non-empty string")
 
-        if feature.get("type") != "cylinder":
-            errors.append(f"{prefix}.type must be 'cylinder'")
-
-        if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
-            errors.append(f"{prefix}.diameter_mm must be a positive number")
-
-        if not _is_int(feature.get("count")) or feature["count"] < 0:
-            errors.append(f"{prefix}.count must be a non-negative integer")
-
-        axis = feature.get("axis")
-        if axis is not None and axis not in {"+x", "+y", "+z", "other"}:
-            errors.append(f"{prefix}.axis must be one of +x, +y, +z, other")
-
-        diameter_tolerance = feature.get(
-            "diameter_tolerance_mm",
-            data.get("diameter_tolerance_mm", 0.1),
-        )
-        if not _is_number(diameter_tolerance) or diameter_tolerance < 0:
+        feature_type = feature.get("type")
+        if feature_type not in {"cylinder", "hole", "keepout", "material"}:
             errors.append(
-                f"{prefix}.diameter_tolerance_mm must be a non-negative number"
+                f"{prefix}.type must be one of cylinder, hole, keepout, material"
             )
+            continue
 
-        count_tolerance = feature.get(
-            "count_tolerance",
-            data.get("count_tolerance", 0),
-        )
-        if not _is_int(count_tolerance) or count_tolerance < 0:
-            errors.append(f"{prefix}.count_tolerance must be a non-negative integer")
+        if feature_type == "cylinder":
+            if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
+                errors.append(f"{prefix}.diameter_mm must be a positive number")
+
+            if not _is_int(feature.get("count")) or feature["count"] < 0:
+                errors.append(f"{prefix}.count must be a non-negative integer")
+
+            axis = feature.get("axis")
+            if axis is not None and axis not in {"+x", "+y", "+z", "other"}:
+                errors.append(f"{prefix}.axis must be one of +x, +y, +z, other")
+
+            diameter_tolerance = feature.get(
+                "diameter_tolerance_mm",
+                data.get("diameter_tolerance_mm", 0.1),
+            )
+            if not _is_number(diameter_tolerance) or diameter_tolerance < 0:
+                errors.append(
+                    f"{prefix}.diameter_tolerance_mm must be a non-negative number"
+                )
+
+            count_tolerance = feature.get(
+                "count_tolerance",
+                data.get("count_tolerance", 0),
+            )
+            if not _is_int(count_tolerance) or count_tolerance < 0:
+                errors.append(f"{prefix}.count_tolerance must be a non-negative integer")
+        elif feature_type == "hole":
+            axis = feature.get("axis")
+            if axis not in {"x", "y", "z", "+x", "+y", "+z"}:
+                errors.append(f"{prefix}.axis must be one of x, y, z")
+            if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
+                errors.append(f"{prefix}.diameter_mm must be a positive number")
+
+            positions = feature.get("positions_mm")
+            if not isinstance(positions, list) or not positions:
+                errors.append(f"{prefix}.positions_mm must be a non-empty array")
+            else:
+                seen = set()
+                for position_index, position in enumerate(positions):
+                    valid = (
+                        isinstance(position, (list, tuple))
+                        and len(position) == 2
+                        and _is_number(position[0])
+                        and _is_number(position[1])
+                    )
+                    if not valid:
+                        errors.append(
+                            f"{prefix}.positions_mm[{position_index}] must be [a, b]"
+                        )
+                        continue
+                    key = (float(position[0]), float(position[1]))
+                    if key in seen:
+                        errors.append(
+                            f"{prefix}.positions_mm[{position_index}] repeats a position"
+                        )
+                    seen.add(key)
+
+            diameter_tolerance = feature.get(
+                "diameter_tolerance_mm",
+                data.get("diameter_tolerance_mm", 0.1),
+            )
+            if not _is_number(diameter_tolerance) or diameter_tolerance < 0:
+                errors.append(
+                    f"{prefix}.diameter_tolerance_mm must be a non-negative number"
+                )
+
+            position_tolerance = feature.get(
+                "position_tolerance_mm",
+                data.get("position_tolerance_mm", 0.1),
+            )
+            if not _is_number(position_tolerance) or position_tolerance < 0:
+                errors.append(
+                    f"{prefix}.position_tolerance_mm must be a non-negative number"
+                )
+        else:
+            try:
+                normalize_box(feature.get("box_mm"))
+            except ValueError as exc:
+                errors.append(f"{prefix}.box_mm is invalid: {exc}")
+            if feature_type == "keepout":
+                maximum = feature.get(
+                    "max_volume_mm3",
+                    data.get("keepout_max_volume_mm3", 0.0),
+                )
+                if not _is_number(maximum) or maximum < 0:
+                    errors.append(
+                        f"{prefix}.max_volume_mm3 must be a non-negative number"
+                    )
+            else:
+                minimum = feature.get("min_volume_mm3")
+                if not _is_number(minimum) or minimum <= 0:
+                    errors.append(
+                        f"{prefix}.min_volume_mm3 must be a positive number"
+                    )
 
     return errors
 
@@ -361,6 +547,43 @@ def _target_from_feature(feature: dict, spec: dict) -> dict:
             feature.get("count_tolerance", spec.get("count_tolerance", 0))
         ),
     }
+
+
+def _hole_target_from_feature(feature: dict, spec: dict) -> dict:
+    return {
+        "name": feature["name"],
+        "axis": feature["axis"],
+        "diameter_mm": float(feature["diameter_mm"]),
+        "positions_mm": [
+            [float(position[0]), float(position[1])]
+            for position in feature["positions_mm"]
+        ],
+        "diameter_tolerance_mm": float(
+            feature.get("diameter_tolerance_mm", spec.get("diameter_tolerance_mm", 0.1))
+        ),
+        "position_tolerance_mm": float(
+            feature.get(
+                "position_tolerance_mm", spec.get("position_tolerance_mm", 0.1)
+            )
+        ),
+    }
+
+
+def _probe_target_from_feature(feature: dict, spec: dict) -> dict:
+    target = {
+        "name": feature["name"],
+        "kind": feature["type"],
+        "box_mm": list(normalize_box(feature["box_mm"])),
+    }
+    if feature["type"] == "keepout":
+        target["max_volume_mm3"] = float(
+            feature.get(
+                "max_volume_mm3", spec.get("keepout_max_volume_mm3", 0.0)
+            )
+        )
+    else:
+        target["min_volume_mm3"] = float(feature["min_volume_mm3"])
+    return target
 
 
 def _find_cylinder_bucket(measured_cylinders: list[dict], target: dict) -> dict | None:
@@ -429,7 +652,12 @@ def _round_float(value: float) -> float:
 
 
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _is_int(value) -> bool:

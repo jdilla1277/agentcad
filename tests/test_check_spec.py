@@ -1,6 +1,7 @@
 import json
 
 import cadquery as cq
+import pytest
 from cadquery import exporters
 
 from agentcad.cli import cli
@@ -156,6 +157,27 @@ class TestCheckSpecCommand:
         assert any("name" in error for error in parsed["errors"])
         assert any("type" in error for error in parsed["errors"])
 
+    @pytest.mark.parametrize("coordinate", [float("nan"), float("inf"), 10**1000])
+    def test_check_spec_rejects_non_finite_hole_positions(
+        self, runner, isolated_dir, coordinate
+    ):
+        spec = _write_spec(isolated_dir, {
+            "features": [{
+                "name": "mounts",
+                "type": "hole",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[coordinate, 0]],
+            }]
+        })
+
+        result = runner.invoke(cli, ["check-spec", "missing.step", str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("positions_mm[0]" in error for error in parsed["errors"])
+
     def test_check_spec_missing_spec_error(self, runner, isolated_dir):
         step = _plate_with_two_holes_step(isolated_dir)
 
@@ -198,3 +220,150 @@ class TestCheckSpecCommand:
         assert parsed["command"] == "check-spec"
         assert parsed["status"] == "unsupported_format"
         assert "STEP/STP/BREP" in parsed["message"]
+
+    def test_check_spec_passes_positioned_holes(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "mounts",
+                    "type": "hole",
+                    "axis": "z",
+                    "diameter_mm": 6,
+                    "positions_mm": [[-10, 0], [10, 0]],
+                    "position_tolerance_mm": 0.05,
+                }
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is True
+        feature = parsed["matched_features"][0]
+        assert feature["type"] == "hole"
+        assert feature["passed"] is True
+        assert feature["max_position_error_mm"] == 0
+        assert feature["measured"]["measured_count"] == 2
+
+    def test_check_spec_reports_hole_position_error_and_count(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "mounts",
+                    "type": "hole",
+                    "axis": "z",
+                    "diameter_mm": 6,
+                    "positions_mm": [[-9, 0], [10, 0]],
+                    "position_tolerance_mm": 0.05,
+                }
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is False
+        feature = parsed["matched_features"][0]
+        assert feature["passed"] is False
+        assert feature["count_error"] == 0
+        assert feature["measured"]["missing_positions_mm"] == [[-9.0, 0.0]]
+        assert feature["measured"]["extra_holes"][0]["position_mm"] == [-10.0, 0.0]
+        assert feature["max_position_error_mm"] == 1.0
+
+    def test_check_spec_material_and_keepout_probes(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "hole_void",
+                    "type": "keepout",
+                    "box_mm": [-11, -1, 0.5, -9, 1, 2],
+                    "max_volume_mm3": 0,
+                },
+                {
+                    "name": "plate_material",
+                    "type": "material",
+                    "box_mm": [0, 0, 0.5, 1, 1, 1.5],
+                    "min_volume_mm3": 0.5,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is True
+        by_name = {row["name"]: row for row in parsed["matched_features"]}
+        assert by_name["hole_void"]["measured"]["volume_mm3"] == 0
+        assert by_name["plate_material"]["measured"]["volume_mm3"] == pytest.approx(1)
+        assert by_name["plate_material"]["volume_margin_mm3"] == pytest.approx(0.5)
+
+    def test_check_spec_reports_failed_material_and_keepout_probes(
+        self, runner, isolated_dir
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "solid_keepout",
+                    "type": "keepout",
+                    "box_mm": [0, 0, 0.5, 1, 1, 1.5],
+                    "max_volume_mm3": 0,
+                },
+                {
+                    "name": "empty_material",
+                    "type": "material",
+                    "box_mm": [-11, -1, 0.5, -9, 1, 2],
+                    "min_volume_mm3": 0.5,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is False
+        by_name = {row["name"]: row for row in parsed["matched_features"]}
+        assert by_name["solid_keepout"]["passed"] is False
+        assert by_name["empty_material"]["passed"] is False
+        assert by_name["solid_keepout"]["measured"]["volume_mm3"] == pytest.approx(1)
+
+    def test_check_spec_rejects_invalid_hole_and_probe_fields(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "mounts",
+                    "type": "hole",
+                    "axis": "z",
+                    "diameter_mm": 6,
+                    "positions_mm": [[0, 0], [0, 0]],
+                },
+                {
+                    "name": "void",
+                    "type": "keepout",
+                    "box_mm": [1, 1, 1, 0, 2, 2],
+                },
+                {
+                    "name": "boss",
+                    "type": "material",
+                    "box_mm": [0, 0, 0, 1, 1, 1],
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        errors = " ".join(parsed["errors"])
+        assert "positions_mm" in errors
+        assert "box_mm" in errors
+        assert "min_volume_mm3" in errors
