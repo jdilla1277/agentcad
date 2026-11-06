@@ -70,10 +70,13 @@ def test_history_list_show_use_ids_and_preserve_every_saved_byte(
     )
     assert shown["diagnostics"]["message"] or shown["diagnostics"]["error"]
     assert shown["checks"]["validation_state"] == "invalid"
-    assert (
-        invoke(runner, ["changes", "show", "accepted"])["change"]["revision_id"]
-        == base["change"]["revision_id"]
-    )
+    accepted = invoke(runner, ["changes", "show", "accepted"])
+    assert accepted["change"]["revision_id"] == base["change"]["revision_id"]
+    assert accepted["promotions"][0]["promotion"]["outcome"] == "promoted"
+    assert "current_advanced" not in accepted["promotions"][0]
+    assert json.loads(Path(accepted["records"]["promotion_history"]).read_text())[
+        "promotion_state"
+    ]["operations"]
     assert snapshot(isolated_dir) == before
 
 

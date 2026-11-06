@@ -209,7 +209,11 @@ class ChangeHistory:
         )
         artifacts = (outcome or {}).get("artifacts", [])
         promotions = [
-            self.promotions._response_fields(op)
+            {
+                key: value
+                for key, value in self.promotions._response_fields(op).items()
+                if key != "current_advanced"
+            }
             for op in state["operations"].values()
             if op["request"]["candidate"]["revision_id"] == revision
         ]
@@ -245,6 +249,7 @@ class ChangeHistory:
                     else None
                 ),
                 "outcome": diagnostics["path"],
+                "promotion_history": str(self.store.root / "agentcad.json"),
             },
             "artifacts": [self._artifact(artifact) for artifact in artifacts[:50]],
             "artifact_count": len(artifacts),
