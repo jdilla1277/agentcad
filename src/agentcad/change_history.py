@@ -274,10 +274,7 @@ class ChangeHistory:
         directory = self.store._path(".agentcad/changes/attempts")
         index = []
         for path in directory.iterdir() if directory.exists() else []:
-            if (
-                not _REVISION.fullmatch(path.name)
-                or not (path / "request.json").exists()
-            ):
+            if not _REVISION.fullmatch(path.name) or not path.is_dir():
                 continue
             try:
                 request = Attempt(self.store, path.name)._read(

@@ -490,17 +490,50 @@ def test_bounded_diagnostics_and_artifacts_keep_full_immutable_records(
     assert snapshot(isolated_dir) == before
 
 
-def test_bad_cursor_and_corrupt_request_preserve_other_rows(
-    runner, isolated_dir, history
+@pytest.mark.parametrize("damage", ["corrupt", "missing"])
+@pytest.mark.parametrize("damaged_index", [0, 1], ids=["older", "latest"])
+def test_bad_cursor_and_damaged_request_preserve_other_rows(
+    runner, isolated_dir, history, damage, damaged_index
 ):
-    base, failed = history
-    request = Path(failed["change"]["request"])
-    request.write_text("not valid JSON")
+    damaged = history[damaged_index]
+    healthy = history[1 - damaged_index]
+    request = Path(damaged["change"]["request"])
+    if damage == "missing":
+        request.unlink()
+    else:
+        request.write_text("not valid JSON")
+    (request.parent.parent / ("r_" + "0" * 32)).write_text("not a directory")
+    (request.parent.parent / "unrelated").mkdir()
     before = snapshot(isolated_dir)
     page = invoke(runner, ["changes", "list"])
     assert page["total"] == 2
-    assert page["changes"][0]["revision_id"] == base["change"]["revision_id"]
+    assert page["count"] == 2
+    assert page["changes"][0]["revision_id"] == healthy["change"]["revision_id"]
+    assert page["changes"][0]["integrity"] == "verified"
+    assert page["changes"][1]["revision_id"] == damaged["change"]["revision_id"]
     assert page["changes"][1]["integrity"] == "unavailable"
+    assert page["changes"][1]["message"]
+    assert page["changes"][1]["is_working"] is (damaged_index == 1)
+    assert page["changes"][1]["is_accepted"] is (damaged_index == 0)
+    first = invoke(runner, ["changes", "list", "--limit", "1"])
+    last = invoke(
+        runner, ["changes", "list", "--limit", "1", "--before", first["next_before"]]
+    )
+    assert last["total"] == 2
+    assert last["changes"] == [page["changes"][1]]
+    assert last["next_before"] is None
+    assert (
+        invoke(runner, ["changes", "show", healthy["change"]["revision_id"]])["change"][
+            "integrity"
+        ]
+        == "verified"
+    )
+    assert (
+        invoke(runner, ["changes", "show", damaged["change"]["revision_id"]], 1)[
+            "reason"
+        ]
+        == "change_evidence_unavailable"
+    )
     bad = invoke(runner, ["changes", "list", "--before", "r_" + "f" * 32], 1)
     assert bad["reason"] == "invalid_history_cursor"
     assert snapshot(isolated_dir) == before
