@@ -8,6 +8,11 @@ picture, and submit an edited script as another version.
 The agent still needs an LLM from your agent provider. AgentCAD runs the CAD
 tools; it does not supply the LLM.
 
+For separate first-use instructions, choose [remote CLI](setup/remote-cli.md),
+[remote MCP](setup/remote-mcp.md), or [REST API](setup/api.md). First read
+[cloud access](setup/cloud-access.md): access requires operator approval and
+issued credentials, and the published pilot has no self-service signup or login.
+
 ## Connect directly to a hosted MCP URL
 
 If your host supplies an MCP URL, configure that URL and your issued credentials

@@ -31,6 +31,10 @@ for the baseline, caveats, and next evaluations.
 
 ## Quick start
 
+For separate local CLI, local MCP, remote CLI, remote MCP, and API instructions,
+see [Choose an AgentCAD setup](docs/setup/README.md). Cloud guides describe the
+current operator-issued pilot access and its limits.
+
 Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
 
 ```
@@ -290,16 +294,20 @@ or `detection`, which includes the default fallback). Run
 For native tool integration with Claude Code, Cursor, or Windsurf:
 
 ```bash
-pip install agentcad[mcp]
+pip install 'agentcad[mcp]'
 ```
 
 Extras combine: `pip install "agentcad[mcp,cadquery]"` installs both.
 
-Add to `.mcp.json`:
+For Claude Code, add to `.mcp.json` and use the absolute path to your virtual
+environment's Python:
 
 ```json
-{"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
+{"mcpServers": {"agentcad": {"command": "/absolute/path/to/.venv/bin/python", "args": ["-m", "agentcad.mcp"]}}}
 ```
+
+Other hosts use their own configuration format. See the
+[local MCP guide](docs/setup/local-mcp.md) for a Codex example and connection checks.
 
 For local STEP/STP/BREP files, call `import_cad` with `file`, `cwd`, and
 `initialize=True` to start a project. The default response includes the import
