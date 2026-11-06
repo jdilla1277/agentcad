@@ -59,12 +59,12 @@ way to use the same cloud projects and results.
 Cloud access requires an API address, key ID, and secret issued by your host.
 There is no signup or login screen.
 
-The local cloud adapter is available in AgentCAD 0.7.1. Install it with
-Python 3.10–3.12; this example uses Python 3.12:
+Install the local cloud adapter with Python 3.10–3.12; this example uses
+Python 3.12:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'agentcad[mcp]==0.7.1'
+.venv/bin/python -m pip install 'agentcad[mcp]==0.7.2'
 .venv/bin/agentcad cloud --help
 ```
 
