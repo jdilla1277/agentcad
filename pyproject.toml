@@ -59,6 +59,15 @@ cadquery = [
     "casadi<3.8; sys_platform == 'win32'",
 ]
 mcp = ["mcp>=1.0.0,<2.0"]
+# USDZ export for Apple Quick Look / AR (`--format usdz`). Not installed by
+# default: OpenUSD's usd-core is a large native wheel (~200 MB installed)
+# under its own license (TOST 1.0, not Apache-2.0), so it stays opt-in.
+# Lower bound: 26.3 is the first wheel whose UsdValidation shader checks load
+# (25.8's report a missing shader registry and fail every USDZ). Upper bound:
+# OpenUSD makes breaking schema/runtime changes between major versions.
+# 26.x wheels cover CPython 3.10-3.12 on macOS universal2, Windows x86-64,
+# and glibc>=2.28 Linux x86-64; there is no Linux ARM wheel.
+usdz = ["usd-core>=26.3,<27"]
 # pyyaml: tests/test_generate_skill_md.py parses SKILL.md frontmatter. It
 # used to arrive transitively through CadQuery's trame dependency; the
 # default profile has no CadQuery, so declare it.

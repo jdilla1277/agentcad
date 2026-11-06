@@ -23,7 +23,7 @@ name: agentcad
 description: >
   CAD tool for AI agents. Use when the user asks you to design, model, or build
   a 3D object. agentcad executes build123d Python scripts and produces STEP
-  files, PNG renders, mesh exports (STL/GLB/OBJ), and geometric metrics.
+  files, PNG renders, mesh exports (STL/GLB/OBJ, optional USDZ), and geometric metrics.
 compatibility: Requires Python 3.10-3.12 and agentcad installed (pip install agentcad).
 allowed-tools: Bash(agentcad:*)
 ---
@@ -36,7 +36,7 @@ name: agentcad
 description: >
   CAD tool for AI agents. Use when the user asks you to design, model, or build
   a 3D object in an existing CadQuery compatibility project. agentcad
-  produces STEP files, PNG renders, mesh exports (STL/GLB/OBJ), and metrics.
+  produces STEP files, PNG renders, mesh exports (STL/GLB/OBJ, optional USDZ), and metrics.
 compatibility: Requires Python 3.10-3.12 and the CadQuery extra installed (pip install "agentcad[cadquery]").
 allowed-tools: Bash(agentcad:*)
 ---

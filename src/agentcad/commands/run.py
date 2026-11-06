@@ -21,8 +21,10 @@ from agentcad.commands._daemon_routing import (
 )
 from agentcad.commands.export_cmd import (
     NO_FORMATS_MESSAGE,
+    SUPPORTED_FORMATS_TEXT,
     parse_export_formats,
     unsupported_export_formats,
+    usdz_preflight,
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import load_manifest
@@ -1188,7 +1190,7 @@ def _assign_part_identity(raw_parts):
         "azimuth:elevation angles, or a mix such as front,45:30."
     ),
 )
-@click.option("--export", default=None, help="Comma-separated mesh formats (stl, glb, obj). STEP is always produced; read outputs.step.")
+@click.option("--export", default=None, help='Comma-separated mesh formats (stl, glb, obj, usdz; usdz needs pip install "agentcad[usdz]"). STEP is always produced; read outputs.step.')
 @click.option(
     "--preview/--no-preview",
     default=True,
@@ -1298,7 +1300,7 @@ def run(
                 "status": "error",
                 "message": (
                     f"Unsupported format(s): {', '.join(invalid)}. "
-                    "Supported: stl, glb, obj. STEP is always produced by a successful "
+                    f"Supported: {SUPPORTED_FORMATS_TEXT}. STEP is always produced by a successful "
                     "run; read outputs.step. --export is only for mesh formats."
                 ),
                 "next_actions": [_run_retry_command(
@@ -1307,6 +1309,12 @@ def run(
                     ) or None,
                 )],
             })
+            sys.exit(1)
+        # A missing optional OpenUSD must stop the run before the script runs
+        # or a version is allocated, not after the STEP is committed.
+        unavailable = usdz_preflight("run", export)
+        if unavailable:
+            _emit_run(unavailable)
             sys.exit(1)
 
     # M60 Phase 2 (slice 2b): suffix-dispatch CAD files to `agentcad import`.
@@ -2073,6 +2081,12 @@ def _run_impl(
                 obj_path = version_dir / "output.obj"
                 export_obj(topo_shape, str(obj_path))
                 exports_meta["obj"] = f"{dir_name}/output.obj"
+            elif fmt == "usdz":
+                from agentcad.usdz import export_usdz
+
+                usdz_path = version_dir / "output.usdz"
+                export_usdz(topo_shape, str(usdz_path), parts=glb_parts)
+                exports_meta["usdz"] = f"{dir_name}/output.usdz"
             mesh_validation[fmt] = validate_written_mesh(version_dir / f"output.{fmt}")
             warnings.extend(mesh_warnings({fmt: mesh_validation[fmt]}))
             lifecycle.meta["outputs"].update(exports_meta)

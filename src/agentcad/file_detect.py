@@ -13,7 +13,7 @@ from typing import Optional
 TIER0_BREP = "tier0_brep"               # STEP / BREP — full edit support
 TIER1_MESH = "tier1_mesh"               # STL — inspect-only
 TIER2_RECOGNIZED = "tier2_recognized"   # IGES / 3MF / OBJ / DXF / SVG — deferred
-DISPLAY_FORMAT = "display_format"       # GLB / GLTF / PLY — export/display only
+DISPLAY_FORMAT = "display_format"       # GLB / GLTF / PLY / USDZ — export/display only
 UNKNOWN_FORMAT = "unknown_format"       # extension not recognized
 MALFORMED = "malformed"                 # extension says X, content says Y
 EMPTY = "empty"                         # zero bytes
@@ -35,6 +35,7 @@ _EXT_TO_FORMAT = {
     ".glb": "glb",
     ".gltf": "gltf",
     ".ply": "ply",
+    ".usdz": "usdz",
 }
 
 def is_recognized_cad_extension(path) -> bool:
@@ -58,12 +59,14 @@ _FORMAT_TO_CATEGORY = {
     "glb": DISPLAY_FORMAT,
     "gltf": DISPLAY_FORMAT,
     "ply": DISPLAY_FORMAT,
+    "usdz": DISPLAY_FORMAT,
 }
 
 # Magic-byte format names that are *compatible* with a given extension.
 # Used so we don't flag a real 3MF (ZIP container) as malformed.
 _COMPATIBLE_MAGIC = {
     "3mf": {"zip"},
+    "usdz": {"zip"},
 }
 
 

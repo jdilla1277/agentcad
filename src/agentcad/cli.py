@@ -136,8 +136,9 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          denotes an output path.
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
                          front,right,45:30
-    --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
-                         outputs.glb; viewer_glb normally generates separately.
+    --export FORMATS     Comma-separated stl, glb, obj, usdz. Explicit GLB appears
+                         in outputs.glb; viewer_glb normally generates separately.
+                         usdz needs pip install "agentcad[usdz]".
                          STEP is always produced; read outputs.step.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
@@ -168,8 +169,10 @@ COMMAND REFERENCE: RENDER, EXPORT, AND REVIEW
     azimuth:elevation, or a mix. Camera options: --zoom N, --size WxH,
     --msaa N, --focus x,y,z, --no-fit, and --name LABEL (single view only).
 
-  agentcad export STEP --format stl,glb,obj
-    Export one or more mesh formats. GLB auto-colors individual solids.
+  agentcad export STEP --format stl,glb,obj,usdz
+    Export one or more mesh formats. GLB and USDZ auto-color individual solids.
+    USDZ (Apple Quick Look/AR, millimetre scale) needs the optional extra:
+    pip install "agentcad[usdz]".
 
   agentcad view FILE [FILE_B] [--overlay] [--measure] [--spec spec.json]
     Open an explicit browser review for STEP/STP or GLB; STEP auto-converts.

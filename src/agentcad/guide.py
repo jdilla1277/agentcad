@@ -312,6 +312,7 @@ identifies the tracked deliverable.
 | `agentcad run ... --params k=v,k=v` | Override script parameters |
 | `agentcad render STEP --view SPEC` | Post-hoc renders with camera control |
 | `agentcad export STEP --format stl,glb` | Post-hoc mesh export |
+| `agentcad export STEP --format usdz` | Apple Quick Look/AR file (needs `pip install "agentcad[usdz]"`) |
 | `agentcad measure STEP` | Dimensional report (overall metrics + feature sizes) |
 | `agentcad check-spec STEP spec.json` | Pass/fail checklist against intended cylindrical features |
 | `agentcad inspect STEP` | Bounded topology report with observable validation phases |

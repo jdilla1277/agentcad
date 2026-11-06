@@ -2,7 +2,7 @@
 
 **CAD tool for AI agents.** Give your coding agent the ability to design 3D models.
 
-Your agent writes build123d Python scripts by default. agentcad handles execution, STEP export, PNG rendering, mesh export (STL/GLB/OBJ), geometric metrics, validation, diffing, and browser preview. CadQuery remains available as an explicit compatibility mode. Each command's final response is structured JSON on stdout.
+Your agent writes build123d Python scripts by default. agentcad handles execution, STEP export, PNG rendering, mesh export (STL/GLB/OBJ, plus optional USDZ), geometric metrics, validation, diffing, and browser preview. CadQuery remains available as an explicit compatibility mode. Each command's final response is structured JSON on stdout.
 
 > **Reading the output:** the JSON response is written to **stdout**; human-readable progress and diagnostics go to **stderr**. Parse stdout as JSON and treat stderr as plain text — don't merge the streams with `2>&1` before a JSON parser, or the progress lines will break parsing. If you need both, capture them separately.
 
@@ -70,6 +70,7 @@ label, never a destination. See `agentcad docs artifacts` for the full contract.
 - **`agentcad run ... --preview`** — four-view PNG for visual verification; the browser viewer can export an on-demand turntable GIF
 - **`agentcad run ... --render iso,front`** — high-quality PNG views
 - **`agentcad run ... --export stl,glb`** — mesh export for 3D printing or web viewers
+- **`agentcad export output.step --format usdz`** — USDZ for Apple Quick Look and AR at real-world scale (optional extra, see [USDZ export](#usdz-export))
 - **`agentcad measure output.step`** — dimensional report (overall metrics, edge lengths, face areas, circular/cylindrical diameters)
 - **`agentcad check-spec output.step spec.json`** — compare measured cylindrical features against an explicit checklist
 - **`agentcad inspect output.step`** — bounded topology deep-dive with observable loading, validity, and extraction phases
@@ -184,6 +185,33 @@ Run responses identify the selection in `runtime_source` (`command`, `project`,
 or `detection`, which includes the default fallback). Run
 `agentcad docs runtimes` for the complete dispatch contract.
 
+## USDZ export
+
+USDZ opens directly in Apple Quick Look on macOS, iPhone, iPad, and Apple
+Vision Pro, at real-world size. It needs OpenUSD, which is not installed by
+default:
+
+```bash
+pip install "agentcad[usdz]"
+agentcad daemon restart   # if a daemon was already running
+agentcad export v1_first/output.step --format usdz
+agentcad run model.py --label ar-review --export usdz
+```
+
+Each captured part becomes a separately named, colored mesh (STEP-only input:
+one mesh per solid). Units are millimetres (`metersPerUnit = 0.001`) and the
+file is Y-up, like GLB. Like other mesh exports, the written file is reopened
+and checked: `mesh_validation.usdz` covers the package, the USD stage, and the
+closed-manifold mesh check. USDZ is a tessellated presentation file; STEP
+remains the precise CAD deliverable.
+
+The extra installs [`usd-core`](https://pypi.org/project/usd-core/)
+(OpenUSD, roughly 200 MB installed) under the TOST 1.0 license rather than
+Apache-2.0; review it before redistributing. Wheels exist for Python 3.10-3.12
+on macOS, Windows x86-64, and Linux x86-64 (glibc 2.28+); there is no Linux
+ARM wheel. Requesting `usdz` without the extra returns a structured error with
+the install command before any script runs or file is written.
+
 ## MCP integration
 
 For native tool integration with Claude Code, Cursor, or Windsurf:
@@ -192,7 +220,8 @@ For native tool integration with Claude Code, Cursor, or Windsurf:
 pip install agentcad[mcp]
 ```
 
-Extras combine: `pip install "agentcad[mcp,cadquery]"` installs both.
+Extras combine: `pip install "agentcad[mcp,cadquery]"` installs both; add
+`usdz` the same way.
 
 Add to `.mcp.json`:
 

@@ -116,7 +116,8 @@ def run(
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Initialize this root first.
         render: Comma-separated views to render (front,right,top,iso,all).
-        export: Comma-separated mesh formats (stl, glb, obj).
+        export: Comma-separated mesh formats (stl, glb, obj, usdz). usdz needs
+            pip install "agentcad[usdz]"; without it the call errors first.
         preview: Render a quick 256x256 iso preview. Default True — pass False to suppress.
         params: Parameter overrides as key=value,key=value.
         dry_run: Compute metrics without creating a version.
@@ -190,7 +191,7 @@ def render(
 
 @mcp.tool()
 def export(step_file: str, formats: str, cwd: str, build_dir: str | None = None) -> dict:
-    """Export a STEP file to mesh formats (stl, glb, obj).
+    """Export a STEP file to mesh formats (stl, glb, obj, usdz).
 
     Returns source CAD validation separately from mesh_validation per written
     format. Success means files were written; require that mesh's is_valid is
@@ -198,7 +199,9 @@ def export(step_file: str, formats: str, cwd: str, build_dir: str | None = None)
 
     Args:
         step_file: Path to the STEP file.
-        formats: Comma-separated formats (stl, glb, obj).
+        formats: Comma-separated formats (stl, glb, obj, usdz). usdz (Apple Quick
+            Look/AR) needs pip install "agentcad[usdz]"; without it the call
+            returns error_kind=optional_dependency_missing and writes nothing.
         cwd: Source project directory (or a subdirectory).
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Use returned artifact paths.

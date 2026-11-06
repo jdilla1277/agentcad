@@ -19,22 +19,26 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install agentcad + test dependencies + CadQuery extra
+      - name: Install agentcad + test dependencies + CadQuery and USDZ extras
         # The full profile. The CadQuery compatibility suite in tests/ builds
-        # its fixtures with CadQuery, so it only collects here.
-        run: pip install -e .[mcp,dev,cadquery]
+        # its fixtures with CadQuery, so it only collects here. The usdz extra
+        # (OpenUSD) lets the USDZ writer/checker tests run instead of skip.
+        run: pip install -e .[mcp,dev,cadquery,usdz]
 
       - name: Verify both runtimes import on a clean install
         # Catches dependency-resolution breakage (e.g. a second OCP generation
         # pulled in by an unpinned transitive dep) that pip and `pip check`
         # both miss. Nothing else in this workflow imports build123d.
-        run: python -c "import build123d, cadquery; print(build123d.__version__)"
+        run: python -c "import build123d, cadquery; from pxr import Usd; print(build123d.__version__, Usd.GetVersion())"
 
       - name: Collect tests
         run: pytest --collect-only -q
 
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
+
+      - name: Run USDZ export suite (OpenUSD installed)
+        run: pytest tests/test_usdz_export.py tests/test_usdz_cadquery.py -q -rs
 
       - name: Install Linux render smoke dependencies
         run: |
@@ -70,14 +74,15 @@ jobs:
       - name: Install agentcad + test dependencies (no cadquery extra)
         run: pip install -e .[mcp,dev]
 
-      - name: Verify CadQuery and CasADi are absent
+      - name: Verify CadQuery, CasADi, and OpenUSD are absent
         run: |
           python - <<'PY'
           import importlib.util, sys
-          missing = [m for m in ("cadquery", "casadi") if importlib.util.find_spec(m) is None]
-          if missing != ["cadquery", "casadi"]:
-              sys.exit(f"default profile must not include cadquery/casadi; found: {set(['cadquery','casadi']) - set(missing)}")
-          print("cadquery and casadi absent")
+          optional = ("cadquery", "casadi", "pxr")
+          present = [m for m in optional if importlib.util.find_spec(m) is not None]
+          if present:
+              sys.exit(f"default profile must not include optional extras; found: {present}")
+          print("cadquery, casadi, and pxr (OpenUSD) absent")
           PY
           python -c "import build123d; print(build123d.__version__)"
 
@@ -100,7 +105,7 @@ jobs:
             tests/test_build123d_primitive_aliases.py \
             tests/test_bbox_coordinates.py \
             tests_b3d/test_duplicate_capture.py \
-            tests/test_cadquery_optional.py tests/test_written_mesh_validation.py tests/test_run_guidance.py tests_b3d/test_step_output_contract.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py -q
+            tests/test_cadquery_optional.py tests/test_usdz_export.py tests/test_written_mesh_validation.py tests/test_run_guidance.py tests_b3d/test_step_output_contract.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py -q
 
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q

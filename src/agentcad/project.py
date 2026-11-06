@@ -333,6 +333,7 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         "glb",
         "stl",
         "obj",
+        "usdz",
         "html",
         "overlay",
         "side_by_side",

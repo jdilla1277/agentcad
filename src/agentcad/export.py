@@ -4,6 +4,7 @@ import math
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+from OCP.BRepLib import BRepLib_ToolTriangulatedShape
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.Message import Message_ProgressRange
 from OCP.RWGltf import RWGltf_CafWriter
@@ -182,6 +183,49 @@ def export_stl(shape, output_path, linear_deflection=0.1):
         raise RuntimeError(f"OCCT STL write failed for {output_path}")
 
 
+def face_triangulations(shape, with_normals=False):
+    """Yield ``(points, triangles, normals)`` for each meshed face of ``shape``.
+
+    ``points`` are world-space ``(x, y, z)`` tuples for this face's nodes,
+    ``triangles`` are 0-based index triples into ``points`` wound outward
+    (reversed faces and mirroring locations are flipped), and ``normals`` is
+    one outward unit normal per point when ``with_normals`` is set, else
+    ``None``. Every face is visited, including loose faces outside solids.
+    Faces without a triangulation are skipped; call
+    ``BRepMesh_IncrementalMesh`` first.
+    """
+    explorer = TopExp_Explorer(shape, TopAbs_FACE)
+    while explorer.More():
+        face = TopoDS.Face_s(explorer.Current())
+        explorer.Next()
+        location = TopLoc_Location()
+        triangulation = BRep_Tool.Triangulation_s(face, location)
+        if triangulation is None:
+            continue
+        trsf = location.Transformation()
+        flip = (face.Orientation() == TopAbs_REVERSED) != trsf.IsNegative()
+        points = []
+        for i in range(1, triangulation.NbNodes() + 1):
+            node = triangulation.Node(i).Transformed(trsf)
+            points.append((node.X(), node.Y(), node.Z()))
+        triangles = []
+        for i in range(1, triangulation.NbTriangles() + 1):
+            n1, n2, n3 = triangulation.Triangle(i).Get()
+            if flip:
+                n2, n3 = n3, n2
+            triangles.append((n1 - 1, n2 - 1, n3 - 1))
+        normals = None
+        if with_normals:
+            if not triangulation.HasNormals():
+                BRepLib_ToolTriangulatedShape.ComputeNormals_s(face, triangulation)
+            sign = -1.0 if face.Orientation() == TopAbs_REVERSED else 1.0
+            normals = []
+            for i in range(1, triangulation.NbNodes() + 1):
+                n = triangulation.Normal(i).Transformed(trsf)
+                normals.append((sign * n.X(), sign * n.Y(), sign * n.Z()))
+        yield points, triangles, normals
+
+
 def export_obj(shape, output_path, linear_deflection=0.1):
     """Export an OCP TopoDS_Shape to Wavefront OBJ.
 
@@ -193,49 +237,18 @@ def export_obj(shape, output_path, linear_deflection=0.1):
     vertices = []
     face_normals = []  # one normal per triangle
     triangles = []
-    v_offset = 0
 
-    explorer = TopExp_Explorer(shape, TopAbs_FACE)
-    while explorer.More():
-        face = TopoDS.Face_s(explorer.Current())
-        location = TopLoc_Location()
-        triangulation = BRep_Tool.Triangulation_s(face, location)
-        if triangulation is None:
-            explorer.Next()
-            continue
-
-        trsf = location.Transformation()
-        nb_nodes = triangulation.NbNodes()
-        nb_tris = triangulation.NbTriangles()
-
-        # Extract vertices
-        for i in range(1, nb_nodes + 1):
-            node = triangulation.Node(i).Transformed(trsf)
-            vertices.append((node.X(), node.Y(), node.Z()))
-
-        # Extract triangles and compute per-face normals
-        for i in range(1, nb_tris + 1):
-            tri = triangulation.Triangle(i)
-            n1, n2, n3 = tri.Get()
-            if face.Orientation() == TopAbs_REVERSED:
-                n2, n3 = n3, n2
-            i1 = n1 + v_offset
-            i2 = n2 + v_offset
-            i3 = n3 + v_offset
-            triangles.append((i1, i2, i3))
-
-            # Compute face normal from vertices
-            v0 = vertices[i1 - 1]
-            v1 = vertices[i2 - 1]
-            v2 = vertices[i3 - 1]
+    for points, face_triangles, _ in face_triangulations(shape):
+        v_offset = len(vertices)
+        vertices.extend(points)
+        for a, b, c in face_triangles:
+            triangles.append((a + v_offset + 1, b + v_offset + 1, c + v_offset + 1))
+            v0, v1, v2 = points[a], points[b], points[c]
             normal = _cross_normalize(
                 v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2],
                 v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2],
             )
             face_normals.append(normal)
-
-        v_offset += nb_nodes
-        explorer.Next()
 
     with open(output_path, "w") as f:
         f.write("# agentcad OBJ export\n")

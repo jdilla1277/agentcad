@@ -12,7 +12,11 @@ from agentcad.commands._daemon_routing import (
 )
 from agentcad.commands._input_recovery import missing_step_payload
 
-VALID_FORMATS = {"stl", "glb", "obj"}
+VALID_FORMATS = {"stl", "glb", "obj", "usdz"}
+# Shared wording for every "Supported:" message. USDZ needs the optional
+# `usdz` extra (OpenUSD); requesting it without the extra fails in
+# ``usdz_preflight`` before any work, with the install command.
+SUPPORTED_FORMATS_TEXT = 'stl, glb, obj, usdz (usdz needs pip install "agentcad[usdz]")'
 
 
 def parse_export_formats(formats: str) -> list[str]:
@@ -33,7 +37,44 @@ def unsupported_export_formats(formats: str) -> list[str]:
 # identically. Dropping blanks makes ``stl,`` trim cleanly, but when EVERY entry
 # is blank (``--format ","``) the result is an empty list, which would otherwise
 # export nothing and still report success.
-NO_FORMATS_MESSAGE = "No export formats specified. Supported: stl, glb, obj"
+NO_FORMATS_MESSAGE = f"No export formats specified. Supported: {SUPPORTED_FORMATS_TEXT}"
+
+
+def usdz_preflight(command, formats):
+    """Return the missing/broken-OpenUSD error payload if USDZ is requested
+    but cannot run, else None. Called before loading geometry, running a
+    script, daemon routing, version allocation, or writing any format."""
+    if "usdz" not in parse_export_formats(formats):
+        return None
+    from agentcad.usdz import usdz_unavailable_payload
+    return usdz_unavailable_payload(command)
+
+
+# Formats that carry per-part names and colors when written by `run`.
+_PART_AWARE_FORMATS = {"glb", "usdz"}
+
+
+def _part_loss_warning(meta, fmt):
+    """Warn when a standalone export replaces a run's part-aware mesh.
+
+    Export only has the STEP, so it writes one mesh per solid with palette
+    colors; the run's captured part ids and requested colors are not in it.
+    """
+    parts = meta.get("parts") or []
+    if fmt not in _PART_AWARE_FORMATS or not fmt_in_outputs(meta, fmt):
+        return None
+    if len(parts) < 2 and not any(p.get("color") for p in parts):
+        return None
+    return (
+        f"{fmt.upper()} replaced this version's run-written file, which kept its "
+        f"{len(parts)} captured part name(s)/color(s). Export reads only the STEP, "
+        "so it writes one mesh per solid with palette colors. For part names and "
+        f"colors, use `agentcad run SCRIPT --label LABEL --export {fmt}`."
+    )
+
+
+def fmt_in_outputs(meta, fmt):
+    return bool((meta.get("outputs") or {}).get(fmt))
 
 
 def _is_version_dir(directory):
@@ -43,11 +84,14 @@ def _is_version_dir(directory):
 
 @click.command("export")
 @click.argument("step_file")
-@click.option("--format", "formats", required=True, help="Comma-separated mesh formats: stl, glb, obj")
+@click.option("--format", "formats", required=True, help='Comma-separated mesh formats: stl, glb, obj, usdz. usdz needs pip install "agentcad[usdz]".')
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @project_options
 def export_cmd(step_file, formats, no_daemon):
-    """Export a STEP file to mesh formats (STL, GLB, OBJ)."""
+    """Export a STEP file to mesh formats (STL, GLB, OBJ, USDZ).
+
+    USDZ (Apple Quick Look / AR) is optional: pip install "agentcad[usdz]".
+    """
     # Reject invalid formats before constructing any missing-path retry.
     fmt_list = parse_export_formats(formats)
     if not fmt_list:
@@ -64,12 +108,17 @@ def export_cmd(step_file, formats, no_daemon):
             "command": "export",
             "status": "error",
             "message": (
-                f"Unsupported format(s): {', '.join(invalid)}. Supported: stl, glb, obj. "
+                f"Unsupported format(s): {', '.join(invalid)}. Supported: {SUPPORTED_FORMATS_TEXT}. "
                 "The input is already STEP; a successful run returns it in outputs.step. "
                 "Export is only for mesh formats."
             ),
             "next_actions": ["agentcad export --help"],
         }))
+        sys.exit(1)
+
+    unavailable = usdz_preflight("export", formats)
+    if unavailable:
+        click.echo(json.dumps(unavailable))
         sys.exit(1)
 
     step_path = Path(step_file)
@@ -110,6 +159,11 @@ def export_cmd(step_file, formats, no_daemon):
     # Export each format
     outputs = {}
     mesh_validation = {}
+    part_warnings = []
+    version_meta = (
+        json.loads((parent_dir / "meta.json").read_text())
+        if _is_version_dir(parent_dir) else {}
+    )
     for fmt in fmt_list:
         out_path = parent_dir / f"{stem}.{fmt}"
         if get_project().configured:
@@ -124,6 +178,9 @@ def export_cmd(step_file, formats, no_daemon):
             elif fmt == "obj":
                 from agentcad.export import export_obj
                 export_obj(topo_shape, str(out_path))
+            elif fmt == "usdz":
+                from agentcad.usdz import export_usdz
+                export_usdz(topo_shape, str(out_path))
             if not out_path.is_file():
                 raise RuntimeError("Writer did not produce a file.")
         except Exception as exc:
@@ -137,6 +194,9 @@ def export_cmd(step_file, formats, no_daemon):
             sys.exit(1)
         outputs[fmt] = str(out_path)
         mesh_validation[fmt] = validate_written_mesh(out_path)
+        warning = _part_loss_warning(version_meta, fmt)
+        if warning:
+            part_warnings.append(warning)
 
         # Preserve earlier outputs/checks if a later requested writer fails.
         if _is_version_dir(parent_dir):
@@ -153,7 +213,7 @@ def export_cmd(step_file, formats, no_daemon):
         "is_valid": validation["is_valid"],
         "validation": validation,
         "mesh_validation": mesh_validation,
-        "warnings": mesh_warnings(mesh_validation),
+        "warnings": mesh_warnings(mesh_validation) + part_warnings,
     }))
 
     maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)

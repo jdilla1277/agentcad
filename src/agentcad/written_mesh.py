@@ -2,7 +2,8 @@
 
 This deliberately supports the static, uncompressed triangle subset we write,
 not general-purpose mesh import. Unsupported features are unknown, not valid.
-GLB scene instances keep separate topology; STL/OBJ have no body identity.
+GLB scene instances and USD mesh prims keep separate topology; STL/OBJ have
+no body identity. USDZ checks need OpenUSD (the optional ``usdz`` extra).
 Only exactly equal stored positions are welded, never a distance tolerance.
 """
 
@@ -200,6 +201,202 @@ def _glb(data):
     return meshes
 
 
+# OpenUSD validators run on reopened USDZ packages when the installed
+# OpenUSD exposes them. Errors fail the file; warnings are reported only.
+_USD_VALIDATORS = (
+    'usdValidation:CompositionErrorTest',
+    'usdValidation:StageMetadataChecker',
+    'usdGeomValidators:StageMetadataChecker',
+    'usdGeomValidators:EncapsulationChecker',
+    'usdShadeValidators:MaterialBindingApiAppliedValidator',
+    'usdShadeValidators:MaterialBindingRelationships',
+    'usdShadeValidators:EncapsulationRulesValidator',
+    'usdShadeValidators:ShaderSdrCompliance',
+    'usdUtilsValidators:MissingReferenceValidator',
+    'usdUtilsValidators:RootPackageValidator',
+    'usdUtilsValidators:UsdzPackageValidator',
+    'usdUtilsValidators:PackageEncapsulationValidator',
+    'usdUtilsValidators:FileExtensionValidator',
+)
+_USD_PRIM_TYPES = {'Xform', 'Scope', 'Mesh', 'Material', 'Shader'}
+# Shader ids AR Quick Look renders (Apple's ARKit USDZ subset).
+_USD_ARKIT_SHADERS = {'UsdPreviewSurface', 'UsdUVTexture', 'UsdTransform2d',
+                      'UsdPrimvarReader_float', 'UsdPrimvarReader_float2',
+                      'UsdPrimvarReader_float3', 'UsdPrimvarReader_float4',
+                      'UsdPrimvarReader_int', 'UsdPrimvarReader_string',
+                      'UsdPrimvarReader_normal', 'UsdPrimvarReader_point',
+                      'UsdPrimvarReader_vector', 'UsdPrimvarReader_matrix'}
+_USD_LAYER_SUFFIXES = ('.usdc', '.usda', '.usd')
+
+
+def _usdz_container(data):
+    """USDZ zip rules: stored, unencrypted, 64-byte aligned, a USD layer first.
+
+    https://openusd.org/release/spec_usdz.html
+    """
+    import io
+    import zipfile
+    import zlib
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        infos = archive.infolist()
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, EOFError) as exc:
+        raise ValueError(f'Invalid USDZ zip container: {exc}') from None
+    if not infos:
+        raise ValueError('USDZ package contains no files.')
+    if not infos[0].filename.lower().endswith(_USD_LAYER_SUFFIXES):
+        raise ValueError(f'USDZ first file {infos[0].filename!r} is not a USD layer.')
+    for info in infos:
+        if info.flag_bits & 0x1:
+            raise ValueError(f'USDZ member {info.filename!r} is encrypted.')
+        if info.compress_type != zipfile.ZIP_STORED:
+            raise ValueError(f'USDZ member {info.filename!r} is compressed; USDZ requires stored files.')
+        if info.header_offset + 30 > len(data):
+            raise ValueError(f'USDZ member {info.filename!r} header is truncated.')
+        signature, *_, name_length, extra_length = struct.unpack_from('<IHHHHHIIIHH', data, info.header_offset)
+        if signature != 0x04034b50:
+            raise ValueError(f'USDZ member {info.filename!r} has a corrupt local header.')
+        start = info.header_offset + 30 + name_length + extra_length
+        if start % 64:
+            raise ValueError(f'USDZ member {info.filename!r} data is not 64-byte aligned.')
+        if start + info.file_size > len(data):
+            raise ValueError(f'USDZ member {info.filename!r} data is truncated.')
+        if zlib.crc32(data[start:start + info.file_size]) != info.CRC:
+            raise ValueError(f'USDZ member {info.filename!r} fails its CRC check.')
+    return [info.filename for info in infos]
+
+
+def _usd_compliance(stage):
+    try:
+        from pxr import UsdValidation
+    except ImportError:
+        return {'status': 'unavailable', 'validators': [], 'errors': [], 'warnings': [],
+                'message': 'This OpenUSD build does not expose UsdValidation.'}
+    registry = UsdValidation.ValidationRegistry()
+    names = [name for name in _USD_VALIDATORS if registry.HasValidator(name)]
+    findings = UsdValidation.ValidationContext(registry.GetOrLoadValidatorsByName(names)).Validate(stage)
+    errors, warnings = [], []
+    for finding in findings:
+        kind = finding.GetType()
+        entry = f'{finding.GetName()}: {finding.GetMessage()}'[:500]
+        if kind == UsdValidation.ValidationErrorType.Error:
+            errors.append(entry)
+        elif kind == UsdValidation.ValidationErrorType.Warn:
+            warnings.append(entry)
+    return {'status': 'fail' if errors else 'pass', 'validators': names,
+            'errors': errors[:20], 'warnings': warnings[:20]}
+
+
+def _usdz(data, path):
+    """Reopen a written USDZ with OpenUSD; return meshes and package details.
+
+    Supports the static subset AgentCAD writes: Xform/Scope/Mesh/Material/
+    Shader prims, triangle faces, no subdivision, animation, or instancing.
+    Each mesh prim is one validation component, like a GLB node.
+    """
+    import numpy as np
+
+    members = _usdz_container(data)
+    try:
+        from pxr import Sdf, Tf, Usd, UsdGeom, UsdShade, UsdUtils
+    except ImportError as exc:
+        raise RuntimeError('USDZ validation needs OpenUSD; install it with '
+                           f'pip install "agentcad[usdz]" ({exc}).') from None
+    try:
+        stage = Usd.Stage.Open(str(path), Usd.Stage.LoadAll)
+    except Tf.ErrorException as exc:
+        raise ValueError(f'OpenUSD could not open the package: {str(exc).strip()[:300]}') from None
+    if stage is None:
+        raise ValueError('OpenUSD could not open the package.')
+    default_prim = stage.GetDefaultPrim()
+    if not default_prim:
+        raise ValueError('USDZ stage has no valid defaultPrim.')
+    for key in ('upAxis', 'metersPerUnit'):
+        if not stage.HasAuthoredMetadata(key):
+            raise ValueError(f'USDZ stage does not declare {key}.')
+    up_axis, meters_per_unit = UsdGeom.GetStageUpAxis(stage), UsdGeom.GetStageMetersPerUnit(stage)
+    if up_axis != 'Y' or not math.isclose(meters_per_unit, 0.001):
+        raise ValueError(f'USDZ stage declares upAxis={up_axis} and metersPerUnit={meters_per_unit}; '
+                         'AgentCAD writes upAxis=Y and metersPerUnit=0.001 (millimetres).')
+
+    package = str(Path(path).resolve())
+    layers, assets, unresolved = UsdUtils.ComputeAllDependencies(Sdf.AssetPath(package))
+    if unresolved:
+        raise ValueError(f'USDZ has unresolved dependencies: {", ".join(unresolved[:5])}.')
+    for dependency in [layer.realPath for layer in layers] + list(assets):
+        resolved = str(Path(dependency.split('[', 1)[0]).resolve())
+        if resolved != package:
+            raise ValueError(f'USDZ references an external file: {dependency}.')
+
+    consumer_warnings, meshes = [], []
+    triangle_count = vertex_count = 0
+    for prim in stage.Traverse():
+        type_name = str(prim.GetTypeName())
+        if prim.IsInstance() or prim.IsInstanceable():
+            raise RuntimeError(f'Instanced USD prim {prim.GetPath()} is not supported.')
+        if type_name not in _USD_PRIM_TYPES:
+            raise RuntimeError(f'USD prim {prim.GetPath()} of type {type_name or "(untyped)"} is not '
+                               'supported; only static Xform, Scope, Mesh, Material, and Shader prims are.')
+        if prim.IsA(UsdGeom.Xformable) and UsdGeom.Xformable(prim).TransformMightBeTimeVarying():
+            raise RuntimeError(f'Animated transform on {prim.GetPath()} is not supported.')
+        if type_name == 'Shader':
+            shader_id = UsdShade.Shader(prim).GetShaderId()
+            if shader_id not in _USD_ARKIT_SHADERS:
+                consumer_warnings.append(f'Shader {prim.GetPath()} id {shader_id!r} is outside the AR Quick Look subset.')
+        if type_name != 'Mesh':
+            continue
+        if len(meshes) >= 4096:
+            raise RuntimeError('USD mesh limit exceeded.')
+        mesh = UsdGeom.Mesh(prim)
+        attributes = (mesh.GetPointsAttr(), mesh.GetFaceVertexCountsAttr(), mesh.GetFaceVertexIndicesAttr())
+        if any(attribute.GetNumTimeSamples() for attribute in attributes):
+            raise RuntimeError(f'Animated USD mesh {prim.GetPath()} is not supported.')
+        scheme = mesh.GetSubdivisionSchemeAttr().Get()
+        if scheme != UsdGeom.Tokens.none:
+            raise RuntimeError(f'USD mesh {prim.GetPath()} uses subdivisionScheme={scheme!r}; '
+                               'only "none" (plain triangles) is supported.')
+        points, counts, indices = (np.asarray(attribute.Get() or [], dtype=float if i == 0 else np.int64)
+                                   for i, attribute in enumerate(attributes))
+        vertex_count += len(points)
+        if vertex_count > MAX_VERTICES:
+            raise RuntimeError('Vertex limit exceeded.')
+        if len(counts) and (counts != 3).any():
+            raise RuntimeError(f'USD mesh {prim.GetPath()} has non-triangle faces; only triangles are supported.')
+        triangle_count += len(counts)
+        if triangle_count > MAX_TRIANGLES:
+            raise RuntimeError('Triangle limit exceeded.')
+        points = points.reshape(-1, 3)
+        if int(counts.sum()) != len(indices):
+            raise ValueError(f'USD mesh {prim.GetPath()} faceVertexCounts do not match faceVertexIndices.')
+        if len(indices) and (int(indices.min()) < 0 or int(indices.max()) >= len(points)):
+            raise ValueError(f'USD mesh {prim.GetPath()} has a face vertex index out of range.')
+        triangles = indices.reshape(-1, 3)
+        world = np.array(UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default()))
+        if not np.isfinite(world).all():
+            raise ValueError(f'USD mesh {prim.GetPath()} has a non-finite transform.')
+        if not np.array_equal(world, np.eye(4)):
+            # USD matrices act on row vectors: p' = p @ M.
+            points = points @ world[:3, :3] + world[3, :3]
+        flip = (np.linalg.det(world[:3, :3]) < 0) != (mesh.GetOrientationAttr().Get() == UsdGeom.Tokens.leftHanded)
+        if flip:
+            triangles = triangles[:, [0, 2, 1]]
+        meshes.append((list(map(tuple, points.tolist())), list(map(tuple, triangles.tolist()))))
+
+    compliance = _usd_compliance(stage)
+    if not members[0].lower().endswith('.usdc'):
+        consumer_warnings.append(f'Root layer {members[0]!r} is not binary .usdc as AR Quick Look expects.')
+    compliance['warnings'] = (compliance['warnings'] + consumer_warnings)[:20]
+    if compliance['errors']:
+        raise ValueError('OpenUSD compliance check failed: ' + '; '.join(compliance['errors'][:3]))
+    details = {
+        'members': members[:20], 'default_prim': str(default_prim.GetPath()),
+        'up_axis': str(up_axis), 'meters_per_unit': meters_per_unit,
+        'mesh_prim_count': len(meshes), 'compliance': compliance,
+    }
+    return meshes, details
+
+
 def _check(meshes):
     from agentcad.validation import _UnionFind, _find_pinch_vertex
 
@@ -262,7 +459,7 @@ def _initial(path):
             'sha256': None,
             'triangle_count': None, 'watertight': None, 'manifold': None,
             'first_failure': None, 'undetermined_layer': None, 'layers': {},
-            'welding': 'exact stored coordinates within each GLB node; global for STL/OBJ',
+            'welding': 'exact stored coordinates within each GLB node or USD mesh prim; global for STL/OBJ',
             'scope': 'Closed, consistently wound manifold surface; no self-intersection, '
                      'dimension, material, or printability checks. No mesh repair is performed.'}
 
@@ -276,12 +473,17 @@ def _validate(path, checkpoint):
         if len(data) > MAX_BYTES:
             raise RuntimeError(f'File exceeds {MAX_BYTES} byte validation limit.')
         report['sha256'] = hashlib.sha256(data).hexdigest()
-        reader = {'.stl': _stl, '.obj': _obj, '.glb': _glb}.get(Path(path).suffix.lower())
-        if reader is None:
-            raise RuntimeError('Unsupported written mesh format.')
-        meshes = reader(data)
+        suffix = Path(path).suffix.lower()
+        details = None
+        if suffix == '.usdz':
+            meshes, details = _usdz(data, path)
+        else:
+            reader = {'.stl': _stl, '.obj': _obj, '.glb': _glb}.get(suffix)
+            if reader is None:
+                raise RuntimeError('Unsupported written mesh format.')
+            meshes = reader(data)
         report['triangle_count'] = sum(len(faces) for _, faces in meshes)
-        report['layers']['file_parse'] = {'status': 'pass'}
+        report['layers']['file_parse'] = {'status': 'pass', **({'usdz': details} if details else {})}
         checkpoint(report)
         stage = 'mesh_manifold'
         mesh = _check(meshes)

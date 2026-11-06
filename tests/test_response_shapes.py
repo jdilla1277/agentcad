@@ -1,7 +1,7 @@
 """Contract tests for the JSON response shape of every agentcad command.
 
 The convention is documented in `agentcad docs schema`:
-    outputs — dict of explicit 3D model artifacts (step, script, stl, glb, obj)
+    outputs — dict of explicit 3D model artifacts (step, script, stl, glb, obj, usdz)
     viewer_glb — always-written GLB that backs viewer.html
     renders — dict of 2D PNG renders (named view or custom angle key)
 
@@ -28,7 +28,7 @@ result = cq.Workplane('XY').box(10, 10, 10)
 show_object(result)
 """
 
-THREE_D_KEYS = {"step", "script", "stl", "glb", "obj"}
+THREE_D_KEYS = {"step", "script", "stl", "glb", "obj", "usdz"}
 RENDER_KEY_HINTS = {"iso", "front", "back", "left", "right", "top", "bottom"}
 
 
