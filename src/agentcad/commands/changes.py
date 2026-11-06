@@ -93,7 +93,7 @@ def _emit(action, result, actions=None):
 @click.option("--before", default=None, help="Use next_before from the previous page.")
 @project_options
 def list_changes(limit, before):
-    """List retained attempts newest first, including no-output failures."""
+    """List retained attempts, including failures and unavailable evidence."""
     result = _history().list(limit=limit, before=before)
     actions = (
         [

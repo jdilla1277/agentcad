@@ -810,7 +810,8 @@ def promote(idempotency_key: str, cwd: str, revision: str | None = None,
 def changes_list(cwd: str, build_dir: str | None = None, limit: int = 20, before: str | None = None) -> dict:
     """Read retained CAD attempts, including failures and interrupted work.
 
-    Newest first, limit 1..100 (default 20). Continue with returned next_before.
+    Newest first, limit 1..100 (default 20). Unreadable/missing request records
+    follow attempts with known ordering. Continue with returned next_before.
     Each row uses its immutable r_ revision ID, not a display label. Working and
     accepted selections are separate. Damaged rows report integrity=unavailable;
     other history stays readable. Never selects, accepts, checks or reruns CAD.
