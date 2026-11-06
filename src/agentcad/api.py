@@ -16,6 +16,13 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Callable, Iterator
 
+from agentcad.pcb_enclosure import (
+    BoardSpec,
+    pcb_case,
+    pcb_enclosure,
+    pcb_enclosure_lid,
+    pcb_lid,
+)
 from agentcad.helpers import (
     annular_boss,
     bbox_point,
@@ -223,4 +230,9 @@ __all__ = [
     "rounded_rect_wire",
     "elliptical_sweep",
     "involute_gear_profile",
+    "BoardSpec",
+    "pcb_case",
+    "pcb_lid",
+    "pcb_enclosure",
+    "pcb_enclosure_lid",
 ]
