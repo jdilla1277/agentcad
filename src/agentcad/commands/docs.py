@@ -1764,6 +1764,8 @@ SECTIONS = {
         "  no retained ID: use context and diff their saved CAD files instead.\n"
         "  Lists include failures and in-progress attempts before any core geometry.\n"
         "  is_working/is_accepted identify current selections, not past decisions.\n"
+        "  result_status is the original run/import result; validation_state and\n"
+        "  check_lifecycle describe latest saved checks, which may finish later.\n"
         "  Damaged rows report integrity=unavailable without hiding other history;\n"
         "  show/compare fail explicitly when source/evidence cannot be verified.\n"
         "\n"
