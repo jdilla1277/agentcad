@@ -1,10 +1,93 @@
 """History selection, refresh and unsaved-edit protection in the real shell."""
 import json
 import os
+from pathlib import Path
 
 import pytest
 
 from agentcad import project_viewer as live
+
+
+@pytest.mark.browser
+@pytest.mark.skipif(os.environ.get("AGENTCAD_BROWSER_SMOKE") != "1", reason="set AGENTCAD_BROWSER_SMOKE=1")
+def test_legacy_saved_preview_opens_directly_without_rebuilding(runner, isolated_dir, monkeypatch):
+    from playwright.sync_api import sync_playwright
+    from agentcad.cli import cli
+    from agentcad.commands import view
+
+    fixture = Path(__file__).parent / "fixtures/viewer/legacy_viewer.html"
+    legacy_template = fixture.read_text(encoding="utf-8")
+    assert all(message not in legacy_template for message in (
+        "agentcad:ready", "agentcad:capture", "agentcad:restore",
+    ))
+    assert runner.invoke(cli, ["init", "--name", "viewer-upgrade"]).exit_code == 0
+    script = isolated_dir / "bracket.py"
+    script.write_text('''
+base = Box(80, 50, 8) - Cylinder(5, 20)
+upright = Box(80, 8, 35).translate((0, -21, 15))
+show_object(base + upright, id="bracket", name="Bracket")
+show_object(Box(10, 10, 8).translate((60, 0, 0)), id="spacer", name="Spacer")
+''')
+
+    def build(label):
+        result = runner.invoke(cli, ["run", str(script), "--label", label,
+                                     "--no-preview", "--no-diff", "--no-daemon"])
+        assert result.exit_code == 0, result.output
+        return json.loads(result.stdout)
+
+    first = build("old")
+    folder = isolated_dir / "v1_old"
+    meta = json.loads((folder / "meta.json").read_text())
+    # Substitute actual geometry using the unchanged old renderer template.
+    with monkeypatch.context() as patch:
+        patch.setattr(view, "_HTML_UNIFIED", legacy_template)
+        view._render_unified(folder / "viewer.html", folder / "output.glb",
+                             label_a="Saved bracket", parts=meta.get("parts"))
+    second = build("new")
+    url = second["project_viewer"]["url"]
+    assert first["project_viewer"]["url"] == url
+    saved_paths = [isolated_dir / "agentcad.json", *(folder / name for name in (
+        "output.step", "output.glb", "viewer.html", "meta.json",
+    ))]
+    before = {path: path.read_bytes() for path in saved_paths}
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        try:
+            page.goto(url)
+            page.wait_for_function("document.querySelector('#status').textContent.includes('Showing v2')")
+            current = page.locator("iframe:not(.pending)").element_handle()
+            embedded_requests = []
+            page.on("request", lambda request: embedded_requests.append(request.url)
+                    if "/artifacts/1/viewer.html?live=1" in request.url else None)
+            page.select_option("#history", "1")
+            direct = page.get_by_role("link", name="Open v1 snapshot")
+            direct.wait_for(state="visible", timeout=8000)
+            page.wait_for_function("document.querySelector('#status').textContent.includes('Open the snapshot directly')")
+            assert "Showing v2" in page.locator("#status").inner_text()
+            assert current.evaluate("element => element.isConnected")
+            assert page.locator("iframe.pending").count() == 0
+            for _ in range(2):
+                page.wait_for_event("response", predicate=lambda response: response.url.startswith(url + "state"))
+            assert len(embedded_requests) == 1  # No hidden reload loop for the old viewer.
+            with page.expect_popup() as opened:
+                direct.click()
+            snapshot = opened.value
+            snapshot.wait_for_function("window.agentcadViewer?.debugState().ready", timeout=45000)
+            assert "/artifacts/1/viewer.html" in snapshot.url
+            assert snapshot.locator("#canvas").is_visible()
+            assert snapshot.evaluate("window.agentcadViewer.debugState().parts.some(part => part.mesh_count > 0)")
+            assert snapshot.evaluate("typeof window.agentcadViewer.captureState") == "undefined"
+            snapshot.close()
+            # A bookmark of the old selection keeps a working direct link.
+            page.reload()
+            page.get_by_role("link", name="Open v1 snapshot").wait_for(state="visible")
+            page.click("#latest")
+            page.wait_for_function("document.querySelector('#status').textContent.includes('Showing v2')")
+            assert "version=" not in page.url
+            assert all(path.read_bytes() == content for path, content in before.items())
+        finally:
+            browser.close()
 
 
 @pytest.mark.browser

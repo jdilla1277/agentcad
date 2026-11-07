@@ -203,6 +203,12 @@ Choose **Return to latest** to resume following new builds. Camera and
 compatible review settings carry across switches and refreshes; unfinished comments and
 exports wait for you to finish before the model changes.
 
+Older saved viewers can still be opened without rebuilding the model. If a
+preview predates the live page's update support, choose **Open vN snapshot**
+to open that saved viewer directly in a new tab. The live page keeps its current
+model visible, and **Return to latest** resumes normal viewing. View settings
+cannot be carried into those older standalone viewers.
+
 `--no-view` never launches a browser or starts the viewer service. If it still
 generates viewer artifacts, an already-open project page can receive them.
 The core-only `--no-preview --no-diff --no-view` combination generates no viewer;

@@ -28,7 +28,7 @@ let current = null, pending = null, latestState = null, reconnecting = false;
 let restoreWarning = '';
 const historySelect = document.querySelector('#history');
 const latestButton = document.querySelector('#latest');
-let history = [], lastHistoryPoll = 0;
+let history = [], lastHistoryPoll = 0, standaloneVersion = null;
 const initialVersion = new URL(location.href).searchParams.get('version');
 let selectedVersion = /^[1-9]\d*$/.test(initialVersion || '') ? Number(initialVersion) : null;
 const viewStateKey = 'agentcad.viewer.view:' + location.pathname;
@@ -78,6 +78,7 @@ async function refreshHistory() {
 }
 function selectVersion(value) {
   selectedVersion = value === '' ? null : Number(value);
+  standaloneVersion = null;
   historySelect.value = value;
   latestButton.disabled = selectedVersion === null;
   restoreWarning = '';
@@ -107,6 +108,14 @@ function showStatus() {
     : failed ? ` — Latest build failed (${attempt.label || 'unlabeled'}); keeping last good model`
     : newer ? ' — Loading selected revision…' : ' — Up to date') + restoreWarning;
   latestButton.disabled = selectedVersion === null;
+  const target = desiredVersion() || current;
+  snapshot.hidden = !target?.artifact;
+  if (target?.artifact) {
+    snapshot.href = target.artifact;
+    snapshot.textContent = target.version !== current?.version || standaloneVersion === target.version
+      ? `Open v${target.version} snapshot ↗` : 'Version snapshot ↗';
+    snapshot.title = 'Open the saved viewer directly in a new tab, without rebuilding';
+  }
   status.classList.toggle('warning', reconnecting || Boolean(failed) || Boolean(restoreWarning));
 }
 function send(frame, type, extra = {}) {
@@ -124,6 +133,20 @@ function load(latest) {
   const item = {...latest, element};
   pending = item;
   item.timer = setTimeout(() => discardPending(' — Preview did not load; retrying'), 45000);
+  element.addEventListener('load', () => {
+    if (pending !== item || item.ready) return;
+    if (item.version !== desiredVersion()?.version) { discardPending(''); return; }
+    // Generated snapshots inline their message handlers. Pre-live viewers
+    // still work on their own; do not leave one hidden waiting for a handshake.
+    const messages = ['agentcad:ready', 'agentcad:capture', 'agentcad:restore'];
+    const compatible = [...element.contentDocument.scripts].some(script =>
+      messages.every(type => script.textContent.includes(type)));
+    if (!compatible) {
+      standaloneVersion = item.version;
+      saveSelection();
+      discardPending(' — Open the snapshot directly in a separate tab to view this saved preview.');
+    }
+  });
   element.src = latest.artifact + '?live=1';
   frames.appendChild(element);
 }
@@ -174,7 +197,7 @@ async function poll() {
     if (Date.now() - lastHistoryPoll > 4000) await refreshHistory();
     const latest = desiredVersion();
     if (pending && latest && pending.version !== latest.version) discardPending('');
-    if (latest && latest.version !== current?.version && !pending) load(latest);
+    if (latest && latest.version !== current?.version && !pending && latest.version !== standaloneVersion) load(latest);
     else if (pending?.ready && current) send(current, 'agentcad:capture');
   } catch (_) { reconnecting = true; }
   showStatus();
