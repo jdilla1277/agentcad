@@ -57,7 +57,7 @@ async def _cloud_tool(operation, **kwargs):
             return {**error.payload(operation), "_exit_code": 1}
     # HTTP requests, polling sleeps, and local file I/O must not block MCP's
     # event loop: discovery, pings, and cancellation still need to be served.
-    result = await asyncio.to_thread(cloud_call, operation, **kwargs)
+    result = await asyncio.to_thread(cloud_call, operation, client_mode="local_mcp", **kwargs)
     return {**result, "_exit_code": 1 if result.get("status") in {"error", "failed"} else 0}
 
 
@@ -173,12 +173,26 @@ async def cloud_job(project: str, job: str, wait_seconds: int = 0) -> dict:
 
 
 @mcp.tool()
-async def cloud_download(project: str, destination: str, job: str | None = None, kind: Literal["step", "render", "report"] = "step",
+async def cloud_export(project: str, version: int, formats: list[Literal["stl", "obj", "glb"]],
+                       idempotency_key: str | None = None) -> dict:
+    """Export a saved cloud version to whole-model meshes without rebuilding CAD.
+
+    Supply 1..3 unique formats. Poll cloud_job, then read result.mesh_validation
+    separately from job completion and geometry_valid. Use cloud_download with
+    that export job and kind='stl', 'obj', or 'glb'. Limits: 32 MiB per file,
+    64 MiB total. No component selector or source metadata preservation.
+    """
+    return await _cloud_tool("export", project=project, version=version, formats=formats, idempotency_key=idempotency_key)
+
+
+@mcp.tool()
+async def cloud_download(project: str, destination: str, job: str | None = None, kind: Literal["step", "render", "report", "stl", "obj", "glb"] = "step",
                    version: int | None = None, path: str | None = None, cwd: str | None = None, overwrite: bool = False) -> dict:
-    """Download a private STEP, PNG render, or JSON report to an explicit local file.
+    """Download a private STEP, PNG, JSON report, or exported mesh to a local file.
 
     Use job plus kind='step'/'render'/'report', OR a returned version/path STEP
-    artifact reference. Pass project IDs and relative artifact paths, not URLs.
+    artifact reference. Mesh kinds stl/obj/glb require the export job ID and
+    have a 32 MiB limit. Pass project IDs and relative paths, not URLs.
     cwd resolves destination. Existing files are preserved unless overwrite=True.
     Returns byte count and SHA-256; interrupted downloads leave no partial file.
     """

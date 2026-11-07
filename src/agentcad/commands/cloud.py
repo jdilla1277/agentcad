@@ -128,6 +128,17 @@ def diff(project, from_version, to_version, idempotency_key):
     _emit("diff", project=project, from_version=from_version, to_version=to_version, idempotency_key=idempotency_key)
 
 
+@cloud.command("export")
+@project_arg
+@version_arg
+@click.option("--format", "formats", required=True, help="Comma-separated whole-model formats: stl, obj, glb.")
+@retry_option
+def export(project, version, formats, idempotency_key):
+    """Export a saved cloud version; return a job without rebuilding CAD."""
+    _emit("export", project=project, version=version, formats=[fmt.strip() for fmt in formats.split(",")],
+          idempotency_key=idempotency_key)
+
+
 @cloud.command("job")
 @project_arg
 @click.argument("job")
@@ -142,7 +153,7 @@ def job(project, job, wait, wait_seconds):
 @project_arg
 @click.argument("destination")
 @click.option("--job", default=None)
-@click.option("--kind", type=click.Choice(["step", "render", "report"]), default="step", show_default=True)
+@click.option("--kind", type=click.Choice(["step", "render", "report", "stl", "obj", "glb"]), default="step", show_default=True)
 @click.option("--version", type=click.IntRange(min=1), default=None)
 @click.option("--path", default=None, help="Returned version-relative output.step path.")
 @click.option("--overwrite", is_flag=True)

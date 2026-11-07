@@ -392,6 +392,11 @@ retry after a lost response. Upload an edited script with a new key and label to
 create another version, then compare with `agentcad cloud diff PROJECT 1 2`.
 
 Only the named script, STEP, or spec file is uploaded. No local project is needed.
+With matching client/host export support, `agentcad cloud export PROJECT VERSION
+--format stl,obj,glb` exports a saved whole model without rebuilding it. Poll
+that export job, read its per-format mesh validation, and download with
+`--kind stl`, `obj`, or `glb`. See the [export workflow](docs/cloud-workflow.md#export-a-saved-model)
+for availability, units, private retrieval, and limits.
 Downloads require an explicit destination and preserve existing files by default.
 Job completion, geometry validity, spec verdicts, and human approval remain
 separate. Run `agentcad docs cloud` for all commands, limits, and MCP tool names.
