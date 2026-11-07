@@ -78,6 +78,55 @@ def test_pending_failure_and_out_of_order_completion_keep_latest(service, tmp_pa
     assert json.loads(read(url + "state"))["attempt"]["status"] == "success"
 
 
+def test_history_includes_saved_versions_before_registration_and_unavailable_previews(service, tmp_path):
+    root = tmp_path / "model"
+    paths = [version(root, number, ready=number != 2) for number in range(1, 5)]
+    entries = [{"version": number, "label": f"edit{number}", "path": path.name + "/",
+                "status": "failed" if number == 3 else "success", "created": "2026-11-07T12:00:00Z"}
+               for number, path in enumerate(paths, 1)]
+    (root / "agentcad.json").write_text(json.dumps({"versions": entries, "current": "edit4"}))
+    live.publish(root, paths[-1], started_ns=4)
+    url = live.open_project(root, lambda _: True)["url"]
+    before = (root / "agentcad.json").read_bytes()
+    history = json.loads(read(url + "history"))
+    assert [item["version"] for item in history["versions"]] == [4, 3, 2, 1]
+    assert [item["viewer_available"] for item in history["versions"]] == [True, False, False, True]
+    assert history["latest_version"] == 4
+    first = history["versions"][-1]
+    assert first["label"] == "edit1"
+    assert first["created"] == "2026-11-07T12:00:00Z"
+    assert read(url + first["artifact"]) == b"<html>Version 1</html>"
+    assert (root / "agentcad.json").read_bytes() == before
+    assert str(root) not in json.dumps(history)
+    assert live.service_status()["cad_loaded"] is False
+    for number in (2, 3, 999):
+        with pytest.raises(HTTPError) as error:
+            read(url + f"artifacts/{number}/viewer.html")
+        assert error.value.code == 404
+
+
+def test_history_denies_symlinked_snapshots_and_manifest_paths(service, tmp_path):
+    root, other = tmp_path / "one", tmp_path / "two"
+    first = version(root, 1)
+    second = version(other, 2)
+    live.publish(root, first, started_ns=1)
+    url = live.open_project(root, lambda _: True)["url"]
+    (root / "agentcad.json").write_text(json.dumps({"versions": [
+        {"version": 1, "path": first.name + "/", "status": "success"},
+    ]}))
+    (first / "viewer.html").unlink()
+    (first / "viewer.html").symlink_to(second / "viewer.html")
+    assert json.loads(read(url + "history"))["versions"][0]["viewer_available"] is False
+    with pytest.raises(HTTPError):
+        read(url + "artifacts/1/viewer.html")
+    (root / "agentcad.json").write_text(json.dumps({"versions": [
+        {"version": 2, "path": "../two/" + second.name + "/", "status": "success"},
+    ]}))
+    with pytest.raises(HTTPError) as error:
+        read(url + "history")
+    assert error.value.code == 503
+
+
 def test_project_isolation_and_only_registered_viewers_are_served(service, tmp_path):
     roots = [tmp_path / "one", tmp_path / "two"]
     with ThreadPoolExecutor() as executor:

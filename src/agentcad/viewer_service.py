@@ -16,6 +16,7 @@ from agentcad import project_viewer as live
 from agentcad.project_viewer_page import PAGE
 from agentcad.versioning import atomic_write_json
 from agentcad import reviews
+from agentcad.viewer_history import project_history, viewer_snapshot
 
 
 class Server(ThreadingHTTPServer):
@@ -102,6 +103,8 @@ class Handler(BaseHTTPRequestHandler):
                 root = self.review_root(token, record)
                 if root is not None:
                     self.reply(200, {"comments": reviews.list_comments(root)})
+            elif route == "history":
+                self.reply(200, project_history(record))
             elif route == "state":
                 client = parse_qs(urlsplit(self.path).query).get("client", [""])[0]
                 if re.fullmatch(r"[a-zA-Z0-9-]{1,64}", client):
@@ -115,11 +118,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"latest": record.get("latest"), "attempt": record.get("attempt")})
             else:
                 artifact = re.fullmatch(r"artifacts/(\d+)/viewer.html", route)
-                source = record.get("versions", {}).get(artifact[1]) if artifact else None
-                if source is None:
+                file = viewer_snapshot(record, int(artifact[1])) if artifact else None
+                if file is None:
                     self.reply(404, {"error": "Unknown viewer"})
                     return
-                file = Path(source)
                 root = Path(record["root"])
                 # Serve only this exact registered snapshot; never source,
                 # metadata, directory listings, or redirected symlinks.
