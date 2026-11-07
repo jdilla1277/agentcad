@@ -56,23 +56,6 @@ jobs:
             tests/test_render_cmd.py::test_render_unavailable_returns_actionable_json \
             tests_b3d/test_daemon_request_isolation.py -q
 
-  viewer-browser:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: pip install -e .[mcp,dev]
-      - run: python -m playwright install --with-deps chromium
-      - name: Exercise saved history, real CAD updates and unsent comments
-        run: >-
-          AGENTCAD_BROWSER_SMOKE=1 pytest
-          tests/test_viewer_history_browser.py tests/test_live_viewer_browser.py tests/test_live_review_browser.py
-          -q -k 'chromium or blocked_checks or saved_revision'
-
   build123d-only:
     runs-on: ubuntu-22.04
     name: Default profile (no CadQuery extra)
@@ -193,5 +176,5 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
-            tests/test_viewer_browser.py tests/test_viewer_regressions_browser.py tests/test_live_viewer_browser.py tests/test_live_review_browser.py \
+            tests/test_viewer_browser.py tests/test_viewer_regressions_browser.py tests/test_live_viewer_browser.py tests/test_live_review_browser.py tests/test_viewer_history_browser.py \
             tests/test_validation_guidance.py -q -k 'not webkit'
