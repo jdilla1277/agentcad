@@ -74,3 +74,47 @@ def test_cli_and_local_mcp_export_and_download(tmp_path, monkeypatch):
 def test_mesh_reference_requires_a_job_before_any_http_request(tmp_path):
     with client(lambda _: pytest.fail("Invalid mesh reference made a request")) as api, pytest.raises(CloudError):
         api.download(PROJECT, str(tmp_path / "output"), kind="stl", version=1, path="v1_model/output.stl")
+
+
+@pytest.mark.parametrize("expired", [True, False])
+def test_wait_deadline_read_timeout_preserves_only_an_authorized_pending_snapshot(monkeypatch, expired):
+    clock, requests = [0.0], []
+    monkeypatch.setattr("agentcad.cloud.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("agentcad.cloud.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    def handle(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(200, json=queued("export"))
+        clock[0] = 3.01 if expired else 2.01
+        raise httpx.ReadTimeout("later poll timed out", request=request)
+    with client(handle) as api:
+        if expired:
+            result = api.job(PROJECT, JOB, wait_seconds=3)
+            assert result["status"] == "queued" and result["next_actions"]
+        else:
+            with pytest.raises(CloudError, match="response was not received"):
+                api.job(PROJECT, JOB, wait_seconds=3)
+    assert len(requests) == 2 and all(request.method == "GET" for request in requests)
+
+
+def test_first_poll_failure_never_returns_an_invented_pending_snapshot():
+    def handle(request):
+        raise httpx.ReadTimeout("no authorized snapshot", request=request)
+    with client(handle) as api, pytest.raises(CloudError):
+        api.job(PROJECT, JOB, wait_seconds=1)
+
+
+@pytest.mark.parametrize("status", [401, 404, 503])
+def test_wait_deadline_never_hides_an_explicit_http_error(monkeypatch, status):
+    clock, calls = [0.0], []
+    monkeypatch.setattr("agentcad.cloud.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("agentcad.cloud.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    def handle(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(200, json=queued("export"))
+        clock[0] = 3.01
+        return httpx.Response(status, json={"detail": {"reason": "request_failed", "message": "Rejected"}})
+    with client(handle) as api, pytest.raises(CloudError) as caught:
+        api.job(PROJECT, JOB, wait_seconds=3)
+    assert caught.value.details["http_status"] == status

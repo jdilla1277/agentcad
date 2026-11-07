@@ -269,9 +269,20 @@ class CloudClient:
         if type(wait_seconds) is not int or not 0 <= wait_seconds <= 60:
             raise CloudError("invalid_wait", "wait_seconds must be an integer from 0 to 60. Poll the same job again if it is still running.")
         deadline = time.monotonic() + wait_seconds
+        result = None
         while True:
             timeout = min(30, max(0.1, deadline - time.monotonic())) if wait_seconds else 30
-            result = self._request("GET", route, timeout=timeout)
+            try:
+                result = self._request("GET", route, timeout=timeout)
+            except CloudError as exc:
+                # A final bounded GET can outlast the remaining wait window.
+                # Preserve only an actual authorized pending response, as the
+                # hosted MCP bridge does; the caller can poll the same job again.
+                if (result is not None and result.get("status") in {"queued", "running"} and wait_seconds
+                        and time.monotonic() >= deadline and exc.reason == "request_failed"
+                        and exc.details.get("http_status") is None):
+                    break
+                raise
             if result.get("status") in {"succeeded", "failed"} or time.monotonic() >= deadline:
                 break
             time.sleep(min(2, max(0, deadline - time.monotonic())))

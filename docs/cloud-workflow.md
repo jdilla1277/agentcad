@@ -233,6 +233,9 @@ usage records. Local CAD commands remain offline and do not send these records.
 - A submission response acknowledges a job. It does not mean geometry passed.
 - A polling call waits at most 60 seconds. If the job is still running, poll
   again; do not submit another build to make it finish.
+- A transport timeout on the final GET at the wait deadline can return the
+  last authorized pending snapshot. Poll that same job again. Explicit HTTP
+  errors, including revoked credentials, are still returned as errors.
 - Keep the submission's `idempotency_key`. If the response is lost, retry with
   that same key and identical input. Use a new key when changing the script,
   label, or other submitted values. The client does not retry submissions for you.

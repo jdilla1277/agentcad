@@ -67,6 +67,8 @@ SECTIONS = {
         "  cloud_job returns status plus nested result or measurement when done.\n"
         "  Poll that same job; --wait defaults to 30 seconds, --wait-seconds and\n"
         "  MCP wait_seconds allow at most 60 seconds of polling per call.\n"
+        "  If the last GET times out at the wait deadline, the last authorized\n"
+        "  pending snapshot is returned; poll that same job again.\n"
         "  For an edit, change the explicit local script, submit with a new key\n"
         "  and label, then compare the returned cloud version numbers.\n"
         "\n"
