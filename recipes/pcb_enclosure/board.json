@@ -1,0 +1,60 @@
+{
+  "name": "28.17 x 51.31 mm sensor board",
+  "board": {
+    "width_mm": 28.17,
+    "height_mm": 51.31,
+    "thickness_mm": 1.6,
+    "corner_radius_mm": 1.0
+  },
+  "mounting_holes": [
+    {"x_mm": 3.0, "y_mm": 3.0, "diameter_mm": 3.0},
+    {"x_mm": 25.17, "y_mm": 3.0, "diameter_mm": 3.0},
+    {"x_mm": 3.0, "y_mm": 48.31, "diameter_mm": 3.0},
+    {"x_mm": 25.17, "y_mm": 48.31, "diameter_mm": 3.0}
+  ],
+  "cutouts": [
+    {
+      "name": "usb",
+      "edge": "bottom",
+      "center_mm": 14.085,
+      "width_mm": 7.62,
+      "height_mm": 4.65
+    },
+    {
+      "name": "button",
+      "edge": "right",
+      "center_mm": 25.71,
+      "width_mm": 6.15,
+      "z_min_mm": 0.6,
+      "height_mm": 2.41
+    }
+  ],
+  "lid_windows": [
+    {
+      "name": "antenna",
+      "x_mm": 2.3,
+      "y_mm": 25.5,
+      "width_mm": 23.5,
+      "height_mm": 20.0
+    }
+  ],
+  "keepouts": [
+    {
+      "name": "antenna_keepout",
+      "box_mm": [2.3, 25.5, 1.6, 25.8, 45.5, 10.6]
+    }
+  ],
+  "heights": {
+    "standoff_mm": 3.0,
+    "bottom_max_mm": 1.5,
+    "top_max_mm": 8.5,
+    "lid_clearance_mm": 0.5
+  },
+  "case": {
+    "wall_mm": 2.0,
+    "floor_mm": 1.6,
+    "clearance_mm": 0.3,
+    "screw": "M2.5",
+    "lid": "screw"
+  }
+}
