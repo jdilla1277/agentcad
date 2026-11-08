@@ -246,7 +246,7 @@ def _build_args(args: list[str], build_dir: str | None) -> list[str]:
 def _invoke(args: list[str], cwd: str | None = None) -> dict:
     """Invoke an agentcad CLI command and return parsed JSON response."""
     runner = CliRunner()
-    env = {"AGENTCAD_DAEMON": "1", "AGENTCAD_NO_LOG": "1"}
+    env = {"AGENTCAD_DAEMON": "1"}
 
     old_cwd = os.getcwd()
     try:
