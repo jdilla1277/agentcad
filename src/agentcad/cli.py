@@ -587,6 +587,12 @@ class _LoggingGroup(click.Group):
                 raise SystemExit(exc.exit_code)
             raise
 
+    def parse_args(self, ctx, args):
+        # CliRunner and MCP pass request-specific args without changing sys.argv.
+        # Copy before Click consumes them, and keep them on this invocation only.
+        ctx.meta["invocation_argv"] = list(args)
+        return super().parse_args(ctx, args)
+
     def _usage_error_payload(self, exc, raw_args):
         command = (
             raw_args[0]
@@ -988,8 +994,8 @@ class _LoggingGroup(click.Group):
         # With no command result, do not create state in an unselected root.
         if not result:
             return
-        # Collect the raw args from sys.argv
-        args = sys.argv[2:] if len(sys.argv) > 2 else []
+        # The first argument is the subcommand already recorded as cmd_name.
+        args = ctx.meta.get("invocation_argv", [])[1:]
         try:
             logger = SessionLogger(get_project().build_root)
             logger.log(cmd_name, {"argv": args}, result)
