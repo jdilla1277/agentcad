@@ -37,7 +37,7 @@ jobs:
         run: pytest tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py -q
 
       - name: Run OCP-free interface guardrails
-        run: pytest tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
+        run: pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
 
       - name: Install Linux render smoke dependencies
         run: |
@@ -123,7 +123,7 @@ jobs:
             tests/test_cadquery_optional.py tests/test_written_mesh_validation.py tests/test_run_guidance.py tests_b3d/test_step_output_contract.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py tests_b3d/test_daemon_request_isolation.py -q
 
       - name: Run OCP-free interface guardrails
-        run: pytest tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
+        run: pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
 
   windows-platform:
     runs-on: windows-latest
@@ -144,6 +144,9 @@ jobs:
         run: pytest --collect-only -q
 
       - name: Run Windows-relevant guardrails
+        run: pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_session_logging_integration.py -q
+
+      - name: Run Windows platform and CAD guardrails
         run: pytest tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests_b3d/test_inspection_budgets.py tests_b3d/test_default_inspection_delivery.py tests_b3d/test_snapshot_retention.py tests_b3d/test_inspection_cache_retention.py tests/test_change_promotion.py tests/test_change_staging.py tests/test_run_retries.py tests/test_versioning.py tests/test_daemon_platform.py tests/test_package_positioning.py tests/test_project_viewer.py tests_b3d/test_step_assembly.py tests_b3d/test_geometry_manifest.py tests_b3d/test_geometry_images.py tests_b3d/test_inspection_report.py tests_b3d/test_inspection_jobs.py tests_b3d/test_generated_inspection.py tests_b3d/test_mcp_import.py tests_b3d/test_import_retries.py tests_b3d/test_daemon_request_isolation.py tests/test_text_encoding.py -q
 
   browser-smoke:

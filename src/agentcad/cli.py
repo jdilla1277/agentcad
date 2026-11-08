@@ -313,9 +313,14 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
     by `agentcad init` by default), or return its content as JSON for another
     agent integration.
 
+  agentcad feedback
+  agentcad feedback --template --output feedback.md
+  agentcad feedback --file feedback.md [--max-entries N] [--local-only]
   agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
-    Save a diagnostic bundle under .agentcad/feedback and, unless --local-only,
-    send it to the agentcad team. The bundle includes recent session context.
+    Get guided questions, fill in a Markdown report, then submit it with recent
+    session context. Quick notes still work. The full bundle is saved locally
+    before uploading; --local-only keeps it local. --file - reads stdin.
+    Explicit --template without --output exports Markdown rather than JSON.
 
   agentcad subscribe EMAIL
     Request product updates. Subscription uses email confirmation (double opt-in).
