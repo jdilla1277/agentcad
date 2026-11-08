@@ -333,7 +333,7 @@ Reports include recent command arguments/results, environment and friction
 signals. Review what you are sending. `--local-only` saves without uploading.
 The full bundle is saved locally before upload; file submissions return a
 compact JSON receipt with `bundle_file`, `remote`, `discord`, and `neon_row_id`.
-`status: "partial"` means upload failed and the local copy remains. A failed
+`status: "partial"` means upload was not confirmed and the local copy remains. A failed
 Discord notification after remote storage does not require resubmitting.
 `agentcad feedback` alone returns a JSON guide and sends nothing. Explicit
 `--template` without `--output` exports Markdown on stdout; `--file -` reads stdin.

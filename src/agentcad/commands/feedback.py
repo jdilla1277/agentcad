@@ -217,8 +217,8 @@ def feedback(message, feedback_file, show_template, output, max_entries, local_o
     \b
     Response fields agents should check:
       - "status": "success" when the bundle was stored (remotely, or just
-        locally with --local-only); "partial" if the remote upload failed
-        (the local file is still written).
+        locally with --local-only); "partial" if the remote request failed
+        and storage was not confirmed (the local file remains).
       - "discord": the human alert webhook status — "ok" / "failed: ..."
         / "skipped: ...". Note: "status" can be "success" while "discord"
         is "failed: ..." — that means Neon has the row but no one was paged.
