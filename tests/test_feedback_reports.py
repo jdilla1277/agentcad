@@ -353,3 +353,26 @@ def test_template_next_actions_preserve_explicit_build_root(runner, isolated_dir
         isolated_dir / "build space"
     )
     assert not (isolated_dir / ".agentcad").exists()
+
+
+def test_report_includes_failed_mcp_request_context(runner, isolated_dir, monkeypatch):
+    pytest.importorskip("mcp")
+    from agentcad.mcp.server import _invoke
+
+    monkeypatch.delenv("AGENTCAD_NO_LOG", raising=False)
+    runner.invoke(cli, ["init", "--name", "mcp-report", "--no-agent-setup"])
+    failed = _invoke(["run", "missing.py", "--label", "missing"], cwd=str(isolated_dir))
+    assert failed["_exit_code"] == 1
+    result = runner.invoke(
+        cli, ["feedback", "--file", "-", "--local-only"], input=REPORT
+    )
+    assert result.exit_code == 0, result.stdout
+    saved = json.loads(Path(payload(result)["bundle_file"]).read_text(encoding="utf-8"))
+    assert saved["report"] == REPORT
+    assert saved["friction_signals"]["errors"] == 1
+    assert saved["friction_signals"]["total_commands"] == 2
+    assert saved["session_log"][-1]["args"]["argv"] == [
+        "missing.py",
+        "--label",
+        "missing",
+    ]
