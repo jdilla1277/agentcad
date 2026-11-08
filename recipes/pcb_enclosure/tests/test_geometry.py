@@ -188,6 +188,59 @@ def test_cutout_near_rim_uses_board_underside_coordinates():
     assert material(tray, (8, -2.2, 5.1, 12, -0.4, 5.9)) > 1
 
 
+@pytest.mark.parametrize("edge", ["bottom", "top", "left", "right"])
+@pytest.mark.parametrize("lip_clearance,lip_thickness", [(0.2, 1.2), (0.8, 2.4)])
+def test_connector_opening_clears_the_assembled_wall_and_lip(edge, lip_clearance, lip_thickness):
+    from build123d import Compound
+
+    center = 10 if edge in {"bottom", "top"} else 15
+    spec = BoardSpec({
+        "board": {"width_mm": 20, "height_mm": 30, "thickness_mm": 1.6},
+        "heights": {"top_max_mm": 4, "lid_clearance_mm": 0.5},
+        "case": {
+            "lid_lip_clearance_mm": lip_clearance,
+            "lid_lip_thickness_mm": lip_thickness,
+        },
+        "cutouts": [{
+            "edge": edge, "center_mm": center, "width_mm": 6,
+            "z_min_mm": 5, "z_max_mm": 6,
+        }],
+    })
+    tray = pcb_case(spec)
+    lid = pcb_lid(spec)
+    assembly = Compound(children=[tray, lid])
+    outer = -0.3 - 2
+    inner = -0.3 + lip_clearance + lip_thickness
+    passage = {
+        "bottom": [7, outer, 5, 13, inner, 6],
+        "top": [7, 30 - inner, 5, 13, 30 - outer, 6],
+        "left": [outer, 12, 5, inner, 18, 6],
+        "right": [20 - inner, 12, 5, 20 - outer, 18, 6],
+    }[edge]
+    assert assembly.is_valid
+    assert len(assembly.solids()) == 2
+    assert material(assembly, passage) == pytest.approx(0, abs=1e-6)
+
+    # The wall and lip immediately above the declared opening remain intact.
+    above = [*passage]
+    above[2], above[5] = 6.02, 6.08
+    assert material(tray, above) > 0.1
+    assert material(lid, above) > 0.1
+
+
+@pytest.mark.parametrize("builder", [pcb_case, pcb_lid])
+def test_corner_radius_boundary_is_checked_before_building(builder):
+    data = {"board": {"width_mm": 20, "height_mm": 30, "corner_radius_mm": 9.9}}
+    part = builder(data)
+    assert part.is_valid
+    assert len(part.solids()) == 1
+    assert part.volume > 0
+
+    data["board"]["corner_radius_mm"] = 10
+    with pytest.raises(ValueError, match="corner_radius_mm must be less than half"):
+        builder(data)
+
+
 @pytest.mark.parametrize("lip_depth", [1.2, 3.0])
 def test_screw_passage_clears_the_entire_lip(lip_depth):
     from build123d import Align, Cylinder, Pos

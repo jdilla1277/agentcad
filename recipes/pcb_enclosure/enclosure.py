@@ -126,8 +126,11 @@ def _normalize(data):
         _field(board, "corner_radius_mm", "corner_radius", default=1.0),
         "board.corner_radius_mm",
     )
-    if corner_radius > min(board_width, board_height) / 2:
-        raise ValueError("board.corner_radius_mm cannot exceed half the board's smaller side")
+    if corner_radius >= min(board_width, board_height) / 2:
+        raise ValueError(
+            "board.corner_radius_mm must be less than half the board's smaller side; "
+            "choose a smaller radius (rounded-end outlines are not supported)"
+        )
 
     heights = _mapping(data.get("heights") or {}, "heights")
     standoff = _positive(
@@ -514,7 +517,8 @@ def _geometry(spec):
     }
 
 
-def _cutout_box(cutout, geo):
+def _cutout_box(cutout, geo, *, lip_inset=0.0):
+    """Span the wall and optional inward lid lip, with 1 mm overtravel at each end."""
     from build123d import Align, Box, Pos
 
     edge = cutout["edge"]
@@ -522,18 +526,19 @@ def _cutout_box(cutout, geo):
     center = cutout["center_mm"]
     z_min = cutout["z_min_mm"]
     z_max = cutout["z_max_mm"]
-    reach = geo["wall"] + 2.0
+    reach = geo["wall"] + lip_inset + 2.0
+    offset = (geo["wall"] - lip_inset) / 2.0
     if edge in {"bottom", "top"}:
         if edge == "bottom":
-            y = -geo["clearance"] - geo["wall"] / 2.0
+            y = -geo["clearance"] - offset
         else:
-            y = geo["height"] + geo["clearance"] + geo["wall"] / 2.0
+            y = geo["height"] + geo["clearance"] + offset
         box = Box(width, reach, z_max - z_min, align=(Align.CENTER, Align.CENTER, Align.MIN))
         return Pos(center, y, z_min) * box
     if edge == "left":
-        x = -geo["clearance"] - geo["wall"] / 2.0
+        x = -geo["clearance"] - offset
     else:
-        x = geo["width"] + geo["clearance"] + geo["wall"] / 2.0
+        x = geo["width"] + geo["clearance"] + offset
     box = Box(reach, width, z_max - z_min, align=(Align.CENTER, Align.CENTER, Align.MIN))
     return Pos(x, center, z_min) * box
 
@@ -665,6 +670,11 @@ def pcb_lid(spec):
             window["y_mm"] + window["height_mm"] / 2.0,
             rim - lip_depth - 1.0,
         ) * opening
+
+    for cutout in spec.cutouts:
+        lid = lid - _cutout_box(
+            cutout, geo, lip_inset=lip_clearance + lip_thickness
+        )
 
     for keepout in spec.keepouts:
         lid = lid - _keepout_box(keepout, geo)

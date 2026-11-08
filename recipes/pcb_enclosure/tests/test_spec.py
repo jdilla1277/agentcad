@@ -147,6 +147,10 @@ def test_from_json_reports_missing_and_malformed_files(tmp_path):
         ({"unknown": True}, "unknown top-level"),
         ({"board": {"width_mm": 0, "height_mm": 30}}, "width_mm"),
         (
+            {"board": {"width_mm": 20, "height_mm": 30, "corner_radius_mm": 10}},
+            "corner_radius_mm must be less than half",
+        ),
+        (
             {"board": {"width_mm": 20, "height_mm": 30, "corner_radius_mm": 11}},
             "corner_radius",
         ),

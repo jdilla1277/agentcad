@@ -53,12 +53,15 @@ Edit `board.json` to change the dimensions and `enclosure.py` to change the
 design. `example.py` shows how to load a local helper file with `run_path`;
 use the same pattern when combining copied features in a larger script.
 
-- `board`: width, height, thickness, and corner radius, in millimeters.
+- `board`: width, height, thickness, and corner radius, in millimeters. The
+  radius must be less than half the smaller side; rounded-end outlines are
+  unsupported by this recipe.
 - `mounting_holes`: hole centers and diameters. Optional boss and pilot
   diameters let you change the support geometry.
 - `cutouts`: a board edge, distance along that edge, width, and vertical range.
   Bottom/top edges use X; left/right edges use Y. `z_min_mm` defaults to zero;
-  supply `height_mm` or an absolute `z_max_mm`.
+  supply `height_mm` or an absolute `z_max_mm`. Openings cut through the tray
+  wall and any lid lip in the same passage, including openings near the rim.
 - `lid_windows`: rectangular openings positioned by their lower-left XY corner.
 - `keepouts`: boxes `[xmin, ymin, zmin, xmax, ymax, zmax]` subtracted from both
   parts. Boxes may extend below the board or outside its outline.
