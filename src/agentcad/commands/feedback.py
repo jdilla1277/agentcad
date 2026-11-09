@@ -121,7 +121,8 @@ def _send_remote(bundle: dict) -> dict:
     can substring-match on "413" to detect payload-too-large and retry with fewer entries.
     """
     try:
-        data = json.dumps(bundle, ensure_ascii=False).encode("utf-8")
+        # JSON escapes preserve POSIX filename surrogates in diagnostic context.
+        data = json.dumps(bundle).encode("utf-8")
         req = Request(
             _resolve_feedback_url(),
             data=data,
@@ -283,7 +284,7 @@ def feedback(message, feedback_file, show_template, output, max_entries, local_o
         if is_report:
             bundle.update(report=message, report_format="markdown")
         bundle_file.write_text(
-            json.dumps(bundle, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            json.dumps(bundle, indent=2) + "\n", encoding="utf-8"
         )
         return bundle
 

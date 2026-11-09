@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from agentcad.commands import feedback as feedback_mod
+from agentcad.commands.feedback import _send_remote
 from agentcad.cli import cli
 
 
@@ -28,6 +30,60 @@ Four matching mounting holes.
 ## Impact or workaround
 I measured the lid and rebuilt it manually.
 """
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX filename surrogate escapes")
+@pytest.mark.parametrize("is_report", [False, True])
+@pytest.mark.parametrize("local_only", [False, True])
+def test_non_utf8_filename_context_survives_save_and_upload(
+    runner, isolated_dir, monkeypatch, is_report, local_only
+):
+    assert runner.invoke(
+        cli, ["init", "--name", "filename-feedback", "--no-agent-setup"]
+    ).exit_code == 0
+    filename = os.fsdecode(b"part_\xff.py")
+    failed = runner.invoke(
+        cli,
+        [
+            "run", filename, "--label", "attempt", "--no-daemon",
+            "--no-preview", "--no-diff", "--no-view",
+        ],
+    )
+    assert failed.exit_code != 0
+    log_file = isolated_dir / ".agentcad/session.jsonl"
+    entry = json.loads(log_file.read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["args"]["argv"][0] == filename
+
+    uploaded = []
+
+    def capture_upload(request, timeout):
+        uploaded.append(json.loads(request.data.decode("utf-8")))
+        handle = io.BytesIO(b'{"discord": "ok", "neon_row_id": 42}')
+        handle.status = 200
+        return handle
+
+    # Exercise the real serializer without sending a network request.
+    monkeypatch.setattr(feedback_mod, "urlopen", capture_upload)
+    monkeypatch.setattr(feedback_mod, "_send_remote", _send_remote)
+    args = ["feedback", "--file", "-"] if is_report else ["feedback", "The script failed"]
+    if local_only:
+        args.append("--local-only")
+    report = "\n## Feedback\nThe script failed. Привет 日本語.\n\n"
+    result = runner.invoke(cli, args, input=report if is_report else None)
+    assert result.exit_code == 0, result.stdout
+    receipt = payload(result)
+    assert receipt["status"] == "success"
+    saved = json.loads(Path(receipt["bundle_file"]).read_bytes().decode("utf-8"))
+    assert saved["session_log"][-1]["args"]["argv"][0] == filename
+    if is_report:
+        assert saved["report"] == report
+    else:
+        assert receipt["bundle"] == saved
+    if local_only:
+        assert receipt["remote"] == "skipped" and uploaded == []
+    else:
+        assert receipt["remote"] == "sent" and receipt["discord"] == "ok"
+        assert uploaded == [saved]
 
 
 def payload(result):
