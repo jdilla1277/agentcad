@@ -36,6 +36,9 @@ jobs:
       - name: Run cloud adapter and local MCP contracts
         run: pytest tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py -q
 
+      - name: Run session logging and MCP audit regressions
+        run: pytest tests/test_session_log.py tests/test_session_logging_integration.py -q
+
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
 
