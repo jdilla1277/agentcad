@@ -354,6 +354,13 @@ Analysis, image sheets and completed job results also have shared
 root. Resumable checkpoints remain protected; a full quota stops enrichment
 with a resume action while preserving the imported model.
 
+To retrieve the complete inventory without opening server-side files, call
+`inspect(artifact="manifest", file=..., cwd=...)` (CLI: `inspect FILE --artifact
+manifest`). Saved report/image paths and `artifact="baseline"` use the same
+bounded byte transfer, with checksums and copyable continuations. See
+[inspection artifacts](docs/inspection-artifacts.md). This works through the
+existing MCP tool connection; the separate `cloud_*` API is unchanged.
+
 ### Cloud projects
 
 For setup and a complete agent build-and-edit loop, see the

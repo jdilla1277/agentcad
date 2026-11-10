@@ -315,7 +315,7 @@ def project_options(function):
     return wrapped
 
 
-def derived_dir(command: str, *inputs: Path) -> Path:
+def derived_dir(command: str, *inputs: Path, create: bool = True) -> Path:
     """Keep legacy standalone behavior; contain configured derived artifacts."""
     layout = get_project()
     first = inputs[0].resolve()
@@ -329,7 +329,8 @@ def derived_dir(command: str, *inputs: Path) -> Path:
     stem = re.sub(r"[^\w.-]", "_", first.stem)[:64]
     result = layout.artifact_path(f"derived/{command}/{stem}-{digest}")
     try:
-        result.mkdir(parents=True, exist_ok=True)
+        if create:
+            result.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise ProjectError(
             "build_root_unwritable",
