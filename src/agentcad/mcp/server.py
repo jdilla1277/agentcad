@@ -246,7 +246,7 @@ def _build_args(args: list[str], build_dir: str | None) -> list[str]:
 def _invoke(args: list[str], cwd: str | None = None) -> dict:
     """Invoke an agentcad CLI command and return parsed JSON response."""
     runner = CliRunner()
-    env = {"AGENTCAD_DAEMON": "1", "AGENTCAD_NO_LOG": "1"}
+    env = {"AGENTCAD_DAEMON": "1"}
 
     old_cwd = os.getcwd()
     try:
@@ -687,6 +687,11 @@ def inspect(
     job_id: str | None = None,
     job_action: Literal["status", "wait", "resume", "cancel"] | None = None,
     response_snapshot: str | None = None,
+    artifact: str | None = None,
+    artifact_offset: int = 0,
+    artifact_bytes: int = 3072,
+    artifact_sha256: str | None = None,
+    artifact_expires_at: str | None = None,
     context_window: int | None = None,
     response_budget: int | None = None,
     response_text_budget: int | None = None,
@@ -728,6 +733,18 @@ def inspect(
             Default retention is 30 days/64 MiB per build root; configure
             [inspection.snapshots] in agentcad.toml. Expired or evicted evidence
             fails explicitly with a fresh inspection action, never a substituted report.
+        artifact: Read saved bytes over this tool: "manifest", "baseline", or an exact
+            returned inventory/image path. Requires the original file/build_dir.
+            Returns bounded base64 chunks with full SHA-256 and next.mcp arguments;
+            no client filesystem access, CAD work or regeneration. Cannot combine
+            with geometry/report/image/job controls. Existing --image attaches PNGs.
+        artifact_offset: Byte offset; nonzero requires artifact_sha256 from first chunk.
+        artifact_bytes: Maximum raw chunk bytes, 1..49152, default 3072. Encoding
+            adds about one third; these explicit reads have no report token budget.
+        artifact_sha256: Require the full file's returned SHA-256 on each continuation.
+            Reject changed, expired, evicted or wrong-baseline evidence explicitly.
+        artifact_expires_at: Retained-artifact expiry from the first chunk; required
+            on its continuations. Generated next actions pin both hash and expiry.
         context_window: Derive a 5% combined response target from caller context tokens.
         response_budget: Override that target with a combined JSON/image estimated limit.
         response_text_budget: Bound complete JSON text; default is combined limit when
@@ -741,6 +758,16 @@ def inspect(
             combine with caller budgets. Harmless for already-unbounded ID lookups.
     """
     args = ["inspect", file]
+    if artifact is not None:
+        args.extend(["--artifact", artifact])
+    if artifact_offset:
+        args.extend(["--artifact-offset", str(artifact_offset)])
+    if artifact_bytes != 3072:
+        args.extend(["--artifact-bytes", str(artifact_bytes)])
+    if artifact_sha256 is not None:
+        args.extend(["--artifact-sha256", artifact_sha256])
+    if artifact_expires_at is not None:
+        args.extend(["--artifact-expires-at", artifact_expires_at])
     if full_response:
         args.append("--full-response")
     if report:

@@ -354,6 +354,13 @@ Analysis, image sheets and completed job results also have shared
 root. Resumable checkpoints remain protected; a full quota stops enrichment
 with a resume action while preserving the imported model.
 
+To retrieve the complete inventory without opening server-side files, call
+`inspect(artifact="manifest", file=..., cwd=...)` (CLI: `inspect FILE --artifact
+manifest`). Saved report/image paths and `artifact="baseline"` use the same
+bounded byte transfer, with checksums and copyable continuations. See
+[inspection artifacts](docs/inspection-artifacts.md). This works through the
+existing MCP tool connection; the separate `cloud_*` API is unchanged.
+
 ### Cloud projects
 
 For setup and a complete agent build-and-edit loop, see the
@@ -409,3 +416,16 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## Feedback
 
 If your agent struggles, run `agentcad feedback "what happened"` to capture a friction log.
+
+For a detailed session report, guided feedback is prepared for the next release:
+
+```bash
+agentcad feedback --template --output feedback.md
+# Fill in the task, what happened, evidence, and any workaround.
+agentcad feedback --file feedback.md
+```
+
+Creating a template sends nothing. Reports include recent session context;
+review what you send, or add `--local-only` to keep it local. Partial reports,
+positive feedback, and ideas are welcome. See `agentcad docs feedback` for
+file/stdin input and upload receipts.

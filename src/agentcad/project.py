@@ -274,6 +274,13 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        if name == "feedback" and (
+            kwargs.get("show_template")
+            or (kwargs.get("message") is None and kwargs.get("feedback_file") is None)
+        ):
+            # Template discovery/export needs no initialized or writable build
+            # root and must not create .agentcad state just to show questions.
+            return function(*args, **kwargs)
         initialize = name == "init" or (name == "import" and kwargs.get("init_flag"))
         writes = name in {
             "init",
@@ -308,7 +315,7 @@ def project_options(function):
     return wrapped
 
 
-def derived_dir(command: str, *inputs: Path) -> Path:
+def derived_dir(command: str, *inputs: Path, create: bool = True) -> Path:
     """Keep legacy standalone behavior; contain configured derived artifacts."""
     layout = get_project()
     first = inputs[0].resolve()
@@ -322,7 +329,8 @@ def derived_dir(command: str, *inputs: Path) -> Path:
     stem = re.sub(r"[^\w.-]", "_", first.stem)[:64]
     result = layout.artifact_path(f"derived/{command}/{stem}-{digest}")
     try:
-        result.mkdir(parents=True, exist_ok=True)
+        if create:
+            result.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise ProjectError(
             "build_root_unwritable",

@@ -313,9 +313,14 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
     by `agentcad init` by default), or return its content as JSON for another
     agent integration.
 
+  agentcad feedback
+  agentcad feedback --template --output feedback.md
+  agentcad feedback --file feedback.md [--max-entries N] [--local-only]
   agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
-    Save a diagnostic bundle under .agentcad/feedback and, unless --local-only,
-    send it to the agentcad team. The bundle includes recent session context.
+    Get guided questions, fill in a Markdown report, then submit it with recent
+    session context. Quick notes still work. The full bundle is saved locally
+    before uploading; --local-only keeps it local. --file - reads stdin.
+    Explicit --template without --output exports Markdown rather than JSON.
 
   agentcad subscribe EMAIL
     Request product updates. Subscription uses email confirmation (double opt-in).
@@ -581,6 +586,12 @@ class _LoggingGroup(click.Group):
             if standalone_mode:
                 raise SystemExit(exc.exit_code)
             raise
+
+    def parse_args(self, ctx, args):
+        # CliRunner and MCP pass request-specific args without changing sys.argv.
+        # Copy before Click consumes them, and keep them on this invocation only.
+        ctx.meta["invocation_argv"] = list(args)
+        return super().parse_args(ctx, args)
 
     def _usage_error_payload(self, exc, raw_args):
         command = (
@@ -983,8 +994,8 @@ class _LoggingGroup(click.Group):
         # With no command result, do not create state in an unselected root.
         if not result:
             return
-        # Collect the raw args from sys.argv
-        args = sys.argv[2:] if len(sys.argv) > 2 else []
+        # The first argument is the subcommand already recorded as cmd_name.
+        args = ctx.meta.get("invocation_argv", [])[1:]
         try:
             logger = SessionLogger(get_project().build_root)
             logger.log(cmd_name, {"argv": args}, result)
