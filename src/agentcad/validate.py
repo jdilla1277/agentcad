@@ -23,8 +23,7 @@ _AGENTCAD_API_NAMES = frozenset({
     "translate", "rotate", "bbox_point", "bbox_size", "place_at", "assemble",
     "annular_boss", "raise_annulus", "ellipse_wire", "spline_wire",
     "polygon_wire", "rounded_rect_wire", "elliptical_sweep",
-    "involute_gear_profile", "BoardSpec", "pcb_case", "pcb_lid",
-    "pcb_enclosure", "pcb_enclosure_lid",
+    "involute_gear_profile",
 })
 
 

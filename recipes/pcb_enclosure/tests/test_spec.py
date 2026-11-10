@@ -1,6 +1,6 @@
 """Board-spec validation and normalization for the PCB enclosure template.
 
-Geometry tests live in ``tests_b3d/test_pcb_enclosure.py`` so this module
+Geometry tests live in ``test_geometry.py`` so this module
 stays fast and importable without the CAD kernel.
 """
 
@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
+from runpy import run_path
 
 import pytest
 
-from agentcad.pcb_enclosure import BoardSpec
+BoardSpec = run_path(str(Path(__file__).resolve().parents[1] / "enclosure.py"))["BoardSpec"]
 
 
 def base_data():
@@ -144,6 +146,10 @@ def test_from_json_reports_missing_and_malformed_files(tmp_path):
     [
         ({"unknown": True}, "unknown top-level"),
         ({"board": {"width_mm": 0, "height_mm": 30}}, "width_mm"),
+        (
+            {"board": {"width_mm": 20, "height_mm": 30, "corner_radius_mm": 10}},
+            "corner_radius_mm must be less than half",
+        ),
         (
             {"board": {"width_mm": 20, "height_mm": 30, "corner_radius_mm": 11}},
             "corner_radius",

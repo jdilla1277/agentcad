@@ -81,7 +81,8 @@ where = ["src"]
 # focused CadQuery compatibility contract. Listing both here means bare
 # `pytest` cannot silently skip the primary runtime. PR #142 shipped a
 # build123d-runner regression after only `tests/` ran; this prevents recurrence.
-testpaths = ["tests", "tests_b3d"]
+# Recipe tests live beside the copyable source and run with the same suite.
+testpaths = ["tests", "tests_b3d", "recipes"]
 # Hard per-test timeout so a wedged test (e.g. a daemon fork that
 # never completes, a hung subprocess holding a socket) fails loudly
 # with a traceback instead of pinning a worker at 0% CPU for the
