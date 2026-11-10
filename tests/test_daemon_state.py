@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import socket
 import stat
+import sys
 import tempfile
 
 import pytest
@@ -124,6 +125,22 @@ def test_default_fallback_is_a_per_user_directory(monkeypatch):
     directory = Path(daemon._default_socket_path()).parent
     assert directory == Path(f"/tmp/agentcad-{os.getuid()}")
     assert Path(daemon._default_pid_path()).parent == directory
+
+
+def test_worker_entrypoint_refuses_relative_runtime_before_leaving_project(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "relative-runtime")
+    monkeypatch.delenv("AGENTCAD_SOCKET_PATH", raising=False)
+    monkeypatch.delenv("AGENTCAD_PID_PATH", raising=False)
+    monkeypatch.setattr(sys, "argv", ["agentcad.daemon"])
+    monkeypatch.setattr(
+        daemon, "_leave_start_directory", lambda: pytest.fail("left before validation")
+    )
+    with pytest.raises(OSError, match="XDG_RUNTIME_DIR"):
+        daemon._main()
+    assert not (tmp_path / "relative-runtime").exists()
 
 
 @pytest.mark.parametrize("kind", ["symlink", "file", "public", "wrong_owner"])

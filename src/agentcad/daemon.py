@@ -1461,6 +1461,9 @@ def _main():
     # meaning what the starting command meant.
     socket_path = os.path.abspath(args.socket or _default_socket_path())
     pid_path = os.path.abspath(args.pid or _default_pid_path())
+    # Validate while relative environment settings still refer to the caller's
+    # directory, including when invoked directly rather than via start_daemon.
+    daemon_state.check_paths(socket_path, pid_path, create=True)
     _leave_start_directory()
 
     # Eager imports — warm up all expensive modules in the parent so each
