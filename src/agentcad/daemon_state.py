@@ -106,8 +106,9 @@ def publish_metadata(path, metadata):
     _check_runtime_parent(path, create=True)
     check_entry(path, "pid")
     path = Path(path)
-    temporary = f".{path.name}-{secrets.token_hex(8)}.tmp"
+    temporary = f".agentcad-pid-{secrets.token_hex(16)}.tmp"
     parent_fd = None
+    created = False
     try:
         # /tmp itself is a system symlink on macOS. Resolve the parent, then
         # pin that directory; the metadata basename is never followed.
@@ -116,6 +117,7 @@ def publish_metadata(path, metadata):
             temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
             0o600, dir_fd=parent_fd,
         )
+        created = True
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             os.fchmod(handle.fileno(), 0o600)
             json.dump(metadata, handle, separators=(",", ":"))
@@ -123,6 +125,7 @@ def publish_metadata(path, metadata):
             os.fsync(handle.fileno())
         check_entry(path, "pid")
         os.replace(temporary, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        created = False
     except OSError as exc:
         if isinstance(exc, DaemonStateError):
             raise
@@ -130,7 +133,8 @@ def publish_metadata(path, metadata):
     finally:
         if parent_fd is not None:
             try:
-                os.unlink(temporary, dir_fd=parent_fd)
+                if created:
+                    os.unlink(temporary, dir_fd=parent_fd)
             except FileNotFoundError:
                 pass
             finally:

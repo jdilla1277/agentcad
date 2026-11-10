@@ -184,6 +184,34 @@ def test_failed_atomic_publication_keeps_previous_metadata(tmp_path, monkeypatch
     assert list(tmp_path.iterdir()) == [pid]
 
 
+def test_failed_temp_creation_never_removes_an_existing_file(tmp_path, monkeypatch):
+    pid = tmp_path / "daemon.pid"
+    daemon._write_pid_metadata(pid, pid=123, instance_id="keep")
+    original = pid.read_bytes()
+    existing = tmp_path / "existing.tmp"
+    existing.write_text("do not delete")
+    original_open = os.open
+
+    def occupied_name(path, flags, *args, **kwargs):
+        if flags & os.O_EXCL:
+            # Deterministically model a collision on the randomly chosen name.
+            existing.rename(tmp_path / path)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", occupied_name)
+    with pytest.raises(OSError):
+        daemon._write_pid_metadata(pid, pid=456, instance_id="new")
+    assert pid.read_bytes() == original
+    remaining = [path for path in tmp_path.iterdir() if path != pid]
+    assert len(remaining) == 1 and remaining[0].read_text() == "do not delete"
+
+
+def test_atomic_metadata_supports_long_operator_pid_names(tmp_path):
+    pid = tmp_path / ("p" * 240)
+    daemon._write_pid_metadata(pid, pid=123, instance_id="test")
+    assert daemon._read_pid_metadata(pid)["pid"] == 123
+
+
 def test_pid_read_does_not_follow_a_link_swapped_after_validation(tmp_path, monkeypatch):
     pid = tmp_path / "daemon.pid"
     daemon._write_pid_metadata(pid, pid=123, instance_id="original")
