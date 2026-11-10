@@ -10,7 +10,8 @@ import shlex
 
 from agentcad.geometry_manifest import BaselineGeometry, MANIFEST_NAME, _digest, read_manifest
 from agentcad.inspection_samples import dimensions, select_samples
-from agentcad.versioning import atomic_write_json
+from agentcad.inspection_cache import cache_lease, CacheResourceLimit
+from agentcad.project import get_project
 
 REPORT_REVISION = "inspection-report-v2"
 DEFAULT_TEXT_BUDGET = 2000
@@ -118,7 +119,8 @@ def _analysis(step, output_root, saved, meta, session):
     # A report is derived; creating it must not change the durable ID registry.
     if read_manifest(step)["manifest_id"] != saved["manifest_id"]:
         raise ValueError("Baseline changed while preparing the inspection report.")
-    atomic_write_json(path, {**data, "sha256": _digest(data)})
+    with cache_lease(output_root) as cache:
+        cache.publish_json(path, {**data, "sha256": _digest(data)})
     return data, path
 
 
@@ -144,6 +146,19 @@ def _estimated_tokens(payload):
 def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMAGES,
                       text_budget=DEFAULT_TEXT_BUDGET, meta=None, response_path=str, response_extra=None,
                       _checkpoint=None):
+    """Prepare a bounded gallery while protecting its artifacts during reads."""
+    with cache_lease(output_root) as cache:
+        payload, prepared = _inspection_report(step_path, output_root, images=images, max_images=max_images,
+            text_budget=text_budget, meta=meta, response_path=response_path, response_extra=response_extra,
+            _checkpoint=_checkpoint)
+        cache.use([prepared["report"], prepared["bundle"], *[Path(row["png"]) if Path(row["png"]).is_absolute() else Path(output_root) / "inspection" / Path(row["png"]).name for row in prepared["media"]]])
+        payload["retention"] = cache.reference()
+        return compact_report(payload), prepared
+
+
+def _inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMAGES,
+                      text_budget=DEFAULT_TEXT_BUDGET, meta=None, response_path=str, response_extra=None,
+                      _checkpoint=None):
     """Reuse analysis and prepare a bounded deterministic gallery.
 
     Budget applies to this report object. The legacy import envelope is a
@@ -155,10 +170,12 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         raise ValueError("text_budget must be positive.")
     step, output_root = Path(step_path), Path(output_root)
     saved = read_manifest(step)
-    session = {}
+    session = {"_report_scope": True}
     checkpoint = _checkpoint or (lambda *args: None)
     checkpoint("analysis", "running", [])
     data, path = _analysis(step, output_root, saved, meta if meta is not None else _read_meta(step), session)
+    with cache_lease(output_root) as cache:
+        cache.use([path])
     checkpoint("analysis", "complete", [path])
     from agentcad.geometry_images import geometry_image
 
@@ -173,6 +190,8 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         try:
             sheet = geometry_image(step, output_root, object_id=planned["target_id"],
                                    isolate=planned["isolate"], _session=session)
+        except CacheResourceLimit:
+            raise
         except Exception as exc:
             omitted.append({"id": planned["id"], "reason": "image_failed", "message": str(exc)[:240]})
             checkpoint(stage, "failed", [])
@@ -185,16 +204,20 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
     # Publish the full delivery catalogue separately so budget truncation never
     # hides which samples were chosen or how to retrieve their images.
     reused = data["overall_reused_for"] if any(row["id"] == "overall" for row in media) else None
-    catalogue = {"analysis_revision": data["analysis_revision"], "media": media, "omitted": omitted,
+    catalogue = {"analysis_revision": data["analysis_revision"], "manifest_id": data["manifest_id"],
+                 "baseline_sha256": data["baseline_sha256"], "media": media, "omitted": omitted,
                  "overall_reused_for": reused}
     catalogue_id = _digest(catalogue)
     catalogue_path = output_root / "inspection" / f"bundle_{catalogue_id[:16]}.json"
     checkpoint("catalogue", "running", [])
-    atomic_write_json(catalogue_path, catalogue)
+    with cache_lease(output_root) as cache:
+        cache.publish_json(catalogue_path, catalogue)
     checkpoint("catalogue", "complete", [catalogue_path])
     manifest_path = response_path(step.with_name(MANIFEST_NAME))
     report_path = response_path(path)
     command = f"agentcad inspect {shlex.quote(response_path(step))}"
+    if get_project().configured:
+        command += " --build-dir " + shlex.quote(str(get_project().build_root))
     payload = {
         "command": "inspect", "status": "success", "analysis_revision": data["analysis_revision"],
         "manifest_id": data["manifest_id"], "version": data["version"], "baseline_sha256": data["baseline_sha256"],
@@ -203,6 +226,7 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         "provenance": {**data["provenance"], "filename": str(data["provenance"].get("filename", ""))[:80]},
         "inventory": {"manifest": manifest_path, "report": report_path,
                       "bundle": response_path(catalogue_path), "parts_total": len(data["parts"]),
+                      "retrieve": {"artifact": "manifest"},
                       "image_root": response_path(output_root / "inspection")},
         "parts": deepcopy(data["parts"][:10]), "samples": deepcopy(data["samples"]),
         "sample_totals": {group: len(values) for group, values in data["samples"].items()},

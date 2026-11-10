@@ -321,9 +321,14 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
     by `agentcad init` by default), or return its content as JSON for another
     agent integration.
 
+  agentcad feedback
+  agentcad feedback --template --output feedback.md
+  agentcad feedback --file feedback.md [--max-entries N] [--local-only]
   agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
-    Save a diagnostic bundle under .agentcad/feedback and, unless --local-only,
-    send it to the agentcad team. The bundle includes recent session context.
+    Get guided questions, fill in a Markdown report, then submit it with recent
+    session context. Quick notes still work. The full bundle is saved locally
+    before uploading; --local-only keeps it local. --file - reads stdin.
+    Explicit --template without --output exports Markdown rather than JSON.
 
   agentcad subscribe EMAIL
     Request product updates. Subscription uses email confirmation (double opt-in).
@@ -499,6 +504,7 @@ class _InvocationOutput:
     def __init__(self, ctx):
         self.ctx = ctx
         self.captured = []
+        self.complete_result = None
 
     def process(self, message, err):
         if message is not None and not err:
@@ -517,7 +523,12 @@ class _InvocationOutput:
                             from agentcad.run_requests import finish_response
                             payload = finish_response(payload)
                         from agentcad.inspection_delivery import apply_delivery
-                        message = json.dumps(apply_delivery(format_response(payload, layout), layout, self.ctx))
+                        formatted = format_response(payload, layout)
+                        if self.ctx.meta.get("inspection_delivery_policy") is not None:
+                            # Presentation may omit viewer fields; lifecycle
+                            # decisions must still use the complete outcome.
+                            self.complete_result = formatted
+                        message = json.dumps(apply_delivery(formatted, layout, self.ctx))
                 except (TypeError, json.JSONDecodeError):
                     pass
         if message is not None:
@@ -584,6 +595,12 @@ class _LoggingGroup(click.Group):
             if standalone_mode:
                 raise SystemExit(exc.exit_code)
             raise
+
+    def parse_args(self, ctx, args):
+        # CliRunner and MCP pass request-specific args without changing sys.argv.
+        # Copy before Click consumes them, and keep them on this invocation only.
+        ctx.meta["invocation_argv"] = list(args)
+        return super().parse_args(ctx, args)
 
     def _usage_error_payload(self, exc, raw_args):
         command = (
@@ -916,9 +933,10 @@ class _LoggingGroup(click.Group):
         finally:
             _INVOCATION_OUTPUT.reset(token)
             self._log_session(ctx, captured)
-            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
+            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1],
+                                    complete_result=output.complete_result)
 
-    def _record_live_build(self, ctx, captured, root, exception=None):
+    def _record_live_build(self, ctx, captured, root, exception=None, *, complete_result=None):
         if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay") or ctx.meta.get("run_replay"):
             return
         layout = ctx.meta.get("project_layout")
@@ -926,8 +944,8 @@ class _LoggingGroup(click.Group):
             root = layout.build_root
         if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
             return
-        result = {}
-        for line in reversed(captured):
+        result = complete_result or {}
+        for line in reversed(captured) if complete_result is None else ():
             try:
                 candidate = json.loads(line)
                 if isinstance(candidate, dict):
@@ -985,8 +1003,8 @@ class _LoggingGroup(click.Group):
         # With no command result, do not create state in an unselected root.
         if not result:
             return
-        # Collect the raw args from sys.argv
-        args = sys.argv[2:] if len(sys.argv) > 2 else []
+        # The first argument is the subcommand already recorded as cmd_name.
+        args = ctx.meta.get("invocation_argv", [])[1:]
         try:
             logger = SessionLogger(get_project().build_root)
             logger.log(cmd_name, {"argv": args}, result)

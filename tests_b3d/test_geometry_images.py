@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+from tests.inspection_helpers import full_response_args
 from PIL import Image
 
 from agentcad.cli import cli
@@ -23,7 +25,7 @@ def _baseline(root, source=None):
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, full_response_args(args))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 

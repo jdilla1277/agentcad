@@ -338,15 +338,28 @@ follow the returned status/wait/resume/cancel actions. These wait controls do
 not change import retry identity. See [inspection jobs](docs/inspection-jobs.md)
 for CLI/MCP examples, checkpoints and cancellation behavior.
 
-Agents can supply `--context-window`, `--response-budget`,
+Import and `inspect --report` default to a 2,000-estimated-token limit for the
+complete JSON response, with bounded image samples and a full-response retrieval
+action. `--full-response` opts out of whole-response compaction. Agents can supply `--context-window`, `--response-budget`,
 `--response-text-budget`, `--image-budget` and a caller-estimated
 `--vision-profile` to bound complete inspection delivery. Limited responses
 include a full saved response and an executable retrieval action. See
 [inspection budgets](docs/inspection-budgets.md) for estimates, CLI/MCP parity
-and the distinction between whole-response limits and the legacy report cap.
+and the distinction between whole-response limits and report preparation.
 Saved response snapshots default to 30 days and 64 MiB per build root, with
 configurable limits and explicit expiry/eviction responses. Cleanup preserves
 geometry, issued IDs, import retry records and resumable jobs.
+Analysis, image sheets and completed job results also have shared
+[cache limits](docs/inspection-cache.md), defaulting to 30 days/512 MiB per build
+root. Resumable checkpoints remain protected; a full quota stops enrichment
+with a resume action while preserving the imported model.
+
+To retrieve the complete inventory without opening server-side files, call
+`inspect(artifact="manifest", file=..., cwd=...)` (CLI: `inspect FILE --artifact
+manifest`). Saved report/image paths and `artifact="baseline"` use the same
+bounded byte transfer, with checksums and copyable continuations. See
+[inspection artifacts](docs/inspection-artifacts.md). This works through the
+existing MCP tool connection; the separate `cloud_*` API is unchanged.
 
 ### Cloud projects
 
@@ -365,8 +378,8 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 `AGENTCAD_KEY_ID`, and `AGENTCAD_KEY_SECRET` in the server process environment.
 Keep credentials in a password manager, outside project files and agent prompts.
 
-The bounded CLI adapter is available in AgentCAD 0.7.1. Install it with
-`pip install 'agentcad[cloud]==0.7.1'` (also included in `agentcad[mcp]`),
+For the local cloud CLI, install
+`pip install 'agentcad[cloud]==0.7.2'` (also included in `agentcad[mcp]`),
 as shown in the guide above:
 
 ```bash
@@ -403,3 +416,16 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## Feedback
 
 If your agent struggles, run `agentcad feedback "what happened"` to capture a friction log.
+
+For a detailed session report, guided feedback is prepared for the next release:
+
+```bash
+agentcad feedback --template --output feedback.md
+# Fill in the task, what happened, evidence, and any workaround.
+agentcad feedback --file feedback.md
+```
+
+Creating a template sends nothing. Reports include recent session context;
+review what you send, or add `--local-only` to keep it local. Partial reports,
+positive feedback, and ideas are welcome. See `agentcad docs feedback` for
+file/stdin input and upload receipts.

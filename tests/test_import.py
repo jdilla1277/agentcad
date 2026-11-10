@@ -11,6 +11,8 @@ from pathlib import Path
 
 import cadquery as cq
 import pytest
+
+from tests.inspection_helpers import full_response_args
 from cadquery import exporters
 
 from agentcad import __version__
@@ -63,7 +65,7 @@ def _invalid_brep(directory: Path, name: str = "invalid.brep") -> Path:
 
 
 def _init_project(runner, isolated_dir):
-    result = runner.invoke(cli, ["init"])
+    result = runner.invoke(cli, full_response_args(["init"]))
     assert result.exit_code == 0, result.output
 
 
@@ -73,7 +75,7 @@ class TestImportCore:
     def test_import_step_produces_v1(self, runner, isolated_dir):
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step)])
+        result = runner.invoke(cli, full_response_args(["import", str(step)]))
 
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.stdout)
@@ -87,7 +89,7 @@ class TestImportCore:
     ):
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, full_response_args(["import", str(step)]))
 
         v1_dir = isolated_dir / "v1_bracket"
         assert v1_dir.is_dir()
@@ -107,7 +109,7 @@ class TestImportCore:
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
         original_bytes = step.read_bytes()
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, full_response_args(["import", str(step)]))
 
         source_copy = isolated_dir / "v1_bracket" / "source.step"
         assert source_copy.read_bytes() == original_bytes
@@ -116,7 +118,7 @@ class TestImportCore:
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
         original_sha = hashlib.sha256(step.read_bytes()).hexdigest()
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, full_response_args(["import", str(step)]))
 
         meta = json.loads(
             (isolated_dir / "v1_bracket" / "meta.json").read_text()
@@ -129,7 +131,7 @@ class TestImportCore:
     def test_manifest_entry_marks_source_as_import(self, runner, isolated_dir):
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, full_response_args(["import", str(step)]))
 
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
         assert len(manifest["versions"]) == 1
@@ -144,7 +146,7 @@ class TestImportCore:
     def test_response_includes_metrics(self, runner, isolated_dir):
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step)])
+        result = runner.invoke(cli, full_response_args(["import", str(step)]))
         parsed = json.loads(result.stdout)
         assert "metrics" in parsed
         # Bracket has a real volume; sanity check.
@@ -168,7 +170,7 @@ class TestImportCore:
         source = _invalid_brep(isolated_dir)
 
         result = runner.invoke(
-            cli, ["import", str(source), "--no-view"]
+            cli, full_response_args(["import", str(source), "--no-view"])
         )
 
         assert result.exit_code == 1
@@ -210,7 +212,7 @@ class TestImportCore:
         )
 
         result = runner.invoke(
-            cli, ["import", str(source), "--no-view", "--no-daemon"]
+            cli, full_response_args(["import", str(source), "--no-view", "--no-daemon"])
         )
 
         assert result.exit_code == 0
@@ -243,7 +245,7 @@ class TestImportCore:
 
         monkeypatch.setattr(target, injected_failure)
         result = runner.invoke(
-            cli, ["import", str(source), "--no-view", "--no-daemon"]
+            cli, full_response_args(["import", str(source), "--no-view", "--no-daemon"])
         )
 
         assert result.exit_code == 0
@@ -263,7 +265,7 @@ class TestImportCore:
         and a more_at pointer."""
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step)])
+        result = runner.invoke(cli, full_response_args(["import", str(step)]))
         parsed = json.loads(result.stdout)
         assert "next_actions" in parsed
         assert 1 <= len(parsed["next_actions"]) <= 2
@@ -276,15 +278,15 @@ class TestImportCore:
         scripted ones via the `source` field — required for the audit trail."""
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
-        result = runner.invoke(cli, ["context"])
+        runner.invoke(cli, full_response_args(["import", str(step)]))
+        result = runner.invoke(cli, full_response_args(["context"]))
         parsed = json.loads(result.stdout)
         assert parsed["versions"][0]["source"] == "import"
 
     def test_label_override(self, runner, isolated_dir):
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step), "--label", "vendor_part"])
+        result = runner.invoke(cli, full_response_args(["import", str(step), "--label", "vendor_part"]))
         parsed = json.loads(result.stdout)
         assert parsed["label"] == "vendor_part"
         assert (isolated_dir / "v1_vendor_part").is_dir()
@@ -298,9 +300,9 @@ class TestImportAutoDiff:
         should auto-diff against the first."""
         _init_project(runner, isolated_dir)
         first = _box_step(isolated_dir, "rev_a.step")
-        runner.invoke(cli, ["import", str(first)])
+        runner.invoke(cli, full_response_args(["import", str(first)]))
         second = _bracket_step(isolated_dir, "rev_b.step")
-        result = runner.invoke(cli, ["import", str(second)])
+        result = runner.invoke(cli, full_response_args(["import", str(second)]))
         parsed = json.loads(result.stdout)
         assert "diff" in parsed
         assert parsed["diff"]["against"] == "rev_a"
@@ -322,14 +324,14 @@ class TestImportAutoDiff:
     ):
         _init_project(runner, isolated_dir)
         first = _box_step(isolated_dir, "rev_a.step")
-        runner.invoke(cli, [
+        runner.invoke(cli, full_response_args([
             "import", str(first), "--no-view", "--no-daemon",
-        ])
+        ]))
         second = _bracket_step(isolated_dir, "rev_b.step")
 
-        result = runner.invoke(cli, [
+        result = runner.invoke(cli, full_response_args([
             "import", str(second), "--no-view", "--no-daemon",
-        ])
+        ]))
 
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.stdout)
@@ -359,9 +361,9 @@ class TestImportAutoDiff:
     ):
         _init_project(runner, isolated_dir)
         first = _box_step(isolated_dir, "rev_a.step")
-        runner.invoke(cli, [
+        runner.invoke(cli, full_response_args([
             "import", str(first), "--no-view", "--no-daemon",
-        ])
+        ]))
         second = _bracket_step(isolated_dir, "rev_b.step")
 
         def fail_exact(*_args, **_kwargs):
@@ -371,9 +373,9 @@ class TestImportAutoDiff:
             "agentcad.solid_compare.bounded_compare_solid_volumes", fail_exact
         )
         monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
-        result = runner.invoke(cli, [
+        result = runner.invoke(cli, full_response_args([
             "import", str(second), "--no-view", "--no-daemon",
-        ])
+        ]))
 
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.stdout)
@@ -399,9 +401,9 @@ class TestImportAutoDiff:
     ):
         _init_project(runner, isolated_dir)
         first = _box_step(isolated_dir, "rev_a.step")
-        runner.invoke(cli, [
+        runner.invoke(cli, full_response_args([
             "import", str(first), "--no-view", "--no-daemon",
-        ])
+        ]))
         second = _bracket_step(isolated_dir, "rev_b.step")
 
         def exact_timeout(*_args, **_kwargs):
@@ -422,9 +424,9 @@ class TestImportAutoDiff:
             exact_timeout,
         )
         monkeypatch.setenv("AGENTCAD_APPROX_RESOLUTION_MM", "1")
-        result = runner.invoke(cli, [
+        result = runner.invoke(cli, full_response_args([
             "import", str(second), "--no-view", "--no-daemon",
-        ])
+        ]))
 
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.stdout)
@@ -443,9 +445,9 @@ class TestImportAutoDiff:
     ):
         _init_project(runner, isolated_dir)
         first = _box_step(isolated_dir, "rev_a.step")
-        baseline = runner.invoke(cli, [
+        baseline = runner.invoke(cli, full_response_args([
             "import", str(first), "--no-view", "--no-daemon",
-        ])
+        ]))
         assert baseline.exit_code == 0, baseline.output
         second = _bracket_step(isolated_dir, "rev_b.step")
 
@@ -460,9 +462,9 @@ class TestImportAutoDiff:
         ):
             monkeypatch.setattr(target, forbidden)
 
-        result = runner.invoke(cli, [
+        result = runner.invoke(cli, full_response_args([
             "import", str(second), "--no-diff", "--no-view", "--no-daemon",
-        ])
+        ]))
 
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.stdout)
@@ -492,7 +494,7 @@ class TestImportRejectsNonTier0:
             "vertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n"
             "endloop\nendfacet\nendsolid x\n"
         )
-        result = runner.invoke(cli, ["import", str(stl)])
+        result = runner.invoke(cli, full_response_args(["import", str(stl)]))
         # Non-zero exit because the file isn't importable for editing.
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
@@ -509,7 +511,7 @@ class TestImportRejectsNonTier0:
         _init_project(runner, isolated_dir)
         bogus = isolated_dir / "widget.step"
         bogus.write_text("<!DOCTYPE html>\n<html>404</html>\n")
-        result = runner.invoke(cli, ["import", str(bogus)])
+        result = runner.invoke(cli, full_response_args(["import", str(bogus)]))
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "malformed"
@@ -517,7 +519,7 @@ class TestImportRejectsNonTier0:
 
     def test_missing_file_returns_clean_error(self, runner, isolated_dir):
         _init_project(runner, isolated_dir)
-        result = runner.invoke(cli, ["import", "nope.step"])
+        result = runner.invoke(cli, full_response_args(["import", "nope.step"]))
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "error"
@@ -532,7 +534,7 @@ class TestImportInitFlag:
         --init lets the agent get past the 'no manifest' wall in one command."""
         # NO `agentcad init` — start from empty dir.
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", "--init", str(step)])
+        result = runner.invoke(cli, full_response_args(["import", "--init", str(step)]))
         assert result.exit_code == 0, result.output
         assert (isolated_dir / "agentcad.json").exists()
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
@@ -544,7 +546,7 @@ class TestImportInitFlag:
         self, runner, isolated_dir
     ):
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step)])
+        result = runner.invoke(cli, full_response_args(["import", str(step)]))
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "error"
@@ -567,7 +569,7 @@ class TestImportBrep:
         BRepTools.Write_s(topo_shape, str(brep_path))
 
         _init_project(runner, isolated_dir)
-        result = runner.invoke(cli, ["import", str(brep_path)])
+        result = runner.invoke(cli, full_response_args(["import", str(brep_path)]))
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "success"
@@ -586,10 +588,10 @@ class TestImportLabelCollision:
         get distinct version directories via the version number prefix."""
         _init_project(runner, isolated_dir)
         first = _bracket_step(isolated_dir, "rev.step")
-        runner.invoke(cli, ["import", str(first)])
+        runner.invoke(cli, full_response_args(["import", str(first)]))
         # Overwrite with a different shape but same filename
         second = _box_step(isolated_dir, "rev.step")
-        result = runner.invoke(cli, ["import", str(second)])
+        result = runner.invoke(cli, full_response_args(["import", str(second)]))
         assert result.exit_code == 0, result.output
         assert (isolated_dir / "v1_rev").is_dir()
         assert (isolated_dir / "v2_rev").is_dir()
@@ -638,8 +640,8 @@ class TestImportSubprocessContract:
 
 class TestInitForce:
     def test_init_force_overwrites_existing_manifest(self, runner, isolated_dir):
-        runner.invoke(cli, ["init", "--name", "first"])
-        result = runner.invoke(cli, ["init", "--name", "second", "--force"])
+        runner.invoke(cli, full_response_args(["init", "--name", "first"]))
+        result = runner.invoke(cli, full_response_args(["init", "--name", "second", "--force"]))
         assert result.exit_code == 0, result.output
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
         assert manifest["name"] == "second"
@@ -649,8 +651,8 @@ class TestInitForce:
     ):
         """Existing behavior preserved — bare `init` on a manifested folder
         still errors. Only --force changes that."""
-        runner.invoke(cli, ["init"])
-        result = runner.invoke(cli, ["init"])
+        runner.invoke(cli, full_response_args(["init"]))
+        result = runner.invoke(cli, full_response_args(["init"]))
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "error"
@@ -668,7 +670,7 @@ def test_import_routes_through_daemon_when_available(runner, isolated_dir, monke
         "agentcad.daemon.send_request",
         lambda *a, **kw: {"type": "result", "exit_code": 0, "output": daemon_output},
     )
-    result = runner.invoke(cli, ["import", "any.step"])
+    result = runner.invoke(cli, full_response_args(["import", "any.step"]))
     assert result.exit_code == 0, result.stdout
     parsed = json.loads(result.stdout)
     assert parsed["via"] == "daemon"
@@ -690,13 +692,13 @@ def test_import_routes_no_diff_flag_through_daemon(
         }
 
     monkeypatch.setattr("agentcad.daemon.send_request", fake_send_request)
-    result = runner.invoke(cli, [
+    result = runner.invoke(cli, full_response_args([
         "import", "any.step", "--label", "fast", "--no-diff", "--no-view",
-    ])
+    ]))
 
     assert result.exit_code == 0, result.output
     assert requests[0]["argv"] == [
-        "import", "any.step", "--label", "fast", "--no-view", "--no-diff",
+        "import", "any.step", "--label", "fast", "--no-view", "--no-diff", "--full-response",
     ]
 
 
@@ -724,7 +726,7 @@ def test_import_no_daemon_flag_skips_routing_and_spawn(
 
     _init_project(runner, isolated_dir)
     step = _box_step(isolated_dir)
-    result = runner.invoke(cli, ["import", str(step), "--no-daemon"])
+    result = runner.invoke(cli, full_response_args(["import", str(step), "--no-daemon"]))
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["status"] == "success"
@@ -754,7 +756,7 @@ def test_successful_import_without_flag_still_routes_then_spawns(
 
     _init_project(runner, isolated_dir)
     step = _box_step(isolated_dir)
-    result = runner.invoke(cli, ["import", str(step)])
+    result = runner.invoke(cli, full_response_args(["import", str(step)]))
 
     assert result.exit_code == 0, result.output
     assert len(route_calls) == 1
@@ -776,7 +778,7 @@ class TestImportInitRuntime:
     def test_init_runtime_cadquery_pins_the_manifest(self, runner, isolated_dir):
         step = _bracket_step(isolated_dir)
         result = runner.invoke(
-            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+            cli, full_response_args(["import", "--init", "--runtime", "cadquery", str(step)])
         )
         assert result.exit_code == 0, result.output
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
@@ -788,7 +790,7 @@ class TestImportInitRuntime:
         """The scaffold follows the manifest, so pinning cq must reach edit.py."""
         step = _bracket_step(isolated_dir)
         result = runner.invoke(
-            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+            cli, full_response_args(["import", "--init", "--runtime", "cadquery", str(step)])
         )
         assert result.exit_code == 0, result.output
         scaffold = (isolated_dir / "edit.py").read_text()
@@ -801,8 +803,8 @@ class TestImportInitRuntime:
     ):
         """The acceptance criterion: no `--runtime` needed on the follow-up run."""
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", "--init", "--runtime", "cadquery", str(step)])
-        result = runner.invoke(cli, ["run", "edit.py", "--output", "scaffold_baseline"])
+        runner.invoke(cli, full_response_args(["import", "--init", "--runtime", "cadquery", str(step)]))
+        result = runner.invoke(cli, full_response_args(["run", "edit.py", "--output", "scaffold_baseline"]))
         assert result.exit_code == 0, result.output
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "success", parsed
@@ -813,7 +815,7 @@ class TestImportInitRuntime:
     ):
         step = _bracket_step(isolated_dir)
         result = runner.invoke(
-            cli, ["import", "--init", "--runtime", "build123d", str(step)]
+            cli, full_response_args(["import", "--init", "--runtime", "build123d", str(step)])
         )
         assert result.exit_code == 0, result.output
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
@@ -824,7 +826,7 @@ class TestImportInitRuntime:
     ):
         """Unchanged behaviour, pinned so the default cannot drift silently."""
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", "--init", str(step)])
+        result = runner.invoke(cli, full_response_args(["import", "--init", str(step)]))
         assert result.exit_code == 0, result.output
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
         assert manifest["runtime"] == "build123d"
@@ -839,7 +841,7 @@ class TestImportInitRuntime:
         """
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", "--runtime", "cadquery", str(step)])
+        result = runner.invoke(cli, full_response_args(["import", "--runtime", "cadquery", str(step)]))
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
         assert parsed["status"] == "error"
@@ -856,7 +858,7 @@ class TestImportInitRuntime:
         _init_project(runner, isolated_dir)
         step = _bracket_step(isolated_dir)
         result = runner.invoke(
-            cli, ["import", "--init", "--runtime", "cadquery", str(step)]
+            cli, full_response_args(["import", "--init", "--runtime", "cadquery", str(step)])
         )
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
@@ -872,7 +874,7 @@ class TestImportInitRuntime:
     ):
         result = runner.invoke(
             cli,
-            ["import", "--runtime", "cadquery", str(isolated_dir / "part.step")],
+            full_response_args(["import", "--runtime", "cadquery", str(isolated_dir / "part.step")]),
         )
         assert result.exit_code != 0
         parsed = json.loads(result.stdout)
@@ -884,7 +886,7 @@ class TestImportInitRuntime:
     def test_runtime_rejects_an_unknown_engine(self, runner, isolated_dir):
         step = _bracket_step(isolated_dir)
         result = runner.invoke(
-            cli, ["import", "--init", "--runtime", "openscad", str(step)]
+            cli, full_response_args(["import", "--init", "--runtime", "openscad", str(step)])
         )
         assert result.exit_code != 0
         assert "openscad" in result.output

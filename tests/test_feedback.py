@@ -13,9 +13,11 @@ def test_feedback_subcommand_registered(runner):
     assert "feedback" in result.output.lower()
 
 
-def test_feedback_requires_message(runner, isolated_dir):
+def test_feedback_without_message_is_a_guide_not_a_submission(runner, isolated_dir):
     result = runner.invoke(cli, ["feedback"])
-    assert result.exit_code != 0
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["mode"] == "template" and output["submitted"] is False
 
 
 def test_feedback_outputs_bundle_json(runner, isolated_dir):

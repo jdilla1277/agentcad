@@ -313,6 +313,31 @@ Before handoff, confirm:
 Export success only means a file was written. The STEP verdict does not certify
 STL, GLB, or OBJ bytes.
 
+## Share feedback
+
+When a modeling session reveals friction, a useful workaround, or something
+that worked particularly well, share it with the AgentCAD team:
+
+```bash
+agentcad feedback --template --output feedback.md
+# Fill in the report with your actual task and observations.
+agentcad feedback --file feedback.md
+```
+
+The template asks what you were trying to do, what happened, what you expected,
+and any evidence or workaround. Positive feedback and ideas are welcome too.
+No section is mandatory. Keep spontaneous mid-task notes easy:
+`agentcad feedback "your observation"` still works without filling in a form.
+
+Reports include recent command arguments/results, environment and friction
+signals. Review what you are sending. `--local-only` saves without uploading.
+The full bundle is saved locally before upload; file submissions return a
+compact JSON receipt with `bundle_file`, `remote`, `discord`, and `neon_row_id`.
+`status: "partial"` means upload was not confirmed and the local copy remains. A failed
+Discord notification after remote storage does not require resubmitting.
+`agentcad feedback` alone returns a JSON guide and sends nothing. Explicit
+`--template` without `--output` exports Markdown on stdout; `--file -` reads stdin.
+
 ## Script writing rules
 
 - `show_object(result)` is required — at least one call.

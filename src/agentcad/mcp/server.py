@@ -246,7 +246,7 @@ def _build_args(args: list[str], build_dir: str | None) -> list[str]:
 def _invoke(args: list[str], cwd: str | None = None) -> dict:
     """Invoke an agentcad CLI command and return parsed JSON response."""
     runner = CliRunner()
-    env = {"AGENTCAD_DAEMON": "1", "AGENTCAD_NO_LOG": "1"}
+    env = {"AGENTCAD_DAEMON": "1"}
 
     old_cwd = os.getcwd()
     try:
@@ -263,7 +263,7 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     )
 
 
-def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
+def _with_images(result, media, *, cwd, image_root=None, keep_core=False, full_response=False):
     """Attach only the images named by the response, checking bytes at delivery."""
     from agentcad.inspection_delivery import finalize_mcp
 
@@ -284,21 +284,32 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False):
         return package(result)
     attachments = []
     try:
+        paths = []
         for item in media:
             path = Path(item["png"])
             if image_root is not None:
                 path = Path(image_root) / path
             if not path.is_absolute():
                 path = Path(cwd) / path
-            png = path.read_bytes()
-            if hashlib.sha256(png).hexdigest() != item["sha256"]:
-                raise ValueError("Image changed before attachment; retry the image request.")
-            if not png.startswith(b"\x89PNG\r\n\x1a\n"):
-                raise ValueError("Inspection image is not a PNG; retry the image request.")
-            attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
+            paths.append(path.resolve())
+        from agentcad.inspection_cache import cache_lease
+        from agentcad.project import ProjectLayout
+        layout = ProjectLayout(Path(result.get("project_root", cwd)), Path(result.get("build_root", cwd)))
+        declared = result.get("inspection", result).get("retention") or result.get("image", {}).get("retention")
+        with cache_lease(paths[0].parent.parent, layout=layout, protect=paths) as cache:
+            cache.validate(paths, declared)
+            for path, item in zip(paths, media):
+                png = path.read_bytes()
+                if hashlib.sha256(png).hexdigest() != item["sha256"]:
+                    raise ValueError("Image changed before attachment; retry the image request.")
+                if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+                    raise ValueError("Inspection image is not a PNG; retry the image request.")
+                attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
     except (OSError, ValueError) as exc:
         if keep_core and result.get("core", {}).get("status") == "success":
             action = ["agentcad", "inspect", result["outputs"]["step"], "--report"]
+            if full_response:
+                action.append("--full-response")
             budget = result.get("inspection", {}).get("budget", {})
             for field, option in (("max_images", "--max-images"), ("text_tokens", "--text-budget")):
                 if field in budget:
@@ -344,6 +355,7 @@ def import_cad(
     response_text_budget: int | None = None,
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
+    full_response: bool = False,
 ) -> Any:
     """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
 
@@ -352,7 +364,9 @@ def import_cad(
     maps to CLI --init and can create the selected project/build root. New
     projects default to build123d; runtime only pins a newly initialized project.
 
-    Default: CLI import JSON, including quality, dimensions, saved inventories
+    Default: complete CLI JSON limited to 2000 estimated text tokens, including
+    import/job metadata, with nested inspection, a delivery audit and full saved
+    response_snapshot retrieval. Includes quality, dimensions, saved inventories
     and up to nine actual PNG image blocks (overall + up to four part/four raw
     face-edge samples). Images and selectors name the same version-local IDs.
     Named design-feature recognition is not available. Artifacts and edit.py
@@ -361,8 +375,11 @@ def import_cad(
     report=False omits inline inspection and attachments but retains the saved
     bundle. report_images=False skips inspection media while keeping the report;
     max_images (0..9) caps media. Neither disables legacy preview artifacts.
-    text_budget bounds the inspection object (default 2000 estimated tokens),
-    excluding legacy import metadata; image-token cost is unknown. view/diff
+    text_budget separately bounds report preparation (default 2000 estimated
+    tokens). Unknown context uses the whole-text fallback and image caps;
+    image-token cost is unknown. full_response=True skips whole-response
+    compaction and retains complete command fields, but report preparation
+    limits still apply. Do not combine full_response with caller budgets. view/diff
     match CLI defaults; set view=False for no browser handoff. build_dir selects
     the artifact/history root, relative to the project root. Attachment failure
     preserves successful core import and returns explicit image_delivery status.
@@ -393,6 +410,10 @@ def import_cad(
     agentcad.toml; references report retention/expiry. This never evicts geometry,
     IDs, import retry evidence or job checkpoints. An oversized snapshot reports
     delivery.status=resource_limit while preserving the import outcome.
+    Reports/images and completed job results share a separate 30-day/512 MiB
+    cache per build root, configured under [inspection.cache]. Resumable job
+    checkpoints are protected; a resource_limit job has stopped. Raise the
+    quota and use its resume action. retention states expiry/protected bytes.
 
     checks_file maps to CLI --checks, including on initialize=True imports.
     Requirements are inherited when omitted; changing them requires actor and
@@ -407,6 +428,8 @@ def import_cad(
     optional inspection media can be prepared later with inspect.
     """
     args = ["import", file]
+    if full_response:
+        args.append("--full-response")
     if idempotency_key is not None:
         args.extend(["--idempotency-key", idempotency_key])
     if label is not None:
@@ -441,7 +464,8 @@ def import_cad(
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
     inspection = result.get("inspection", {})
     return _with_images(result, inspection.get("media", []), cwd=cwd,
-                        image_root=inspection.get("inventory", {}).get("image_root"), keep_core=True)
+                        image_root=inspection.get("inventory", {}).get("image_root"), keep_core=True,
+                        full_response=full_response)
 
 
 @mcp.tool()
@@ -665,11 +689,17 @@ def inspect(
     job_id: str | None = None,
     job_action: Literal["status", "wait", "resume", "cancel"] | None = None,
     response_snapshot: str | None = None,
+    artifact: str | None = None,
+    artifact_offset: int = 0,
+    artifact_bytes: int = 3072,
+    artifact_sha256: str | None = None,
+    artifact_expires_at: str | None = None,
     context_window: int | None = None,
     response_budget: int | None = None,
     response_text_budget: int | None = None,
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
+    full_response: bool = False,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
@@ -685,7 +715,12 @@ def inspect(
         entity_id: Retrieve one typed ID from an imported or run-generated baseline's geometry manifest.
         image: Return a labeled four-view PNG attachment plus its JSON record.
         isolate: Show only the selected entity; requires image and entity_id.
-        report: Return the saved compact inspection report and ranked sample bundle.
+        report: Return nested inspection plus a whole-response delivery audit,
+            defaulting to 2000 estimated text tokens, and ranked image samples.
+            retention reports the 30-day/512 MiB cache policy, expiry and protected
+            checkpoint bytes. Configure [inspection.cache] in agentcad.toml.
+            Expired job results fail explicitly with a fresh inspection action;
+            resource_limit jobs stop and can resume after raising their quota.
         report_images: Prepare/deliver report images; false keeps the same analysis without images.
         max_images: Maximum distinct report images, 0..9; overall then alternating part/face-edge samples.
         text_budget: Estimated token allowance for the report JSON (compact UTF-8 bytes / 3).
@@ -700,15 +735,43 @@ def inspect(
             Default retention is 30 days/64 MiB per build root; configure
             [inspection.snapshots] in agentcad.toml. Expired or evicted evidence
             fails explicitly with a fresh inspection action, never a substituted report.
+        artifact: Read saved bytes over this tool: "manifest", "baseline", or an exact
+            returned inventory/image path. Requires the original file/build_dir.
+            Returns bounded base64 chunks with full SHA-256 and next.mcp arguments;
+            no client filesystem access, CAD work or regeneration. Cannot combine
+            with geometry/report/image/job controls. Existing --image attaches PNGs.
+        artifact_offset: Byte offset; nonzero requires artifact_sha256 from first chunk.
+        artifact_bytes: Maximum raw chunk bytes, 1..49152, default 3072. Encoding
+            adds about one third; these explicit reads have no report token budget.
+        artifact_sha256: Require the full file's returned SHA-256 on each continuation.
+            Reject changed, expired, evicted or wrong-baseline evidence explicitly.
+        artifact_expires_at: Retained-artifact expiry from the first chunk; required
+            on its continuations. Generated next actions pin both hash and expiry.
         context_window: Derive a 5% combined response target from caller context tokens.
         response_budget: Override that target with a combined JSON/image estimated limit.
         response_text_budget: Bound complete JSON text; default is combined limit when
-            known, otherwise 2000. Legacy text_budget still bounds the nested report.
+            known, otherwise 2000, including when no caller options are supplied.
+            text_budget separately bounds report preparation.
         image_budget: Inline image-token limit. Without vision_profile, omit constrained images.
         vision_profile: Caller estimate {name: "host", tokens_per_image: 1000} per
             1024-square sheet. Inspect delivery fields for applied estimates/omissions.
+        full_response: Skip whole-response compaction; a plain report has its
+            previous flat shape. Report preparation limits still apply. Cannot
+            combine with caller budgets. Harmless for already-unbounded ID lookups.
     """
     args = ["inspect", file]
+    if artifact is not None:
+        args.extend(["--artifact", artifact])
+    if artifact_offset:
+        args.extend(["--artifact-offset", str(artifact_offset)])
+    if artifact_bytes != 3072:
+        args.extend(["--artifact-bytes", str(artifact_bytes)])
+    if artifact_sha256 is not None:
+        args.extend(["--artifact-sha256", artifact_sha256])
+    if artifact_expires_at is not None:
+        args.extend(["--artifact-expires-at", artifact_expires_at])
+    if full_response:
+        args.append("--full-response")
     if report:
         args.append("--report")
     if background:
