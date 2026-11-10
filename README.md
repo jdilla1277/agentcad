@@ -111,7 +111,7 @@ and edits:
 
 - **`agentcad run script.py --label label`** — execute a build123d script,
   producing a versioned STEP file and geometric metrics
-- **Pre-injected helpers** - build primitives, import existing STEP geometry,
+- **Pre-injected helpers** — build primitives, import existing STEP geometry,
   select features, and perform bounded or validated editing operations
 - **[CAD recipes](recipes/)** — reusable features and models to copy and adapt,
   starting with a PCB enclosure with board supports and connector openings
