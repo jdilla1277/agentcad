@@ -23,6 +23,13 @@ def _short_pid_path(name):
     return f"/tmp/agentcad-test-{name}-{os.getpid()}.pid"
 
 
+def _leave_stale_socket(path):
+    """Leave a private socket pathname with no listening process."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
+        endpoint.bind(path)
+        os.chmod(path, 0o600)
+
+
 def _start_slow_request_server(name, delay_s=0.15):
     """Accept one daemon frame, record its side effect, then stay silent."""
     from agentcad.daemon import _read_one_message
@@ -32,6 +39,7 @@ def _start_slow_request_server(name, delay_s=0.15):
         os.unlink(sock_path)
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(sock_path)
+    os.chmod(sock_path, 0o600)
     listener.listen(1)
     listener.settimeout(2)
     submissions = []
@@ -67,6 +75,7 @@ def _start_progress_response_server(name, *, interval_s=0.02, count=4):
         os.unlink(sock_path)
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(sock_path)
+    os.chmod(sock_path, 0o600)
     listener.listen(1)
     submissions = []
     errors = []
@@ -254,6 +263,7 @@ class TestSendRequest:
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.bind(sock_path)
+            os.chmod(sock_path, 0o600)
             s.close()
             result = send_request({"type": "ping"}, socket_path=sock_path)
             assert result is None
@@ -583,6 +593,8 @@ class TestLifecycle:
         assert os.path.exists(pid_path)
 
         # PID metadata ties the process to one random daemon startup.
+        assert pathlib.Path(sock_path).stat().st_mode & 0o777 == 0o600
+        assert pathlib.Path(pid_path).stat().st_mode & 0o777 == 0o600
         metadata = json.loads(pathlib.Path(pid_path).read_text())
         assert metadata["pid"] == os.getpid()
         assert metadata["version"] == 1
@@ -638,9 +650,9 @@ class TestLifecycle:
         # Create stale PID file with a dead PID
         with open(pid_path, "w") as f:
             f.write("999999999")  # Almost certainly not running
+        os.chmod(pid_path, 0o600)
         # Create stale socket file
-        with open(sock_path, "w") as f:
-            f.write("")
+        _leave_stale_socket(sock_path)
 
         status = daemon_status(socket_path=sock_path, pid_path=pid_path)
         # Should report not running (dead process)
@@ -659,9 +671,9 @@ class TestLifecycle:
         # Alive PID — the pytest runner itself. Definitely not a daemon.
         with open(pid_path, "w") as f:
             f.write(str(os.getpid()))
+        os.chmod(pid_path, 0o600)
         # Socket file present but no listener bound.
-        with open(sock_path, "w") as f:
-            f.write("")
+        _leave_stale_socket(sock_path)
 
         status = daemon_status(socket_path=sock_path, pid_path=pid_path)
         assert status["running"] is False, (
@@ -681,6 +693,7 @@ class TestLifecycle:
         sock_path, pid_path = daemon_paths
         with open(pid_path, "w") as f:
             f.write(str(os.getpid()))
+        os.chmod(pid_path, 0o600)
         # No socket file — simulates "daemon process started but never bound".
         assert not os.path.exists(sock_path)
 
@@ -849,6 +862,7 @@ class TestBoundedServerReads:
         pid_path = _short_pid_path("status-timeout")
         with open(pid_path, "w") as f:
             f.write(str(os.getpid()))
+        os.chmod(pid_path, 0o600)
         monkeypatch.setattr("agentcad.daemon._STATUS_PING_TIMEOUT_S", 0.03)
         try:
             result = daemon_status(
@@ -1320,7 +1334,7 @@ class TestForceStopDaemon:
                 pid=proc.pid,
                 instance_id="stale-daemon-instance",
             )
-            pathlib.Path(sock_path).write_text("")
+            _leave_stale_socket(sock_path)
 
             result = stop_daemon(socket_path=sock_path, pid_path=pid_path)
 
@@ -1372,6 +1386,7 @@ class TestForceStopDaemon:
         )
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(sock_path)
+        os.chmod(sock_path, 0o600)
         listener.listen(1)
         received = []
 
@@ -1487,7 +1502,8 @@ class TestForceStopDaemon:
 
         sock_path, pid_path = daemon_paths
         pathlib.Path(pid_path).write_text(metadata)
-        pathlib.Path(sock_path).write_text("preserve")
+        os.chmod(pid_path, 0o600)
+        _leave_stale_socket(sock_path)
 
         result = stop_daemon(socket_path=sock_path, pid_path=pid_path)
 

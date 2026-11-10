@@ -38,6 +38,7 @@ import time
 import traceback
 
 import agentcad
+from agentcad import daemon_state
 
 
 def _venv_tag():
@@ -89,14 +90,14 @@ def _default_socket_path():
     override = os.environ.get("AGENTCAD_SOCKET_PATH")
     if override:
         return override
-    return f"/tmp/agentcad-daemon-{os.getuid()}-{_venv_tag()}.sock"
+    return str(daemon_state.runtime_directory() / f"daemon-{_venv_tag()}.sock")
 
 
 def _default_pid_path():
     override = os.environ.get("AGENTCAD_PID_PATH")
     if override:
         return override
-    return f"/tmp/agentcad-daemon-{os.getuid()}-{_venv_tag()}.pid"
+    return str(daemon_state.runtime_directory() / f"daemon-{_venv_tag()}.pid")
 
 
 # ---------- Protocol ----------
@@ -321,8 +322,8 @@ class DaemonServer:
             # is patched), so no zombies accumulate.
             pass
 
-        if os.path.exists(self._socket_path):
-            os.unlink(self._socket_path)
+        daemon_state.check_paths(self._socket_path, self._pid_path, create=True)
+        _unlink_quiet(self._socket_path)
 
         # Write the PID file BEFORE binding the socket. ``start_daemon``'s
         # readiness check watches for the socket to appear; if we bound it
@@ -338,6 +339,7 @@ class DaemonServer:
 
         server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server_sock.bind(self._socket_path)
+        os.chmod(self._socket_path, 0o600)
         # Backlog 16 absorbs short bursts. Per-request work happens in forked
         # children, so the parent itself rarely blocks.
         server_sock.listen(16)
@@ -375,10 +377,8 @@ class DaemonServer:
                     _safe_close(conn)
         finally:
             server_sock.close()
-            if os.path.exists(self._socket_path):
-                os.unlink(self._socket_path)
-            if os.path.exists(self._pid_path):
-                os.unlink(self._pid_path)
+            _unlink_quiet(self._socket_path)
+            _unlink_quiet(self._pid_path)
 
     def _fork_and_run(self, request, conn, listen_sock):
         """Fork a child to handle one ``run`` request; parent returns immediately."""
@@ -693,6 +693,7 @@ def _send_request_with_peer(
 
     sock = None
     try:
+        daemon_state.check_paths(socket_path=socket_path)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(connect_timeout_s)
         sock.connect(socket_path)
@@ -813,16 +814,13 @@ def _write_pid_metadata(pid_path, *, pid, instance_id):
         "pid": pid,
         "instance_id": instance_id,
     }
-    with open(pid_path, "w") as f:
-        json.dump(metadata, f, separators=(",", ":"))
+    daemon_state.publish_metadata(pid_path, metadata)
 
 
 def _read_pid_metadata(pid_path):
     """Return validated PID metadata, including legacy integer PID files."""
-    try:
-        with open(pid_path) as f:
-            raw = f.read().strip()
-    except OSError:
+    raw = daemon_state.read_metadata(pid_path)
+    if raw is None:
         return None
 
     try:
@@ -861,13 +859,11 @@ def _read_pid(pid_path):
 
 
 def _unlink_quiet(path):
-    """``os.unlink(path)`` that swallows the not-found case."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+    """Remove only safe, user-owned state; preserve unsafe paths."""
+    daemon_state.unlink_state(path)
 
 
+@daemon_state.guarded("running")
 def daemon_status(socket_path=None, pid_path=None):
     """Check if the daemon is running. Returns dict with running, pid, version,
     and (when relevant) a ``stale`` flag + hint when the daemon's in-memory
@@ -896,6 +892,7 @@ def daemon_status(socket_path=None, pid_path=None):
     if pid_path is None:
         pid_path = _default_pid_path()
 
+    daemon_state.check_paths(socket_path, pid_path)
     pid_metadata = _read_pid_metadata(pid_path)
     if pid_metadata is None:
         return {"running": False}
@@ -1026,6 +1023,7 @@ def _force_kill(pid, pid_path, socket_path, sigterm_grace_s=2.0):
     return method
 
 
+@daemon_state.guarded("stopped")
 def stop_daemon(socket_path=None, pid_path=None):
     """Stop a daemon without ever signaling an identity inferred from PID alone.
 
@@ -1042,6 +1040,7 @@ def stop_daemon(socket_path=None, pid_path=None):
     if pid_path is None:
         pid_path = _default_pid_path()
 
+    daemon_state.check_paths(socket_path, pid_path)
     pid_metadata = _read_pid_metadata(pid_path)
     if pid_metadata is None:
         _unlink_quiet(pid_path)
@@ -1163,6 +1162,7 @@ def stop_daemon(socket_path=None, pid_path=None):
 _DEFAULT_START_TIMEOUT_S = 90.0
 
 
+@daemon_state.guarded("started")
 def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEOUT_S):
     """Start the daemon as a subprocess. Returns dict with started, pid.
 
@@ -1181,7 +1181,10 @@ def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEO
     if pid_path is None:
         pid_path = _default_pid_path()
 
+    daemon_state.check_paths(socket_path, pid_path, create=True)
     status = daemon_status(socket_path=socket_path, pid_path=pid_path)
+    if status.get("error_kind"):
+        return {**status, "started": False}
     if status.get("running"):
         return {
             "started": False,
@@ -1277,6 +1280,7 @@ def restart_daemon(socket_path=None, pid_path=None):
     }
 
 
+@daemon_state.guarded("spawned")
 def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     """Spawn a daemon by forking off the calling process — no extra cold OCP.
 
@@ -1313,7 +1317,10 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     socket_path = os.path.abspath(socket_path)
     pid_path = os.path.abspath(pid_path)
 
+    daemon_state.check_paths(socket_path, pid_path, create=True)
     status = daemon_status(socket_path=socket_path, pid_path=pid_path)
+    if status.get("error_kind"):
+        return {**status, "spawned": False, "reason": "unsafe_daemon_state"}
     if status.get("running"):
         return {"spawned": False, "reason": "already_running",
                 "pid": status["pid"]}
