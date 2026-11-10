@@ -409,3 +409,16 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## Feedback
 
 If your agent struggles, run `agentcad feedback "what happened"` to capture a friction log.
+
+For a detailed session report, guided feedback is prepared for the next release:
+
+```bash
+agentcad feedback --template --output feedback.md
+# Fill in the task, what happened, evidence, and any workaround.
+agentcad feedback --file feedback.md
+```
+
+Creating a template sends nothing. Reports include recent session context;
+review what you send, or add `--local-only` to keep it local. Partial reports,
+positive feedback, and ideas are welcome. See `agentcad docs feedback` for
+file/stdin input and upload receipts.

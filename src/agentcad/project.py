@@ -274,6 +274,13 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        if name == "feedback" and (
+            kwargs.get("show_template")
+            or (kwargs.get("message") is None and kwargs.get("feedback_file") is None)
+        ):
+            # Template discovery/export needs no initialized or writable build
+            # root and must not create .agentcad state just to show questions.
+            return function(*args, **kwargs)
         initialize = name == "init" or (name == "import" and kwargs.get("init_flag"))
         writes = name in {
             "init",
