@@ -7,34 +7,27 @@ import re
 from pathlib import Path
 
 from agentcad import change_contract as contract
-from agentcad.feature_checks import check_holes, check_probe, normalize_box
+from agentcad.feature_checks import (
+    check_positioned_cylinders,
+    check_probe,
+    normalize_box,
+    validate_positions,
+)
 
 CORE_IDS = {"execution", "written_geometry"}
 
 
 def _number(value, name, *, minimum=0):
-    if type(value) not in (int, float) or not math.isfinite(value):
+    if type(value) not in (int, float):
+        raise ValueError(f"{name} must be a finite number.")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
         raise ValueError(f"{name} must be a finite number.")
     if minimum is not None and value < minimum:
         raise ValueError(f"{name} must be a finite number >= {minimum}.")
-
-
-def _positions(value, name):
-    """Validate 2D hole positions used perpendicular to a declared axis."""
-    if not isinstance(value, list) or not value:
-        raise ValueError(f"{name} must be a non-empty array of [a, b] positions.")
-    if len(value) > 200:
-        raise ValueError(f"{name} may declare at most 200 positions.")
-    positions = []
-    for index, position in enumerate(value):
-        if not isinstance(position, (list, tuple)) or len(position) != 2:
-            raise ValueError(f"{name}[{index}] must be [a, b] in the plane perpendicular to the axis.")
-        _number(position[0], f"{name}[{index}][0]", minimum=None)
-        _number(position[1], f"{name}[{index}][1]", minimum=None)
-        positions.append([float(position[0]), float(position[1])])
-    if len({(a, b) for a, b in positions}) != len(positions):
-        raise ValueError(f"{name} must not repeat a position; holes are matched one-to-one.")
-    return positions
 
 
 def compile_policy(declaration, *, previous=None, core=False, profile="deliverable"):
@@ -90,7 +83,7 @@ def compile_policy(declaration, *, previous=None, core=False, profile="deliverab
             "dimension": {"axis", "expected_mm", "tolerance_mm"},
             "cylinders": {"axis", "diameter_mm", "count", "tolerance_mm"},
             "preserve_cylinders": {"axis", "diameter_mm", "tolerance_mm", "baseline_revision_id"},
-            "holes": {
+            "positioned_cylinders": {
                 "axis",
                 "diameter_mm",
                 "positions_mm",
@@ -109,17 +102,17 @@ def compile_policy(declaration, *, previous=None, core=False, profile="deliverab
         if type(required) is not bool:
             raise ValueError("required must be a boolean.")
         settings = {k: v for k, v in row.items() if k not in ("check_id", "required")}
-        if kind in ("dimension", "cylinders", "preserve_cylinders", "holes"):
+        if kind in ("dimension", "cylinders", "preserve_cylinders", "positioned_cylinders"):
             if row.get("axis") not in ("x", "y", "z"):
                 raise ValueError("axis must be x, y, or z in the assembly frame.")
             settings.setdefault("tolerance_mm", 0.1)
             _number(settings["tolerance_mm"], "tolerance_mm", minimum=1e-6)
         if kind == "dimension":
             _number(row.get("expected_mm"), "expected_mm", minimum=1e-6)
-        elif kind in ("cylinders", "preserve_cylinders", "holes"):
+        elif kind in ("cylinders", "preserve_cylinders", "positioned_cylinders"):
             _number(row.get("diameter_mm"), "diameter_mm", minimum=1e-6)
-        if kind == "holes":
-            settings["positions_mm"] = _positions(
+        if kind == "positioned_cylinders":
+            settings["positions_mm"] = validate_positions(
                 row.get("positions_mm"), "positions_mm"
             )
             settings.setdefault("position_tolerance_mm", 0.1)
@@ -345,8 +338,8 @@ def evaluate_checks(candidate, policy, measurements, *, baselines=None, reason=N
                             and max(displacement, diameter_change) <= tolerance + 1e-9
                             else "fail"
                         )
-                elif kind == "holes":
-                    passed, observed = check_holes(
+                elif kind == "positioned_cylinders":
+                    passed, observed = check_positioned_cylinders(
                         measurements["cylinders"],
                         axis=settings["axis"],
                         diameter_mm=settings["diameter_mm"],

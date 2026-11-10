@@ -3,7 +3,7 @@
 These helpers deliberately work on raw OCCT shapes and plain dictionaries so
 the build123d and CadQuery runtimes can share one measurement vocabulary. A
 probe box is always ``[xmin, ymin, zmin, xmax, ymax, zmax]`` in the assembly
-frame and may include negative coordinates (enclosure floors live below
+frame and may include negative coordinates (models may place floors below
 ``z=0``).
 """
 
@@ -13,13 +13,48 @@ import math
 
 AXIS_INDEX = {"x": 0, "+x": 0, "y": 1, "+y": 1, "z": 2, "+z": 2}
 
+# Bound both the declared positions and the measured candidates so one-to-one
+# matching stays predictable in time and recursion depth.
+MAX_POSITIONED_CYLINDERS = 200
+
 
 def _number(value, name, *, minimum=None):
-    if type(value) not in (int, float) or not math.isfinite(value):
+    if type(value) not in (int, float):
+        raise ValueError(f"{name} must be a finite number.")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
         raise ValueError(f"{name} must be a finite number.")
     if minimum is not None and value < minimum:
         raise ValueError(f"{name} must be >= {minimum}.")
     return float(value)
+
+
+def validate_positions(value, name="positions_mm"):
+    """Validate 2D cylinder positions used perpendicular to a declared axis."""
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError(f"{name} must be a non-empty array of [a, b] positions.")
+    if len(value) > MAX_POSITIONED_CYLINDERS:
+        raise ValueError(
+            f"{name} may declare at most {MAX_POSITIONED_CYLINDERS} positions."
+        )
+    positions = []
+    for index, position in enumerate(value):
+        if not isinstance(position, (list, tuple)) or len(position) != 2:
+            raise ValueError(
+                f"{name}[{index}] must be [a, b] in the plane perpendicular to the axis."
+            )
+        positions.append([
+            _number(position[0], f"{name}[{index}][0]"),
+            _number(position[1], f"{name}[{index}][1]"),
+        ])
+    if len({(a, b) for a, b in positions}) != len(positions):
+        raise ValueError(
+            f"{name} must not repeat a position; cylinders are matched one-to-one."
+        )
+    return positions
 
 
 def normalize_box(value, name="box_mm"):
@@ -33,8 +68,13 @@ def normalize_box(value, name="box_mm"):
 
 
 def box_key(box):
-    """Return a stable lookup key for a normalized probe box."""
-    return tuple(round(float(v), 6) for v in box)
+    """Return the exact normalized tuple for a probe box.
+
+    Rounding here would let two distinct boxes share one measurement, so the
+    lookup key preserves the full float values.
+    """
+    return tuple(float(v) for v in box)
+
 
 
 def _shape(shape):
@@ -187,7 +227,7 @@ def _assign(costs, tolerance):
     return assigned
 
 
-def check_holes(
+def check_positioned_cylinders(
     cylinders,
     *,
     axis,
@@ -196,16 +236,26 @@ def check_holes(
     positions_mm,
     position_tolerance_mm=0.1,
 ):
-    """Compare measured cylinders with explicitly positioned holes."""
-    positions = [
-        [float(value) for value in position] for position in positions_mm
-    ]
+    """Compare measured cylinder axes with explicitly positioned cylinders.
+
+    This proves that solid cylinders of the given diameter exist at each
+    position. It does not establish a hole, its depth, or which side contains
+    material.
+    """
+    positions = validate_positions(positions_mm)
+    tolerance = float(position_tolerance_mm)
     candidates = _matches(
         cylinders,
         axis=axis,
         diameter_mm=float(diameter_mm),
         diameter_tolerance_mm=float(diameter_tolerance_mm),
     )
+    if len(candidates) > MAX_POSITIONED_CYLINDERS:
+        raise ValueError(
+            f"Positioned-cylinder check matched more than "
+            f"{MAX_POSITIONED_CYLINDERS} measured cylinders; narrow the "
+            "diameter or axis."
+        )
     costs = [
         [
             math.dist(position, candidate["position_mm"])
@@ -213,7 +263,7 @@ def check_holes(
         ]
         for position in positions
     ]
-    assigned = _assign(costs, float(position_tolerance_mm))
+    assigned = _assign(costs, tolerance)
 
     by_expected = {
         expected_index: candidate_index
@@ -270,7 +320,7 @@ def check_holes(
         and not extra
         and len(candidates) == len(positions)
         and max_matched_error is not None
-        and max_matched_error <= float(position_tolerance_mm) + 1e-9
+        and max_matched_error <= tolerance + 1e-9
     )
     observed = {
         "expected_count": len(positions),
@@ -278,10 +328,10 @@ def check_holes(
         "positions_mm": positions,
         "diameter_mm": float(diameter_mm),
         "diameter_tolerance_mm": float(diameter_tolerance_mm),
-        "position_tolerance_mm": float(position_tolerance_mm),
+        "position_tolerance_mm": tolerance,
         "matches": matches,
         "missing_positions_mm": missing,
-        "extra_holes": extra,
+        "extra_cylinders": extra,
         "max_position_error_mm": (
             max(position_errors) if position_errors else None
         ),
@@ -298,6 +348,7 @@ def check_holes(
         "coordinate_frame": "assembly",
     }
     return passed, observed
+
 
 
 def check_probe(rows, *, kind, box_mm, threshold_mm3):

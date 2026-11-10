@@ -16,7 +16,12 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.commands.measure import measure_tier0_payload, validity_from_metrics
-from agentcad.feature_checks import check_holes, check_probe, normalize_box
+from agentcad.feature_checks import (
+    check_positioned_cylinders,
+    check_probe,
+    normalize_box,
+    validate_positions,
+)
 
 
 @click.command("check-spec")
@@ -38,7 +43,7 @@ def check_spec(file, spec_file, no_daemon, complete=False):
 
       {"features":[
         {"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4},
-        {"name":"mounts","type":"hole","axis":"z","diameter_mm":3,
+        {"name":"mounts","type":"positioned_cylinders","axis":"z","diameter_mm":3,
          "positions_mm":[[3,3],[25.17,3]]},
         {"name":"usb","type":"keepout","box_mm":[10,-2,0,18,0,5]}
       ]}
@@ -240,13 +245,13 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
                 "passed": passed,
             })
             total_abs_count_error += abs(count_error)
-        elif feature_type == "hole":
-            target = _hole_target_from_feature(feature, spec)
+        elif feature_type == "positioned_cylinders":
+            target = _positioned_cylinders_target_from_feature(feature, spec)
             cylinders = measurement.get("precise_cylinders")
             if cylinders is None:
                 missing_features.append({
                     "name": target["name"],
-                    "type": "hole",
+                    "type": "positioned_cylinders",
                     "target": target,
                     "measured": None,
                     "reason": "precise_cylinder_evidence_missing",
@@ -254,19 +259,31 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
                 total_abs_count_error += len(target["positions_mm"])
                 continue
 
-            passed, observed = check_holes(
-                cylinders,
-                axis=target["axis"],
-                diameter_mm=target["diameter_mm"],
-                diameter_tolerance_mm=target["diameter_tolerance_mm"],
-                positions_mm=target["positions_mm"],
-                position_tolerance_mm=target["position_tolerance_mm"],
-            )
+            try:
+                passed, observed = check_positioned_cylinders(
+                    cylinders,
+                    axis=target["axis"],
+                    diameter_mm=target["diameter_mm"],
+                    diameter_tolerance_mm=target["diameter_tolerance_mm"],
+                    positions_mm=target["positions_mm"],
+                    position_tolerance_mm=target["position_tolerance_mm"],
+                )
+            except ValueError as exc:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": "positioned_cylinders",
+                    "target": target,
+                    "measured": None,
+                    "reason": str(exc),
+                })
+                total_abs_count_error += len(target["positions_mm"])
+                continue
+
             count_error = observed["measured_count"] - observed["expected_count"]
             total_abs_count_error += abs(count_error)
             matched_features.append({
                 "name": target["name"],
-                "type": "hole",
+                "type": "positioned_cylinders",
                 "target": target,
                 "measured": observed,
                 "count_error": count_error,
@@ -371,7 +388,7 @@ def _load_spec(path: Path) -> dict | None:
                 "Use features like "
                 "{\"name\":\"bolt_holes\",\"type\":\"cylinder\","
                 "\"diameter_mm\":12,\"count\":6}, "
-                "{\"name\":\"mounts\",\"type\":\"hole\",\"axis\":\"z\","
+                "{\"name\":\"mounts\",\"type\":\"positioned_cylinders\",\"axis\":\"z\","
                 "\"diameter_mm\":3,\"positions_mm\":[[3,3],[25.17,3]]}, or "
                 "{\"name\":\"usb_keepout\",\"type\":\"keepout\","
                 "\"box_mm\":[10.275,-2.3,0,17.895,-0.3,4.65]}."
@@ -391,7 +408,8 @@ def _declared_probe_boxes(spec: dict) -> list:
 
 def _needs_precise_cylinders(spec: dict) -> bool:
     return any(
-        feature.get("type") == "hole" for feature in spec.get("features", [])
+        feature.get("type") == "positioned_cylinders"
+        for feature in spec.get("features", [])
     )
 
 
@@ -430,9 +448,15 @@ def _validate_spec(data) -> list[str]:
             errors.append(f"{prefix}.name must be a non-empty string")
 
         feature_type = feature.get("type")
-        if feature_type not in {"cylinder", "hole", "keepout", "material"}:
+        if feature_type not in {
+            "cylinder",
+            "positioned_cylinders",
+            "keepout",
+            "material",
+        }:
             errors.append(
-                f"{prefix}.type must be one of cylinder, hole, keepout, material"
+                f"{prefix}.type must be one of cylinder, positioned_cylinders, "
+                "keepout, material"
             )
             continue
 
@@ -462,36 +486,20 @@ def _validate_spec(data) -> list[str]:
             )
             if not _is_int(count_tolerance) or count_tolerance < 0:
                 errors.append(f"{prefix}.count_tolerance must be a non-negative integer")
-        elif feature_type == "hole":
+        elif feature_type == "positioned_cylinders":
             axis = feature.get("axis")
             if axis not in {"x", "y", "z", "+x", "+y", "+z"}:
                 errors.append(f"{prefix}.axis must be one of x, y, z")
             if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
                 errors.append(f"{prefix}.diameter_mm must be a positive number")
 
-            positions = feature.get("positions_mm")
-            if not isinstance(positions, list) or not positions:
-                errors.append(f"{prefix}.positions_mm must be a non-empty array")
-            else:
-                seen = set()
-                for position_index, position in enumerate(positions):
-                    valid = (
-                        isinstance(position, (list, tuple))
-                        and len(position) == 2
-                        and _is_number(position[0])
-                        and _is_number(position[1])
-                    )
-                    if not valid:
-                        errors.append(
-                            f"{prefix}.positions_mm[{position_index}] must be [a, b]"
-                        )
-                        continue
-                    key = (float(position[0]), float(position[1]))
-                    if key in seen:
-                        errors.append(
-                            f"{prefix}.positions_mm[{position_index}] repeats a position"
-                        )
-                    seen.add(key)
+            try:
+                validate_positions(
+                    feature.get("positions_mm"),
+                    f"{prefix}.positions_mm",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
 
             diameter_tolerance = feature.get(
                 "diameter_tolerance_mm",
@@ -549,15 +557,14 @@ def _target_from_feature(feature: dict, spec: dict) -> dict:
     }
 
 
-def _hole_target_from_feature(feature: dict, spec: dict) -> dict:
+def _positioned_cylinders_target_from_feature(feature: dict, spec: dict) -> dict:
     return {
         "name": feature["name"],
         "axis": feature["axis"],
         "diameter_mm": float(feature["diameter_mm"]),
-        "positions_mm": [
-            [float(position[0]), float(position[1])]
-            for position in feature["positions_mm"]
-        ],
+        "positions_mm": validate_positions(
+            feature["positions_mm"], "positions_mm"
+        ),
         "diameter_tolerance_mm": float(
             feature.get("diameter_tolerance_mm", spec.get("diameter_tolerance_mm", 0.1))
         ),

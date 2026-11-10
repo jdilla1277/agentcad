@@ -11,7 +11,7 @@ from agentcad.change_checks import (
     measure_geometry,
     probe_boxes_for_policy,
 )
-from agentcad.feature_checks import check_holes
+from agentcad.feature_checks import check_positioned_cylinders
 
 
 def declaration(*checks, **extra):
@@ -246,12 +246,12 @@ def z_cylinder(diameter, x, y, face):
     }
 
 
-def test_positioned_holes_and_probes_compile_with_signed_coordinates():
+def test_positioned_cylinders_and_probes_compile_with_signed_coordinates():
     policy = compile_policy(
         declaration(
             {
                 "check_id": "mounts",
-                "kind": "holes",
+                "kind": "positioned_cylinders",
                 "axis": "z",
                 "diameter_mm": 3,
                 "positions_mm": [[-5.5, 2], [3, 3]],
@@ -287,21 +287,21 @@ def test_positioned_holes_and_probes_compile_with_signed_coordinates():
     [
         {
             "check_id": "mounts",
-            "kind": "holes",
+            "kind": "positioned_cylinders",
             "axis": "z",
             "diameter_mm": 3,
             "positions_mm": [[1, 2], [1, 2]],
         },
         {
             "check_id": "mounts",
-            "kind": "holes",
+            "kind": "positioned_cylinders",
             "axis": "z",
             "diameter_mm": 3,
             "positions_mm": [[1, 2, 3]],
         },
         {
             "check_id": "mounts",
-            "kind": "holes",
+            "kind": "positioned_cylinders",
             "axis": "z",
             "diameter_mm": 3,
             "positions_mm": [],
@@ -329,12 +329,41 @@ def test_bad_position_and_probe_requirements_are_rejected(bad):
         compile_policy(declaration(bad))
 
 
-def test_positioned_holes_match_one_to_one_and_report_missing_and_extra():
+def test_positioned_cylinders_share_the_200_position_limit():
+    positions = [[float(index), 0.0] for index in range(200)]
     policy = compile_policy(
         declaration(
             {
                 "check_id": "mounts",
-                "kind": "holes",
+                "kind": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": positions,
+            }
+        )
+    )
+    assert len(policy["checks"][0]["settings"]["positions_mm"]) == 200
+
+    with pytest.raises(ValueError, match="at most 200 positions"):
+        compile_policy(
+            declaration(
+                {
+                    "check_id": "mounts",
+                    "kind": "positioned_cylinders",
+                    "axis": "z",
+                    "diameter_mm": 3,
+                    "positions_mm": [*positions, [200.0, 0.0]],
+                }
+            )
+        )
+
+
+def test_positioned_cylinders_match_one_to_one_and_report_missing_and_extra():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "positioned_cylinders",
                 "axis": "z",
                 "diameter_mm": 3,
                 "positions_mm": [[0, 0], [10, 0]],
@@ -350,7 +379,7 @@ def test_positioned_holes_match_one_to_one_and_report_missing_and_extra():
     observed = result["observed"]
     assert result["state"] == "fail"
     assert observed["missing_positions_mm"] == [[10.0, 0.0]]
-    assert observed["extra_holes"][0]["position_mm"] == [11.0, 0.0]
+    assert observed["extra_cylinders"][0]["position_mm"] == [11.0, 0.0]
     assert observed["max_position_error_mm"] == pytest.approx(1.0)
     assert observed["affected_face_indices"] == [1, 2]
 
@@ -360,10 +389,10 @@ def test_positioned_holes_match_one_to_one_and_report_missing_and_extra():
     assert result["observed"]["max_position_error_mm"] == 0
 
 
-def test_hole_summary_uses_assigned_error_and_keeps_nearest_diagnostic():
+def test_positioned_cylinder_summary_uses_assigned_error_and_keeps_nearest_diagnostic():
     cylinders = [z_cylinder(3, 0.04, 0, 1), z_cylinder(3, -0.1, 0, 2)]
 
-    passed, observed = check_holes(
+    passed, observed = check_positioned_cylinders(
         cylinders,
         axis="z",
         diameter_mm=3,
@@ -376,12 +405,12 @@ def test_hole_summary_uses_assigned_error_and_keeps_nearest_diagnostic():
     assert observed["max_nearest_position_error_mm"] == pytest.approx(0.06)
 
 
-def test_holes_ignore_cylinders_outside_the_diameter_and_axis_selection():
+def test_positioned_cylinders_ignore_cylinders_outside_the_diameter_and_axis_selection():
     policy = compile_policy(
         declaration(
             {
                 "check_id": "mounts",
-                "kind": "holes",
+                "kind": "positioned_cylinders",
                 "axis": "z",
                 "diameter_mm": 3,
                 "positions_mm": [[0, 0]],
