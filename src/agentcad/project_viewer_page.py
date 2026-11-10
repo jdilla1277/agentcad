@@ -136,12 +136,21 @@ function load(latest) {
   element.addEventListener('load', () => {
     if (pending !== item || item.ready) return;
     if (item.version !== desiredVersion()?.version) { discardPending(''); return; }
+    const loaded = element.contentDocument;
+    // Artifact read failures return JSON, and browser/error pages may be HTML.
+    // Neither is evidence of a legacy viewer; leave them on the retry path.
+    if (!loaded || loaded.contentType !== 'text/html') {
+      discardPending(' — Preview did not load; retrying'); return;
+    }
     // Generated snapshots inline their message handlers. Pre-live viewers
     // still work on their own; do not leave one hidden waiting for a handshake.
     const messages = ['agentcad:ready', 'agentcad:capture', 'agentcad:restore'];
-    const compatible = [...element.contentDocument.scripts].some(script =>
+    const compatible = [...loaded.scripts].some(script =>
       messages.every(type => script.textContent.includes(type)));
     if (!compatible) {
+      if (!loaded.querySelector('canvas#canvas')) {
+        discardPending(' — Preview did not load; retrying'); return;
+      }
       standaloneVersion = item.version;
       saveSelection();
       discardPending(' — Open the snapshot directly in a separate tab to view this saved preview.');

@@ -10,6 +10,80 @@ from agentcad import project_viewer as live
 
 @pytest.mark.browser
 @pytest.mark.skipif(os.environ.get("AGENTCAD_BROWSER_SMOKE") != "1", reason="set AGENTCAD_BROWSER_SMOKE=1")
+@pytest.mark.parametrize("historical", [False, True], ids=["initial", "history"])
+@pytest.mark.parametrize("error_type", ["application/json", "text/html"])
+def test_temporary_artifact_error_retries_automatically(tmp_path, monkeypatch, historical, error_type):
+    from playwright.sync_api import sync_playwright
+
+    monkeypatch.setenv("AGENTCAD_VIEWER_HOME", str(tmp_path / "runtime"))
+    root = tmp_path / "model"
+    root.mkdir()
+    entries = []
+    for number in (1, 2):
+        folder = root / f"v{number}_edit"
+        folder.mkdir()
+        meta = {"version": number, "label": f"edit{number}", "status": "success",
+                "artifacts": {"viewer": {"status": "success"}}}
+        (folder / "meta.json").write_text(json.dumps(meta))
+        (folder / "output.glb").write_bytes(b"glTF")
+        (folder / "viewer.html").write_text(f'''<p>Revision {number}</p><script>
+          addEventListener('message', event => {{
+            if(event.origin !== location.origin || event.source !== parent) return;
+            if(event.data.type === 'agentcad:capture')
+              parent.postMessage({{type:'agentcad:state',state:null}},location.origin);
+            if(event.data.type === 'agentcad:restore')
+              parent.postMessage({{type:'agentcad:restored'}},location.origin);
+          }});
+          parent.postMessage({{type:'agentcad:ready'}},location.origin);
+        </script>''')
+        entries.append({**meta, "path": folder.name + "/"})
+    (root / "agentcad.json").write_text(json.dumps({"versions": entries, "current": "edit2"}))
+    live.publish(root, folder, started_ns=2)
+    url = live.open_project(root, lambda _: True)["url"]
+    target = 1 if historical else 2
+    attempts = []
+
+    def transient_error(route):
+        attempts.append(route.request.url)
+        if len(attempts) == 1:
+            body = (json.dumps({"error": "Viewer artifact unavailable; retry after rebuilding"})
+                    if error_type == "application/json" else "<html><body>Service unavailable</body></html>")
+            route.fulfill(status=503, content_type=error_type, body=body)
+        else:
+            route.continue_()
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.route(f"**/artifacts/{target}/viewer.html?live=1", transient_error)
+                page.goto(url)
+                if historical:
+                    page.wait_for_function("document.querySelector('#status').textContent.includes('Showing v2')")
+                    current = page.locator("iframe:not(.pending)").element_handle()
+                    page.select_option("#history", "1")
+                page.wait_for_function("document.querySelector('#status').textContent.includes('Preview did not load; retrying')")
+                assert "Open the snapshot directly" not in page.locator("#status").inner_text()
+                if historical:
+                    assert current.evaluate("element => element.isConnected")
+                page.wait_for_function(
+                    f"document.querySelector('#status').textContent.includes('Showing v{target}')",
+                    timeout=10000,
+                )
+                assert len(attempts) == 2
+                assert page.locator("iframe.pending").count() == 0
+                assert page.locator("iframe:not(.pending)").count() == 1
+                assert page.locator("iframe").element_handle().content_frame().locator("p").inner_text() == f"Revision {target}"
+                assert ("version=1" in page.url) == historical
+            finally:
+                browser.close()
+    finally:
+        live.stop_service()
+
+
+@pytest.mark.browser
+@pytest.mark.skipif(os.environ.get("AGENTCAD_BROWSER_SMOKE") != "1", reason="set AGENTCAD_BROWSER_SMOKE=1")
 def test_legacy_saved_preview_opens_directly_without_rebuilding(runner, isolated_dir, monkeypatch):
     from playwright.sync_api import sync_playwright
     from agentcad.cli import cli
