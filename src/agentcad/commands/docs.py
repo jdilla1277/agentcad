@@ -15,7 +15,26 @@ from agentcad.runners import dispatch
 # CADQUERY_OVERLAY below. ``get_sections(runtime)`` merges that overlay
 # onto the base only for the cadquery runtime.
 SECTIONS = {
+    "account": (
+        "ACCOUNT CONNECTION\n"
+        "  Local CAD work needs no account. Install agentcad[cloud] for remote access.\n"
+        "  agentcad account connect [--name NAME] [--no-browser] opens signup/sign-in.\n"
+        "  In the browser, finish workspace setup and explicitly approve this installation.\n"
+        "  agentcad account status finishes approval and checks the connection online.\n"
+        "  Then use agentcad cloud projects list or other existing cloud commands.\n"
+        "  Website account pages list installations and let you revoke them.\n"
+        "  agentcad account disconnect revokes online, then clears local state.\n"
+        "  --forget clears local state only; revoke approved installations on the website.\n"
+        "  Credentials use a private user-only file, never project files or tool output.\n"
+        "  AGENTCAD_ACCOUNT_STATE selects a separate private profile; AGENTCAD_ACCOUNT_URL\n"
+        "  selects an enabled account host. Use a separate profile for Preview.\n"
+        "  Pending requests expire after 15 minutes. Retry status after an interrupted\n"
+        "  exchange; clear expired/revoked state with disconnect --forget, then reconnect.\n"
+        "  See https://github.com/jdilla1277/agentcad/blob/main/docs/accounts.md\n"
+    ),
     "cloud": (
+        "  Connect with agentcad account connect, approve in the browser, then account status.\n"
+        "  Saved installations can use the cloud commands below. See docs account.\n"
         "Cloud projects through the CLI or local MCP server:\n"
         "  A host-issued remote MCP URL is another connection option: no local\n"
         "  AgentCAD installation is required. Call cloud_help on that server.\n"
@@ -323,6 +342,7 @@ SECTIONS = {
         "            local service: agentcad viewer [open|status|stop].\n"
         "\n"
         "  Setup, recovery, and reference\n"
+        "  account — Create/connect an account, check status, or disconnect; see docs account.\n"
         "  cloud   — Use hosted projects via explicit cloud operations; see docs cloud.\n"
         "  init    — Initialize a new agentcad project (creates agentcad.json).\n"
         "  recover — Validate and reconcile one interrupted version directory.\n"

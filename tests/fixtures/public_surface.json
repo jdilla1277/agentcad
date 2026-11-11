@@ -1,5 +1,6 @@
 {
   "commands": [
+    "account",
     "check-spec",
     "cloud",
     "context",
@@ -24,6 +25,7 @@
     "viewer"
   ],
   "docs_sections": [
+    "account",
     "artifacts",
     "build123d",
     "cadquery",
