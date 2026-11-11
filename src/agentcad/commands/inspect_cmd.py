@@ -18,6 +18,7 @@ from agentcad.commands._daemon_routing import (
 )
 from agentcad.native_io import suppress_native_output
 from agentcad.inspection_delivery import delivery_options, forward_options, read_snapshot
+from agentcad.experimental_inspect import option as inspect_option, enabled as inspect_enabled
 
 DEFAULT_ID_LIMIT = 100
 DEFAULT_VALIDATION_TIMEOUT_S = 90.0
@@ -257,6 +258,7 @@ def _clear_validation_timeout(previous_state) -> None:
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@inspect_option
 @project_options
 @delivery_options
 def inspect_cmd(
@@ -288,7 +290,11 @@ def inspect_cmd(
     no_daemon,
 ):
     """Inspect any file. STEP/BREP get a full topology report; other formats
-    get a structured 'recognized but not editable here' response. Never throws."""
+    get a structured 'recognized but not editable here' response. Never throws.
+
+    WIP: typed --id, --image, --report, --artifact and inspection job controls
+    require --experimental-inspect on every call. Basic --ids/--summary do not.
+    """
     if artifact is None and (artifact_offset or artifact_bytes != 3072 or artifact_sha256 is not None or artifact_expires_at is not None):
         raise click.UsageError("--artifact-offset, --artifact-bytes, --artifact-sha256 and --artifact-expires-at require --artifact.")
     if artifact is not None:
@@ -887,7 +893,7 @@ def _inspect_tier0_impl(
                         with_summary=with_summary,
                     ),
                 }
-            if with_ids:
+            if with_ids and inspect_enabled():
                 from agentcad.geometry_manifest import MANIFEST_NAME, read_manifest, summary
                 if Path(file_path).with_name(MANIFEST_NAME).is_file() and Path(file_path).name == "output.step":
                     try:

@@ -1,5 +1,6 @@
 """Bounded default reports preserve inventories, identities and actual media."""
 
+from tests.inspection_helpers import experimental_args
 import asyncio
 import base64
 from copy import deepcopy
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 from PIL import Image
 
 from agentcad.cli import cli
@@ -63,7 +64,7 @@ def _distinct_parts(path, count=12):
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, full_response_args(args))
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
@@ -233,16 +234,16 @@ def test_cli_mcp_report_parity_and_real_image_content(runner, isolated_dir):
 
     step, _ = _baseline(isolated_dir)
     expected = _json(runner, ["inspect", str(step), "--report", "--max-images", "2", "--text-budget", "5000"])
-    actual = mcp_inspect(file=str(step), cwd=str(isolated_dir), report=True, max_images=2, text_budget=5000, full_response=True)
+    actual = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, max_images=2, text_budget=5000, full_response=True)
     assert isinstance(actual, CallToolResult)
     assert actual.structuredContent.pop("_exit_code") == 0
     assert actual.structuredContent == expected
     assert [c.type for c in actual.content] == ["text", "image", "image"]
     assert base64.b64decode(actual.content[1].data) == (Path(expected["inventory"]["image_root"]) / expected["media"][0]["png"]).read_bytes()
-    converted = asyncio.run(mcp.call_tool("inspect", {"file": str(step), "cwd": str(isolated_dir), "report": True, "max_images": 2, "full_response": True}))
+    converted = asyncio.run(mcp.call_tool("inspect", {**({"file": str(step), "cwd": str(isolated_dir), "report": True, "max_images": 2, "full_response": True}), "experimental_inspect": True}))
     assert isinstance(converted, CallToolResult)
     assert len(converted.content) == 3
-    no_images = mcp_inspect(file=str(step), cwd=str(isolated_dir), report=True, report_images=False, full_response=True)
+    no_images = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, report_images=False, full_response=True)
     assert isinstance(no_images, dict)
     assert no_images["media"] == []
     assert no_images["analysis_revision"] == expected["analysis_revision"]

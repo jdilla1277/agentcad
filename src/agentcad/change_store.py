@@ -1,9 +1,10 @@
 """Retain immutable source, core geometry, and diagnostics for each attempt.
 
-This store does not replace version directories or perform promotion. An
+This store retains attempts separately from accepted version directories. An
 attempt request is saved before execution; core records are sealed once their
 inputs are known, and the final command response is a separate immutable record.
 An interrupted attempt stays addressable without pretending it completed.
+Completing deferred checks delegates saved automatic intent to PromotionStore.
 """
 
 from __future__ import annotations
@@ -27,6 +28,12 @@ _REVISION = re.compile(r"r_[0-9a-f]{32}\Z")
 
 class ChangeStoreError(ValueError):
     """Retention failed or a retained record/input is no longer trustworthy."""
+
+
+class RecoverySelectionChanged(ChangeStoreError):
+    """Recovery must not silently replace newer intended work."""
+
+    reason = "recovery_selection_changed"
 
 
 def _within_root(path, root):
@@ -157,6 +164,9 @@ class ChangeStore:
         promotion_mode: str = "automatic",
         requirements: dict | None = None,
         defer_checks: bool = False,
+        recovery: dict | None = None,
+        expected_selection: dict | None = None,
+        recovery_policy: dict | None = None,
     ) -> Attempt:
         if not (self.root / "agentcad.json").is_file():
             raise ChangeStoreError(
@@ -174,6 +184,8 @@ class ChangeStore:
         attempt = Attempt(self, revision_id)
         with _version_lock(self.root):
             state = self._state()
+            if expected_selection is not None and state != expected_selection:
+                raise RecoverySelectionChanged("Recovery selection changed; inspect the newer work and use a new request key.")
             from agentcad.change_checks import compile_policy
 
             previous = None
@@ -182,6 +194,12 @@ class ChangeStore:
                     "request.json", "attempt_request"
                 )
                 previous = parent.get("check_policy")
+            if recovery is not None:
+                if hashlib.sha256(source).hexdigest() != recovery["source_sha256"]:
+                    raise ChangeStoreError("Recovery source differs from the pinned request bytes.")
+                if previous is not None and previous != recovery_policy:
+                    raise ChangeStoreError("Recovery requirements changed; inspect the selected work before retrying.")
+                previous = recovery_policy
             policy = compile_policy(
                 requirements,
                 previous=previous,
@@ -215,6 +233,13 @@ class ChangeStore:
                     baseline_errors[check_id] = str(exc)
             source_path = attempt.directory / ("source" + Path(source_name).suffix.lower())
             _write_bytes_once(source_path, source)
+            from agentcad.change_promotion import PromotionStore
+
+            promotions = PromotionStore(self.root)
+            automatic = (
+                promotions.automatic_seed(revision_id)
+                if defer_checks and promotion_mode == "automatic" else None
+            )
             request = _sealed(
                 "attempt_request",
                 revision_id=revision_id,
@@ -231,16 +256,30 @@ class ChangeStore:
                 check_inputs=baseline_inputs,
                 baseline_errors=baseline_errors,
                 defer_checks=bool(defer_checks),
+                **({"recovery": recovery} if recovery is not None else {}),
+                **({"automatic_promotion": automatic} if automatic else {}),
             )
             _write_json_once(attempt.directory / "request.json", request)
+            selection_path = self._path(_STATE / "working.json")
+            had_selection = selection_path.exists()
             atomic_write_json(
-                self._path(_STATE / "working.json"),
+                selection_path,
                 {
                     "schema_version": 1,
                     "revision_id": revision_id,
                     "selection_generation": request["selection_generation"],
                 },
             )
+            try:
+                promotions.cancel_superseded()
+            except BaseException:
+                # Keep the failed attempt/source for inspection, but a begin()
+                # that did not finish must not strand it as the selected work.
+                if had_selection:
+                    atomic_write_json(selection_path, state)
+                else:
+                    selection_path.unlink(missing_ok=True)
+                raise
         return attempt
 
     def read(self, revision_id: str) -> dict:
@@ -372,6 +411,12 @@ class ChangeStore:
         }
 
     def complete_checks(self, revision_id: str) -> dict:
+        checked = self._complete_checks(revision_id)
+        from agentcad.change_promotion import PromotionStore
+
+        return {**checked, **PromotionStore(self.root).complete_automatic(revision_id)}
+
+    def _complete_checks(self, revision_id: str) -> dict:
         # Validate before creating even a lock directory for an unknown ID.
         observed = self.read_checks(revision_id)
         if observed["lifecycle"] == "completed":
@@ -473,6 +518,9 @@ class Attempt:
                     != expected[0]["sha256"]
                 ):
                     raise ChangeStoreError("A prepared geometry snapshot cannot be replaced.")
+            from agentcad.change_promotion import PromotionStore
+
+            PromotionStore(self.store.root).ensure_automatic(self.revision_id)
             return self.reference()
         inputs = [request["source"], *request.get("check_inputs", [])]
         for artifact in inputs:
@@ -567,6 +615,9 @@ class Attempt:
                 response=response,
             ),
         )
+        from agentcad.change_promotion import PromotionStore
+
+        PromotionStore(self.store.root).ensure_automatic(self.revision_id)
         return self.reference()
 
     def _evaluate(self, candidate, policy, response):
@@ -593,7 +644,7 @@ class Attempt:
                 pass  # The individual preservation check reports unavailable.
         return evaluate_checks(candidate, policy, measurement, baselines=baselines, reason=reason)
 
-    def finish(self, response: dict) -> dict:
+    def finish(self, response: dict, *, restored_artifacts=None, unavailable_artifacts=None) -> dict:
         if (self.directory / "outcome.json").exists():
             saved = self.store.read(self.revision_id)
             if saved["outcome"]["response"] != _safe_json(response):
@@ -603,7 +654,12 @@ class Attempt:
             return self.reference()
         self.prepare(response)
         core = self._read("core.json", "attempt_core")
-        artifacts, unavailable = self._capture_artifacts(response)
+        if restored_artifacts is None:
+            artifacts, unavailable = self._capture_artifacts(response)
+        else:
+            artifacts, unavailable = restored_artifacts, unavailable_artifacts or []
+            for artifact in artifacts:
+                self._verify(artifact)
         _write_json_once(
             self.store._path(self.directory.relative_to(self.store.root) / "outcome.json"),
             _sealed(

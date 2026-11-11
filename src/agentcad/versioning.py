@@ -218,6 +218,9 @@ def commit_version(
             raise PromotionRefused(result)
         return promotions._manifest()
     with _version_lock(project_dir):
+        if advance_current:
+            from agentcad.experimental_changes import guard_history
+            guard_history(project_dir)
         manifest = json.loads(manifest_path.read_text())
         _merge_version_entry(
             manifest, reservation, manifest_entry, advance_current=advance_current

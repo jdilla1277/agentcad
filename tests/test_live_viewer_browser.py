@@ -1,7 +1,6 @@
 """The actual conversational loop: real CAD builds and a persistent browser."""
 import json
 import os
-import shlex
 
 import pytest
 
@@ -26,7 +25,7 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
     assert runner.invoke(cli, ["init", "--name", "blocked-checks"]).exit_code == 0
     script = isolated_dir / "model.py"
     script.write_text(SCRIPT)
-    result = runner.invoke(cli, ["run", str(script), "--label", "accepted",
+    result = runner.invoke(cli, ["run", "--experimental-changes", str(script), "--label", "accepted",
                                 "--no-preview", "--no-diff", "--no-daemon"])
     assert result.exit_code == 0, result.output
     accepted = json.loads(result.stdout)
@@ -57,7 +56,7 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
                         "actor": "test", "rationale": "Exercise each blocked-attempt status."}))
                     label = f"{command}-{status}"
                     source = str(script) if command == "run" else accepted["outputs"]["step"]
-                    args = [command, source, "--label", label, "--checks", str(requirements),
+                    args = [command, "--experimental-changes", source, "--label", label, "--checks", str(requirements),
                             "--no-view", "--no-diff", "--no-daemon"]
                     if command == "run":
                         args.append("--no-preview")
@@ -89,7 +88,7 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
             requirements.write_text(json.dumps({"schema_version": 1, "checks": [{
                 "check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 60,
             }], "actor": "test", "rationale": "Exercise superseded valid geometry."}))
-            refused = runner.invoke(cli, ["run", str(script), "--label", "selection-conflict",
+            refused = runner.invoke(cli, ["run", "--experimental-changes", str(script), "--label", "selection-conflict",
                                           "--checks", str(requirements), "--no-preview", "--no-view",
                                           "--no-diff", "--no-daemon"])
             assert refused.exit_code == 1, refused.output
@@ -101,13 +100,13 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
             assert page.locator("iframe").count() == 1
             assert page.locator("#snapshot").get_attribute("href") == snapshot
             monkeypatch.setattr(PromotionStore, "commit", original_commit)
-            staged = runner.invoke(cli, ["run", str(script), "--label", "staged-review", "--stage",
+            staged = runner.invoke(cli, ["run", "--experimental-changes", str(script), "--label", "staged-review", "--stage",
                                          "--checks", str(requirements), "--no-preview", "--no-view", "--no-diff", "--no-daemon"])
             assert staged.exit_code == 0, staged.output
             revision = json.loads(staged.stdout)["change"]["revision_id"]
             page.wait_for_function("document.querySelector('#status').textContent.includes('staged; checks passed')")
             assert element.evaluate("element => element.isConnected")
-            promoted = runner.invoke(cli, ["promote", revision, "--idempotency-key", "human-reviewed"])
+            promoted = runner.invoke(cli, ["promote", "--experimental-changes", revision, "--idempotency-key", "human-reviewed"])
             assert promoted.exit_code == 0, promoted.output
             page.wait_for_function("document.querySelector('#status').textContent.includes('Accepted')")
             assert "showing previous model" in page.locator("#status").inner_text()
@@ -188,11 +187,11 @@ def test_live_loop_twenty_builds_failure_import_and_restart(engine, runner, isol
                                           "--label", "imported", "--no-diff", "--no-daemon"])
             assert imported.exit_code == 0, imported.output
             delivered = json.loads(imported.stdout)
-            # The bounded default can omit optional viewer metadata. Fetch the
-            # complete reply while keeping the browser on the same live page.
-            recovered = runner.invoke(cli, [*shlex.split(delivered["response_snapshot"]["retrieve"])[1:], "--no-daemon"])
-            assert recovered.exit_code == 0, recovered.output
-            assert json.loads(recovered.stdout)["project_viewer"]["url"] == url
+            # Ordinary import keeps the live viewer without activating WIP
+            # Inspect reports, jobs or delivery snapshots.
+            assert "response_snapshot" not in delivered
+            assert "inspection_job" not in delivered and "inspection" not in delivered
+            assert delivered["project_viewer"]["url"] == url
             frame = showing(21)
             assert frame.evaluate("window.agentcadViewer.debugState().mode") == "single-a"
             assert "Previous mode unavailable" in page.locator("#status").inner_text()

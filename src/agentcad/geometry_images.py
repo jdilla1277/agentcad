@@ -10,7 +10,7 @@ import tempfile
 from agentcad.geometry_manifest import BaselineGeometry, _digest, read_manifest, record
 from agentcad.inspection_cache import cache_lease
 
-IMAGE_REVISION = "geometry-image-v3"
+IMAGE_REVISION = "geometry-image-v4"
 IMAGE_SIZE = 1024
 IMAGE_VIEWS = ("iso", "top", "front", "right")
 
