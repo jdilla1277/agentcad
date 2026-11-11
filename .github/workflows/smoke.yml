@@ -33,6 +33,9 @@ jobs:
       - name: Collect tests
         run: pytest --collect-only -q
 
+      - name: Run occupied-volume metric regressions
+        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
+
       - name: Run cloud adapter and local MCP contracts
         run: pytest tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py tests/test_experimental_inspect.py -q
 
@@ -105,6 +108,9 @@ jobs:
         # must still succeed for everything else.
         run: pytest --collect-only -q
 
+      - name: Run occupied-volume metric regressions
+        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
+
       - name: Install Linux render smoke dependencies
         # The contract test and tests_b3d/test_render_cmd.py render PNGs,
         # which needs an X11/GLX display on Linux (see the full-profile job).
@@ -160,6 +166,9 @@ jobs:
 
       - name: Collect tests
         run: pytest --collect-only -q
+
+      - name: Run occupied-volume metric regressions
+        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
 
       - name: Run Windows-relevant guardrails
         run: pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_session_logging_integration.py -q
