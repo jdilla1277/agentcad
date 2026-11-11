@@ -1,9 +1,12 @@
 """Normalized imported identities: provenance, reload, lookup and real edits."""
 
+from tests.inspection_helpers import experimental_args
 import json
 from pathlib import Path
 
 import pytest
+
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 
 from agentcad.cli import cli
 from agentcad.geometry_manifest import create_manifest, load_geometry, read_manifest
@@ -12,13 +15,13 @@ from tests_b3d.test_step_assembly import _nested_step
 
 
 def _import(runner, path, label="baseline", *extra):
-    result = runner.invoke(cli, ["import", str(path), "--init", "--label", label, "--no-view", "--no-diff", *extra])
+    result = runner.invoke(cli, experimental_args(full_response_args(["import", str(path), "--init", "--label", label, "--no-view", "--no-diff", *extra])))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
@@ -97,7 +100,7 @@ def test_cli_and_mcp_lookup_are_equivalent(runner, isolated_dir):
     imported = _import(runner, _nested_step(isolated_dir / "supplier.step"))
     step = imported["outputs"]["step"]
     expected = _json(runner, ["inspect", step, "--id", "face_v1_1"])
-    actual = mcp_inspect(file=step, cwd=str(isolated_dir), entity_id="face_v1_1")
+    actual = mcp_inspect(experimental_inspect=True, file=step, cwd=str(isolated_dir), entity_id="face_v1_1")
     assert actual.pop("_exit_code") == 0
     assert actual == expected
 
@@ -109,7 +112,7 @@ def test_wrong_version_kind_and_unknown_ids_fail(runner, isolated_dir):
     for value in ("face_v2_1", "face_v1_99999", "F1"):
         with pytest.raises(ValueError):
             context.pick_face(value)
-        response = runner.invoke(cli, ["inspect", step, "--id", value])
+        response = runner.invoke(cli, experimental_args(["inspect", step, "--id", value]))
         assert response.exit_code == 1
         assert json.loads(response.stdout)["status"] == "error"
     with pytest.raises(ValueError, match="Expected a face"):
@@ -141,7 +144,7 @@ def test_stale_data_fails_before_selection(runner, isolated_dir, monkeypatch, ch
         monkeypatch.setattr("agentcad.geometry_manifest._kernel_version", lambda: "incompatible")
     with pytest.raises(ValueError):
         load_geometry(step)
-    result = runner.invoke(cli, ["inspect", str(step), "--id", "face_v1_1"])
+    result = runner.invoke(cli, experimental_args(["inspect", str(step), "--id", "face_v1_1"]))
     assert result.exit_code == 1
 
 

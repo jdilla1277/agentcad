@@ -1,3 +1,5 @@
+import contextvars
+import functools
 import json
 import os
 import shlex
@@ -11,7 +13,9 @@ from agentcad.project import ProjectError, format_response, get_project
 
 from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
+from agentcad.commands.changes import changes
 from agentcad.commands.cloud import cloud
+from agentcad.commands.account import account
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
@@ -26,6 +30,7 @@ from agentcad.commands.measure import measure
 from agentcad.commands.parts import parts_cmd
 from agentcad.commands.render import render
 from agentcad.commands.recover import recover
+from agentcad.commands.promote import promote
 from agentcad.commands.review import review_cmd
 from agentcad.commands.run import _OUTPUT_DEPRECATION, candidate_scripts, run
 from agentcad.commands.skill import skill
@@ -79,6 +84,17 @@ NAMED PARTS AND GROUPS
                 options={"color": "red", "part_of": "wheels"})
   Use `agentcad parts` after a run to list, isolate, hide, ghost, or focus
   captured parts and groups. Run `agentcad docs parts` for the full API.
+
+EXPERIMENTAL CHANGE WORKFLOW (WIP)
+  Explicitly include --experimental-changes on every change-workflow call.
+  Ordinary run/import calls keep standard CAD behavior. --stage, --checks,
+  --defer-checks and authored-run retry/status require the flag. Existing
+  experimental requirements or unpromoted work cannot be bypassed by omitting it.
+  agentcad changes list --experimental-changes
+  agentcad changes show working --experimental-changes
+  agentcad changes compare accepted working --experimental-changes
+  These reads never select, accept, complete checks, or execute CAD. Use the
+  returned r_ IDs for exact revisions; see `agentcad docs changes`.
 
 EXAMPLE SESSION
   $ agentcad init --name myproject__INIT_RUNTIME__
@@ -145,14 +161,20 @@ COMMAND REFERENCE: CREATE AND IMPORT
                          Required unless --dry-run.
     --output LABEL       Deprecated compatibility alias for --label. It never
                          denotes an output path.
+    --idempotency-key KEY Save before sending; retry identical source/options
+                         without executing again. Repairs need a new key.
+    --status             Read a run by key without SCRIPT or --label, including
+                         after source edits/removal. See docs run-retries.
     --render VIEWS       Named views, `all`, angle azimuth:elevation, or a mix:
                          front,right,45:30
     --export FORMATS     Comma-separated stl, glb, obj. Explicit GLB appears in
                          outputs.glb; viewer_glb normally generates separately.
-                         STEP is always produced; read outputs.step.
+                         Normal mode: STEP is always produced; read outputs.step.
+                         With --stage, prepare diagnostics from change.geometry.
     --preview / --no-preview
                          Generate or skip the agent-readable composite and
                          per-part previews. Preview is on by default (~2-4s).
+                         Staged candidates prepare views separately.
     --view / --no-view   Open or reuse the live project after success (default on).
                          From v2, previous/current comparison is preloaded.
     --diff / --no-diff   Generate or skip automatic comparison with the prior
@@ -304,9 +326,14 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
     by `agentcad init` by default), or return its content as JSON for another
     agent integration.
 
+  agentcad feedback
+  agentcad feedback --template --output feedback.md
+  agentcad feedback --file feedback.md [--max-entries N] [--local-only]
   agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
-    Save a diagnostic bundle under .agentcad/feedback and, unless --local-only,
-    send it to the agentcad team. The bundle includes recent session context.
+    Get guided questions, fill in a Markdown report, then submit it with recent
+    session context. Quick notes still work. The full bundle is saved locally
+    before uploading; --local-only keeps it local. --file - reads stdin.
+    Explicit --template without --output exports Markdown rather than JSON.
 
   agentcad subscribe EMAIL
     Request product updates. Subscription uses email confirmation (double opt-in).
@@ -317,8 +344,9 @@ JSON RESPONSE CONTRACT
     "success"          primary command work completed; inspect artifact statuses
     "failed"           script execution failed; consumes a version and creates
                        v{N}_{label}_failed/ with the script and metadata
-    "error"            CLI/input error; no version or artifacts
-    "validation_error" static script check failed; no version or artifacts
+    "error"            CLI/input error; no accepted CAD output
+    "validation_error" static script check failed; no numbered version;
+                       source and diagnostics may be retained under change
     "invalid_geometry" script/import produced an invalid final B-rep; records
                        a numbered diagnostic attempt unless --dry-run, writes no
                        STEP, and does not advance current; see
@@ -337,6 +365,19 @@ JSON RESPONSE CONTRACT
   success, unavailable, timeout, failed, or skipped; a non-success artifact does
   not reverse core success or remove the registered STEP. Keep and use that STEP;
   retry only the optional render/view work if you need it.
+
+  Normal acceptance returns a durable `promotion` receipt for the exact checked
+  revision. `not_promoted` with selection_changed means a newer edit superseded
+  this build; its diagnostic geometry remains retained and current is unchanged.
+  Inspect/reconcile before rerunning the current script or import. This conflict
+  is separate from a measured geometry failure. See `agentcad docs check-spec`
+  for retained requirements, receipts, and delayed automatic acceptance.
+
+  Use run/import --stage to save a checked experiment without replacing the
+  accepted model. Open it with view REVISION, then accept its saved bytes with
+  promote REVISION --idempotency-key KEY. Read promote --idempotency-key KEY
+  --status after interruption; repeat the same key to resume/replay safely.
+  See `agentcad docs promote`.
 
 SPEC AND MEASUREMENT CHECKS
   When requirements include explicit holes, bores, diameters, counts, or
@@ -458,6 +499,86 @@ def _build_guide(runtime: str = "build123d") -> str:
     )
 
 
+class _InvocationOutput:
+    """Output state owned by one ``agentcad`` command invocation.
+
+    It records everything the command echoes (for the session log and live
+    viewer) and rewrites JSON responses for the invocation's project layout.
+    """
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.captured = []
+        self.complete_result = None
+
+    def process(self, message, err):
+        if message is not None and not err:
+            layout = self.ctx.meta.get("project_layout")
+            if layout is not None:
+                try:
+                    payload = json.loads(message)
+                    if isinstance(payload, dict) and "command" in payload:
+                        from agentcad.change_retention import attach_change
+
+                        payload = attach_change(payload)
+                        from agentcad.change_recovery import finish_response as finish_recovery
+                        payload = finish_recovery(payload)
+                        from agentcad.experimental_changes import present
+                        payload = present(payload)
+                        if payload.get("command") == "import":
+                            from agentcad.import_requests import finish_response
+                            payload = finish_response(payload)
+                        elif payload.get("command") == "run":
+                            from agentcad.run_requests import finish_response
+                            payload = finish_response(payload)
+                        from agentcad.inspection_delivery import apply_delivery
+                        from agentcad.experimental_inspect import present
+                        formatted = present(format_response(payload, layout))
+                        if self.ctx.meta.get("inspection_delivery_policy") is not None:
+                            # Presentation may omit viewer fields; lifecycle
+                            # decisions must still use the complete outcome.
+                            self.complete_result = formatted
+                        message = json.dumps(apply_delivery(formatted, layout, self.ctx))
+                except (TypeError, json.JSONDecodeError):
+                    pass
+        if message is not None:
+            self.captured.append(str(message))
+        return message
+
+
+# The invocation currently producing output. A context variable, not a
+# per-command swap of ``click.echo``: the daemon is forked from inside a
+# running command, and a swapped-in echo closure would follow it there and
+# reformat every later project's output with the spawning project's layout.
+# ``contextvars.Context().run`` gives daemon requests a clean slate.
+#
+# Context variables do not propagate into new threads on Python 3.10-3.12: a
+# ``threading.Thread`` starts with an empty context. Anything a command echoes
+# from a worker thread would skip the project formatting and session capture,
+# so commands must echo from the thread that runs the command.
+_INVOCATION_OUTPUT = contextvars.ContextVar("agentcad_invocation_output", default=None)
+# If this module is imported a second time (``python -m agentcad.cli`` runs it
+# as ``__main__`` and the daemon later imports ``agentcad.cli``), wrap the
+# real echo rather than the first copy's wrapper. Only agentcad's own wrapper
+# is unwrapped; any other ``click.echo`` replacement is kept as is.
+_CLICK_ECHO = getattr(click.echo, "_agentcad_click_echo", click.echo)
+
+
+@functools.wraps(_CLICK_ECHO)
+def _echo(message=None, file=None, nl=True, err=False, color=None):
+    output = _INVOCATION_OUTPUT.get()
+    if output is not None:
+        message = output.process(message, err)
+    return _CLICK_ECHO(message, file=file, nl=nl, err=err, color=color)
+
+
+_echo._agentcad_click_echo = _CLICK_ECHO
+
+# Installed once per process. Commands keep calling ``click.echo``; the
+# per-invocation behavior lives in ``_INVOCATION_OUTPUT``.
+click.echo = _echo
+
+
 class _LoggingGroup(click.Group):
     """Click Group that auto-logs every command invocation to session.jsonl."""
 
@@ -484,6 +605,12 @@ class _LoggingGroup(click.Group):
             if standalone_mode:
                 raise SystemExit(exc.exit_code)
             raise
+
+    def parse_args(self, ctx, args):
+        # CliRunner and MCP pass request-specific args without changing sys.argv.
+        # Copy before Click consumes them, and keep them on this invocation only.
+        ctx.meta["invocation_argv"] = list(args)
+        return super().parse_args(ctx, args)
 
     def _usage_error_payload(self, exc, raw_args):
         command = (
@@ -782,51 +909,53 @@ class _LoggingGroup(click.Group):
         formatter.write("\n")
 
     def invoke(self, ctx):
-        captured = []
-        original_echo = click.echo
+        output = _InvocationOutput(ctx)
+        captured = output.captured
         project_root = Path.cwd()
         ctx.meta["viewer_started_ns"] = time.time_ns()
 
-        def _capturing_echo(message=None, **kwargs):
-            if message is not None and not kwargs.get("err"):
-                layout = ctx.meta.get("project_layout")
-                if layout is not None:
-                    try:
-                        payload = json.loads(message)
-                        if isinstance(payload, dict) and "command" in payload:
-                            message = json.dumps(format_response(payload, layout))
-                    except (TypeError, json.JSONDecodeError):
-                        pass
-            if message is not None:
-                captured.append(str(message))
-            original_echo(message, **kwargs)
-
-        click.echo = _capturing_echo
+        token = _INVOCATION_OUTPUT.set(output)
         try:
             return super().invoke(ctx)
         except ProjectError as exc:
             ctx.meta["project_error"] = True
+            ctx.meta["command_exit_code"] = 1
             payload = exc.payload(ctx.invoked_subcommand or "unknown")
             if ctx.invoked_subcommand == "run":
                 payload.update(label=ctx.meta.get("run_label"), artifact_created=False,
                                outputs={"step": None})
             click.echo(json.dumps(payload))
             sys.exit(1)
+        except Exception as exc:
+            # Import has no run-style outer recovery boundary. Once its source
+            # is retained, preserve unexpected parser/metric failures as a
+            # structured terminal attempt rather than leaving an empty stdout.
+            attempt = ctx.meta.get("change_attempt")
+            if attempt is None and ctx.invoked_subcommand != "import":
+                raise
+            ctx.meta["command_exit_code"] = 1
+            click.echo(json.dumps({
+                "command": ctx.meta.get("change_command", ctx.invoked_subcommand),
+                "status": "error",
+                "message": f"Internal error: {type(exc).__name__}: {exc}",
+            }))
+            sys.exit(1)
         finally:
-            click.echo = original_echo
+            _INVOCATION_OUTPUT.reset(token)
             self._log_session(ctx, captured)
-            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1])
+            self._record_live_build(ctx, captured, project_root, sys.exc_info()[1],
+                                    complete_result=output.complete_result)
 
-    def _record_live_build(self, ctx, captured, root, exception=None):
-        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
+    def _record_live_build(self, ctx, captured, root, exception=None, *, complete_result=None):
+        if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay") or ctx.meta.get("run_replay"):
             return
         layout = ctx.meta.get("project_layout")
         if layout is not None:
             root = layout.build_root
         if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
             return
-        result = {}
-        for line in reversed(captured):
+        result = complete_result or {}
+        for line in reversed(captured) if complete_result is None else ():
             try:
                 candidate = json.loads(line)
                 if isinstance(candidate, dict):
@@ -836,15 +965,25 @@ class _LoggingGroup(click.Group):
                 continue
         if result.get("via") == "daemon":
             return  # The child already recorded the attempt with its own start time.
-        failed = result.get("status") in {"error", "failed", "validation_error", "invalid_geometry", "timeout"}
+        checks_blocked = result.get("status") in {
+            "checks_failed", "checks_pending", "checks_unavailable",
+            "not_promoted",
+            "staged",
+        }
+        failed = checks_blocked or result.get("status") in {
+            "error", "failed", "validation_error", "invalid_geometry", "timeout",
+        }
         if not result and exception is not None:
             failed = not isinstance(exception, SystemExit) or exception.code not in (0, None)
         unavailable = result.get("status") == "success" and result.get("version") and not result.get("viewer")
         if failed or unavailable:
             try:
                 from agentcad.project_viewer import record_failure
+                attempt_status = result["status"] if checks_blocked else (
+                    "failed" if failed else "preview_unavailable"
+                )
                 record_failure(root, result.get("label") or "unlabeled",
-                               "failed" if failed else "preview_unavailable",
+                               attempt_status,
                                started_ns=ctx.meta["viewer_started_ns"])
             except Exception:
                 pass  # Optional UI state must never replace the command result.
@@ -852,9 +991,19 @@ class _LoggingGroup(click.Group):
     def _log_session(self, ctx, captured):
         if os.environ.get("AGENTCAD_NO_LOG") or ctx.meta.get("project_error") or ctx.meta.get("project_dry_run"):
             return
+        if os.environ.get("_AGENTCAD_DAEMON_CHILD") == "1":
+            # A daemon-routed command. The client that sent it logs the
+            # command once, with its own argv and the final ``via: daemon``
+            # result. The daemon's ``sys.argv`` belongs to whatever started
+            # the daemon, not to this request.
+            return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
-        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud"):
+        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "account", "changes"):
+            return
+        if cmd_name == "check-spec" and not ctx.meta.get("experimental_check_completion", False) and ctx.meta.get("experimental_revision_read"):
+            return
+        if cmd_name == "promote" and ctx.meta.get("experimental_promotion_status"):
             return
         # Parse the last JSON output (commands may echo multiple things)
         result = {}
@@ -868,8 +1017,8 @@ class _LoggingGroup(click.Group):
         # With no command result, do not create state in an unselected root.
         if not result:
             return
-        # Collect the raw args from sys.argv
-        args = sys.argv[2:] if len(sys.argv) > 2 else []
+        # The first argument is the subcommand already recorded as cmd_name.
+        args = ctx.meta.get("invocation_argv", [])[1:]
         try:
             logger = SessionLogger(get_project().build_root)
             logger.log(cmd_name, {"argv": args}, result)
@@ -886,8 +1035,10 @@ def cli():
     """agentcad — CLI CAD tool for AI agents. Command results are JSON."""
 
 
+cli.add_command(account)
 cli.add_command(context)
 cli.add_command(check_spec)
+cli.add_command(changes)
 cli.add_command(cloud)
 cli.add_command(daemon)
 cli.add_command(diff)
@@ -902,6 +1053,7 @@ cli.add_command(measure)
 cli.add_command(parts_cmd)
 cli.add_command(render)
 cli.add_command(recover)
+cli.add_command(promote)
 cli.add_command(review_cmd)
 cli.add_command(run)
 cli.add_command(skill)

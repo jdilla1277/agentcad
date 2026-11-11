@@ -16,7 +16,7 @@ from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID, TopAbs_REVERSED
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
-from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf
+from OCP.gp import gp_Trsf
 from OCP.XCAFApp import XCAFApp_Application
 from OCP.XCAFDoc import XCAFDoc_ColorSurf, XCAFDoc_DocumentTool
 
@@ -83,7 +83,10 @@ def _parse_color(value):
 
 def _transform_y_up(shape):
     trsf = gp_Trsf()
-    trsf.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), -math.pi / 2)
+    # Exact quarter-turn: (x, y, z) -> (x, z, -y). A trigonometric
+    # rotation leaves tiny nonzero terms at 90 degrees; independently
+    # transformed faces can then export different positions for one vertex.
+    trsf.SetValues(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0)
     return BRepBuilderAPI_Transform(shape, trsf, True).Shape()
 
 

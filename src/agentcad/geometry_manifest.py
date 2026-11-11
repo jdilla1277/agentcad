@@ -165,6 +165,7 @@ def summary(step_path: str | Path, payload: dict) -> dict:
         "recognition": payload["recognition"],
         "root_occurrence_ids": roots[:10], "root_occurrences_total": len(roots),
         "sample_ids": sample_ids,
+        "id_scope": "version_local", "cross_version_correspondence": "not_available",
         "lookup_example": f"agentcad inspect {shlex.quote(str(step_path))} --id {roots[0] if roots else sample_ids['face']}",
         "image_example": f"agentcad inspect {shlex.quote(str(step_path))} --image",
     }
@@ -284,7 +285,7 @@ class BaselineGeometry:
 
 
 def load_geometry(step_path: str | Path) -> BaselineGeometry:
-    """Load an imported baseline and its checked, typed-ID selection context."""
+    """Load a saved baseline and its checked, typed-ID selection context."""
     from agentcad.api import _record_loaded_file
 
     _record_loaded_file(str(step_path))

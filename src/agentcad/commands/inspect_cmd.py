@@ -1,4 +1,5 @@
 import json
+import math
 import shlex
 import signal
 import sys
@@ -16,6 +17,8 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.native_io import suppress_native_output
+from agentcad.inspection_delivery import delivery_options, forward_options, read_snapshot
+from agentcad.experimental_inspect import option as inspect_option, enabled as inspect_enabled
 
 DEFAULT_ID_LIMIT = 100
 DEFAULT_VALIDATION_TIMEOUT_S = 90.0
@@ -187,13 +190,23 @@ def _clear_validation_timeout(previous_state) -> None:
 
 @click.command("inspect")
 @click.argument("file")
-@click.option("--id", "entity_id", help="Retrieve one typed ID from an imported baseline's saved geometry manifest.")
-@click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of an imported baseline or --id target.")
+@click.option("--id", "entity_id", help="Retrieve one typed ID from an imported or run-generated baseline's saved geometry manifest.")
+@click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of a saved baseline or --id target.")
 @click.option("--isolate", is_flag=True, help="Show only the --id target; requires --image. Default images highlight it in context.")
-@click.option("--report", "with_report", is_flag=True, help="Return the saved compact import report and ranked sample image bundle.")
+@click.option("--report", "with_report", is_flag=True, help="Prepare or reuse a compact report and ranked sample image bundle for an imported or run-generated baseline.")
 @click.option("--no-images", is_flag=True, help="Omit image preparation/delivery for --report; keep the same analysis and sample plan.")
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum distinct --report images; overall first, then alternating part/face-edge samples.")
 @click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated text-token allowance for --report (compact JSON UTF-8 bytes / 3).")
+@click.option("--background", is_flag=True, help="Start --report analysis in a detached local worker and return its job.")
+@click.option("--wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for --report after these seconds; its worker continues.")
+@click.option("--job", "job_id", default=None, help="Retrieve/control the durable inspection job for this FILE; requires --report.")
+@click.option("--job-action", type=click.Choice(["status", "wait", "resume", "cancel"]), default=None, help="Action on --job. Default: wait. Cancellation stops between stages.")
+@click.option("--response-snapshot", default=None, help="Retrieve a complete saved response by its delivery ID; requires --report. No CAD work.")
+@click.option("--artifact", default=None, help="Read saved bytes: manifest, baseline, or a returned inventory/image path. Bounded base64 chunks; no CAD work.")
+@click.option("--artifact-offset", type=click.IntRange(min=0), default=0, help="Byte offset for --artifact; continuations require --artifact-sha256.")
+@click.option("--artifact-bytes", type=click.IntRange(min=1, max=49152), default=3072, show_default=True, help="Maximum raw bytes returned by --artifact (before base64 encoding).")
+@click.option("--artifact-sha256", default=None, help="Require these exact artifact bytes; copy the first chunk's SHA-256 on continuation.")
+@click.option("--artifact-expires-at", default=None, help="Pin the first chunk's retained-artifact expiry; copy the generated continuation action.")
 @click.option(
     "--ids", "with_ids", is_flag=True,
     help="Include per-feature ID lists (solids, faces, edges) for use with "
@@ -245,7 +258,9 @@ def _clear_validation_timeout(previous_state) -> None:
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@inspect_option
 @project_options
+@delivery_options
 def inspect_cmd(
     file,
     entity_id,
@@ -255,6 +270,16 @@ def inspect_cmd(
     no_images,
     max_images,
     text_budget,
+    background,
+    wait_timeout,
+    job_id,
+    job_action,
+    response_snapshot,
+    artifact,
+    artifact_offset,
+    artifact_bytes,
+    artifact_sha256,
+    artifact_expires_at,
     with_ids,
     with_summary,
     id_limit,
@@ -265,7 +290,32 @@ def inspect_cmd(
     no_daemon,
 ):
     """Inspect any file. STEP/BREP get a full topology report; other formats
-    get a structured 'recognized but not editable here' response. Never throws."""
+    get a structured 'recognized but not editable here' response. Never throws.
+
+    WIP: typed --id, --image, --report, --artifact and inspection job controls
+    require --experimental-inspect on every call. Basic --ids/--summary do not.
+    """
+    if artifact is None and (artifact_offset or artifact_bytes != 3072 or artifact_sha256 is not None or artifact_expires_at is not None):
+        raise click.UsageError("--artifact-offset, --artifact-bytes, --artifact-sha256 and --artifact-expires-at require --artifact.")
+    if artifact is not None:
+        if (entity_id or with_image or with_report or with_ids or with_summary or validate_only
+                or isolate or background or wait_timeout is not None or job_id or job_action or response_snapshot
+                or no_images or max_images != 9 or text_budget != 2000 or no_limit or id_limit != DEFAULT_ID_LIMIT):
+            raise click.UsageError("--artifact reads saved bytes; omit geometry, report, image and job controls.")
+        from agentcad.inspection_artifacts import read_artifact
+        from agentcad.project import derived_dir
+
+        try:
+            payload = read_artifact(file, artifact, derived_dir("inspect", Path(file), create=False),
+                                    offset=artifact_offset, length=artifact_bytes, expected_sha256=artifact_sha256,
+                                    expected_expires_at=artifact_expires_at)
+        except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+            _emit({"command": "inspect", "status": "error",
+                   "reason": getattr(exc, "reason", "inspection_artifact_unavailable"), "message": str(exc),
+                   "suggestion": "Use the original baseline/build root and exact reference. Request a fresh report or image for new evidence; old artifact bytes are never regenerated by retrieval."}, exit_code=1)
+            return
+        _emit(payload)
+        return
     if validate_only and (with_ids or with_summary):
         raise click.UsageError(
             "--validate-only cannot be combined with --ids or --summary; "
@@ -279,10 +329,44 @@ def inspect_cmd(
         raise click.UsageError("--report cannot be combined with --id, --image, --ids, --summary, or --validate-only.")
     if not with_report and (no_images or max_images != 9 or text_budget != 2000):
         raise click.UsageError("--no-images, --max-images and --text-budget require --report.")
+    if not with_report and (background or wait_timeout is not None or job_id or job_action):
+        raise click.UsageError("Inspection job controls require --report.")
+    if wait_timeout is not None and not math.isfinite(wait_timeout):
+        raise click.BadParameter("Use a finite number of seconds.", param_hint="--wait-timeout")
+    if job_action and not job_id:
+        raise click.UsageError("--job-action requires --job.")
+    if job_id and (no_images or max_images != 9):
+        raise click.UsageError("--job uses its saved image configuration; omit --no-images/--max-images.")
+    if background and (job_action in {"status", "wait", "cancel"} or wait_timeout is not None):
+        raise click.UsageError("--background cannot be combined with a wait deadline or status/wait/cancel action.")
+    if job_id and job_action is None:
+        job_action = "wait"
+    if background and job_action == "wait":
+        raise click.UsageError("Use --job-action resume with --background to start a saved job.")
+    if response_snapshot:
+        if not with_report or job_id or background or wait_timeout is not None or no_images or max_images != 9 or text_budget != 2000:
+            raise click.UsageError("--response-snapshot requires --report and uses saved content; omit job/report preparation controls. Use --response-text-budget for a new delivery limit.")
+        try:
+            snapshot, exit_code = read_snapshot(response_snapshot, file, get_project())
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            baseline = Path(file).resolve()
+            mode = ["--report"] if baseline.with_name("geometry_manifest.json").is_file() else ["--validate-only"]
+            _emit({"command": "inspect", "status": "error", "reason": getattr(exc, "reason", "response_snapshot_unavailable"),
+                   "message": str(exc), "suggestion": "Request fresh inspection evidence, or restore the original snapshot from backup. A fresh report does not recover the historical response.",
+                   "next_actions": [shlex.join(["agentcad", "inspect", str(baseline), *mode, "--build-dir", str(get_project().build_root)])]}, exit_code=1)
+            return
+        _emit(snapshot, exit_code=exit_code)
+        return
     # Try routing through daemon. Exits before returning if reachable.
     argv = ["inspect", file]
     if with_report:
         argv.extend(["--report", "--max-images", str(max_images), "--text-budget", str(text_budget)])
+        if background:
+            argv.append("--background")
+        if wait_timeout is not None:
+            argv.extend(["--wait-timeout", str(wait_timeout)])
+        if job_id:
+            argv.extend(["--job", job_id, "--job-action", job_action])
     if no_images:
         argv.append("--no-images")
     if entity_id:
@@ -304,23 +388,43 @@ def inspect_cmd(
     argv.extend(["--validation-timeout", str(validation_timeout)])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
+    forward_options(argv)
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     if with_report:
         from agentcad.inspection_report import inspection_report, ReportBudgetError
+        from agentcad.inspection_jobs import request_report
         from agentcad.project import derived_dir
 
         try:
-            payload, _ = inspection_report(
-                file, derived_dir("inspect", Path(file)), images=not no_images,
-                max_images=max_images, text_budget=text_budget, response_path=get_project().response_path,
-                response_extra=get_project().describe(),
-            )
+            controlled = background or wait_timeout is not None or job_id is not None
+            if not controlled:
+                payload, _ = inspection_report(
+                    file, derived_dir("inspect", Path(file)), images=not no_images,
+                    max_images=max_images, text_budget=text_budget, response_path=get_project().response_path,
+                    response_extra=get_project().describe(),
+                )
+            else:
+                job, result, expired = request_report(
+                    file, derived_dir("inspect", Path(file)), get_project(), images=not no_images,
+                    max_images=max_images, text_budget=text_budget,
+                    background=background, wait_timeout=wait_timeout, job_id=job_id, action=job_action,
+                    response_extra=get_project().describe(),
+                )
         except Exception as exc:
             _emit({"command": "inspect", "status": "error", "message": str(exc),
+                   "reason": getattr(exc, "reason", "report_unavailable"),
+                   "next_actions": [shlex.join(["agentcad", "inspect", str(Path(file).resolve()), "--report", "--build-dir", str(get_project().build_root)])],
                    "error_kind": "report_budget_too_small" if isinstance(exc, ReportBudgetError) else "report_unavailable"}, exit_code=1)
             return
-        _emit(payload)
+        if not controlled:
+            _emit(payload)
+            return
+        payload = {"command": "inspect", "status": "success" if job["status"] == "complete" else job["status"],
+                   "inspection_job": job, "wait_expired": expired}
+        if result:
+            payload["inspection"] = result[0]
+        _emit(payload, exit_code=1 if job_action not in {"status", "cancel"} and job["status"] in {"failed", "stopped", "canceled", "resource_limit"} else 0)
         return
 
     if entity_id or with_image:
@@ -341,6 +445,8 @@ def inspect_cmd(
             "next_actions": ["agentcad docs editing — load this baseline with load_geometry; part/occurrence records link to their members"],
         }
         image_action = f"agentcad inspect {shlex.quote(file)}" + (f" --id {entity_id}" if entity_id else "") + " --image"
+        if get_project().configured:
+            image_action += " --build-dir " + shlex.quote(str(get_project().build_root))
         payload["next_actions"].insert(0, image_action)
         if with_image:
             from agentcad.geometry_images import geometry_image
@@ -357,6 +463,8 @@ def inspect_cmd(
                     payload["next_actions"][0] = f"agentcad inspect {shlex.quote(file)} --id {sample} --image"
             except Exception as exc:
                 payload.update(status="error", error_kind="image_unavailable")
+                if hasattr(exc, "reason"):
+                    payload["reason"] = exc.reason
                 payload["image"] = {"status": "failed", "message": str(exc)}
                 payload["next_actions"] = [
                     image_action + (" --isolate" if isolate else ""),
@@ -366,6 +474,8 @@ def inspect_cmd(
                     "Resolve the reported image error and retry, or inspect the record without --image. "
                     "Headless Linux PNG rendering requires X11/GLX, for example xvfb-run -a."
                 )
+                if getattr(exc, "reason", None) == "inspection_cache_resource_limit":
+                    payload["suggestion"] = "Increase inspection.cache.max_bytes in agentcad.toml and retry the same image request. The geometry record is available without --image."
                 _emit(payload, exit_code=1)
                 return
         _emit(payload)
@@ -507,6 +617,7 @@ def inspect_cmd(
 
 
 def _emit(payload: dict, exit_code: int = 0) -> None:
+    click.get_current_context().meta["inspection_exit_code"] = exit_code
     click.echo(json.dumps(payload))
     if exit_code != 0:
         sys.exit(exit_code)
@@ -782,7 +893,7 @@ def _inspect_tier0_impl(
                         with_summary=with_summary,
                     ),
                 }
-            if with_ids:
+            if with_ids and inspect_enabled():
                 from agentcad.geometry_manifest import MANIFEST_NAME, read_manifest, summary
                 if Path(file_path).with_name(MANIFEST_NAME).is_file() and Path(file_path).name == "output.step":
                     try:

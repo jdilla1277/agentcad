@@ -161,10 +161,12 @@ def resolve_project(
     base = (start or Path.cwd()).resolve()
     root = base
     discovered_build = None
+    found_project = False
     for candidate in (base, *base.parents):
         if (candidate / "agentcad.toml").exists() or (
             candidate / "agentcad.json"
         ).exists():
+            found_project = True
             root = candidate
             if not (candidate / "agentcad.toml").exists():
                 try:
@@ -177,6 +179,19 @@ def resolve_project(
                 except (OSError, ValueError):
                     pass  # read_manifest supplies the actionable error.
             break
+    # Returned job actions carry an absolute build root. A source project
+    # created with only --build-dir may have no marker in its source tree;
+    # let its own descendants recover the recorded owner from that root.
+    # A separately marked project (or an unrelated cwd) must still fail the
+    # existing ownership check rather than adopting somebody else's history.
+    if not found_project and build_dir is not None and Path(build_dir).is_absolute():
+        try:
+            selected = json.loads((Path(build_dir) / "agentcad.json").read_text())
+            owner = Path(selected["project_root"]).resolve()
+            if base.is_relative_to(owner):
+                root = owner
+        except (OSError, ValueError, TypeError, KeyError):
+            pass  # read_manifest retains the normal invalid-manifest errors.
     configured = None
     config_path = root / "agentcad.toml"
     if config_path.exists():
@@ -259,6 +274,18 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        if name in {"run", "import", "inspect"}:
+            from agentcad.experimental_inspect import validate
+            validate(ctx, kwargs)
+        from agentcad.experimental_changes import validate
+        validate(ctx, kwargs)
+        if name == "feedback" and (
+            kwargs.get("show_template")
+            or (kwargs.get("message") is None and kwargs.get("feedback_file") is None)
+        ):
+            # Template discovery/export needs no initialized or writable build
+            # root and must not create .agentcad state just to show questions.
+            return function(*args, **kwargs)
         initialize = name == "init" or (name == "import" and kwargs.get("init_flag"))
         writes = name in {
             "init",
@@ -271,8 +298,10 @@ def project_options(function):
             "feedback",
         } or (name == "diff" and kwargs.get("visual")) or (
             name == "inspect" and (kwargs.get("with_image") or kwargs.get("with_report"))
+        ) or (name == "check-spec" and kwargs.get("complete")) or (
+            name in {"restore", "repair"} and not kwargs.get("request_status")
         )
-        if kwargs.get("dry_run"):
+        if kwargs.get("dry_run") or (name in {"run", "restore", "repair"} and kwargs.get("request_status")):
             writes = False
             ctx.meta["project_dry_run"] = True
         if name in {"run", "context", "recover", "parts"} or (
@@ -290,10 +319,11 @@ def project_options(function):
             layout.preflight()
         return function(*args, **kwargs)
 
-    return wrapped
+    from agentcad.experimental_changes import _COMMANDS, option
+    return option(wrapped) if function.__name__ in _COMMANDS else wrapped
 
 
-def derived_dir(command: str, *inputs: Path) -> Path:
+def derived_dir(command: str, *inputs: Path, create: bool = True) -> Path:
     """Keep legacy standalone behavior; contain configured derived artifacts."""
     layout = get_project()
     first = inputs[0].resolve()
@@ -307,7 +337,8 @@ def derived_dir(command: str, *inputs: Path) -> Path:
     stem = re.sub(r"[^\w.-]", "_", first.stem)[:64]
     result = layout.artifact_path(f"derived/{command}/{stem}-{digest}")
     try:
-        result.mkdir(parents=True, exist_ok=True)
+        if create:
+            result.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise ProjectError(
             "build_root_unwritable",
@@ -343,6 +374,10 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         "volume_glb",
         "volume_png",
         "source_copy",
+        "image_root",
+        "manifest",
+        "report",
+        "bundle",
     }
 
     def visit(value, key="", paths=False):
@@ -356,8 +391,8 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
             (layout.configured or Path.cwd().resolve() != layout.project_root)
             and isinstance(value, str)
             and (key in path_keys or paths)
-            and re.match(r"^v\d+(?:_|/)", value)
-            and "/" in value
+            and re.match(r"^v\d+(?:_|[/\\])", value)
+            and ("/" in value or os.sep in value)
         ):
             return layout.response_path(layout.artifact_path(value))
         return value
@@ -386,4 +421,74 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         if result.get("scaffold") == "edit.py":
             result["scaffold"] = str(layout.project_root / "edit.py")
     result.update(layout.describe())
+    if payload.get("command") == "import" and (
+        layout.configured or Path.cwd().resolve() != layout.project_root
+    ):
+        _format_import_presentation(result, payload.get("outputs", {}).get("step"), layout)
     return result
+
+
+def _format_import_presentation(result, original_step, layout):
+    """Relocate generated actions, then account for the final inline report.
+
+    Only known command prefixes are replaced. Descriptions and quoted paths
+    remain intact, including paths containing the em dash used in annotations.
+    The response is detached from retained requests and analysis artifacts.
+    """
+    if original_step:
+        step = str(layout.artifact_path(original_step))
+        root_option = " --build-dir " + shlex.quote(str(layout.build_root))
+        try:
+            report_step = os.path.relpath(step, Path.cwd())
+        except ValueError:  # A configured build root can be on another drive.
+            report_step = step
+
+        def relocate(action, target=step):
+            for verb in ("inspect", "measure", "view"):
+                # Stored output paths use '/', while Path-generated examples
+                # can use native Windows separators in the same cached reply.
+                for previous in (original_step, str(Path(original_step)), step):
+                    prefix = f"agentcad {verb} {shlex.quote(previous)}"
+                    if action == prefix or action.startswith(prefix + " "):
+                        suffix = action[len(prefix):]
+                        selected_root = root_option if layout.configured and root_option not in suffix else ""
+                        return f"agentcad {verb} {shlex.quote(target)}{selected_root}{suffix}"
+            return action
+
+        geometry = result.get("geometry_manifest", {})
+        for name in ("lookup_example", "image_example"):
+            if name in geometry:
+                geometry[name] = relocate(geometry[name])
+        for container in (result, result.get("inspection", {})):
+            if "next_actions" in container:
+                # Caller-relative report actions avoid repeating long absolute
+                # paths inside a tight allowance; they still target this STEP.
+                target = step if container is result else report_step
+                container["next_actions"] = [relocate(action, target) for action in container["next_actions"]]
+
+    report = result.get("inspection")
+    if report is not None and report.get("budget", {}).get("scope") == "inspection_report":
+        from agentcad.inspection_report import ReportBudgetError, compact_report
+
+        try:
+            result["inspection"] = compact_report(report)
+        except ReportBudgetError as exc:
+            _omit_import_report(result, report, original_step, layout, exc)
+
+
+def _omit_import_report(result, report, original_step, layout, error):
+    """Keep committed CAD success when caller-specific report additions overflow."""
+    from agentcad.inspection_report import _estimated_tokens
+
+    result.pop("inspection")
+    recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
+                          _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
+    result["inspection_delivery"] = {
+        "status": "omitted", "reason": "text_budget_too_small",
+        "text_tokens": report["budget"]["text_tokens"], "message": str(error),
+        "next_actions": [shlex.join([
+            "agentcad", "inspect", str(layout.artifact_path(original_step)),
+            "--report", "--no-images", "--text-budget", str(recovery_budget),
+            "--build-dir", str(layout.build_root),
+        ])],
+    }

@@ -8,6 +8,7 @@ view, inspect) works unchanged on imported versions.
 """
 import hashlib
 import json
+import math
 import shutil
 import shlex
 import sys
@@ -28,6 +29,9 @@ from agentcad.runners import dispatch
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import MANIFEST_FILE
 from agentcad.native_io import silence_native_stdout
+from agentcad.change_retention import change_options
+from agentcad.inspection_delivery import delivery_options, forward_options
+from agentcad.experimental_inspect import option as inspect_option, enabled as inspect_enabled, ordinary_semantic
 
 
 @click.command("import", short_help="Import a CAD file as a versioned baseline.")
@@ -74,19 +78,106 @@ from agentcad.native_io import silence_native_stdout
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-@click.option("--inspection-image/--no-inspection-image", default=True, help="Prepare inspection image media (overall and ranked samples; default enabled). Retrieval remains available later.")
-@click.option("--report/--no-report", "show_report", default=True, help="Include the compact inspection report in the response. The saved report/bundle remain available when disabled.")
+@click.option("--inspection-image/--no-inspection-image", default=True, help="WIP: prepare overall/ranked media with --experimental-inspect (on by default within opt-in). Retrieval remains available later.")
+@click.option("--report/--no-report", "show_report", default=True, help="WIP: include the compact report with --experimental-inspect (on by default within opt-in). --no-report keeps its saved bundle.")
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum inspection images to prepare, including the overall sheet.")
-@click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Estimated token allowance for the inline inspection report, excluding legacy import fields.")
+@click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Report preparation token allowance, separate from whole-response delivery limits.")
+@click.option("--idempotency-key", default=None, help="Reuse this key and identical source/options to recover an import without creating another version. Scoped to the selected build root.")
+@click.option("--inspection-background", is_flag=True, help="Run inspection analysis in a detached local worker; core import still completes before returning.")
+@click.option("--inspection-wait-timeout", type=click.FloatRange(min=0), default=None, help="Stop waiting for inspection after these seconds; its worker continues. Does not limit core import or legacy preview work.")
+@inspect_option
 @project_options
+@delivery_options
+@change_options
 def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation_profile, no_daemon, inspection_image,
-               show_report, max_images, text_budget):
+               show_report, max_images, text_budget, idempotency_key, inspection_background, inspection_wait_timeout):
     """Import a CAD file (STEP/STP/BREP) as a versioned baseline.
+
+    With --stage, retain and check the candidate without accepting a baseline.
+    Inspect change.geometry or view its revision, then explicitly promote it.
 
     The imported file becomes v_N in the manifest with full provenance
     tracking. Every other command (run, diff, render, view) works on it
     just like a scripted version.
+
+    WIP enriched reports, images, ID manifests and jobs require an explicit
+    --experimental-inspect on every call. Ordinary imports skip that work.
     """
+    if not inspect_enabled():
+        show_report = inspection_image = False
+    # Try routing through daemon. Exits before returning if reachable.
+    if inspection_background and inspection_wait_timeout is not None:
+        raise click.UsageError("Choose --inspection-background or --inspection-wait-timeout.")
+    if inspection_wait_timeout is not None and not math.isfinite(inspection_wait_timeout):
+        raise click.BadParameter("Use a finite number of seconds.", param_hint="--inspection-wait-timeout")
+    argv = ["import", file]
+    if label:
+        argv.extend(["--label", label])
+    if init_flag:
+        argv.append("--init")
+    if runtime:
+        argv.extend(["--runtime", runtime])
+    if not open_view:
+        argv.append("--no-view")
+    if not auto_diff:
+        argv.append("--no-diff")
+    if not inspection_image and (inspect_enabled() or click.get_current_context().get_parameter_source("inspection_image") == click.core.ParameterSource.COMMANDLINE):
+        argv.append("--no-inspection-image")
+    if not show_report and (inspect_enabled() or click.get_current_context().get_parameter_source("show_report") == click.core.ParameterSource.COMMANDLINE):
+        argv.append("--no-report")
+    if max_images != 9:
+        argv.extend(["--max-images", str(max_images)])
+    if text_budget != 2000:
+        argv.extend(["--text-budget", str(text_budget)])
+    if validation_profile != "deliverable":
+        argv.extend(["--validation-profile", validation_profile])
+    if idempotency_key is not None:
+        argv.extend(["--idempotency-key", idempotency_key])
+    if inspection_background:
+        argv.append("--inspection-background")
+    if inspection_wait_timeout is not None:
+        argv.extend(["--inspection-wait-timeout", str(inspection_wait_timeout)])
+    from agentcad.change_retention import forward_check_options
+    forward_check_options(argv)
+    forward_options(argv)
+    maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    def execute():
+        return _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
+                            validation_profile, no_daemon, inspection_image,
+                            show_report, max_images, text_budget, inspection_background, inspection_wait_timeout)
+
+    if idempotency_key is not None:
+        from agentcad.import_requests import ImportRequest
+
+        semantic = {
+            **ordinary_semantic(),
+            "label": _safe_label(Path(file).stem if label is None else label),
+            "runtime": runtime, "validation_profile": validation_profile,
+            "open_view": open_view, "auto_diff": auto_diff,
+            "inspection_image": inspection_image, "show_report": show_report,
+            "max_images": max_images, "text_budget": text_budget,
+        }
+        ctx = click.get_current_context()
+        # Keep existing keys compatible when no explicit checks were requested.
+        # Bind declarations by content, so edits to the same file cannot replay
+        # a result evaluated against different requirements.
+        if "change_requirements" in ctx.meta:
+            semantic["requirements"] = ctx.meta["change_requirements"]
+        if ctx.meta.get("change_defer_checks"):
+            semantic["defer_checks"] = True
+        if ctx.meta.get("change_stage"):
+            semantic["stage"] = True
+        ImportRequest(idempotency_key, file=file, semantic=semantic).run(execute)
+        # Fork only after the request's execution lock has been released.
+        maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
+    else:
+        execute()
+
+
+def _import_impl(file, label, init_flag, open_view, auto_diff, runtime,
+                 validation_profile, no_daemon, inspection_image,
+                 show_report, max_images, text_budget, inspection_background=False, inspection_wait_timeout=None):
     # --runtime pins only the manifest that --init creates. Refuse it when a
     # manifest already exists even if --init was also passed: --init is a
     # no-op in that case, so accepting the flag would silently ignore the
@@ -120,31 +211,27 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         }, exit_code=1)
         return
 
-    # Try routing through daemon. Exits before returning if reachable.
-    argv = ["import", file]
-    if label:
-        argv.extend(["--label", label])
-    if init_flag:
-        argv.append("--init")
-    if runtime:
-        argv.extend(["--runtime", runtime])
-    if not open_view:
-        argv.append("--no-view")
-    if not auto_diff:
-        argv.append("--no-diff")
-    if not inspection_image:
-        argv.append("--no-inspection-image")
-    if not show_report:
-        argv.append("--no-report")
-    if max_images != 9:
-        argv.extend(["--max-images", str(max_images)])
-    if text_budget != 2000:
-        argv.extend(["--text-budget", str(text_budget)])
-    if validation_profile != "deliverable":
-        argv.extend(["--validation-profile", validation_profile])
-    maybe_route_through_daemon(argv, no_daemon=no_daemon)
+    file_path = click.get_current_context().meta.get("import_request_source", Path(file))
+    original_filename = Path(file).name
 
-    file_path = Path(file)
+    def _pin_source(path):
+        from agentcad.change_retention import begin_change
+        if (not manifest_path.is_file() or path.suffix.lower() not in (".step", ".stp", ".brep")
+                or not path.is_file()):
+            return path
+        try:
+            source = path.read_bytes()
+        except OSError:
+            return path  # File detection supplies the existing actionable error.
+        attempt = begin_change(
+            command="import", label=_safe_label(label or Path(file).stem or "import"),
+            source=source, source_name=original_filename,
+            model={"command": "import", "validation_profile": validation_profile,
+                   "runtime": runtime},
+        )
+        return attempt.source_path if attempt else path
+
+    file_path = _pin_source(file_path)
 
     # 1. Sniff the file type. Tier 0 only.
     detection = file_detect.detect_file_type(file_path)
@@ -181,11 +268,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
 
     manifest = get_project().read_manifest()
     versions = manifest.get("versions", [])
+    # --init may only now have created the manifest; pin before any parser or
+    # validator reads source bytes. Reuse an already retained source otherwise.
+    file_path = _pin_source(file_path)
 
     # 3. Resolve the label. Version numbers are reserved atomically only after
     # parsing/metrics establish whether this is valid or diagnostic output.
     if label is None:
-        label = file_path.stem or "import"
+        label = Path(file).stem or "import"
     label = _safe_label(label)
     ext = file_path.suffix.lower()
 
@@ -265,18 +355,27 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "version": version_num,
             "label": label,
             "source": "import",
-            "original_filename": file_path.name,
+            "original_filename": original_filename,
             "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
             "tool_version": __version__,
             "created": datetime.now(timezone.utc).isoformat(),
             "outputs": {"source": f"{invalid_dir_name}/source{ext}"},
         }
+        from agentcad.change_retention import prepare_change
+        from agentcad.import_requests import mark_core
+        mark_core(invalid_meta)
+        try:
+            prepare_change(invalid_meta)
+        except Exception:
+            shutil.rmtree(invalid_dir, ignore_errors=True)
+            raise
         commit_version(reservation, invalid_meta, {
             "version": version_num,
             "label": label,
             "status": "invalid_geometry",
             "source": "import",
             "path": f"{invalid_dir_name}/",
+            **({"import_request": invalid_meta["import_request"]} if "import_request" in invalid_meta else {}),
         }, advance_current=False)
         _emit({**invalid_meta, "path": f"{invalid_dir_name}/"}, exit_code=1)
         return
@@ -284,6 +383,31 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # 6. Materialize provenance only after the input has parsed and passed
     # validity. Parser errors do not consume a version.
     from agentcad.versioning import reserve_version
+
+    from agentcad.change_retention import assess_change
+    # Normalize once: requirements and delivery must use the same STEP bytes,
+    # including source assembly placement and metadata.
+    from agentcad.change_retention import current_attempt
+    attempt = current_attempt()
+    diagnostic = None
+    if attempt:
+        diagnostic = attempt.directory / "import-normalized.step"
+        from agentcad.change_retention import capture_geometry
+        try:
+            with silence_native_stdout():
+                _export_step(source_document or topo_shape, diagnostic)
+        finally:
+            capture_geometry(diagnostic)
+        from agentcad.step_io import load_cad_shape
+        with silence_native_stdout():
+            metrics, validation = validated_metrics(load_cad_shape(diagnostic), profile=validation_profile,
+                                                     source_path=diagnostic)
+        blocked = assess_change({"command": "import", "status": "success", "metrics": metrics,
+                                 "validation": validation, "validation_profile": validation_profile}, diagnostic)
+        if blocked:
+            diagnostic.unlink(missing_ok=True)
+            _emit(blocked, exit_code=0 if blocked["status"] == "staged" else 1)
+            return
 
     reservation = reserve_version(get_project().build_root, label)
     version_num = reservation.number
@@ -305,9 +429,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     #    so we standardize on STEP regardless of input format.
     try:
         with silence_native_stdout():
-            _export_step(source_document or topo_shape, version_dir / "output.step")
+            if diagnostic is not None:
+                shutil.move(str(diagnostic), str(version_dir / "output.step"))
+            else:
+                _export_step(source_document or topo_shape, version_dir / "output.step")
 
     except Exception as exc:
+        from agentcad.change_retention import capture_geometry
+        capture_geometry(version_dir / "output.step")
         shutil.rmtree(version_dir, ignore_errors=True)
         _emit({
             "command": "import", "status": "malformed",
@@ -342,7 +471,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         "version": version_num,
         "label": label,
         "source": "import",
-        "original_filename": file_path.name,
+        "original_filename": original_filename,
         "sha256": sha256,
         "tool_version": __version__,
         "created": created,
@@ -374,16 +503,34 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
             "inspection_report": {"status": "pending"},
         },
     }
+    if not inspect_enabled():
+        for name in ("geometry_manifest", "inspection_image", "inspection_report"):
+            meta["artifacts"].pop(name)
     comparison_enabled = auto_diff and has_previous_step
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
-    commit_version(reservation, meta, {
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "source": "import",
-        "path": f"{dir_name}/",
-    }, advance_current=True)
+    from agentcad.change_retention import prepare_change
+    from agentcad.import_requests import mark_core
+    mark_core(meta)
+    try:
+        prepare_change(meta, geometry=version_dir / "output.step")
+    except Exception:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        raise
+    from agentcad.change_promotion import PromotionRefused
+    try:
+        commit_version(reservation, meta, {
+            "version": version_num,
+            "label": label,
+            "status": "success",
+            "source": "import",
+            "path": f"{dir_name}/",
+            **({"import_request": meta["import_request"]} if "import_request" in meta else {}),
+        }, advance_current=True)
+    except PromotionRefused as exc:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        _emit({**exc.payload("import"), "label": label}, exit_code=1)
+        return
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     if assembly_warning:
         lifecycle.add_warning(assembly_warning)
@@ -407,24 +554,26 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         lifecycle.set_artifact(name, "success")
         return True, value
 
-    # Issue identities from normalized geometry after the usable core is
-    # committed, before optional rendering. A failed inventory cannot erase it.
-    from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
+    manifest_ok, geometry_data = False, None
+    if inspect_enabled():
+        # Issue identities from normalized geometry after the usable core is
+        # committed, before optional rendering. A failed inventory cannot erase it.
+        from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
 
-    manifest_ok, geometry_data = _attempt_artifact(
-        "geometry_manifest",
-        lambda: create_manifest(version_dir / "output.step", version_num, source={
-            "sha256": sha256, "filename": file_path.name,
-            "length_units": list(source_document.source_length_units) if source_document else [],
-            "assembly_metadata": "preserved_source_document" if source_document else "derived_normalized_geometry",
-        }),
-    )
-    if manifest_ok:
-        lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
-        lifecycle.meta["geometry_manifest"] = geometry_summary(
-            Path(get_project().response_path(version_dir / "output.step")), geometry_data,
+        manifest_ok, geometry_data = _attempt_artifact(
+            "geometry_manifest",
+            lambda: create_manifest(version_dir / "output.step", version_num, source={
+                "sha256": sha256, "filename": original_filename,
+                "length_units": list(source_document.source_length_units) if source_document else [],
+                "assembly_metadata": "preserved_source_document" if source_document else "derived_normalized_geometry",
+            }),
         )
-        lifecycle.persist()
+        if manifest_ok:
+            lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
+            lifecycle.meta["geometry_manifest"] = geometry_summary(
+                Path(get_project().response_path(version_dir / "output.step")), geometry_data,
+            )
+            lifecycle.persist()
 
     # 10. Edit scaffold — write `edit.py` if absent, so the agent has a
     #     templated starting point. The scaffold must match the project's
@@ -438,7 +587,7 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
         def _write_scaffold():
             scaffold_path.write_text(
                 _edit_scaffold(
-                    get_project().response_path(version_dir), file_path.name, label, project_rt,
+                    get_project().response_path(version_dir), original_filename, label, project_rt,
                     build_dir=str(get_project().build_root) if get_project().configured else None,
                     geometry_manifest=manifest_ok,
                 ),
@@ -460,48 +609,65 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     # Build reusable analysis and a bounded sample catalogue. Media failures
     # are recorded individually and cannot undo the committed core/scaffold.
     inspection_payload = None
-    if manifest_ok:
-        from agentcad.inspection_report import inspection_report
+    if inspect_enabled():
+        if manifest_ok:
+            from agentcad.inspection_jobs import request_report
 
-        report_ok, report_result = _attempt_artifact(
-            "inspection_report", lambda: inspection_report(
-                version_dir / "output.step", version_dir, images=inspection_image,
-                max_images=max_images, text_budget=text_budget if show_report else 2000,
-                meta=lifecycle.meta, response_path=get_project().response_path,
-            ),
-        )
-        if report_ok:
-            inspection_payload, prepared = report_result
+            def publish_job(job):
+                # Recovery must discover the same job even if the caller dies
+                # during analysis, before any report can be returned.
+                lifecycle.meta["inspection_job"] = job
+                lifecycle.persist()
 
-            def relative(path):
-                return Path(path).resolve().relative_to(get_project().build_root).as_posix()
+            report_ok, job_result = _attempt_artifact(
+                "inspection_report", lambda: request_report(
+                    version_dir / "output.step", version_dir, get_project(), images=inspection_image,
+                    max_images=max_images, text_budget=text_budget if show_report else 2000,
+                    meta=lifecycle.meta, background=inspection_background, wait_timeout=inspection_wait_timeout,
+                    on_prepared=publish_job,
+                ),
+            )
+            report_result = None
+            if report_ok:
+                job, report_result, wait_expired = job_result
+                lifecycle.meta["inspection_job"] = job
+                lifecycle.meta["inspection_wait_expired"] = wait_expired
+                if report_result is None:
+                    lifecycle.set_artifact("inspection_report", job["status"], message="Use inspection_job.actions to wait, resume or cancel analysis.")
+                    lifecycle.set_artifact("inspection_image", job["status"], message="Inspection images are managed by the durable job.")
+                    lifecycle.persist()
+            if report_result is not None:
+                inspection_payload, prepared = report_result
 
-            lifecycle.meta["outputs"]["inspection_report"] = relative(prepared["report"])
-            lifecycle.meta["outputs"]["inspection_bundle"] = relative(prepared["bundle"])
-            overall = next((row for row in prepared["media"] if row["id"] == "overall"), None)
-            if overall:
-                image_path = Path(overall["png"])
-                if not image_path.is_absolute():
-                    image_path = get_project().project_root / image_path
-                png_path = relative(image_path)
-                lifecycle.meta["outputs"]["inspection_image"] = png_path
-                lifecycle.meta["inspection_image"] = {
-                    "png": png_path, "metadata": relative(image_path.with_suffix(".json")),
-                    "manifest_id": geometry_data["manifest_id"],
-                    "labeled_ids": [row["id"] for group in prepared["analysis"]["samples"].values() for row in group],
-                    "labels_complete": False, "size": [1024, 1024],
-                }
-                lifecycle.set_artifact("inspection_image", "success")
-            elif not inspection_image or max_images == 0:
-                lifecycle.set_artifact("inspection_image", "skipped", message="Inspection images disabled or capped at zero.")
-            else:
-                lifecycle.set_artifact("inspection_image", "failed", message="Overall image unavailable; see inspection bundle omissions.")
-            lifecycle.persist()
+                def relative(path):
+                    return Path(path).resolve().relative_to(get_project().build_root).as_posix()
+
+                lifecycle.meta["outputs"]["inspection_report"] = relative(prepared["report"])
+                lifecycle.meta["outputs"]["inspection_bundle"] = relative(prepared["bundle"])
+                overall = next((row for row in prepared["media"] if row["id"] == "overall"), None)
+                if overall:
+                    image_path = Path(overall["png"])
+                    if not image_path.is_absolute():
+                        image_path = get_project().project_root / image_path
+                    png_path = relative(image_path)
+                    lifecycle.meta["outputs"]["inspection_image"] = png_path
+                    lifecycle.meta["inspection_image"] = {
+                        "png": png_path, "metadata": relative(image_path.with_suffix(".json")),
+                        "manifest_id": geometry_data["manifest_id"],
+                        "labeled_ids": [row["id"] for group in prepared["analysis"]["samples"].values() for row in group],
+                        "labels_complete": False, "size": [1024, 1024],
+                    }
+                    lifecycle.set_artifact("inspection_image", "success")
+                elif not inspection_image or max_images == 0:
+                    lifecycle.set_artifact("inspection_image", "skipped", message="Inspection images disabled or capped at zero.")
+                else:
+                    lifecycle.set_artifact("inspection_image", "failed", message="Overall image unavailable; see inspection bundle omissions.")
+                lifecycle.persist()
+            elif not report_ok:
+                lifecycle.set_artifact("inspection_image", "skipped", message="Inspection analysis unavailable.")
         else:
-            lifecycle.set_artifact("inspection_image", "skipped", message="Inspection analysis unavailable.")
-    else:
-        lifecycle.set_artifact("inspection_report", "skipped", message="Geometry manifest was unavailable.")
-        lifecycle.set_artifact("inspection_image", "skipped", message="Geometry manifest was unavailable.")
+            lifecycle.set_artifact("inspection_report", "skipped", message="Geometry manifest was unavailable.")
+            lifecycle.set_artifact("inspection_image", "skipped", message="Geometry manifest was unavailable.")
 
     # 8. Visual artifacts (preview, glb, viewer).
     from agentcad.render import render_composite_4view
@@ -795,12 +961,14 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     response["more_at"] = "agentcad docs editing"
     click.echo(json.dumps(response))
 
-    maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
+    if not click.get_current_context().meta.get("import_request"):
+        maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
 
 
 # --- helpers ----------------------------------------------------------------
 
 def _emit(payload: dict, exit_code: int = 0) -> None:
+    click.get_current_context().meta["import_exit_code"] = exit_code
     click.echo(json.dumps(payload))
     if exit_code != 0:
         sys.exit(exit_code)
@@ -839,7 +1007,8 @@ def _edit_scaffold(
             ).replace(
                 "# --- Edit here",
                 "# Typed IDs are bound to this baseline's geometry_manifest.json.\n"
-                "# Look up one record: agentcad inspect " + shlex.quote(version_dir + '/output.step') + f" --id face_{version_token}_1\n"
+                "# WIP: each enriched Inspect call requires --experimental-inspect.\n"
+                "# Look up one record: agentcad inspect " + shlex.quote(version_dir + '/output.step') + f" --id face_{version_token}_1 --experimental-inspect\n"
                 "# Select it with geometry.pick_face('face_v...') or geometry.pick_edge('edge_v...').\n"
                 "# Selectors address the original baseline; inspect each newly saved version.\n\n"
                 "# --- Edit here",
@@ -849,6 +1018,8 @@ def _edit_scaffold(
             "agentcad run edit.py --label my_edit",
             "agentcad run edit.py --label my_edit --build-dir " + shlex.quote(build_dir),
         )
+    if geometry_manifest:
+        source = source.replace("agentcad run edit.py --label my_edit", "agentcad run edit.py --label my_edit --experimental-inspect")
     return source
 
 

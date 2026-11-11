@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import tempfile
 
 from agentcad.geometry_manifest import BaselineGeometry, _digest, read_manifest, record
-from agentcad.versioning import atomic_write_json
+from agentcad.inspection_cache import cache_lease
 
-IMAGE_REVISION = "geometry-image-v3"
+IMAGE_REVISION = "geometry-image-v4"
 IMAGE_SIZE = 1024
 IMAGE_VIEWS = ("iso", "top", "front", "right")
 
@@ -57,6 +56,16 @@ def _overall_labels(saved):
 
 
 def geometry_image(step_path, output_root, *, object_id=None, isolate=False, _session=None):
+    """Return a checked, ID-bound sheet under the selected cache policy."""
+    with cache_lease(output_root) as cache:
+        image = _geometry_image(step_path, output_root, object_id=object_id, isolate=isolate, _session=_session)
+        cache.use([Path(image["png"]), Path(image["metadata"])])
+        if not (_session or {}).get("_report_scope"):
+            image["retention"] = cache.reference()
+        return image
+
+
+def _geometry_image(step_path, output_root, *, object_id=None, isolate=False, _session=None):
     """Verify the baseline on every call; cache only a checked derived image."""
     step_path = Path(step_path)
     saved = read_manifest(step_path)
@@ -123,6 +132,6 @@ def geometry_image(step_path, output_root, *, object_id=None, isolate=False, _se
         # an image of the original baseline.
         if read_manifest(step_path)["manifest_id"] != saved["manifest_id"]:
             raise ValueError("Baseline changed during image rendering; retry with the original version.")
-        os.replace(temporary, png)
-        atomic_write_json(metadata, {**result, "metadata_sha256": _digest(result)})
+        with cache_lease(output_root) as cache:
+            cache.publish_image(temporary, png, metadata, {**result, "metadata_sha256": _digest(result)})
     return _response(result, png, metadata)

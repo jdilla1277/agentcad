@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -19,7 +21,9 @@ from agentcad.commands.measure import measure_tier0_payload, validity_from_metri
 
 @click.command("check-spec")
 @click.argument("file")
-@click.argument("spec_file")
+@click.argument("spec_file", required=False)
+@click.option("--complete", "complete", is_flag=True, default=False,
+              help="WIP, requires --experimental-changes: complete deferred checks and settle still-current automatic acceptance; stages stay unaccepted.")
 @click.option(
     "--no-daemon",
     is_flag=True,
@@ -27,7 +31,7 @@ from agentcad.commands.measure import measure_tier0_payload, validity_from_metri
     help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.",
 )
 @project_options
-def check_spec(file, spec_file, no_daemon):
+def check_spec(file, spec_file, no_daemon, complete=False):
     """Check a STEP/BREP file against a JSON feature spec.
 
     SPEC_FILE example:
@@ -36,7 +40,75 @@ def check_spec(file, spec_file, no_daemon):
 
     A failed spec still means the command ran successfully: status remains
     "success" and the comparison result is in passed/matched_features.
+    With a retained revision ID, omit SPEC_FILE to read its pinned receipt;
+    --complete performs deferred checks and settles saved automatic intent.
+    Staged candidates still require explicit promotion. Reads are read-only.
     """
+    if file.startswith("r_") and not Path(file).exists():
+        from agentcad.change_store import ChangeStore
+        from agentcad.project import get_project
+
+        if spec_file:
+            _emit({
+                "command": "check-spec", "status": "error",
+                "message": "A retained revision uses its pinned requirements; create a successor to change them.",
+            }, exit_code=1)
+            return
+        store = ChangeStore(get_project().build_root)
+        started_ns = time.time_ns()
+        try:
+            from agentcad.change_promotion import PromotionStore
+            # Read the operation first: a committed acceptance then necessarily
+            # has completed evidence. Pending operation + newer evidence is safe.
+            automatic = PromotionStore(store.root).automatic_fields(file) if not complete else {}
+            checked = store.complete_checks(file) if complete else {**store.read_checks(file), **automatic}
+            receipt = checked["receipt"]
+            saved = store.read(file)
+            geometry = next((
+                str(store.root / a["path"])
+                for a in (saved["candidate"] or {}).get("inputs", []) if a["role"] == "geometry"
+            ), None)
+            warnings = []
+            if checked.get("current_advanced"):
+                accepted = checked["accepted_version_after"]
+                try:
+                    from agentcad.project_viewer import record_failure
+                    record_failure(store.root, f"v{accepted['version']} · {accepted['label']}",
+                                   "accepted_without_viewer", started_ns=started_ns)
+                except (OSError, TimeoutError) as exc:
+                    warnings.append(f"Accepted, but live viewer status could not update: {exc}")
+            root_option = " --build-dir " + shlex.quote(str(store.root)) if get_project().configured else ""
+            notes = ["Check results and the promotion decision are separate: passing checks accept only a still-active normal-run intent. Staged or superseded work stays unaccepted. Reads never change current."]
+            actions = []
+            if checked.get("current_advanced"):
+                step = shlex.quote(get_project().response_path(store.root / checked["outputs"]["step"]))
+                actions = [f"agentcad view {step}{root_option} — inspect the accepted model"]
+            elif checked.get("promotion", {}).get("outcome") == "not_promoted":
+                notes.append("The final promotion receipt preserves evidence at refusal time, which may differ from the latest check receipt. Repeating --complete cannot reopen that decision; reconcile the selected revisions before a new attempt.")
+                actions = [f"agentcad context{root_option} — inspect the working and accepted revisions before a new attempt"]
+            _emit({
+                "command": "check-spec", "status": "success", **checked,
+                "validation_state": receipt["validation_state"] if receipt else "pending",
+                "passed": receipt["promotion_ready"] if receipt else False,
+                "current_advanced": checked.get("current_advanced", False), "geometry": geometry,
+                "notes": notes,
+                **({"warnings": warnings} if warnings else {}),
+                **({"next_actions": actions} if actions else {}),
+                "more_at": "agentcad docs check-spec",
+            })
+        except Exception as exc:
+            _emit({
+                "command": "check-spec", "status": "error", "message": str(exc),
+                "revision_id": file,
+                "suggestion": "Use a returned revision ID and its selected build directory. Retry --complete to recover checks or an interrupted automatic acceptance; it never executes CAD again.",
+            }, exit_code=1)
+        return
+    if complete or spec_file is None:
+        _emit({
+            "command": "check-spec", "status": "error",
+            "message": "Use FILE SPEC_FILE, or a retained REVISION_ID with optional --complete.",
+        }, exit_code=1)
+        return
     argv = ["check-spec", file, spec_file]
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 

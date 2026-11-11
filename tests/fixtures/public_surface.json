@@ -1,5 +1,7 @@
 {
   "commands": [
+    "account",
+    "changes",
     "check-spec",
     "cloud",
     "context",
@@ -13,6 +15,7 @@
     "instructions",
     "measure",
     "parts",
+    "promote",
     "recover",
     "render",
     "review",
@@ -23,9 +26,11 @@
     "viewer"
   ],
   "docs_sections": [
+    "account",
     "artifacts",
     "build123d",
     "cadquery",
+    "changes",
     "check-spec",
     "cloud",
     "commands",
@@ -44,10 +49,12 @@
     "parts",
     "patterns",
     "preamble",
+    "promote",
     "quickstart",
     "recovery",
     "render",
     "review",
+    "run-retries",
     "runtimes",
     "schema",
     "validation",

@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import click
 from agentcad.project import ProjectError, get_project, project_options, validate_version_label
+from agentcad.experimental_inspect import option as inspect_option, enabled as inspect_enabled, forward as forward_inspect, ordinary_semantic
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -26,6 +28,7 @@ from agentcad.commands.export_cmd import (
 )
 from agentcad.comparison_phases import ComparisonPhaseRecorder
 from agentcad.manifest import load_manifest
+from agentcad.change_retention import change_options
 
 
 _DEFAULT_RUN_TIMEOUT_S = 115.0
@@ -41,6 +44,7 @@ _OUTPUT_DEPRECATION = (
 )
 
 _PHASE_ARTIFACTS = {
+    "geometry_manifest": "geometry_manifest",
     "export_mesh": "mesh_exports",
     "render_views": "renders",
     "preview": "preview",
@@ -94,6 +98,8 @@ def _run_contract_payload(payload: dict) -> dict:
                 f"agentcad run {shlex.quote(script)} --label "
                 f"{shlex.quote(str(label)) if label is not None else 'LABEL'}"
             )
+            if contract.get("change_stage"):
+                recovery += " --stage"
             existing_message = payload.get("message")
             inherited = (payload.get("validation") or {}).get("inherited_from_input")
             if isinstance(inherited, dict) and inherited.get("path"):
@@ -170,6 +176,10 @@ def _run_retry_command(ctx, *, script=None, omit=(), **overrides):
         ("--no-diff", values.get("auto_diff") is False),
         ("--no-view", values.get("open_view") is False),
         ("--params", values.get("params")),
+        ("--checks", values.get("checks_file")),
+        ("--defer-checks", values.get("defer_checks", False)),
+        ("--stage", values.get("stage", False)),
+        ("--idempotency-key", values.get("idempotency_key") if not ctx.meta.get("run_request") else None),
         ("--dry-run", values.get("dry_run", False)),
         ("--runtime", values.get("runtime")),
         ("--validation-profile", values.get("validation_profile")
@@ -303,6 +313,10 @@ def _timeout_suggestion(phase, completed):
             "Mesh export timed out; try skipping optional mesh exports or reducing "
             "geometry complexity."
         ),
+        "geometry_manifest": (
+            "The STEP and script are already saved, but typed-ID inventory timed out. "
+            "Use inspect --ids for legacy topology or import the saved STEP as a new baseline."
+        ),
         "render_views": (
             "Requested view rendering timed out; rerun without --render while "
             "iterating on geometry."
@@ -399,6 +413,9 @@ def _handle_run_timeout(_signum, _frame):
 
 def _install_run_timeout(phase_tracker):
     global _ACTIVE_PHASE_TRACKER, _PREVIOUS_ALARM_HANDLER, _RUN_TIMEOUT_INSTALLED
+    # Recovery of an already committed STEP also needs the tracker when
+    # timers are disabled or SIGALRM is unavailable (for example Windows).
+    _ACTIVE_PHASE_TRACKER = phase_tracker
     timeout_s = _run_timeout_seconds()
     if timeout_s is None:
         return
@@ -406,7 +423,6 @@ def _install_run_timeout(phase_tracker):
         return
     if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
         return
-    _ACTIVE_PHASE_TRACKER = phase_tracker
     _PREVIOUS_ALARM_HANDLER = signal.getsignal(signal.SIGALRM)
     signal.signal(signal.SIGALRM, _handle_run_timeout)
     signal.setitimer(signal.ITIMER_REAL, timeout_s)
@@ -473,7 +489,17 @@ def _recover_committed_core(error, *, timeout_payload=None):
     lifecycle.meta["completed_phases"] = list(tracker.completed)
     lifecycle.meta["phase_timings"] = dict(tracker.timings)
     lifecycle.persist()
-    return lifecycle.response()
+    response = lifecycle.response()
+    if timeout_payload and timeout_payload.get("suggestion"):
+        response["suggestion"] = timeout_payload["suggestion"]
+    if phase == "geometry_manifest":
+        layout = get_project()
+        step = layout.response_path(layout.artifact_path(response["outputs"]["step"]))
+        action = ["agentcad", "inspect", step, "--ids"]
+        if layout.configured:
+            action.extend(["--build-dir", str(layout.build_root)])
+        response["next_actions"] = [shlex.join(action)]
+    return response
 
 
 def _cleanup_uncommitted_reservation():
@@ -1005,7 +1031,8 @@ def _record_failure(
     version_dir = reservation.path
 
     # Copy script into failed directory
-    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+    from agentcad.change_retention import copy_run_source, prepare_change
+    copy_run_source(script_path, version_dir / "script.py")
 
     # Write meta.json
     created = datetime.now(timezone.utc).isoformat()
@@ -1023,6 +1050,7 @@ def _record_failure(
         meta["runtime_source"] = runtime_source
     if guidance:
         meta.update(guidance)
+    prepare_change(meta)
     commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
@@ -1065,7 +1093,8 @@ def _record_invalid_geometry(
     version_num = reservation.number
     dir_name = reservation.dir_name
     version_dir = reservation.path
-    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+    from agentcad.change_retention import copy_run_source, prepare_change
+    copy_run_source(script_path, version_dir / "script.py")
 
     meta = {
         **response,
@@ -1083,6 +1112,7 @@ def _record_invalid_geometry(
         meta["groups"] = groups
     if warnings:
         meta["warnings"] = warnings
+    prepare_change(meta)
     commit_version(reservation, meta, {
         "version": version_num,
         "label": label,
@@ -1165,13 +1195,15 @@ def _assign_part_identity(raw_parts):
 
 
 @click.command()
-@click.argument("script")
+@click.argument("script", required=False)
+@click.option("--idempotency-key", default=None, help="Python runs: WIP, requires --experimental-changes. Save one key; retry identical source/options without executing again. CAD-file dispatch uses ordinary import keys.")
+@click.option("--status", "request_status", is_flag=True, default=False, help="WIP, requires --experimental-changes: read the saved run by key without SCRIPT or --label.")
 @click.option(
     "--label",
     default=None,
     help=(
         "Label for this version. The STEP path is returned in outputs.step. "
-        "Required unless --dry-run."
+        "Required unless --dry-run or --status."
     ),
 )
 @click.option(
@@ -1188,12 +1220,12 @@ def _assign_part_identity(raw_parts):
         "azimuth:elevation angles, or a mix such as front,45:30."
     ),
 )
-@click.option("--export", default=None, help="Comma-separated mesh formats (stl, glb, obj). STEP is always produced; read outputs.step.")
+@click.option("--export", default=None, help="Comma-separated mesh formats (stl, glb, obj). In normal mode STEP is always produced; read outputs.step. With --stage, prepare diagnostics separately from change.geometry.")
 @click.option(
     "--preview/--no-preview",
     default=True,
     help=(
-        "4-view composite PNG + per-part previews (default on, ~2-4s). "
+        "4-view composite PNG + per-part previews (default on in normal mode, ~2-4s). With --stage, prepare diagnostics separately. "
         "By itself, --no-preview skips only those PNGs; viewer.html, its GLB, "
         "and automatic diff work remain enabled. Combine it with --no-diff "
         "--no-view for the core-only fast path."
@@ -1234,13 +1266,19 @@ def _assign_part_identity(raw_parts):
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@inspect_option
 @click.pass_context
 @project_options
+@change_options
 def run(
     ctx, script, label, legacy_output, render, export, preview, auto_diff,
     open_view, params, dry_run, runtime, validation_profile, no_daemon,
+    idempotency_key, request_status,
 ):
     """Execute the project's CAD script and produce a versioned STEP file.
+
+    --stage saves a checked candidate at change.geometry instead of accepting a
+    version. outputs.step stays null; inspect the candidate, then use promote.
 
     New projects use build123d. CadQuery scripts remain supported in projects
     explicitly pinned to the compatibility runtime or through
@@ -1255,6 +1293,22 @@ def run(
     ctx.meta["run_label"] = output
     ctx.meta["run_legacy_output"] = legacy_output is not None
     ctx.meta["viewer_dry_run"] = dry_run
+    if request_status:
+        if not idempotency_key:
+            raise ProjectError("run_key_required", "Run status requires --idempotency-key.",
+                               "Read a saved run with agentcad run --idempotency-key KEY --status.")
+        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon", "experimental_inspect", "experimental_changes"}
+        if any(name not in allowed and ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE for name in ctx.params):
+            raise ProjectError("run_status_options", "Status accepts only a key and optional build directory.",
+                               "Omit SCRIPT and build options when reading a saved run.")
+        from agentcad.run_requests import RunRequest
+        RunRequest(idempotency_key).lookup()
+        return
+    if script is None:
+        raise click.MissingParameter(ctx=ctx, param_hint="'SCRIPT'", param_type="argument")
+    if idempotency_key is not None and dry_run:
+        raise ProjectError("run_key_needs_retention", "Retry keys require a retained run, not --dry-run.",
+                           "Remove --dry-run to save the attempt, or omit the key for a dry run.")
     if label is not None and legacy_output is not None:
         raise click.UsageError(
             "Use --label or the deprecated --output alias, not both.",
@@ -1321,15 +1375,46 @@ def run(
         from agentcad.commands.import_cmd import import_cmd
         ctx.invoke(
             import_cmd,
+            experimental_inspect=inspect_enabled(),
             file=script,
             label=output,
             init_flag=False,
             auto_diff=auto_diff,
             open_view=open_view,
             no_daemon=no_daemon,
+            checks_file=ctx.meta.get("change_checks_file"),
+            defer_checks=ctx.meta.get("change_defer_checks", False),
+            stage=ctx.meta.get("change_stage", False),
+            experimental_changes=ctx.meta.get("experimental_changes", False),
+            idempotency_key=idempotency_key,
         )
         return
 
+    def execute():
+        return _execute_run(
+            ctx, script, output, render, export, preview, auto_diff, open_view,
+            params, dry_run, runtime, no_daemon or idempotency_key is not None,
+            validation_profile,
+        )
+
+    if idempotency_key is not None:
+        from agentcad.run_requests import RunRequest
+        semantic = {
+            **ordinary_semantic(),
+            "label": output, "render": render, "export": export,
+            "preview": preview, "auto_diff": auto_diff, "open_view": open_view,
+            "params": params, "runtime": runtime,
+            "validation_profile": validation_profile,
+            "requirements": ctx.meta.get("change_requirements"),
+            "defer_checks": ctx.meta.get("change_defer_checks", False),
+            "stage": ctx.meta.get("change_stage", False),
+        }
+        return RunRequest(idempotency_key, script=script, semantic=semantic).run(execute)
+    return execute()
+
+
+def _execute_run(ctx, script, output, render, export, preview, auto_diff, open_view,
+                 params, dry_run, runtime, no_daemon, validation_profile):
     # Run the actual work inside a try/except so internal exceptions
     # (e.g. `Bnd_Box is void` from compute_metrics on a degenerate
     # shape) surface as JSON on stdout — preserving the docs' "All
@@ -1347,6 +1432,7 @@ def run(
         # they already emitted the proper JSON. Pass through.
         raise
     except ProjectError:
+        _cleanup_uncommitted_reservation()
         raise
     except _RunTimeout as e:
         recovered = _recover_committed_core(e, timeout_payload=e.payload)
@@ -1433,6 +1519,9 @@ def _run_impl(
         argv.extend(["--runtime", runtime])
     if validation_profile != "deliverable":
         argv.extend(["--validation-profile", validation_profile])
+    from agentcad.change_retention import forward_check_options
+    forward_check_options(argv)
+    forward_inspect(argv)
     # Check syntax/capture locally before contacting a daemon or importing CAD.
     _t = _start_phase("validation")
 
@@ -1475,7 +1564,11 @@ def _run_impl(
     from agentcad.runners import dispatch
 
     try:
-        raw_source = script_path.read_text(encoding="utf-8")
+        source_bytes = ctx.meta.get("run_request_source_bytes")
+        if source_bytes is None:
+            source_bytes = script_path.read_bytes()
+        ctx.meta["change_run_source"] = (source_bytes, script_path.name)
+        raw_source = source_bytes.decode("utf-8")
     except (OSError, UnicodeError) as exc:
         _emit_run({
             "command": "run", "status": "error", "error_kind": "script_unreadable",
@@ -1526,6 +1619,9 @@ def _run_impl(
         sys.exit(1)
 
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
+
+    from agentcad.change_retention import begin_run_change
+    begin_run_change()
 
     # Pre-execution import/helper validation (before version allocation)
     validation_errors = runner.validate(raw_source)
@@ -1620,6 +1716,7 @@ def _run_impl(
             })
             sys.exit(1)
         reservation = reserve_version(get_project().build_root, label, suffix="_failed")
+        _phase_tracker.reservation = reservation
         _record_failure(
             script_path,
             label,
@@ -1766,7 +1863,11 @@ def _run_impl(
     staged_step = staging_dir / "output.step"
     _heartbeat("writing STEP…")
     _sub = time.perf_counter()
-    runner.export_step(shape, str(staged_step))
+    try:
+        runner.export_step(shape, str(staged_step))
+    finally:
+        from agentcad.change_retention import capture_geometry
+        capture_geometry(staged_step)
     _timings["export_write_ms"] = round((time.perf_counter() - _sub) * 1000)
     _heartbeat("validating the written STEP…")
     validation = validate_delivered_step(
@@ -1869,6 +1970,7 @@ def _run_impl(
         invalid_response["completed_phases"] = list(_phase_tracker.completed)
         invalid_response["phase_timings"] = dict(_timings)
         reservation = reserve_version(get_project().build_root, label, suffix="_invalid")
+        _phase_tracker.reservation = reservation
         _record_invalid_geometry(
             script_path,
             label,
@@ -1881,6 +1983,28 @@ def _run_impl(
             warnings,
             invalid_response,
         )
+
+    from agentcad.change_retention import assess_change
+    # Seal the non-rendered model metadata with the checked geometry. Explicit
+    # promotion must preserve named handles and overrides without rerunning CAD.
+    checked_model = {
+        "command": "run",
+        "status": "success",
+        "metrics": metrics,
+        "validation": validation,
+        "validation_profile": validation_profile,
+    }
+    if parts_output:
+        checked_model["parts"] = parts_output
+    if groups_output:
+        checked_model["groups"] = groups_output
+    if parsed_params:
+        checked_model["params"] = parsed_params
+    blocked = assess_change(checked_model, staged_step)
+    if blocked:
+        _discard_staged_step()
+        _emit_run(blocked)
+        sys.exit(0 if blocked["status"] == "staged" else 1)
 
     # Dry-run: return metrics only, no version/disk artifacts
     if dry_run:
@@ -1917,7 +2041,8 @@ def _run_impl(
     version_dir = reservation.path
 
     # Copy script into version directory
-    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+    from agentcad.change_retention import copy_run_source, prepare_change
+    copy_run_source(script_path, version_dir / "script.py")
 
     # Export STEP file via the runner (each engine has its own writer)
     _heartbeat("exporting STEP…")
@@ -1969,6 +2094,7 @@ def _run_impl(
         "validation": validation,
         "validation_profile": validation_profile,
         "artifacts": {
+            "geometry_manifest": {"status": "pending"},
             "mesh_exports": _artifact_state(
                 bool(export), "No optional mesh exports requested."
             ),
@@ -2016,14 +2142,52 @@ def _run_impl(
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
 
-    commit_version(reservation, meta, {
-        "version": version_num,
-        "label": label,
-        "status": "success",
-        "path": f"{dir_name}/",
-    }, advance_current=True)
+    if not inspect_enabled():
+        meta["artifacts"].pop("geometry_manifest", None)
+    prepare_change(meta, geometry=version_dir / "output.step")
+    from agentcad.change_promotion import PromotionRefused
+    try:
+        commit_version(reservation, meta, {
+            "version": version_num,
+            "label": label,
+            "status": "success",
+            "path": f"{dir_name}/",
+        }, advance_current=True)
+    except PromotionRefused as exc:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        _emit_run({**exc.payload("run"), "label": label})
+        sys.exit(1)
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     _phase_tracker.lifecycle = lifecycle
+
+    if inspect_enabled():
+        # Issue IDs only from the delivered STEP, never the script's in-memory
+        # traversal. Inventory is post-core work: failure cannot undo a valid run.
+        _heartbeat("indexing saved geometry IDs…")
+        _t = _start_phase("geometry_manifest")
+        from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
+
+        try:
+            geometry_data = create_manifest(version_dir / "output.step", version_num, source={
+                "kind": "script", "filename": script_path.name,
+                "sha256": hashlib.sha256((version_dir / "script.py").read_bytes()).hexdigest(),
+                "runtime": runtime_name, "assembly_metadata": "derived_normalized_geometry",
+            })
+            lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
+            lifecycle.meta["geometry_manifest"] = geometry_summary(
+                Path(get_project().response_path(version_dir / "output.step")), geometry_data,
+            )
+            lifecycle.set_artifact("geometry_manifest", "success")
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            lifecycle.set_artifact("geometry_manifest", "failed", message=message)
+            warnings.append(
+                "Typed-ID inventory unavailable; the saved STEP/script remain usable. "
+                "Use inspect --ids or import the saved STEP as a new baseline. " + message
+            )
+            lifecycle.meta["warnings"] = warnings
+            lifecycle.persist()
+        _finish_phase("geometry_manifest", _t)
 
     comparison_recorder = None
     if comparison_enabled:
@@ -2499,9 +2663,18 @@ def _run_impl(
         "outputs": {
             "step": f"{dir_name}/output.step",
             "script": f"{dir_name}/script.py",
+            **({"geometry_manifest": lifecycle.meta["outputs"]["geometry_manifest"]}
+               if "geometry_manifest" in lifecycle.meta["outputs"] else {}),
             **exports_meta,
         },
     }
+    if "geometry_manifest" in lifecycle.meta:
+        output_json["geometry_manifest"] = lifecycle.meta["geometry_manifest"]
+        step_argument = shlex.quote(get_project().response_path(version_dir / "output.step"))
+        output_json["next_actions"] = [
+            f"agentcad inspect {step_argument} --report",
+            output_json["geometry_manifest"]["lookup_example"],
+        ]
     output_json["metrics"] = metrics
     output_json["validation"] = validation
     output_json["validation_profile"] = validation_profile

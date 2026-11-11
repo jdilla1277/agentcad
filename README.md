@@ -148,7 +148,8 @@ and edits:
 ## Spatial review comments
 
 Live project viewers opened after a run or with `agentcad viewer open` use the existing service bound to
-`127.0.0.1`. Press `C`, click the model, confirm the inferred named part and
+`127.0.0.1`. Click **Comments** in the bottom-left viewer controls, then **+ New comment**
+(or press `C`). Click the model, confirm the inferred named part and
 revision scope, then choose **Send comment**. To hold feedback back, choose
 **Save draft** instead; unsent drafts can be edited, deleted, sent individually,
 or submitted together with **Send all drafts**.
@@ -174,9 +175,15 @@ actor, timestamp, optional message, and associated revision. The older
 New builds wait while you write or send a comment or reply, then update the
 model once you send, save, or cancel. Current/Previous/Both follow the displayed
 revision sides; the original source version stays in the thread. If a part
-disappears, its comment remains in the list as unplaced. Comments become
+disappears, its comment remains in the list as unplaced. Hiding a part hides its
+comment pins in the 3D view; its threads stay in the sidebar. Showing the part
+restores its pins. Comments become
 available to the agent on its next turn; they do not start a new agent run.
 File viewers and temporary part/diff viewers remain read-only.
+
+To reposition the model, click **Pan** and drag, or hold **Shift** while dragging.
+Click **Pan** again to return to orbiting. **Fit view** centers the visible model
+and adjusts the zoom to fit it on screen.
 
 `--label` names the version; the JSON response returns the actual file under
 `outputs.step`. The older `--output LABEL` spelling remains a deprecated
@@ -296,7 +303,82 @@ Add to `.mcp.json`:
 {"agentcad": {"command": "python", "args": ["-m", "agentcad.mcp"]}}
 ```
 
+For local STEP/STP/BREP files, call `import_cad` with `file`, `cwd`, and
+`initialize=True` to start a project. Ordinary imports keep the standard CAD
+path. The enriched Inspect workflow is **WIP** and requires
+`experimental_inspect=True` on every MCP call, or `--experimental-inspect` on
+each CLI `import`, `run` or rich `inspect` call. No environment variable, project
+setting or earlier request enables it. Missing acknowledgment returns
+`experimental_inspect_required` before starting the requested work.
+
+With opt-in, the default response includes the import
+JSON and up to nine inspection PNG attachments. Use `report_images=False` for
+an image-free report or `report=False` to keep the bundle on disk. Follow the
+returned IDs and paths with `inspect` and `run`. Local paths refer to the MCP
+execution filesystem. See `agentcad docs mcp` for controls.
+
+For retry-safe imports, pass `idempotency_key="supplier-001"` (CLI:
+`agentcad import supplier.step --init --idempotency-key supplier-001`). Preserve
+the key and identical source/options after a lost response: retries return the
+original version without importing or opening the viewer again. A different
+source, label, runtime request, validation profile, report/image limits or
+viewer/diff options conflicts with that key. Explicit checks JSON content and
+`--defer-checks` must also match. Use a new key for an intentional
+new import. Keys are scoped to the selected build directory; the original file
+must remain readable with identical bytes.
+
+A contended retry waits up to ten seconds, then reports `in_progress` if the
+original process still owns execution; retry the same request later. A stopped
+process releases ownership automatically. Retrying recovers a committed version
+and marks unfinished artifacts interrupted, or explicitly reports that execution
+stopped before commit. Optional analysis is not automatically resumed. Saved
+responses describe the original attempt; use `inspect` for fresh inspection.
+When retrying from another project subdirectory, returned actions target the
+selected baseline from that caller directory. Inline detail/media may be trimmed
+further to keep the final report within its text budget; saved analysis and IDs
+stay unchanged. If required references cannot fit, `inspection_delivery` reports
+the omission and provides a retrieval action with a larger allowance.
+Deleting `.agentcad/import_requests` deletes retry protection for those keys.
+
+With Inspect opt-in, imports return a durable `inspection_job` and wait for inspection by
+default. Use `--inspection-background` or `--inspection-wait-timeout SECONDS`
+to return before analysis finishes. A wait deadline leaves the worker running;
+follow the returned status/wait/resume/cancel actions. These wait controls do
+not change import retry identity. See [inspection jobs](docs/inspection-jobs.md)
+for CLI/MCP examples, checkpoints and cancellation behavior.
+
+Opted-in import and `inspect --report` default to a 2,000-estimated-token limit for the
+complete JSON response, with bounded image samples and a full-response retrieval
+action. `--full-response` opts out of whole-response compaction. Agents can supply `--context-window`, `--response-budget`,
+`--response-text-budget`, `--image-budget` and a caller-estimated
+`--vision-profile` to bound complete inspection delivery. Limited responses
+include a full saved response and an executable retrieval action. See
+[inspection budgets](docs/inspection-budgets.md) for estimates, CLI/MCP parity
+and the distinction between whole-response limits and report preparation.
+Saved response snapshots default to 30 days and 64 MiB per build root, with
+configurable limits and explicit expiry/eviction responses. Cleanup preserves
+geometry, issued IDs, import retry records and resumable jobs.
+Analysis, image sheets and completed job results also have shared
+[cache limits](docs/inspection-cache.md), defaulting to 30 days/512 MiB per build
+root. Resumable checkpoints remain protected; a full quota stops enrichment
+with a resume action while preserving the imported model.
+
+To retrieve the complete inventory without opening server-side files, call
+`inspect(artifact="manifest", file=..., cwd=...)` (CLI: `inspect FILE --artifact
+manifest`). Saved report/image paths and `artifact="baseline"` use the same
+bounded byte transfer, with checksums and copyable continuations. See
+[inspection artifacts](docs/inspection-artifacts.md). This works through the
+existing MCP tool connection; the separate `cloud_*` API is unchanged.
+
 ### Cloud projects
+
+For setup and a complete agent build-and-edit loop, see the
+[cloud workflow guide](docs/cloud-workflow.md).
+
+If your host supplies a hosted MCP URL, a supported agent can connect directly
+with the issued key pair, without installing AgentCAD locally. Call `cloud_help`
+for remote tools and explicit content uploads. The guide covers URL setup and
+retrieving private evidence through MCP.
 
 If your host has issued an AgentCAD API address and key pair, the same local
 MCP server also offers `cloud_run`, `cloud_import`, `cloud_measure`,
@@ -305,8 +387,9 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 `AGENTCAD_KEY_ID`, and `AGENTCAD_KEY_SECRET` in the server process environment.
 Keep credentials in a password manager, outside project files and agent prompts.
 
-The bounded CLI adapter is available with `pip install 'agentcad[cloud]'`
-(also included in `agentcad[mcp]`):
+For the local cloud CLI, install
+`pip install 'agentcad[cloud]==0.7.2'` (also included in `agentcad[mcp]`),
+as shown in the guide above:
 
 ```bash
 agentcad cloud projects create --name Bracket
@@ -342,3 +425,16 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## Feedback
 
 If your agent struggles, run `agentcad feedback "what happened"` to capture a friction log.
+
+For a detailed session report, guided feedback is prepared for the next release:
+
+```bash
+agentcad feedback --template --output feedback.md
+# Fill in the task, what happened, evidence, and any workaround.
+agentcad feedback --file feedback.md
+```
+
+Creating a template sends nothing. Reports include recent session context;
+review what you send, or add `--local-only` to keep it local. Partial reports,
+positive feedback, and ideas are welcome. See `agentcad docs feedback` for
+file/stdin input and upload receipts.

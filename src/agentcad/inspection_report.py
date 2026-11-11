@@ -10,7 +10,8 @@ import shlex
 
 from agentcad.geometry_manifest import BaselineGeometry, MANIFEST_NAME, _digest, read_manifest
 from agentcad.inspection_samples import dimensions, select_samples
-from agentcad.versioning import atomic_write_json
+from agentcad.inspection_cache import cache_lease, CacheResourceLimit
+from agentcad.project import get_project
 
 REPORT_REVISION = "inspection-report-v2"
 DEFAULT_TEXT_BUDGET = 2000
@@ -51,13 +52,27 @@ def _covers_model(saved, part_id):
     )
 
 
-def _analysis(step, output_root, saved, meta, session):
+def analysis_inputs(saved, meta):
     source_hash = saved["source"].get("sha256")
-    if (meta.get("version") != saved["version"] or not source_hash
-            or meta.get("sha256") != source_hash):
+    recorded = meta.get("geometry_manifest") or {}
+    if saved["source"].get("kind") == "script":
+        # Generated quality describes the delivered STEP, not Python bytes.
+        # Bind it to the identity recorded at the successful run boundary.
+        matches = (meta.get("command") == "run" and isinstance(recorded, dict)
+                   and recorded.get("manifest_id") == saved["manifest_id"]
+                   and recorded.get("baseline_sha256") == saved["baseline"]["sha256"])
+    else:
+        matches = bool(source_hash and meta.get("sha256") == source_hash)
+    if meta.get("version") != saved["version"] or not matches:
         meta = {}
     quality = _quality(meta)
     inputs = {"revision": REPORT_REVISION, "manifest_id": saved["manifest_id"], "quality": quality}
+    return inputs
+
+
+def _analysis(step, output_root, saved, meta, session):
+    inputs = analysis_inputs(saved, meta)
+    quality = inputs["quality"]
     revision = _digest(inputs)
     path = output_root / "inspection" / f"report_{revision[:16]}.json"
     try:
@@ -104,7 +119,8 @@ def _analysis(step, output_root, saved, meta, session):
     # A report is derived; creating it must not change the durable ID registry.
     if read_manifest(step)["manifest_id"] != saved["manifest_id"]:
         raise ValueError("Baseline changed while preparing the inspection report.")
-    atomic_write_json(path, {**data, "sha256": _digest(data)})
+    with cache_lease(output_root) as cache:
+        cache.publish_json(path, {**data, "sha256": _digest(data)})
     return data, path
 
 
@@ -128,7 +144,21 @@ def _estimated_tokens(payload):
 
 
 def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMAGES,
-                      text_budget=DEFAULT_TEXT_BUDGET, meta=None, response_path=str, response_extra=None):
+                      text_budget=DEFAULT_TEXT_BUDGET, meta=None, response_path=str, response_extra=None,
+                      _checkpoint=None):
+    """Prepare a bounded gallery while protecting its artifacts during reads."""
+    with cache_lease(output_root) as cache:
+        payload, prepared = _inspection_report(step_path, output_root, images=images, max_images=max_images,
+            text_budget=text_budget, meta=meta, response_path=response_path, response_extra=response_extra,
+            _checkpoint=_checkpoint)
+        cache.use([prepared["report"], prepared["bundle"], *[Path(row["png"]) if Path(row["png"]).is_absolute() else Path(output_root) / "inspection" / Path(row["png"]).name for row in prepared["media"]]])
+        payload["retention"] = cache.reference()
+        return compact_report(payload), prepared
+
+
+def _inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMAGES,
+                      text_budget=DEFAULT_TEXT_BUDGET, meta=None, response_path=str, response_extra=None,
+                      _checkpoint=None):
     """Reuse analysis and prepare a bounded deterministic gallery.
 
     Budget applies to this report object. The legacy import envelope is a
@@ -140,8 +170,13 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         raise ValueError("text_budget must be positive.")
     step, output_root = Path(step_path), Path(output_root)
     saved = read_manifest(step)
-    session = {}
+    session = {"_report_scope": True}
+    checkpoint = _checkpoint or (lambda *args: None)
+    checkpoint("analysis", "running", [])
     data, path = _analysis(step, output_root, saved, meta if meta is not None else _read_meta(step), session)
+    with cache_lease(output_root) as cache:
+        cache.use([path])
+    checkpoint("analysis", "complete", [path])
     from agentcad.geometry_images import geometry_image
 
     media, omitted = [], []
@@ -150,26 +185,39 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         if len(media) >= allowed:
             omitted.append({"id": planned["id"], "reason": "image_cap" if images else "images_disabled"})
             continue
+        stage = "image:" + planned["id"]
+        checkpoint(stage, "running", [])
         try:
             sheet = geometry_image(step, output_root, object_id=planned["target_id"],
                                    isolate=planned["isolate"], _session=session)
+        except CacheResourceLimit:
+            raise
+        except Exception as exc:
+            omitted.append({"id": planned["id"], "reason": "image_failed", "message": str(exc)[:240]})
+            checkpoint(stage, "failed", [])
+        else:
+            checkpoint(stage, "complete", [Path(sheet["png"]), Path(sheet["metadata"])])
             media.append({
                 "id": planned["id"], "role": planned["role"],
                 "png": response_path(Path(sheet["png"])), "sha256": sheet["png_sha256"],
             })
-        except Exception as exc:
-            omitted.append({"id": planned["id"], "reason": "image_failed", "message": str(exc)[:240]})
     # Publish the full delivery catalogue separately so budget truncation never
     # hides which samples were chosen or how to retrieve their images.
     reused = data["overall_reused_for"] if any(row["id"] == "overall" for row in media) else None
-    catalogue = {"analysis_revision": data["analysis_revision"], "media": media, "omitted": omitted,
+    catalogue = {"analysis_revision": data["analysis_revision"], "manifest_id": data["manifest_id"],
+                 "baseline_sha256": data["baseline_sha256"], "media": media, "omitted": omitted,
                  "overall_reused_for": reused}
     catalogue_id = _digest(catalogue)
     catalogue_path = output_root / "inspection" / f"bundle_{catalogue_id[:16]}.json"
-    atomic_write_json(catalogue_path, catalogue)
+    checkpoint("catalogue", "running", [])
+    with cache_lease(output_root) as cache:
+        cache.publish_json(catalogue_path, catalogue)
+    checkpoint("catalogue", "complete", [catalogue_path])
     manifest_path = response_path(step.with_name(MANIFEST_NAME))
     report_path = response_path(path)
     command = f"agentcad inspect {shlex.quote(response_path(step))}"
+    if get_project().configured:
+        command += " --build-dir " + shlex.quote(str(get_project().build_root))
     payload = {
         "command": "inspect", "status": "success", "analysis_revision": data["analysis_revision"],
         "manifest_id": data["manifest_id"], "version": data["version"], "baseline_sha256": data["baseline_sha256"],
@@ -178,6 +226,7 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         "provenance": {**data["provenance"], "filename": str(data["provenance"].get("filename", ""))[:80]},
         "inventory": {"manifest": manifest_path, "report": report_path,
                       "bundle": response_path(catalogue_path), "parts_total": len(data["parts"]),
+                      "retrieve": {"artifact": "manifest"},
                       "image_root": response_path(output_root / "inspection")},
         "parts": deepcopy(data["parts"][:10]), "samples": deepcopy(data["samples"]),
         "sample_totals": {group: len(values) for group, values in data["samples"].items()},
@@ -185,7 +234,7 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
         "media_path_basis": "inventory.image_root",
         "media_summary": {"prepared": len(media), "returned": len(media), "omitted": len(omitted),
                                          "failed": sum(row["reason"] == "image_failed" for row in omitted),
-                                         "reused_overall_for": reused},
+                                         "reused_overall_for": reused, "state": "disabled" if not images else "complete"},
         "next_actions": [f"{command} --id ID --image", f"{command} --report --no-images"],
         "budget": {"scope": "inspection_report", "text_tokens": text_budget, "max_images": allowed,
                    "image_size": [1024, 1024], "image_tokens": "unknown", "context_window": "unknown",
@@ -203,22 +252,38 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
                 part["name_truncated"] = True
                 payload["budget"]["truncated"] = True
             part["name"] = part["name"][:80]
-    # Preserve baseline/revision, status, counts, artifact references and CTAs.
-    # Remove optional tail detail in a declared order when a caller lowers text.
+    payload = compact_report(payload)
+    return payload, {"report": path, "bundle": catalogue_path, "media": media, "omitted": omitted,
+                     "analysis": data}
+
+
+def compact_report(report):
+    """Bound a detached presentation after paths/actions change, without I/O.
+
+    Previously omitted media remain omitted. Counts refer to the original
+    sample catalogue, so repeated presentation cannot lose or double-count them.
+    """
+    payload = deepcopy(report)
+    budget = payload["budget"]
+    text_budget = budget["text_tokens"]
+    reserve = budget["transport_reserve_tokens"]
+    prepared = payload["media_summary"]["prepared"]
+    omitted_by_images = payload["media_summary"]["omitted"] - budget.get("media_omitted_by_text", 0)
+    disabled = payload["media_summary"]["state"] == "disabled"
     while True:
         payload["budget"]["parts_returned"] = len(payload["parts"])
         payload["budget"]["media_references_returned"] = len(payload["media"])
         payload["budget"]["samples_returned"] = {group: len(values) for group, values in payload["samples"].items()}
         payload["media_summary"]["returned"] = len(payload["media"])
-        payload["media_summary"]["omitted"] = len(omitted) + len(media) - len(payload["media"])
+        payload["media_summary"]["omitted"] = omitted_by_images + prepared - len(payload["media"])
         payload["media_summary"]["state"] = (
-            "partial_failure" if payload["media_summary"]["failed"] else "disabled" if not images
+            "partial_failure" if payload["media_summary"]["failed"] else "disabled" if disabled
             else "bounded" if payload["media_summary"]["omitted"] else "complete"
         )
-        payload["budget"]["media_omitted_by_text"] = len(media) - len(payload["media"])
+        payload["budget"]["media_omitted_by_text"] = prepared - len(payload["media"])
         payload["budget"]["estimated_text_tokens"] = _estimated_tokens(payload)
         payload["budget"]["estimated_text_tokens"] = _estimated_tokens(payload)
-        if _estimated_tokens(payload) <= text_budget - 10:
+        if _estimated_tokens(payload) <= text_budget - reserve:
             break
         payload["budget"]["truncated"] = True
         samples = payload["samples"]
@@ -240,8 +305,9 @@ def inspection_report(step_path, output_root, *, images=True, max_images=MAX_IMA
             payload["media"].pop()
         elif payload["parts"]:
             payload["parts"].pop()
+        elif payload.get("next_actions"):
+            payload["next_actions"].pop()  # The compact inventory retrieval hint remains.
         else:
             raise ReportBudgetError("Text budget is too small for required identity, status and retrieval references; increase --text-budget.")
     payload["budget"]["estimated_text_tokens"] = _estimated_tokens(payload)
-    return payload, {"report": path, "bundle": catalogue_path, "media": media, "omitted": omitted,
-                     "analysis": data}
+    return payload

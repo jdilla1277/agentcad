@@ -23,6 +23,7 @@ Why no version-mismatch handshake:
     is gated on it.
 """
 
+import contextvars
 import hashlib
 import json
 import os
@@ -37,6 +38,7 @@ import time
 import traceback
 
 import agentcad
+from agentcad import daemon_state
 
 
 def _venv_tag():
@@ -88,14 +90,14 @@ def _default_socket_path():
     override = os.environ.get("AGENTCAD_SOCKET_PATH")
     if override:
         return override
-    return f"/tmp/agentcad-daemon-{os.getuid()}-{_venv_tag()}.sock"
+    return str(daemon_state.runtime_directory() / f"daemon-{_venv_tag()}.sock")
 
 
 def _default_pid_path():
     override = os.environ.get("AGENTCAD_PID_PATH")
     if override:
         return override
-    return f"/tmp/agentcad-daemon-{os.getuid()}-{_venv_tag()}.pid"
+    return str(daemon_state.runtime_directory() / f"daemon-{_venv_tag()}.pid")
 
 
 # ---------- Protocol ----------
@@ -111,6 +113,49 @@ _PID_METADATA_VERSION = 1
 
 class DaemonProtocolError(Exception):
     """A peer sent a frame that violates the daemon protocol contract."""
+
+
+# These describe the daemon process itself: anything named ``AGENTCAD_DAEMON*``
+# plus the socket and pid paths. Every other ``AGENTCAD_*`` variable is a
+# client setting (viewer home, timeouts, logging) and travels with each
+# request, because the daemon's own environment is whatever the process that
+# happened to spawn it had.
+_DAEMON_PROCESS_ENV_PREFIX = "AGENTCAD_DAEMON"
+_DAEMON_PROCESS_ENV = frozenset({"AGENTCAD_SOCKET_PATH", "AGENTCAD_PID_PATH"})
+
+
+def _is_client_env_key(key):
+    return (
+        key.startswith("AGENTCAD_")
+        and not key.startswith(_DAEMON_PROCESS_ENV_PREFIX)
+        and key not in _DAEMON_PROCESS_ENV
+    )
+
+
+def client_request_env(environ=None):
+    """The caller's ``AGENTCAD_*`` settings to send with a ``run`` request."""
+    environ = os.environ if environ is None else environ
+    return {k: v for k, v in environ.items() if _is_client_env_key(k)}
+
+
+def _request_env_overrides(request_env):
+    """Environment changes for one request, in ``CliRunner.invoke`` form.
+
+    A request that carries ``env`` replaces every client-scoped
+    ``AGENTCAD_*`` variable: values it sends are set (an empty string stays
+    empty), and ones it doesn't send are unset (``None``). Requests without
+    ``env`` (older clients) keep the daemon's values.
+    """
+    overrides = {}
+    if isinstance(request_env, dict):
+        overrides = {k: None for k in os.environ if _is_client_env_key(k)}
+        overrides.update(
+            (k, v) for k, v in request_env.items()
+            if _is_client_env_key(k) and isinstance(v, str)
+        )
+    overrides["AGENTCAD_DAEMON"] = "1"
+    overrides["_AGENTCAD_DAEMON_CHILD"] = "1"
+    return overrides
 
 
 def encode_message(msg):
@@ -192,24 +237,34 @@ class DaemonServer:
 
         In production this only runs inside a forked child (see ``_run_in_child``);
         the child exits after sending the response so cwd/env mutations don't
-        leak. The in-process path (tests) restores cwd and the recursion-guard
-        env var explicitly.
+        leak. The in-process path (tests) restores cwd explicitly;
+        ``CliRunner.invoke(env=...)`` restores the environment.
+
+        A request runs as its client: in the client's ``cwd``, with the
+        client's ``AGENTCAD_*`` settings from ``env`` when present, and with
+        no output state inherited from the command that spawned the daemon.
         """
         from click.testing import CliRunner
         from agentcad.cli import cli
 
         cwd = request.get("cwd")
         argv = request.get("argv", [])
-        original_cwd = os.getcwd()
-        original_env = os.environ.get("AGENTCAD_DAEMON")
-        original_child_env = os.environ.get("_AGENTCAD_DAEMON_CHILD")
-        os.environ["AGENTCAD_DAEMON"] = "1"
-        os.environ["_AGENTCAD_DAEMON_CHILD"] = "1"
+        try:
+            original_cwd = os.getcwd()
+        except OSError:
+            # The directory this process started in was deleted. Requests
+            # carry their own cwd, so that must not take the daemon down.
+            original_cwd = None
+        env = _request_env_overrides(request.get("env"))
         try:
             if cwd:
                 os.chdir(cwd)
             runner = CliRunner()
-            result = runner.invoke(cli, argv)
+            # A fresh context: no per-invocation state (such as the output
+            # formatter of the command that spawned this daemon) carries
+            # into this request. That includes the usage-error JSON the CLI
+            # echoes after the command's own output state has been reset.
+            result = contextvars.Context().run(runner.invoke, cli, argv, env=env)
             output = result.stdout
             if result.exit_code != 0 and not output.strip():
                 command = argv[0] if argv else "unknown"
@@ -251,15 +306,8 @@ class DaemonServer:
                 "version": self._version,
             }
         finally:
-            os.chdir(original_cwd)
-            if original_env is None:
-                os.environ.pop("AGENTCAD_DAEMON", None)
-            else:
-                os.environ["AGENTCAD_DAEMON"] = original_env
-            if original_child_env is None:
-                os.environ.pop("_AGENTCAD_DAEMON_CHILD", None)
-            else:
-                os.environ["_AGENTCAD_DAEMON_CHILD"] = original_child_env
+            if original_cwd is not None:
+                os.chdir(original_cwd)
 
     def serve(self):
         """Run the accept-and-fork loop until ``shutdown`` arrives."""
@@ -274,8 +322,8 @@ class DaemonServer:
             # is patched), so no zombies accumulate.
             pass
 
-        if os.path.exists(self._socket_path):
-            os.unlink(self._socket_path)
+        daemon_state.check_paths(self._socket_path, self._pid_path, create=True)
+        _unlink_quiet(self._socket_path)
 
         # Write the PID file BEFORE binding the socket. ``start_daemon``'s
         # readiness check watches for the socket to appear; if we bound it
@@ -291,6 +339,7 @@ class DaemonServer:
 
         server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server_sock.bind(self._socket_path)
+        os.chmod(self._socket_path, 0o600)
         # Backlog 16 absorbs short bursts. Per-request work happens in forked
         # children, so the parent itself rarely blocks.
         server_sock.listen(16)
@@ -328,10 +377,8 @@ class DaemonServer:
                     _safe_close(conn)
         finally:
             server_sock.close()
-            if os.path.exists(self._socket_path):
-                os.unlink(self._socket_path)
-            if os.path.exists(self._pid_path):
-                os.unlink(self._pid_path)
+            _unlink_quiet(self._socket_path)
+            _unlink_quiet(self._pid_path)
 
     def _fork_and_run(self, request, conn, listen_sock):
         """Fork a child to handle one ``run`` request; parent returns immediately."""
@@ -646,6 +693,7 @@ def _send_request_with_peer(
 
     sock = None
     try:
+        daemon_state.check_paths(socket_path=socket_path)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(connect_timeout_s)
         sock.connect(socket_path)
@@ -766,16 +814,13 @@ def _write_pid_metadata(pid_path, *, pid, instance_id):
         "pid": pid,
         "instance_id": instance_id,
     }
-    with open(pid_path, "w") as f:
-        json.dump(metadata, f, separators=(",", ":"))
+    daemon_state.publish_metadata(pid_path, metadata)
 
 
 def _read_pid_metadata(pid_path):
     """Return validated PID metadata, including legacy integer PID files."""
-    try:
-        with open(pid_path) as f:
-            raw = f.read().strip()
-    except OSError:
+    raw = daemon_state.read_metadata(pid_path)
+    if raw is None:
         return None
 
     try:
@@ -814,13 +859,11 @@ def _read_pid(pid_path):
 
 
 def _unlink_quiet(path):
-    """``os.unlink(path)`` that swallows the not-found case."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+    """Remove only safe, user-owned state; preserve unsafe paths."""
+    daemon_state.unlink_state(path)
 
 
+@daemon_state.guarded("running")
 def daemon_status(socket_path=None, pid_path=None):
     """Check if the daemon is running. Returns dict with running, pid, version,
     and (when relevant) a ``stale`` flag + hint when the daemon's in-memory
@@ -849,6 +892,7 @@ def daemon_status(socket_path=None, pid_path=None):
     if pid_path is None:
         pid_path = _default_pid_path()
 
+    daemon_state.check_paths(socket_path, pid_path)
     pid_metadata = _read_pid_metadata(pid_path)
     if pid_metadata is None:
         return {"running": False}
@@ -979,6 +1023,7 @@ def _force_kill(pid, pid_path, socket_path, sigterm_grace_s=2.0):
     return method
 
 
+@daemon_state.guarded("stopped")
 def stop_daemon(socket_path=None, pid_path=None):
     """Stop a daemon without ever signaling an identity inferred from PID alone.
 
@@ -995,6 +1040,7 @@ def stop_daemon(socket_path=None, pid_path=None):
     if pid_path is None:
         pid_path = _default_pid_path()
 
+    daemon_state.check_paths(socket_path, pid_path)
     pid_metadata = _read_pid_metadata(pid_path)
     if pid_metadata is None:
         _unlink_quiet(pid_path)
@@ -1116,6 +1162,7 @@ def stop_daemon(socket_path=None, pid_path=None):
 _DEFAULT_START_TIMEOUT_S = 90.0
 
 
+@daemon_state.guarded("started")
 def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEOUT_S):
     """Start the daemon as a subprocess. Returns dict with started, pid.
 
@@ -1134,7 +1181,10 @@ def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEO
     if pid_path is None:
         pid_path = _default_pid_path()
 
+    daemon_state.check_paths(socket_path, pid_path, create=True)
     status = daemon_status(socket_path=socket_path, pid_path=pid_path)
+    if status.get("error_kind"):
+        return {**status, "started": False}
     if status.get("running"):
         return {
             "started": False,
@@ -1230,6 +1280,7 @@ def restart_daemon(socket_path=None, pid_path=None):
     }
 
 
+@daemon_state.guarded("spawned")
 def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     """Spawn a daemon by forking off the calling process — no extra cold OCP.
 
@@ -1261,8 +1312,15 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
         socket_path = _default_socket_path()
     if pid_path is None:
         pid_path = _default_pid_path()
+    # The daemon leaves the spawning project's directory (below), so pin
+    # its own files first.
+    socket_path = os.path.abspath(socket_path)
+    pid_path = os.path.abspath(pid_path)
 
+    daemon_state.check_paths(socket_path, pid_path, create=True)
     status = daemon_status(socket_path=socket_path, pid_path=pid_path)
+    if status.get("error_kind"):
+        return {**status, "spawned": False, "reason": "unsafe_daemon_state"}
     if status.get("running"):
         return {"spawned": False, "reason": "already_running",
                 "pid": status["pid"]}
@@ -1333,6 +1391,13 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     if devnull > 2:
         os.close(devnull)
 
+    # This process was copied out of a running command in some project.
+    # Don't keep that project's directory as the daemon's home: every
+    # request carries its own cwd. (Each request also runs in a fresh
+    # context, see ``_handle_run``, so the spawning command's
+    # per-invocation state stays behind.)
+    _leave_start_directory()
+
     try:
         server = DaemonServer(socket_path=socket_path, pid_path=pid_path)
         server.serve()
@@ -1343,6 +1408,19 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
 
 
 # ---------- __main__ ----------
+
+def _leave_start_directory():
+    """Move the daemon out of the directory it was started from.
+
+    Requests carry their own cwd, so the starting directory (some project,
+    possibly a temporary one) has no meaning for the daemon. Callers make
+    socket and pid paths absolute first.
+    """
+    try:
+        os.chdir("/")
+    except OSError:
+        pass
+
 
 def _warm_step_reader():
     """Pay the STEP reader's one-time initialization in the daemon parent.
@@ -1378,6 +1456,15 @@ def _main():
     parser.add_argument("--socket", default=None)
     parser.add_argument("--pid", default=None)
     args = parser.parse_args()
+    # Pin the daemon's own files before leaving the starting directory, so a
+    # relative --socket/--pid or AGENTCAD_SOCKET_PATH/AGENTCAD_PID_PATH keeps
+    # meaning what the starting command meant.
+    socket_path = os.path.abspath(args.socket or _default_socket_path())
+    pid_path = os.path.abspath(args.pid or _default_pid_path())
+    # Validate while relative environment settings still refer to the caller's
+    # directory, including when invoked directly rather than via start_daemon.
+    daemon_state.check_paths(socket_path, pid_path, create=True)
+    _leave_start_directory()
 
     # Eager imports — warm up all expensive modules in the parent so each
     # forked child inherits OCP in memory via copy-on-write. build123d is
@@ -1394,8 +1481,8 @@ def _main():
     _warm_step_reader()
 
     server = DaemonServer(
-        socket_path=args.socket,
-        pid_path=args.pid,
+        socket_path=socket_path,
+        pid_path=pid_path,
     )
     server.serve()
 

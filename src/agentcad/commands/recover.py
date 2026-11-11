@@ -86,6 +86,25 @@ def recover(version_dir: str, make_current: bool) -> None:
         return
 
     number, inferred_label = parsed
+    if manifest.get("promotion_state"):
+        from agentcad.change_promotion import PromotionStore
+        from agentcad.project import ProjectError
+        try:
+            state = PromotionStore(project_dir)._state(manifest)
+        except ValueError as exc:
+            raise ProjectError("promotion_history_unavailable", str(exc), "Restore the promotion history before using legacy recovery.") from exc
+        for operation in state["operations"].values():
+            if ((operation.get("materialization") or {}).get("dir_name") == path.name
+                and operation["result"].get("outcome") != "promoted"):
+                _emit({
+                    "command": "recover", "status": "error", "reason": "promotion_required",
+                    "request_key": operation["request"]["request_key"],
+                    "revision_id": operation["request"]["candidate"]["revision_id"],
+                    "message": "These files belong to an unaccepted promotion operation; legacy recovery cannot accept them.",
+                    "suggestion": "Use promote with the original key to resume, or --status to inspect its refusal before a new attempt.",
+                    "recovery_performed": False, "current_advanced": False,
+                }, exit_code=1)
+                return
     relative_path = f"{path.name}/"
     matching_entry = next((
         entry for entry in manifest.get("versions", [])

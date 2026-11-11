@@ -259,6 +259,19 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     position: absolute; bottom: 12px; left: 16px; color: #666;
     font-size: 11px; user-select: none;
   }
+  #viewer-tools {
+    position: absolute; bottom: 38px; left: 16px; z-index: 35;
+    display: flex; gap: 6px;
+  }
+  #viewer-tools button {
+    height: 34px; padding: 0 12px; border: 1px solid rgba(0,0,0,.14);
+    border-radius: 6px; background: rgba(255,255,255,.94); color: #27313f;
+    font: 12px monospace; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+  }
+  #viewer-tools button:hover { background: #e8eef5; }
+  #viewer-tools button[aria-pressed="true"] { background: #333; color: #fff; }
+  #canvas.pan-mode { cursor: grab; }
+  #canvas.pan-mode:active { cursor: grabbing; }
   #pause-btn {
     position: absolute; bottom: 16px; right: 16px;
     width: 32px; height: 32px; border: none; border-radius: 50%;
@@ -284,13 +297,7 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
     font-family: monospace; font-size: 11px;
     padding: 6px 10px; border-radius: 4px; user-select: none;
   }
-  #comment-toggle-btn {
-    position: absolute; top: 10px; left: 12px; z-index: 42;
-    height: 34px; padding: 0 12px; border: 1px solid rgba(0,0,0,.14);
-    border-radius: 17px; background: rgba(255,255,255,.94); color: #27313f;
-    font: 12px monospace; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.12);
-  }
-  #comment-toggle-btn.active { background: #1b75bb; border-color: #1b75bb; color: #fff; }
+  #viewer-tools #comment-toggle-btn.active { background: #1b75bb; border-color: #1b75bb; color: #fff; }
   #comment-toggle-btn[disabled] { opacity: .5; cursor: not-allowed; }
   body.placing-comment #canvas {
     cursor: crosshair;
@@ -537,11 +544,15 @@ _HTML_UNIFIED = r"""<!DOCTYPE html>
   <button data-mode="parts" id="btn-parts">Parts</button>
   <button data-mode="spec" id="btn-spec" class="spec">Spec check</button>
 </div>
-<div id="info">drag to orbit · scroll to zoom</div>
+<div id="viewer-tools" role="toolbar" aria-label="Viewer controls">
+  <button id="pan-btn" aria-pressed="false" title="Toggle drag to pan (or hold Shift while dragging)">Pan</button>
+  <button id="fit-view-btn" title="Center and fit the visible model">Fit view</button>
+  <button id="comment-toggle-btn" aria-expanded="false" aria-controls="comments-panel" title="Open comments, then choose + New comment (or press C)">Comments</button>
+</div>
+<div id="info">drag to orbit · Shift + drag to pan · scroll to zoom</div>
 <button id="pause-btn" title="Pause / play rotation">&#9646;&#9646;</button>
 <button id="export-gif-btn" title="Export current view as animated GIF">Export GIF</button>
 <div id="export-progress" style="display:none;">Encoding GIF… <span id="export-progress-pct">0%</span></div>
-<button id="comment-toggle-btn" title="Open spatial comments (C)">Comments</button>
 <div id="comment-placement-hud"><strong>Place comment</strong><span>Click the surface you mean</span><kbd>Esc</kbd><span>cancel</span></div>
 <div id="comment-target-preview"></div>
 <div id="comment-pins"></div>
@@ -622,9 +633,11 @@ const hasParts = Array.isArray(PARTS) && PARTS.length > 0;
 const hasPartChanges = Boolean(PART_CHANGES);
 const hasPartsView = hasParts || hasPartChanges;
 const hasGroups = Array.isArray(GROUPS) && GROUPS.length > 0;
-const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec);
+const hasReview = REVIEW && (REVIEW.measure || REVIEW.check_spec || REVIEW.change_receipt);
+const singleModelRole = REVIEW && REVIEW.change_receipt ? 'Retained' : 'Current';
 const partObjects = new Map();
 const partObjectsByRole = { a: new Map(), b: new Map() };
+const commentPartObjectsByModel = new WeakMap();
 const partRows = new Map();
 const groupRows = new Map();
 let currentMode = null;
@@ -652,6 +665,7 @@ function captureLiveState() {
     mode: currentMode, hasB,
     position: camera.position.toArray(), target: controls.target.toArray(),
     autoRotate: controls.autoRotate,
+    panEnabled: controls.mouseButtons.LEFT === THREE.MOUSE.PAN,
     hidden: [...partState.hidden], isolated: [...partState.isolated],
     selected: partState.selected, ghostRest: partState.ghostRest,
     overlay: ['opacity-a', 'opacity-b', 'visible-a', 'visible-b'].map(id => {
@@ -670,6 +684,7 @@ function restoreLiveState(state) {
   const fallback = !button || button.disabled;
   setMode(fallback ? (hasB ? 'single-b' : 'single-a') : mode);
   setAutoRotate(false);
+  setPanMode(Boolean(state.panEnabled));
   const vector = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
   if (vector(state.position) && vector(state.target)) {
     controls.enableDamping = false;
@@ -730,8 +745,8 @@ function setupModeButtons() {
     disable('btn-side', 'Open two models to use side-by-side comparison.');
     disable('btn-overlay', 'Open two models to use overlay comparison.');
   }
-  document.getElementById('btn-single-a').textContent = hasB ? 'Previous' : 'Current';
-  document.getElementById('btn-single-a').title = hasB ? LABEL_A : `Current · ${LABEL_A}`;
+  document.getElementById('btn-single-a').textContent = hasB ? 'Previous' : singleModelRole;
+  document.getElementById('btn-single-a').title = hasB ? LABEL_A : `${singleModelRole} · ${LABEL_A}`;
   document.getElementById('btn-single-b').textContent = 'Current';
   document.getElementById('btn-single-b').title = `Current · ${LABEL_B}`;
   if (!hasAgentView) {
@@ -1173,16 +1188,21 @@ function registerPartMeshes(model) {
   });
 }
 
-function indexCommentPartMeshes(model, role) {
-  const index = partObjectsByRole[role];
-  model.traverse(c => {
-    if (!c.isMesh) return;
-    const partId = detectPartId(c, COMMENT_PARTS);
-    if (!partId) return;
-    c.userData.partId = partId;
-    if (!index.has(partId)) index.set(partId, []);
-    index.get(partId).push(c);
-  });
+function indexCommentPartMeshes(model, role=null) {
+  let index = commentPartObjectsByModel.get(model);
+  if (!index) {
+    index = new Map();
+    model.traverse(c => {
+      if (!c.isMesh) return;
+      const partId = detectPartId(c, COMMENT_PARTS);
+      if (!partId) return;
+      c.userData.partId = partId;
+      if (!index.has(partId)) index.set(partId, []);
+      index.get(partId).push(c);
+    });
+    commentPartObjectsByModel.set(model, index);
+  }
+  if (role) partObjectsByRole[role] = index;
 }
 
 function partIsPrimary(partId) {
@@ -1427,6 +1447,7 @@ function setCommentPanel(open, { preserveCamera=false }={}) {
   const oldWidth = canvas.clientWidth;
   document.getElementById('comments-panel').classList.toggle('open', open);
   document.getElementById('comment-toggle-btn').classList.toggle('active', open);
+  document.getElementById('comment-toggle-btn').setAttribute('aria-expanded', String(open));
   resize();
   if (!preserveCamera && oldWidth !== canvas.clientWidth) {
     camera.position.sub(controls.target).multiplyScalar(oldWidth / canvas.clientWidth).add(controls.target);
@@ -1437,7 +1458,7 @@ function setCommentPanel(open, { preserveCamera=false }={}) {
 
 function beginCommentPlacement() {
   if (!reviewEnabled) return;
-  if (['agent-view', 'parts'].includes(currentMode)) return;
+  if (['agent-view', 'parts'].includes(currentMode)) setMode(hasB ? 'single-b' : 'single-a');
   setCommentPanel(true);
   pendingCommentAnchor = null;
   editingCommentId = null;
@@ -1466,14 +1487,14 @@ function cancelCommentPlacement() {
 function commentScopeLabel(scope) {
   if (scope === 'previous') return 'Previous';
   if (scope === 'both') return 'Both';
-  if (!hasB) return 'Current';
+  if (!hasB) return singleModelRole;
   return scope === 'b' ? 'Current' : 'Previous';
 }
 
 function commentScopeDescription(scope) {
   if (scope === 'previous') return 'Previous revision is not displayed in this viewer';
   if (scope === 'both') return `Both · ${LABEL_A} + ${LABEL_B}`;
-  if (!hasB) return `Current · ${LABEL_A}`;
+  if (!hasB) return `${singleModelRole} · ${LABEL_A}`;
   return scope === 'b' ? `Current · ${LABEL_B}` : `Previous · ${LABEL_A}`;
 }
 
@@ -1816,6 +1837,20 @@ function commentPartMeshes(partId, role, useCurrentParts=false) {
   return roleIndex.get(partId) || [];
 }
 
+function commentPartVisible(comment, role) {
+  // Check the model actually drawn in this viewport. Split and overlay views
+  // have their own copies, whose visibility can differ from the single view.
+  const model = currentMode === 'side-by-side'
+    ? (role === 'b' ? reviewSplitModelB : reviewSplitModelA)
+    : currentMode === 'overlay' ? (role === 'b' ? overlayModelB : overlayModelA)
+    : modelForRole(role);
+  if (!model || !objectIsVisible(model)) return false;
+  const partId = comment.target?.part_id;
+  if (!partId) return true;
+  const meshes = commentPartObjectsByModel.get(model)?.get(partId) || [];
+  return meshes.some(objectIsVisible);
+}
+
 function pointFromPartRelative(anchor, partId, role, useCurrentParts=false) {
   if (!partId || !Array.isArray(anchor.part_relative)) return null;
   const meshes = commentPartMeshes(partId, role, useCurrentParts);
@@ -2127,7 +2162,10 @@ function updateCommentPins() {
     const comment = reviewComments.find(entry => entry.id === pin.dataset.commentId);
     if (!comment || canvas.style.display === 'none') { pin.style.display = 'none'; continue; }
     const role = pin.dataset.role || commentSourceRole(comment);
-    if (!commentRoleVisible(role, comment)) { pin.style.display = 'none'; continue; }
+    if (!commentRoleVisible(role, comment) || !commentPartVisible(comment, role)) {
+      pin.style.display = 'none';
+      continue;
+    }
     const anchor = comment.anchor || {};
     if (anchor.kind === 'view') {
       if (!sameViewerVersion(comment) || (comment.view || {}).mode !== currentMode) {
@@ -2220,7 +2258,10 @@ function setupReviewComments() {
     toggle.title = 'Open the live project with `agentcad viewer open` to add comments.';
     return;
   }
-  toggle.addEventListener('click', () => setCommentPanel(!document.getElementById('comments-panel').classList.contains('open')));
+  toggle.addEventListener('click', () => {
+    if (['agent-view', 'parts'].includes(currentMode)) setMode(hasB ? 'single-b' : 'single-a');
+    setCommentPanel(!document.getElementById('comments-panel').classList.contains('open'));
+  });
   document.getElementById('close-comments-btn').addEventListener('click', () => setCommentPanel(false));
   document.getElementById('new-comment-btn').addEventListener('click', beginCommentPlacement);
   document.getElementById('cancel-comment-btn').addEventListener('click', cancelCommentPlacement);
@@ -2468,6 +2509,10 @@ function makeReviewRow({ label, status, badge, summary, bucket, missing }) {
 }
 
 function setupReviewPanel() {
+  if (REVIEW.change_receipt) {
+    setupChangeReceiptPanel();
+    return;
+  }
   const measure = REVIEW.measure || {};
   const spec = REVIEW.check_spec || null;
   const dims = (spec && spec.metrics && spec.metrics.dimensions) || (measure.metrics && measure.metrics.dimensions) || {};
@@ -2584,6 +2629,47 @@ function setupReviewPanel() {
       summary: `axis ${bucket.axis} · ${bucket.representative_centers.length} representative centers`,
       bucket,
     }));
+  }
+}
+
+function setupChangeReceiptPanel() {
+  const number = value => value === null || value === undefined ? 'unavailable' : String(value);
+  const receipt = REVIEW.change_receipt;
+  const state = receipt.validation_state;
+  const tone = state === 'valid' ? 'pass' : state === 'invalid' ? 'fail' : 'info';
+  document.getElementById('review-heading').textContent = 'Change checks';
+  document.getElementById('btn-spec').textContent = 'Change checks';
+  const pill = document.getElementById('review-pill');
+  pill.textContent = state;
+  pill.className = 'pill ' + tone;
+  document.getElementById('review-subtitle').textContent =
+    `Retained snapshot ${receipt.candidate.revision_id}. This view does not change acceptance. Reopen to refresh the receipt.`;
+  document.getElementById('review-features').textContent = `${receipt.checks.filter(c => c.state === 'pass').length} / ${receipt.checks.length}`;
+  document.getElementById('review-error').textContent = String(receipt.blockers.length);
+  document.querySelector('#review-features').parentElement.querySelector('span').textContent = 'Checks passed';
+  document.querySelector('#review-error').parentElement.querySelector('span').textContent = 'Blockers';
+  document.querySelector('#review-validity').parentElement.querySelector('span').textContent = 'Check state';
+  document.querySelector('#review-spec-section h2').textContent = 'Requirements';
+  document.getElementById('review-dimensions').closest('section').style.display = 'none';
+  document.getElementById('review-validity').textContent = state;
+  document.getElementById('review-measure-section').style.display = 'none';
+  const rows = document.getElementById('review-spec-rows');
+  const required = new Set(REVIEW.check_policy.checks.filter(c => c.require_completion).map(c => c.check_id));
+  for (const check of receipt.checks) {
+    const observed = check.observed || {};
+    let summary = observed.reason || JSON.stringify(observed);
+    if (observed.expected_mm !== undefined) {
+      summary = `Expected ${number(observed.expected_mm)} mm ± ${number(observed.tolerance_mm)} mm; measured ${number(observed.measured_mm)} mm.`;
+    } else if (observed.expected_count !== undefined) {
+      const diameters = [...new Set((observed.cylinders || []).map(c => c.diameter_mm))]
+        .sort((a, b) => Math.abs(a - observed.expected_diameter_mm) - Math.abs(b - observed.expected_diameter_mm));
+      summary = `Expected ${observed.expected_count} cylinders at diameter ${number(observed.expected_diameter_mm)} mm ± ${number(observed.tolerance_mm)} mm; matched ${observed.matched_count}. Measured axis diameters: ${diameters.slice(0, 6).map(number).join(', ') || 'none'} mm${diameters.length > 6 ? ' (more in receipt)' : ''}.`;
+    } else if (observed.expected_displacement_mm !== undefined) {
+      summary = `Expected unchanged axes; maximum center displacement ${number(observed.max_displacement_mm)} mm; diameter change ${number(observed.max_diameter_change_mm)} mm; tolerance ${number(observed.tolerance_mm)} mm.`;
+    }
+    rows.appendChild(makeReviewRow({label: `${check.check_id} (${required.has(check.check_id) ? 'required' : 'advisory'})`,
+      status: check.state === 'pass' ? 'pass' : check.state === 'fail' ? 'fail' : 'info',
+      badge: check.state, summary}));
   }
 }
 
@@ -2952,23 +3038,57 @@ function attach(scene, url, { material, onMesh, alignToCenter=false }) {
       axes.position.set(box.min.x - maxDim * 0.3, box.min.y + 0.02, box.min.z - maxDim * 0.3);
       scene.add(axes);
 
+      // All scene copies get an index once, so pin updates never need to
+      // traverse the assembly or match mesh names on each animation frame.
+      indexCommentPartMeshes(model);
       if (onMesh) onMesh(model);
       resolve(model);
     }, undefined, reject);
   });
 }
 
-function fitCamera() {
-  if (combinedBox.isEmpty()) return;
-  const center = combinedBox.getCenter(new THREE.Vector3());
-  const size = combinedBox.getSize(new THREE.Vector3());
-  const maxDim = Math.max(size.x, size.y, size.z);
+function fitCamera(box=combinedBox, preserveDirection=false) {
+  if (box.isEmpty()) return;
+  // Clear any pending pan/rotation before positioning the camera, so damping
+  // cannot pull the model off center again after Fit view.
+  const damping = controls.enableDamping;
+  const autoRotate = controls.autoRotate;
+  controls.enableDamping = false;
+  controls.autoRotate = false;
+  controls.update();
+  const direction = preserveDirection ? camera.position.clone().sub(controls.target).normalize()
+    : new THREE.Vector3(1.2, 0.8, 1.2).normalize();
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 0.01);
+  // Parts and Agent views hide the canvas, making its client size zero even
+  // when model loading is still in progress. The renderer retains its size.
+  const viewport = renderer.getSize(new THREE.Vector2());
+  const aspect = viewport.x / viewport.y / (splitMode ? 2 : 1);
+  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  const limitingHalfFov = Math.min(halfFov, Math.atan(Math.tan(halfFov) * aspect));
+  const distance = radius / Math.sin(limitingHalfFov) * 1.12;
   controls.target.copy(center);
-  camera.position.set(center.x + maxDim * 1.2, center.y + maxDim * 0.8, center.z + maxDim * 1.2);
-  camera.near = maxDim * 0.001;
-  camera.far = maxDim * 100;
+  camera.position.copy(center).addScaledVector(direction, distance);
+  camera.near = radius * 0.001;
+  camera.far = Math.max(radius * 100, distance + radius * 2);
   camera.updateProjectionMatrix();
   controls.update();
+  controls.enableDamping = damping;
+  controls.autoRotate = autoRotate;
+}
+
+function fitVisibleModels() {
+  const models = splitMode ? [reviewSplitModelA, reviewSplitModelB]
+    : currentMode === 'overlay' ? [overlayModelA, overlayModelB]
+    : [currentMode === 'single-b' ? reviewModelB : reviewModelA];
+  const box = new THREE.Box3();
+  for (const model of models) {
+    model?.traverseVisible(mesh => {
+      if (mesh.isMesh) box.expandByObject(mesh);
+    });
+  }
+  pauseAutoRotate();
+  fitCamera(box, true);
 }
 
 // Load all scenes in parallel, then fit camera
@@ -3041,10 +3161,12 @@ function setMode(mode) {
   currentMode = mode;
   const spatialCommentsAvailable = !['agent-view', 'parts'].includes(mode);
   const commentToggle = document.getElementById('comment-toggle-btn');
-  commentToggle.style.display = spatialCommentsAvailable ? '' : 'none';
+  document.getElementById('pan-btn').style.display = spatialCommentsAvailable ? '' : 'none';
+  document.getElementById('fit-view-btn').style.display = spatialCommentsAvailable ? '' : 'none';
   if (!spatialCommentsAvailable) {
     document.getElementById('comments-panel').classList.remove('open');
     commentToggle.classList.remove('active');
+    commentToggle.setAttribute('aria-expanded', 'false');
     cancelCommentPlacement();
     for (const pin of document.querySelectorAll('.comment-pin')) pin.style.display = 'none';
   }
@@ -3109,7 +3231,7 @@ function setMode(mode) {
   if (mode === 'single-a') {
     clearReviewMarkers();
     currentScene = sceneA_single;
-    labelL.textContent = `${hasB ? 'Previous' : 'Current'} · ${LABEL_A}`;
+    labelL.textContent = `${hasB ? 'Previous' : singleModelRole} · ${LABEL_A}`;
     labelL.style.display = 'block';
     if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
   } else if (mode === 'single-b') {
@@ -3132,7 +3254,7 @@ function setMode(mode) {
     currentScene = sceneA_single;
     if (hasParts && PARTS_MODEL === 'a') partControls.style.display = 'block';
     specPanel.style.display = 'grid';
-    labelL.textContent = `${hasB ? 'Previous' : 'Current'} · ${LABEL_A}`;
+    labelL.textContent = `${hasB ? 'Previous' : singleModelRole} · ${LABEL_A}`;
     labelL.style.display = 'block';
     selectFirstReviewRow();
   }
@@ -3165,6 +3287,20 @@ pauseBtn.addEventListener('click', () => {
   setAutoRotate(!controls.autoRotate);
 });
 controls.addEventListener('start', pauseAutoRotate);
+
+function setPanMode(enabled) {
+  controls.mouseButtons.LEFT = enabled ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+  controls.touches.ONE = enabled ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+  canvas.classList.toggle('pan-mode', enabled);
+  document.getElementById('pan-btn').setAttribute('aria-pressed', String(enabled));
+  document.getElementById('info').textContent = enabled
+    ? 'drag to pan · Shift + drag to orbit · scroll to zoom'
+    : 'drag to orbit · Shift + drag to pan · scroll to zoom';
+}
+document.getElementById('pan-btn').addEventListener('click', () => {
+  setPanMode(controls.mouseButtons.LEFT !== THREE.MOUSE.PAN);
+});
+document.getElementById('fit-view-btn').addEventListener('click', fitVisibleModels);
 
 // Render one frame to the canvas. Shared between the rAF loop and the GIF
 // export, so split-viewport rendering stays consistent.
@@ -3448,7 +3584,7 @@ def _render_unified(
         "__PARTS_JSON__": json.dumps(parts_payload),
         "__PART_CHANGES_JSON__": json.dumps(part_changes) if part_changes else "null",
         "__GROUPS_JSON__": json.dumps(groups_payload),
-        "__REVIEW_JSON__": json.dumps(review) if review else "null",
+        "__REVIEW_JSON__": json.dumps(review).replace("</", "<\\/") if review else "null",
         "__PART_REVIEW_JSON__": json.dumps(part_review) if part_review else "null",
         "__VIEWER_CONTEXT_JSON__": json.dumps(viewer_context or {}),
         "__COMMENT_PARTS_JSON__": json.dumps([
@@ -3458,7 +3594,7 @@ def _render_unified(
     html = _HTML_UNIFIED
     for k, v in replacements.items():
         html = html.replace(k, v)
-    Path(out_html_path).write_text(html)
+    Path(out_html_path).write_text(html, encoding="utf-8")
 
 
 def _render_single(glb_path, *, review=None):
@@ -3467,7 +3603,8 @@ def _render_single(glb_path, *, review=None):
     _render_unified(
         html_path,
         glb_a=glb_path,
-        label_a=glb_path.name,
+        label_a=(review["change_receipt"]["candidate"]["revision_id"]
+                 if review and review.get("change_receipt") else glb_path.name),
         default_mode="spec" if review else "single-a",
         review=review,
     )
@@ -3686,11 +3823,29 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None, in
 )
 @project_options
 def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
-    """Open a GLB or STEP file in the browser.
+    """Open a GLB, STEP, or retained revision in the browser.
 
     With one file: single-model viewer.
     With two files: diff view (side-by-side by default, or --overlay for tinted overlay).
+    A retained revision opens its diagnostic geometry and pinned check receipt.
     """
+    retained_review = None
+    if file.startswith("r_") and not Path(file).exists():
+        if file_b or spec_file or overlay:
+            _error("Open a retained revision alone; its requirements are already pinned.")
+        from agentcad.change_store import ChangeStore
+        store = ChangeStore(get_project().build_root)
+        revision_id = file
+        try:
+            saved = store.read(revision_id)
+            checked = store.read_checks(revision_id)
+            geometry = next((a for a in (saved["candidate"] or {}).get("inputs", []) if a["role"] == "geometry"), None)
+            if geometry is None:
+                _error("This revision has no renderable geometry. Inspect its retained source and diagnostics; no older model was substituted.")
+            file = str(store.root / geometry["path"])
+            retained_review = {"change_receipt": checked["receipt"], "check_policy": saved["policy"]}
+        except ValueError as exc:
+            _error(str(exc))
     if with_validation and file_b is not None:
         _error("--validation accepts one STEP/BREP file; omit the second file.")
     review, err = _build_review_payload(
@@ -3701,6 +3856,8 @@ def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
     )
     if err:
         _error(err)
+    if retained_review:
+        review = {**(review or {}), **retained_review}
 
     if file_b is None:
         glb_a, shape_a, err = _resolve_to_glb_and_shape(file)
@@ -3719,6 +3876,9 @@ def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
         if review:
             response["mode"] = "validation" if with_validation else "spec"
             response["review"] = True
+            if retained_review:
+                response.update(mode="checks", revision_id=revision_id,
+                                receipt=checked["receipt_path"], current_advanced=False)
             if with_validation:
                 response["validation"] = review["validation"]
                 response["is_valid"] = review["validation"]["is_valid"]

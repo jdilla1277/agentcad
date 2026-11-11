@@ -1,18 +1,22 @@
 """Bounded default reports preserve inventories, identities and actual media."""
 
+from tests.inspection_helpers import experimental_args
 import asyncio
 import base64
+from copy import deepcopy
 import hashlib
 import json
 import math
 from pathlib import Path
 
 import pytest
+
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 from PIL import Image
 
 from agentcad.cli import cli
 from agentcad.geometry_manifest import create_manifest, read_manifest
-from agentcad.inspection_report import inspection_report, ReportBudgetError
+from agentcad.inspection_report import compact_report, inspection_report, ReportBudgetError, _estimated_tokens
 from agentcad.inspection_samples import select_samples
 from agentcad.step_assembly import read_step_assembly, write_step_assembly
 from tests_b3d.test_step_assembly import _nested_step
@@ -60,7 +64,7 @@ def _distinct_parts(path, count=12):
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, args)
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
@@ -127,6 +131,28 @@ def test_ranking_and_full_parts_inventory_are_deterministic_and_budgeted(isolate
     assert default["budget"]["estimated_text_tokens"] <= 2000
     with pytest.raises(ReportBudgetError, match="budget is too small"):
         inspection_report(step, isolated_dir, images=False, text_budget=1)
+
+
+@pytest.mark.parametrize("mode", ["one_image", "no_images_left", "disabled"])
+def test_recompaction_preserves_media_accounting_and_source(isolated_dir, mode):
+    step, _ = _baseline(isolated_dir)
+    report, _ = inspection_report(step, isolated_dir, images=mode != "disabled", max_images=2, text_budget=5000)
+    original_omitted = report["media_summary"]["omitted"]
+    prepared = report["media_summary"]["prepared"]
+    report["media"] = report["media"][:1] if mode == "one_image" else []
+    text_omitted = prepared - len(report["media"])
+    report["budget"].update(text_tokens=2000, media_omitted_by_text=text_omitted,
+                            truncated=text_omitted > 0, media_references_returned=len(report["media"]))
+    report["media_summary"].update(omitted=original_omitted + text_omitted, returned=len(report["media"]))
+    before = deepcopy(report)
+    compact = compact_report(report)
+    assert report == before
+    assert compact_report(compact) == compact
+    assert compact["media_summary"]["omitted"] == original_omitted + prepared - len(compact["media"])
+    assert compact["budget"]["media_omitted_by_text"] == prepared - len(compact["media"])
+    assert compact["budget"]["estimated_text_tokens"] == _estimated_tokens(compact) <= 1990
+    assert compact["media_summary"]["state"] == ("disabled" if mode == "disabled" else "bounded")
+    assert compact["analysis_revision"] == report["analysis_revision"]
 
 
 def test_sphere_samples_exclude_collapsed_poles_but_keep_explicit_ids(runner, isolated_dir):
@@ -208,16 +234,16 @@ def test_cli_mcp_report_parity_and_real_image_content(runner, isolated_dir):
 
     step, _ = _baseline(isolated_dir)
     expected = _json(runner, ["inspect", str(step), "--report", "--max-images", "2", "--text-budget", "5000"])
-    actual = mcp_inspect(file=str(step), cwd=str(isolated_dir), report=True, max_images=2, text_budget=5000)
+    actual = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, max_images=2, text_budget=5000, full_response=True)
     assert isinstance(actual, CallToolResult)
     assert actual.structuredContent.pop("_exit_code") == 0
     assert actual.structuredContent == expected
     assert [c.type for c in actual.content] == ["text", "image", "image"]
     assert base64.b64decode(actual.content[1].data) == (Path(expected["inventory"]["image_root"]) / expected["media"][0]["png"]).read_bytes()
-    converted = asyncio.run(mcp.call_tool("inspect", {"file": str(step), "cwd": str(isolated_dir), "report": True, "max_images": 2}))
+    converted = asyncio.run(mcp.call_tool("inspect", {**({"file": str(step), "cwd": str(isolated_dir), "report": True, "max_images": 2, "full_response": True}), "experimental_inspect": True}))
     assert isinstance(converted, CallToolResult)
     assert len(converted.content) == 3
-    no_images = mcp_inspect(file=str(step), cwd=str(isolated_dir), report=True, report_images=False)
+    no_images = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, report_images=False, full_response=True)
     assert isinstance(no_images, dict)
     assert no_images["media"] == []
     assert no_images["analysis_revision"] == expected["analysis_revision"]

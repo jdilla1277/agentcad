@@ -12,6 +12,7 @@ content hash, not a manually bumped version, so it can never be forgotten.
 """
 
 import hashlib
+from pathlib import Path
 
 from agentcad.runners import dispatch
 
@@ -63,6 +64,14 @@ stage whose assumptions were wrong, then build and validate again.
 
 Understand the available evidence before writing geometry.
 
+Enriched Inspect is work in progress. On every CLI call, use
+`--experimental-inspect` for typed IDs, reports, highlighted images, inspection
+jobs and artifact retrieval; local MCP uses `experimental_inspect=true`.
+Ordinary import/run and basic `inspect --ids` stay available without it.
+No environment/project setting or previous request enables the workflow.
+Opted-in replies identify `experimental_inspect.status=work_in_progress`.
+Copy generated follow-up actions so the next call carries acknowledgment too.
+
 - For generation, inspect every supplied drawing, image, and requirement. Note
   units, views, orientation, repeated features, and which dimensions are
   explicit versus inferred.
@@ -101,9 +110,21 @@ Turn the request into a concrete geometry contract before building.
   ```json
   {"features":[{"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4}]}
   ```
+- For retained dimension and preservation checks that gate normal acceptance,
+  use `--checks requirements.json`. Read `agentcad docs check-spec` for its
+  declaration schema and inherited repair requirements.
+- To inspect an experiment before replacing the accepted model, use
+  add `--stage` to run or import, inspect `change.revision_id` with `agentcad view`,
+  then accept that saved revision with `agentcad promote REVISION --idempotency-key KEY`.
+  Save the key before sending; reuse it for status or
+  retries. Read `agentcad docs promote` for staged results and recovery.
 - Declare structural intent when known, for example with
   `show_object(part, options={"expect_solids": 1})`. Use named parts and
   `floating: true` when separated bodies are intentional.
+- For a real run, save `--idempotency-key KEY` before sending so a lost response
+  can be recovered without executing CAD again. Repeat identical source/options,
+  or use `agentcad run --idempotency-key KEY --status` without the working script.
+  Use a new key for a repair or intended new build. See `agentcad docs run-retries`.
 
 Specification is complete when the result could be judged without relying on
 the same reasoning that constructs it. When a requirement cannot be checked
@@ -299,6 +320,31 @@ Before handoff, confirm:
 
 Export success only means a file was written. The STEP verdict does not certify
 STL, GLB, or OBJ bytes.
+
+## Share feedback
+
+When a modeling session reveals friction, a useful workaround, or something
+that worked particularly well, share it with the AgentCAD team:
+
+```bash
+agentcad feedback --template --output feedback.md
+# Fill in the report with your actual task and observations.
+agentcad feedback --file feedback.md
+```
+
+The template asks what you were trying to do, what happened, what you expected,
+and any evidence or workaround. Positive feedback and ideas are welcome too.
+No section is mandatory. Keep spontaneous mid-task notes easy:
+`agentcad feedback "your observation"` still works without filling in a form.
+
+Reports include recent command arguments/results, environment and friction
+signals. Review what you are sending. `--local-only` saves without uploading.
+The full bundle is saved locally before upload; file submissions return a
+compact JSON receipt with `bundle_file`, `remote`, `discord`, and `neon_row_id`.
+`status: "partial"` means upload was not confirmed and the local copy remains. A failed
+Discord notification after remote storage does not require resubmitting.
+`agentcad feedback` alone returns a JSON guide and sends nothing. Explicit
+`--template` without `--output` exports Markdown on stdout; `--file -` reads stdin.
 
 ## Script writing rules
 
@@ -636,3 +682,17 @@ def guide_fingerprint(runtime: str) -> str:
     """Short content hash identifying this package's rendered guide."""
     digest = hashlib.sha256(guide_body(runtime).encode("utf-8")).hexdigest()
     return digest[:12]
+
+
+def read_text_file(path: Path) -> str:
+    """Read UTF-8 or the legacy locale encoding without replacing characters.
+
+    Earlier releases wrote these files with the platform default encoding, so
+    non-UTF-8 files must use that locale, which can be cp1251, cp1252, or another
+    code page. Explicit 'locale' also works when Python's UTF-8 mode is enabled.
+    If neither encoding works, raise before an installer can overwrite notes.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return Path(path).read_text(encoding="locale")
