@@ -10,6 +10,7 @@ engine.
 from __future__ import annotations
 
 import warnings as _warnings
+import traceback
 from typing import Any
 
 from agentcad.runners import ExecutionResult
@@ -181,14 +182,18 @@ def execute(user_source: str, params: dict[str, Any] | None = None) -> Execution
             discovered_parameters=discovered,
             parameters=params or {},
             exception=f"Script execution failed: {e}",
+            traceback=traceback.format_exc(),
         )
 
     if not build_result.success:
+        error = build_result.exception
         return ExecutionResult(
             status="execution_error",
             discovered_parameters=discovered,
             parameters=params or {},
             exception=f"Script execution failed: {build_result.exception}",
+            traceback="".join(traceback.format_exception(type(error), error, error.__traceback__))
+            if isinstance(error, BaseException) else None,
         )
 
     if not build_result.results:

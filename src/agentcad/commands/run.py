@@ -1618,7 +1618,10 @@ def _run_impl(
     begin_run_change()
 
     # Pre-execution import/helper validation (before version allocation)
-    validation_errors = runner.validate(raw_source)
+    from agentcad.project_imports import script_imports
+    from agentcad.project import get_project
+    with script_imports(script_path, get_project().project_root):
+        validation_errors = runner.validate(raw_source)
     if validation_errors:
         _emit_run({
             "command": "run",
@@ -1671,7 +1674,7 @@ def _run_impl(
     # return it as script_output instead of letting it corrupt the JSON.
     from agentcad.native_io import capture_stdout
 
-    with capture_stdout() as script_stdout:
+    with script_imports(script_path, get_project().project_root), capture_stdout() as script_stdout:
         result = runner.execute(raw_source, parsed_params)
     if script_stdout.text:
         ctx.meta["run_script_output"] = _bounded_script_output(script_stdout.text)
@@ -1703,6 +1706,8 @@ def _run_impl(
         )
         if result.error_kind:
             guidance["error_kind"] = result.error_kind
+        if result.traceback:
+            guidance["traceback"] = result.traceback
         if dry_run:
             _emit_run({
                 "command": "run", "status": "error", "runtime": runtime_name,
