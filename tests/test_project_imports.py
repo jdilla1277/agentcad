@@ -93,3 +93,49 @@ def test_import_failure_restores_process_state(tmp_path):
             importlib.import_module("local_part")
     assert sys.path == path and sys.meta_path == finders
     assert "local_part" not in sys.modules
+
+
+@pytest.mark.parametrize("already_loaded", [False, True])
+def test_python_helper_named_like_stdlib_is_deferred_and_scoped(tmp_path, monkeypatch, already_loaded):
+    from agentcad.project_imports import script_imports
+    from agentcad.validate import validate_script
+    original = importlib.import_module("calendar")
+    if not already_loaded:
+        monkeypatch.delitem(sys.modules, "calendar")
+    marker = tmp_path / "executed.txt"
+    (tmp_path / "calendar.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('once')\ndef make_part(): return 12\n"
+    )
+    with script_imports(tmp_path / "model.py", tmp_path):
+        assert validate_script("from calendar import make_part\nshow_object(make_part())") == []
+        assert not marker.exists()
+        assert importlib.import_module("calendar").make_part() == 12
+    assert marker.read_text() == "once"
+    if already_loaded:
+        assert sys.modules["calendar"] is original
+    else:
+        assert "calendar" not in sys.modules
+
+
+def test_namespace_folder_does_not_reload_installed_regular_package(tmp_path, monkeypatch):
+    from agentcad.project_imports import script_imports
+    installed = tmp_path / "installed"
+    package = installed / "installed_fixture_pkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("VALUE = 12\n")
+    monkeypatch.syspath_prepend(str(installed))
+    original = importlib.import_module("installed_fixture_pkg")
+    project = tmp_path / "project"
+    (project / "installed_fixture_pkg").mkdir(parents=True)  # No __init__.py.
+    try:
+        with script_imports(project / "model.py", project):
+            assert importlib.import_module("installed_fixture_pkg") is original
+    finally:
+        sys.modules.pop("installed_fixture_pkg", None)
+
+
+def test_project_file_cannot_replace_builtin_module(tmp_path):
+    from agentcad.project_imports import script_imports
+    (tmp_path / "sys.py").write_text("raise AssertionError('must not replace built-in sys')\n")
+    with script_imports(tmp_path / "model.py", tmp_path):
+        assert importlib.import_module("sys") is sys

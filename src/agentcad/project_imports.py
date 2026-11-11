@@ -4,25 +4,48 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import importlib
 from importlib.abc import MetaPathFinder
-from importlib.machinery import PathFinder, SourceFileLoader
+from importlib.machinery import BuiltinImporter, FrozenImporter, PathFinder, SourceFileLoader
 from pathlib import Path
 import sys
 from threading import RLock
 
 _roots = ContextVar("agentcad_script_import_roots", default=())
+_names = ContextVar("agentcad_script_import_names", default=frozenset())
 _lock = RLock()
-_reserved = frozenset(sys.stdlib_module_names) | {"agentcad"}
 
 
 def is_local_import(name):
     """Locate local source without executing it during preflight validation."""
-    if name.split(".")[0] in _reserved:
+    if name.split(".")[0] not in _names.get():
         return False
     for root in _roots.get():
         path = root.joinpath(*name.split("."))
         if path.with_suffix(".py").is_file() or path.is_dir():
             return True
     return False
+
+
+def _local_spec(spec, roots):
+    if spec is None:
+        return False
+    paths = [spec.origin] if spec.origin else spec.submodule_search_locations or ()
+    return any(Path(path).is_relative_to(root) for path in paths for root in roots)
+
+
+def _local_names(roots):
+    """Only evict names Python would actually resolve inside this project."""
+    candidates = {
+        child.stem if child.suffix == ".py" else child.name
+        for root in roots for child in root.iterdir()
+        if child.suffix == ".py" or child.is_dir()
+    }
+    search = [str(root) for root in roots] + sys.path
+    return frozenset(
+        name for name in candidates if name.isidentifier() and name != "agentcad"
+        and BuiltinImporter.find_spec(name) is None
+        and FrozenImporter.find_spec(name) is None
+        and _local_spec(PathFinder.find_spec(name, search), roots)
+    )
 
 
 class _FreshSourceLoader(SourceFileLoader):
@@ -54,17 +77,13 @@ def script_imports(script, project_root):
     """
     roots = tuple(dict.fromkeys((Path(script).resolve().parent, Path(project_root).resolve())))
     with _lock:
-        names = {
-            child.stem if child.suffix == ".py" else child.name
-            for root in roots for child in root.iterdir()
-            if (child.suffix == ".py" or child.is_dir())
-        } - _reserved
-        names = {name for name in names if name.isidentifier()}
+        names = _local_names(roots)
         previous = {name: module for name, module in sys.modules.copy().items()
                     if name.split(".")[0] in names}
         path_before = sys.path[:]
         finder = _LocalSourceFinder()
         token = _roots.set(roots)
+        names_token = _names.set(names)
         for name in previous:
             sys.modules.pop(name, None)
         sys.path[:0] = [str(root) for root in roots]
@@ -80,4 +99,5 @@ def script_imports(script, project_root):
             sys.path[:] = path_before
             sys.meta_path.remove(finder)
             _roots.reset(token)
+            _names.reset(names_token)
             importlib.invalidate_caches()
