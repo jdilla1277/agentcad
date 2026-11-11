@@ -305,6 +305,8 @@ def compact_report(report):
             payload["media"].pop()
         elif payload["parts"]:
             payload["parts"].pop()
+        elif payload.get("next_actions"):
+            payload["next_actions"].pop()  # The compact inventory retrieval hint remains.
         else:
             raise ReportBudgetError("Text budget is too small for required identity, status and retrieval references; increase --text-budget.")
     payload["budget"]["estimated_text_tokens"] = _estimated_tokens(payload)

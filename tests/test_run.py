@@ -1556,7 +1556,7 @@ def test_run_fast_path_writes_core_ids_and_explicit_exports_without_visuals(
 
         result = runner.invoke(cli, [
             "run", "script.py", "--output", "fast", "--no-preview",
-            "--no-diff", "--no-view", "--export", "stl", "--no-daemon",
+            "--no-diff", "--no-view", "--export", "stl", "--no-daemon", "--experimental-inspect",
         ])
 
     assert result.exit_code == 0, result.output
