@@ -379,7 +379,7 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 Keep credentials in a password manager, outside project files and agent prompts.
 
 For the local cloud CLI, install
-`pip install 'agentcad[cloud]==0.7.2'` (also included in `agentcad[mcp]`),
+`pip install 'agentcad[cloud]==0.7.3'` (also included in `agentcad[mcp]`),
 as shown in the guide above:
 
 ```bash
@@ -417,7 +417,7 @@ Apache License 2.0. See [LICENSE](LICENSE).
 
 If your agent struggles, run `agentcad feedback "what happened"` to capture a friction log.
 
-For a detailed session report, guided feedback is prepared for the next release:
+For a detailed session report, save and fill in a guided feedback template:
 
 ```bash
 agentcad feedback --template --output feedback.md

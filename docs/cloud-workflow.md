@@ -64,7 +64,7 @@ Python 3.12:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'agentcad[mcp]==0.7.2'
+.venv/bin/python -m pip install 'agentcad[mcp]==0.7.3'
 .venv/bin/agentcad cloud --help
 ```
 
