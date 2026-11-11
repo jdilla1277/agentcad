@@ -358,7 +358,7 @@ def _minimum(payload):
         # full response. Avoid repeating its long local path in the same reply.
         if payload["response_snapshot"].get("retrieve"):
             payload["response_snapshot"].pop("path", None)
-        keep = {"report"}
+        keep = {"report", "retrieve"}
         if not payload.get("geometry_manifest"):
             keep.add("manifest")
         if report["media"]:

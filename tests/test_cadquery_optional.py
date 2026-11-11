@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import socket
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -363,15 +366,8 @@ class TestDaemonReporting:
         )
         assert server.handle_request({"type": "ping"})["cadquery_available"] is True
 
-    def test_status_propagates_cadquery_available(self, monkeypatch, tmp_path):
-        socket_path = tmp_path / "d.sock"
-        socket_path.write_text("")
-        pid_path = tmp_path / "d.pid"
-
-        monkeypatch.setattr(
-            daemon_mod, "_read_pid_metadata",
-            lambda _p: {"pid": 4242, "instance_id": "abc"},
-        )
+    @pytest.mark.skipif(not daemon_mod.daemon_supported(), reason="POSIX daemon")
+    def test_status_propagates_cadquery_available(self, monkeypatch):
         monkeypatch.setattr(daemon_mod, "_pid_alive", lambda _pid: True)
         monkeypatch.setattr(
             daemon_mod, "_send_request_with_peer",
@@ -387,11 +383,21 @@ class TestDaemonReporting:
             ),
         )
 
-        status = daemon_mod.daemon_status(
-            socket_path=str(socket_path), pid_path=str(pid_path)
-        )
-        assert status["running"] is True
-        assert status["cadquery_available"] is False
+        # A real private endpoint keeps this reporting test compatible with
+        # the same ownership/type checks applied to actual daemon state.
+        # Use a short directory to stay within macOS's UNIX socket limit.
+        with tempfile.TemporaryDirectory(prefix="acd-opt-", dir="/tmp") as directory:
+            socket_path = Path(directory) / "d.sock"
+            pid_path = Path(directory) / "d.pid"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
+                endpoint.bind(str(socket_path))
+                os.chmod(socket_path, 0o600)
+                daemon_mod._write_pid_metadata(pid_path, pid=4242, instance_id="abc")
+                status = daemon_mod.daemon_status(
+                    socket_path=str(socket_path), pid_path=str(pid_path)
+                )
+                assert status["running"] is True
+                assert status["cadquery_available"] is False
 
 
 # ---------- docs / help never imply CadQuery ships by default ----------
