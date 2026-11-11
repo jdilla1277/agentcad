@@ -22,9 +22,9 @@ cwd_option = click.option("--cwd", type=click.Path(file_okay=False), help="Resol
 
 @click.group()
 def cloud():
-    """Use hosted CAD projects with an API URL and issued credentials.
+    """Use hosted CAD projects with a connected CLI or issued pilot credentials.
 
-    Set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the
+    Run agentcad account connect and approve in your browser, or set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the
     process environment. See agentcad docs cloud. No local project is needed.
     """
 
