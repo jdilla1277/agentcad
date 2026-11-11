@@ -57,7 +57,7 @@ def test_complete_cli_mcp_report_budgets_and_saved_full_retrieval(runner, isolat
     mcp = asyncio.run(server.mcp.call_tool("inspect", {**({
         "file": str(step), "cwd": str(isolated_dir), "report": True, "response_text_budget": 3000,
         "response_budget": 5500, "image_budget": 2500, "vision_profile": {"name": "host", "tokens_per_image": 1000},
-    }), "experimental_inspect": True}))
+    })}))
     assert isinstance(mcp, CallToolResult)
     actual = mcp.structuredContent
     _assert_budget(actual)
@@ -213,7 +213,7 @@ def test_mcp_attachment_failure_remains_bounded_and_successful(isolated_dir, mon
         return result
 
     monkeypatch.setattr(server, "_invoke", tamper)
-    result = _payload(server.import_cad(str(REAL), str(isolated_dir), experimental_inspect=True, initialize=True, view=False, diff=False,
+    result = _payload(server.import_cad(str(REAL), str(isolated_dir), initialize=True, view=False, diff=False,
                               max_images=1, response_text_budget=6000,
                               response_budget=8000, vision_profile={"name": "host", "tokens_per_image": 1000}))
     assert isinstance(result, dict)
@@ -263,7 +263,7 @@ def _assert_failed_snapshot(runner, cwd, response, status):
         "file": snapshot["baseline"], "cwd": str(cwd), "report": True,
         "build_dir": snapshot["build_root"], "response_snapshot": snapshot["id"],
         "response_text_budget": 6000, "image_budget": 0,
-    }), "experimental_inspect": True}))
+    })}))
     payload = _payload(result)
     assert payload["_exit_code"] == 1 and payload["status"] == status
 
@@ -359,7 +359,7 @@ def test_registered_inspect_rejects_unknown_budget_fields_before_execution(isola
     monkeypatch.setattr(server, "_invoke", lambda *a, **kw: pytest.fail("Unknown budget option executed inspection"))
     with pytest.raises(ValueError, match="Invalid inspect arguments"):
         asyncio.run(server.mcp.call_tool("inspect", {**({"file": "missing.step", "cwd": str(isolated_dir),
-                                                     "report": True, "response_buget": 1000}), "experimental_inspect": True}))
+                                                     "report": True, "response_buget": 1000})}))
 
 
 @pytest.mark.parametrize("prepare_images", [False, True])
@@ -369,7 +369,7 @@ def test_text_only_mcp_serializes_exactly_what_was_measured(isolated_dir, prepar
     response = asyncio.run(server.mcp.call_tool("inspect", {**({
         "file": str(step), "cwd": str(isolated_dir), "report": True,
         "report_images": prepare_images, "image_budget": 0, "response_text_budget": 3000,
-    }), "experimental_inspect": True}))
+    })}))
     assert isinstance(response, CallToolResult)
     assert [block.type for block in response.content] == ["text"]
     text = response.content[0].text

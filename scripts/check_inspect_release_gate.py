@@ -1,4 +1,4 @@
-"""Check the installed package's ordinary and experimental Inspect paths."""
+"""Check the installed package's default Milestone 2 Inspect contract."""
 
 import json
 from pathlib import Path
@@ -24,28 +24,29 @@ def check():
     with tempfile.TemporaryDirectory(prefix="inspect-release-") as directory:
         with runner.isolated_filesystem(temp_dir=directory):
             root = Path.cwd()
-            refused = invoke(["inspect", "missing.step", "--report", "--no-daemon"], 1)
-            assert refused["reason"] == "experimental_inspect_required"
-            assert not list(root.iterdir()), "Unacknowledged Inspect wrote project state"
-            invoke(["init", "--name", "release-gate", "--no-agent-setup"])
+            invoke(["init", "--name", "release-contract", "--no-agent-setup"])
             Path("part.py").write_text("show_object(Box(10,20,5))\n", encoding="utf-8")
             quiet = ["--no-preview", "--no-view", "--no-diff", "--no-daemon"]
-            ordinary = invoke(["run", "part.py", "--label", "ordinary", *quiet])
-            assert "geometry_manifest" not in ordinary and "experimental_inspect" not in ordinary
-            baseline = Path(ordinary["outputs"]["step"])
-            assert not baseline.with_name("geometry_manifest.json").exists()
-            assert not baseline.with_name("inspection").exists()
-            assert not (root / ".agentcad/inspection_delivery").exists()
-            opted = invoke(["run", "part.py", "--label", "opted", "--experimental-inspect", *quiet])
-            assert opted["experimental_inspect"]["status"] == "work_in_progress"
-            baseline = Path(opted["outputs"]["step"])
+            built = invoke(["run", "part.py", "--label", "source", *quiet])
+            assert built["geometry_manifest"] and "experimental_inspect" not in built
+            baseline = Path(built["outputs"]["step"])
             assert baseline.with_name("geometry_manifest.json").is_file()
-            denied = invoke(["inspect", str(baseline), "--id", "face_v2_1", "--no-daemon"], 1)
-            assert denied["reason"] == "experimental_inspect_required"
-            basic = invoke(["inspect", str(baseline), "--ids", "--no-daemon"])
-            assert "experimental_inspect" not in basic
-            assert "geometry_manifest" not in basic
-    print("Installed Inspect gate passed: standard CAD works, rich Inspect requires per-call acknowledgment.")
+            imported = invoke(["import", str(baseline), "--label", "baseline", "--max-images", "1", "--no-view", "--no-diff", "--no-daemon"])
+            assert imported["core"]["status"] == "success"
+            assert imported["inspection"]["media"] and imported["response_snapshot"]
+            assert "--experimental-inspect" not in imported["response_snapshot"]["retrieve"]
+            baseline = Path(imported["outputs"]["step"])
+            entity = invoke(["inspect", str(baseline), "--id", "face_v2_1", "--no-daemon"])
+            assert entity["entity"]["id"] == "face_v2_1" and entity["selector"]
+            image = invoke(["inspect", str(baseline), "--id", "face_v2_1", "--image", "--no-daemon"])
+            assert (root / image["image"]["png"]).is_file()
+            compatible = invoke(["inspect", str(baseline), "--id", "face_v2_1", "--experimental-inspect", "--no-daemon"])
+            assert compatible == entity
+            lean = invoke(["import", str(baseline), "--label", "lean", "--no-report", "--no-inspection-image", "--no-view", "--no-diff", "--no-daemon"])
+            assert "inspection" not in lean and lean["geometry_manifest"]
+            refused = invoke(["run", "part.py", "--label", "staged", "--stage", *quiet], 1)
+            assert refused["reason"] == "experimental_changes_required"
+    print("Installed Inspect contract passed: Milestone 2 is default-on; changes remain gated.")
 
 
 if __name__ == "__main__":

@@ -54,7 +54,7 @@ def test_report_snapshot_expiry_cli_mcp_and_fresh_recovery(runner, isolated_dir,
             "file": str(step), "cwd": str(child), "report": True,
             "response_snapshot": ref["id"], "build_dir": str(isolated_dir),
             "response_text_budget": 5000, "image_budget": 0,
-        }), "experimental_inspect": True})))
+        })})))
         assert mcp["_exit_code"] == 1 and mcp["reason"] == "response_snapshot_unavailable"
         assert mcp["next_actions"] == error["next_actions"]
     fresh, current = _invoke(runner, shlex.split(error["next_actions"][0])[1:])
@@ -100,7 +100,7 @@ def test_import_quota_eviction_and_oversized_retry_keep_accepted_geometry(runner
     mcp = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(REAL), "cwd": str(isolated_dir), "initialize": True, "view": False, "diff": False,
         "idempotency_key": "retention", "response_text_budget": 6000, "max_images": 1,
-    }), "experimental_inspect": True, "experimental_changes": True}))
+    }), "experimental_changes": True}))
     payload = _payload(mcp)
     assert payload["_exit_code"] == 0 and payload["delivery"]["status"] == "resource_limit"
     assert all(block.type == "text" for block in mcp.content)

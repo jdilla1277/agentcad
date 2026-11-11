@@ -15,6 +15,7 @@ from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
 from agentcad.commands.changes import changes
 from agentcad.commands.cloud import cloud
+from agentcad.commands.account import account
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
@@ -927,6 +928,9 @@ class _LoggingGroup(click.Group):
                                outputs={"step": None})
             click.echo(json.dumps(payload))
             sys.exit(1)
+        except click.exceptions.Exit:
+            # Help and explicit Click exits are control flow, not import failures.
+            raise
         except Exception as exc:
             # Import has no run-style outer recovery boundary. Once its source
             # is retained, preserve unexpected parser/metric failures as a
@@ -1008,7 +1012,7 @@ class _LoggingGroup(click.Group):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
-        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "changes"):
+        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "account", "changes"):
             return
         if ctx.meta.get("working_viewer_status"):
             return
@@ -1046,6 +1050,7 @@ def cli():
     """agentcad — CLI CAD tool for AI agents. Command results are JSON."""
 
 
+cli.add_command(account)
 cli.add_command(context)
 cli.add_command(check_spec)
 cli.add_command(changes)

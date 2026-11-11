@@ -78,8 +78,8 @@ from agentcad.experimental_inspect import option as inspect_option, enabled as i
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
-@click.option("--inspection-image/--no-inspection-image", default=True, help="WIP: prepare overall/ranked media with --experimental-inspect (on by default within opt-in). Retrieval remains available later.")
-@click.option("--report/--no-report", "show_report", default=True, help="WIP: include the compact report with --experimental-inspect (on by default within opt-in). --no-report keeps its saved bundle.")
+@click.option("--inspection-image/--no-inspection-image", default=True, help="Prepare overall and sampled inspection media (default on). Retrieve other IDs later.")
+@click.option("--report/--no-report", "show_report", default=True, help="Include the compact inspection report (default on). --no-report keeps its saved bundle.")
 @click.option("--max-images", type=click.IntRange(min=0, max=9), default=9, show_default=True, help="Maximum inspection images to prepare, including the overall sheet.")
 @click.option("--text-budget", type=click.IntRange(min=1), default=2000, show_default=True, help="Report preparation token allowance, separate from whole-response delivery limits.")
 @click.option("--idempotency-key", default=None, help="Reuse this key and identical source/options to recover an import without creating another version. Scoped to the selected build root.")
@@ -100,11 +100,10 @@ def import_cmd(file, label, init_flag, open_view, auto_diff, runtime, validation
     tracking. Every other command (run, diff, render, view) works on it
     just like a scripted version.
 
-    WIP enriched reports, images, ID manifests and jobs require an explicit
-    --experimental-inspect on every call. Ordinary imports skip that work.
+    Imports prepare typed geometry IDs, a compact inspection report and sampled
+    four-view images by default. Use --no-report or --no-inspection-image to
+    control delivery; complete inventories and per-ID views remain retrievable.
     """
-    if not inspect_enabled():
-        show_report = inspection_image = False
     # Try routing through daemon. Exits before returning if reachable.
     if inspection_background and inspection_wait_timeout is not None:
         raise click.UsageError("Choose --inspection-background or --inspection-wait-timeout.")
@@ -1007,8 +1006,8 @@ def _edit_scaffold(
             ).replace(
                 "# --- Edit here",
                 "# Typed IDs are bound to this baseline's geometry_manifest.json.\n"
-                "# WIP: each enriched Inspect call requires --experimental-inspect.\n"
-                "# Look up one record: agentcad inspect " + shlex.quote(version_dir + '/output.step') + f" --id face_{version_token}_1 --experimental-inspect\n"
+                "# Inspect IDs, images and code selectors refer to this saved baseline.\n"
+                "# Look up one record: agentcad inspect " + shlex.quote(version_dir + '/output.step') + f" --id face_{version_token}_1\n"
                 "# Select it with geometry.pick_face('face_v...') or geometry.pick_edge('edge_v...').\n"
                 "# Selectors address the original baseline; inspect each newly saved version.\n\n"
                 "# --- Edit here",
@@ -1018,8 +1017,6 @@ def _edit_scaffold(
             "agentcad run edit.py --label my_edit",
             "agentcad run edit.py --label my_edit --build-dir " + shlex.quote(build_dir),
         )
-    if geometry_manifest:
-        source = source.replace("agentcad run edit.py --label my_edit", "agentcad run edit.py --label my_edit --experimental-inspect")
     return source
 
 
