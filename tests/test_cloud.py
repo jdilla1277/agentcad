@@ -260,3 +260,37 @@ def test_poll_deadline_keeps_last_pending_result_but_does_not_hide_earlier_outag
             with pytest.raises(CloudError):
                 api.job(PROJECT, JOB, wait_seconds=60)
     assert len(calls) == 2 and calls[1] < 1
+
+
+def test_real_http_poll_timeout_at_wait_deadline_returns_the_observed_job():
+    """A slow final HTTP response must not discard an already observed cloud job."""
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    calls = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            calls.append(self.path)
+            if len(calls) > 1:
+                time.sleep(2)  # Exceeds the remaining part of a three-second wait.
+            body = json.dumps(queued()).encode()
+            try:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The deadline intentionally closes the second response.
+        def log_message(self, *_):
+            pass
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with CloudClient(f"http://127.0.0.1:{server.server_port}", KEY, SECRET) as api:
+            result = api.job(PROJECT, JOB, wait_seconds=3)
+        assert calls == [ROOT + f"/jobs/{JOB}"] * 2
+        assert result["status"] == "queued" and result["id"] == JOB
+        assert result["next_actions"] == [f"agentcad cloud job {PROJECT} {JOB} --wait"]
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=2)
