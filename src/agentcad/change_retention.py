@@ -141,6 +141,7 @@ def begin_change(*, command: str, label: str, source: bytes, source_name: str, m
             requirements=ctx.meta.get("change_requirements"),
             defer_checks=ctx.meta.get("change_defer_checks", False),
             promotion_mode="staged" if ctx.meta.get("change_stage") else "automatic",
+            **ctx.meta.get("change_recovery_begin", {}),
         )
     except Exception as exc:
         ctx.meta["change_start_error"] = str(exc)
@@ -151,13 +152,13 @@ def begin_change(*, command: str, label: str, source: bytes, source_name: str, m
                 "Fix the requirements JSON; policy changes need actor and rationale. See agentcad docs check-spec.",
             ) from exc
         raise ProjectError(
-            "change_retention_failed",
+            getattr(exc, "reason", "change_retention_failed"),
             f"Could not retain the change before execution: {exc}",
             "Check the selected build directory and retry; no new CAD result was accepted.",
         ) from exc
     ctx.meta["change_attempt"] = attempt
     ctx.meta["change_command"] = command
-    request = ctx.meta.get("import_request") or ctx.meta.get("run_request")
+    request = ctx.meta.get("change_recovery_request") or ctx.meta.get("import_request") or ctx.meta.get("run_request")
     if request is not None:
         request.bind_attempt(attempt)
     return attempt

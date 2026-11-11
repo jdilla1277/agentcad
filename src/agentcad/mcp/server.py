@@ -30,7 +30,7 @@ class AgentCADMCP(FastMCP):
                     "Explicit per-call WIP opt-in. Must be true for retained changes, declared checks, stage, promote and authored-run retry/status; default false."
                 )
                 tool.description += "\nWIP change workflows require experimental_changes=true on every call; ordinary CAD calls default to false."
-            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare"}:
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
@@ -41,7 +41,7 @@ class AgentCADMCP(FastMCP):
             raise ValueError(f"Invalid {name} arguments: experimental_changes must be a boolean.")
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare"}:
+        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -962,6 +962,60 @@ def changes_compare(baseline: str, revision: str, cwd: str, build_dir: str | Non
     missing geometry is explicit and never replaced by the accepted model.
     """
     return _invoke(_build_args(_experimental(["changes", "compare", baseline, revision], experimental_changes), build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_restore(idempotency_key: str, cwd: str, revision: str | None = None,
+                    label: str | None = None, status: bool = False,
+                    build_dir: str | None = None, experimental_changes: bool = False) -> dict:
+    """Restore verified saved source/model/artifacts as NEW STAGED work.
+
+    Supply revision (r_ ID, working, accepted), label and a unique key. Current
+    intended requirements apply; older geometry can fail them. No CAD executes,
+    accepted model/history is unchanged. Copied review assets are historical;
+    use view on the returned revision for a fresh review. Retry identical inputs
+    with the same key. status=true needs only the key/cwd/build_dir and reads
+    the original result without executing, selecting or checking again.
+    """
+    args = _experimental(["changes", "restore"], experimental_changes)
+    if revision is not None:
+        args.append(revision)
+    args.extend(["--idempotency-key", idempotency_key])
+    if label is not None:
+        args.extend(["--label", label])
+    if status:
+        args.append("--status")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_repair(idempotency_key: str, cwd: str, revision: str | None = None,
+                   source: str | None = None, label: str | None = None,
+                   params: str | None = None, status: bool = False,
+                   build_dir: str | None = None, experimental_changes: bool = False) -> dict:
+    """Execute edited Python CAD source as NEW STAGED work linked to a revision.
+
+    Supply revision, source, label and a unique key. Inherits saved runtime and
+    parameter overrides, plus current intended requirements. params optionally
+    replaces pinned overrides using key=value,key2=value2 (empty string clears). Never accepts the result;
+    review, then explicitly promote. Imported CAD supports restore only.
+    Identical retry/key replays; changed inputs need a new key. status=true
+    accepts only the key/cwd/build_dir, works without source, and never executes
+    source or changes selection. Interrupted requests never automatically rerun.
+    """
+    args = _experimental(["changes", "repair"], experimental_changes)
+    if revision is not None:
+        args.append(revision)
+    if source is not None:
+        args.append(source)
+    args.extend(["--idempotency-key", idempotency_key])
+    if label is not None:
+        args.extend(["--label", label])
+    if params is not None:
+        args.extend(["--params", params])
+    if status:
+        args.append("--status")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()

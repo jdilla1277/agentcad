@@ -298,8 +298,10 @@ def project_options(function):
             "feedback",
         } or (name == "diff" and kwargs.get("visual")) or (
             name == "inspect" and (kwargs.get("with_image") or kwargs.get("with_report"))
-        ) or (name == "check-spec" and kwargs.get("complete"))
-        if kwargs.get("dry_run") or (name == "run" and kwargs.get("request_status")):
+        ) or (name == "check-spec" and kwargs.get("complete")) or (
+            name in {"restore", "repair"} and not kwargs.get("request_status")
+        )
+        if kwargs.get("dry_run") or (name in {"run", "restore", "repair"} and kwargs.get("request_status")):
             writes = False
             ctx.meta["project_dry_run"] = True
         if name in {"run", "context", "recover", "parts"} or (

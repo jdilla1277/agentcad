@@ -520,6 +520,8 @@ class _InvocationOutput:
                         from agentcad.change_retention import attach_change
 
                         payload = attach_change(payload)
+                        from agentcad.change_recovery import finish_response as finish_recovery
+                        payload = finish_recovery(payload)
                         from agentcad.experimental_changes import present
                         payload = present(payload)
                         if payload.get("command") == "import":

@@ -223,6 +223,7 @@ class ChangeHistory:
             "source": self._artifact(request["source"]),
             "geometry": self._artifact(geometry[0]) if geometry else None,
             "model": request["model"],
+            **({"recovery": request["recovery"]} if request.get("recovery") else {}),
             "policy": saved["policy"] or request.get("check_policy"),
             "checks": self._checks(saved, checked),
             "metrics": core.get("metrics"),
