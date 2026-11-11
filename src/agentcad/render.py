@@ -472,7 +472,7 @@ def render_geometry_sheet(shape, output_path, *, annotations, dimensions, title,
                     projections.append({"id": label, "view": name, "point": annotation["point"],
                                         "pixel": endpoint, "label_box": [lx, ly, lx + text_width, ly + 21]})
                 draw.line([(x0, y0), (x0, y0 + height)], fill=(180, 180, 180))
-        draw.text((16, 999), "Exact measurements and complete inventory: geometry_manifest.json | Request another ID with inspect --id ID --image",
+        draw.text((16, 999), "WIP | Next: agentcad inspect FILE --id ID --image --experimental-inspect | Inventory: geometry_manifest.json",
                   font=_image_label_font(13), fill=(25, 25, 25))
         output.save(output_path)
     finally:

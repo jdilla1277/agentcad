@@ -64,6 +64,14 @@ stage whose assumptions were wrong, then build and validate again.
 
 Understand the available evidence before writing geometry.
 
+Enriched Inspect is work in progress. On every CLI call, use
+`--experimental-inspect` for typed IDs, reports, highlighted images, inspection
+jobs and artifact retrieval; local MCP uses `experimental_inspect=true`.
+Ordinary import/run and basic `inspect --ids` stay available without it.
+No environment/project setting or previous request enables the workflow.
+Opted-in replies identify `experimental_inspect.status=work_in_progress`.
+Copy generated follow-up actions so the next call carries acknowledgment too.
+
 - For generation, inspect every supplied drawing, image, and requirement. Note
   units, views, orientation, repeated features, and which dimensions are
   explicit versus inferred.

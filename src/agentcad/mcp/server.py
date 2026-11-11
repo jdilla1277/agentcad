@@ -22,6 +22,9 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
+            if "experimental_inspect" in tool.inputSchema.get("properties", {}):
+                tool.inputSchema["properties"]["experimental_inspect"]["description"] = "Explicit per-call WIP opt-in for enriched Inspect/import workflows; default false."
+                tool.description += "\nWIP enriched Inspect requires experimental_inspect=true on every call; ordinary CAD operations default to false."
             if "experimental_changes" in tool.inputSchema.get("properties", {}):
                 tool.inputSchema["properties"]["experimental_changes"]["description"] = (
                     "Explicit per-call WIP opt-in. Must be true for retained changes, declared checks, stage, promote and authored-run retry/status; default false."
@@ -32,6 +35,8 @@ class AgentCADMCP(FastMCP):
         return tools
 
     async def call_tool(self, name, arguments):
+        if arguments and "experimental_inspect" in arguments and type(arguments["experimental_inspect"]) is not bool:
+            raise ValueError(f"Invalid {name} arguments: experimental_inspect must be a boolean.")
         if arguments and "experimental_changes" in arguments and type(arguments["experimental_changes"]) is not bool:
             raise ValueError(f"Invalid {name} arguments: experimental_changes must be a boolean.")
         # FastMCP otherwise drops unknown arguments before calling a tool.
@@ -350,8 +355,8 @@ def import_cad(
     validation_profile: Literal["deliverable", "kernel"] = "deliverable",
     view: bool = True,
     diff: bool = True,
-    report: bool = True,
-    report_images: bool = True,
+    report: bool | None = None,
+    report_images: bool | None = None,
     max_images: int = 9,
     text_budget: int = 2000,
     build_dir: str | None = None,
@@ -368,15 +373,19 @@ def import_cad(
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
     full_response: bool = False,
+    experimental_inspect: bool = False,
 ) -> Any:
-    """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
+    """Import a local STEP/STP/BREP baseline; enriched inspection is WIP.
 
     file and cwd refer to the MCP execution filesystem. No cloud account is
     needed; cloud_import uploads to a hosted project instead. initialize=True
     maps to CLI --init and can create the selected project/build root. New
     projects default to build123d; runtime only pins a newly initialized project.
 
-    Default: complete CLI JSON limited to 2000 estimated text tokens, including
+    WIP: experimental_inspect=True is required on every enriched call.
+    Ordinary imports skip Inspect enrichment. report/report_images=None use
+    the opted-in defaults; explicit True requests require acknowledgment.
+    With opt-in: complete CLI JSON limited to 2000 estimated text tokens, including
     import/job metadata, with nested inspection, a delivery audit and full saved
     response_snapshot retrieval. Includes quality, dimensions, saved inventories
     and up to nine actual PNG image blocks (overall + up to four part/four raw
@@ -440,6 +449,12 @@ def import_cad(
     optional inspection media can be prepared later with inspect.
     """
     args = _experimental(["import", file], experimental_changes)
+    if experimental_inspect:
+        args.append("--experimental-inspect")
+    if report is True:
+        args.append("--report")
+    if report_images is True:
+        args.append("--inspection-image")
     if full_response:
         args.append("--full-response")
     if idempotency_key is not None:
@@ -455,11 +470,14 @@ def import_cad(
         args.append("--no-view")
     if not diff:
         args.append("--no-diff")
-    if not report:
+    if report is False:
         args.append("--no-report")
-    if not report_images:
+    if report_images is False:
         args.append("--no-inspection-image")
-    args.extend(["--max-images", str(max_images), "--text-budget", str(text_budget)])
+    if experimental_inspect or max_images != 9:
+        args.extend(["--max-images", str(max_images)])
+    if experimental_inspect or text_budget != 2000:
+        args.extend(["--text-budget", str(text_budget)])
     if checks_file is not None:
         args.extend(["--checks", checks_file])
     if defer_checks:
@@ -497,13 +515,15 @@ def run(
     defer_checks: bool = False,
     stage: bool = False,
     idempotency_key: str | None = None,
+    experimental_inspect: bool = False,
     experimental_changes: bool = False,
 ) -> dict:
     """Execute a build123d script and produce a versioned STEP file with metrics.
 
     New projects use build123d. Existing CadQuery compatibility projects follow
     the runtime pinned in their agentcad.json.
-    Saved STEP versions also issue version-local geometry IDs. Use inspect
+    With experimental_inspect=True, saved STEP versions issue typed geometry IDs.
+    Each enriched inspect call also needs that explicit per-call opt-in. Use inspect
     with report=True or entity_id to inspect the result without re-importing.
     Reports/images are prepared on request; dry runs do not issue IDs.
 
@@ -539,6 +559,8 @@ def run(
             fast path.
     """
     args = _experimental(["run", script], experimental_changes)
+    if experimental_inspect:
+        args.append("--experimental-inspect")
     if output is not None:
         args.extend(["--label", output])
     if render:
@@ -568,14 +590,17 @@ def run(
 
 @mcp.tool()
 def run_status(idempotency_key: str, cwd: str, build_dir: str | None = None,
-               experimental_changes: bool = False) -> dict:
+               experimental_inspect: bool = False, experimental_changes: bool = False) -> dict:
     """Read the original authored run by key without executing source or selecting work.
 
     Works after the working script is edited or removed. Returned artifacts and
     check results belong to the original run; they may differ from current work.
     In-progress or interrupted results never authorize an automatic second run.
     """
-    return _invoke(_build_args(_experimental(["run", "--idempotency-key", idempotency_key, "--status"], experimental_changes), build_dir), cwd=cwd)
+    args = _experimental(["run", "--idempotency-key", idempotency_key, "--status"], experimental_changes)
+    if experimental_inspect:
+        args.append("--experimental-inspect")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
@@ -714,8 +739,12 @@ def inspect(
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
     full_response: bool = False,
+    experimental_inspect: bool = False,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
+
+    WIP: typed IDs, images, reports, jobs, snapshots and byte retrieval require
+    experimental_inspect=True on every call; ordinary numeric topology does not.
 
     Args:
         file: Path to the STEP file.
@@ -774,6 +803,8 @@ def inspect(
             combine with caller budgets. Harmless for already-unbounded ID lookups.
     """
     args = ["inspect", file]
+    if experimental_inspect:
+        args.append("--experimental-inspect")
     if artifact is not None:
         args.extend(["--artifact", artifact])
     if artifact_offset:

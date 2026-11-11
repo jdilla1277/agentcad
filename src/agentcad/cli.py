@@ -531,7 +531,8 @@ class _InvocationOutput:
                             from agentcad.run_requests import finish_response
                             payload = finish_response(payload)
                         from agentcad.inspection_delivery import apply_delivery
-                        formatted = format_response(payload, layout)
+                        from agentcad.experimental_inspect import present
+                        formatted = present(format_response(payload, layout))
                         if self.ctx.meta.get("inspection_delivery_policy") is not None:
                             # Presentation may omit viewer fields; lifecycle
                             # decisions must still use the complete outcome.

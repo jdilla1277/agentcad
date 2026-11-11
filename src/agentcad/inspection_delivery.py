@@ -76,6 +76,7 @@ def delivery_options(function):
         except ValueError as exc:
             raise ProjectError("invalid_delivery_budget", str(exc), "Use agentcad docs editing for inspection budget controls.") from exc
         ctx = click.get_current_context()
+        from agentcad.experimental_inspect import enabled
         eligible = ctx.command.name == "import" or ctx.command.name == "inspect" and kwargs.get("with_report")
         if full_response and policy is not None:
             raise click.UsageError("--full-response cannot be combined with caller delivery budgets.")
@@ -85,7 +86,7 @@ def delivery_options(function):
             ctx.meta["inspection_delivery_full_response"] = True
         # Historical retrieval expands the recorded response unless a caller
         # explicitly requests a new bounded projection of that same snapshot.
-        if policy is None and eligible and not full_response and not kwargs.get("response_snapshot"):
+        if policy is None and eligible and enabled() and not full_response and not kwargs.get("response_snapshot"):
             policy = {}
         if policy is None:
             return function(*args, **kwargs)
@@ -115,6 +116,8 @@ def append_options(args, values):
 
 
 def forward_options(args):
+    from agentcad.experimental_inspect import forward
+    forward(args)
     if click.get_current_context().meta.get("inspection_delivery_full_response"):
         args.append("--full-response")
     return append_options(args, click.get_current_context().meta.get("inspection_delivery_policy"))
@@ -195,6 +198,8 @@ def save_snapshot(payload, layout, ctx):
     reference = SnapshotStore(layout).publish(body)
     reference["retrieve"] = shlex.join(["agentcad", "inspect", baseline, "--report", "--response-snapshot", reference["id"],
                                        "--build-dir", str(layout.build_root)])
+    from agentcad.experimental_inspect import present
+    reference = present({"response_snapshot": reference})["response_snapshot"]
     return reference
 
 
@@ -208,6 +213,8 @@ def read_snapshot(snapshot_id, file, layout):
     ctx = click.get_current_context()
     reference["retrieve"] = shlex.join(["agentcad", "inspect", body["baseline"], "--report", "--response-snapshot", snapshot_id,
                                        "--build-dir", str(layout.build_root)])
+    from agentcad.experimental_inspect import present
+    reference = present({"response_snapshot": reference})["response_snapshot"]
     ctx.meta["inspection_delivery_snapshot"] = reference
     materialized = deepcopy(body["payload"])
     original_report = _report(materialized)
@@ -396,7 +403,7 @@ def constrain(payload, requested, reference, *, delivered=True):
         # outside that scope so two self-referential estimates cannot drift.
         outer = {key: result.pop(key) for key in (
             "_exit_code", "via", "project_root", "build_root", "build_root_source", "response_snapshot",
-            "historical_response", "snapshot_command", "current_advanced", "recorded_current_advanced",
+            "historical_response", "snapshot_command", "current_advanced", "recorded_current_advanced", "experimental_inspect",
         ) if key in result}
         result = {"command": result["command"], "status": result["status"], "inspection": result, **outer}
     report = _report(result)
@@ -498,6 +505,8 @@ def apply_delivery(payload, layout, ctx):
 
 
 def finalize_mcp(payload, *, delivered=True):
+    from agentcad.experimental_inspect import present
+    payload = present(payload, acknowledged=payload.get("experimental_inspect", {}).get("enabled") is True)
     audit = payload.get("delivery", {})
     if audit.get("scope") == "complete_response" and "response_snapshot" in payload:
         return constrain(payload, audit["requested"], payload["response_snapshot"], delivered=delivered)

@@ -1,5 +1,6 @@
 """A saved edit remains inspectable/selectable without another import."""
 
+from tests.inspection_helpers import experimental_args
 import base64
 import hashlib
 import json
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 
 from agentcad.cli import cli
 from agentcad.geometry_manifest import load_geometry, read_manifest
@@ -19,7 +20,7 @@ FAST = ["--no-preview", "--no-diff", "--no-view", "--no-daemon"]
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, full_response_args(args))
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
@@ -133,7 +134,7 @@ def test_mcp_saved_run_and_inspection_match_cli_with_configured_paths(runner, is
     (isolated_dir / "agentcad.toml").write_text('build_dir = "artifacts with spaces"\n', encoding="utf-8")
     _json(runner, ["init"])
     (isolated_dir / "edit.py").write_text("show_object(Box(10,20,5))", encoding="utf-8")
-    saved = mcp_run(script="edit.py", cwd=str(isolated_dir), output="generated", preview=False, diff=False, view=False)
+    saved = mcp_run(experimental_inspect=True, script="edit.py", cwd=str(isolated_dir), output="generated", preview=False, diff=False, view=False)
     assert saved["_exit_code"] == 0
     step = Path(saved["outputs"]["step"])
     assert step.is_absolute()
@@ -141,7 +142,7 @@ def test_mcp_saved_run_and_inspection_match_cli_with_configured_paths(runner, is
     assert Path(saved["outputs"]["geometry_manifest"]).is_file()
     assert saved["geometry_manifest"]["manifest_id"] == read_manifest(step)["manifest_id"]
     cli_report = _json(runner, ["inspect", str(step), "--report", "--max-images", "1"])
-    mcp_report = mcp_inspect(file=str(step), cwd=str(isolated_dir), report=True, max_images=1, full_response=True)
+    mcp_report = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, max_images=1, full_response=True)
     assert isinstance(mcp_report, CallToolResult)
     assert mcp_report.structuredContent.pop("_exit_code") == 0
     assert mcp_report.structuredContent == cli_report
@@ -149,7 +150,7 @@ def test_mcp_saved_run_and_inspection_match_cli_with_configured_paths(runner, is
     assert base64.b64decode(mcp_report.content[1].data) == png.read_bytes()
     assert hashlib.sha256(png.read_bytes()).hexdigest() == cli_report["media"][0]["sha256"]
     face_id = saved["geometry_manifest"]["sample_ids"]["face"]
-    looked_up = mcp_inspect(file=str(step), cwd=str(isolated_dir), entity_id=face_id)
+    looked_up = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), entity_id=face_id)
     assert looked_up["entity"] == load_geometry(step).record(face_id)
 
 
@@ -178,7 +179,7 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         from agentcad.mcp.server import run as mcp_run
 
         (isolated_dir / "edit.py").write_text("show_object(Box(10,20,5))", encoding="utf-8")
-        saved = mcp_run(script="edit.py", cwd=str(isolated_dir), output="saved part", preview=False, diff=False, view=False)
+        saved = mcp_run(experimental_inspect=True, script="edit.py", cwd=str(isolated_dir), output="saved part", preview=False, diff=False, view=False)
         assert saved["_exit_code"] == 0
     assert saved["status"] == saved["core"]["status"] == "success"
     assert saved["artifacts"]["geometry_manifest"]["status"] == ("failed" if failure == "exception" else "timeout")
@@ -194,6 +195,8 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         assert "typed-ID inventory timed out" in saved["suggestion"]
         assert "inspect --ids" in saved["suggestion"]
         action = shlex.split(saved["next_actions"][0])
+        assert "--experimental-inspect" in action
+        action.remove("--experimental-inspect")
         assert action[:2] == ["agentcad", "inspect"]
         assert action[2] == saved["outputs"]["step"]
         assert "--ids" in action
@@ -205,7 +208,7 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         assert legacy["faces"] and all("object_id" not in face for face in legacy["faces"])
         assert Path(saved["outputs"]["step"]).read_bytes() == step_bytes
         assert (build / "agentcad.json").read_bytes() == history
-    failed_lookup = runner.invoke(cli, full_response_args(["inspect", saved["outputs"]["step"], "--id", "face_v1_1"]))
+    failed_lookup = runner.invoke(cli, experimental_args(full_response_args(["inspect", saved["outputs"]["step"], "--id", "face_v1_1"])))
     assert failed_lookup.exit_code == 1
     assert not Path(saved["outputs"]["step"]).with_name("geometry_manifest.json").exists()
 
@@ -237,10 +240,10 @@ def test_dry_invalid_and_failed_runs_do_not_issue_ids(runner, isolated_dir, monk
     dry = _save(runner, isolated_dir, "show_object(Box(10,20,5))", extra=["--dry-run"])
     assert dry["artifact_created"] is False
     (isolated_dir / "edit.py").write_text("show_object(Box(10,20,5))\nraise RuntimeError('execution failed')", encoding="utf-8")
-    assert runner.invoke(cli, full_response_args(["run", "edit.py", "--label", "failed", *FAST])).exit_code == 1
+    assert runner.invoke(cli, experimental_args(full_response_args(["run", "edit.py", "--label", "failed", *FAST]))).exit_code == 1
     fixture = Path(__file__).parents[1] / "tests/fixtures/validation/open_shell.step"
     (isolated_dir / "edit.py").write_text(f"show_object(load_step_shape({str(fixture)!r}))", encoding="utf-8")
-    invalid = runner.invoke(cli, full_response_args(["run", "edit.py", "--label", "invalid", *FAST]))
+    invalid = runner.invoke(cli, experimental_args(full_response_args(["run", "edit.py", "--label", "invalid", *FAST])))
     assert invalid.exit_code == 1
     assert json.loads(invalid.stdout)["status"] == "invalid_geometry"
     assert not list(isolated_dir.rglob("geometry_manifest.json"))
