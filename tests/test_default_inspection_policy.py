@@ -35,7 +35,7 @@ def command(name):
     ('inspect', ['--report', '--response-snapshot', 'delivery_saved', '--response-text-budget', '4000'], True),
 ])
 def test_policy_selection(name, options, enabled):
-    result = CliRunner().invoke(command(name), ['supplier.step', '--experimental-inspect', *options])
+    result = CliRunner().invoke(command(name), ['supplier.step', *options])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data['enabled'] is enabled
@@ -44,7 +44,7 @@ def test_policy_selection(name, options, enabled):
     assert ('--full-response' in data['forwarded']) == ('--full-response' in options)
     if '--response-text-budget' in options:
         assert data['policy']['response_text_budget'] == 4000
-        assert data['forwarded'] == ['--experimental-inspect', '--response-text-budget', '4000']
+        assert data['forwarded'] == ['--response-text-budget', '4000']
     elif enabled:
         assert data['policy'] == {}
 
@@ -61,7 +61,7 @@ def test_incompatible_modes_are_explicit(name, options):
 
 
 def test_default_does_not_replace_the_commands_file_diagnostics():
-    result = CliRunner().invoke(command('import'), ['bad\0.step', '--experimental-inspect'])
+    result = CliRunner().invoke(command('import'), ['bad\0.step'])
     assert result.exit_code == 0
     assert json.loads(result.output)['argument'] == 'bad\0.step'
 

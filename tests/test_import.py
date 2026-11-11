@@ -12,7 +12,7 @@ from pathlib import Path
 import cadquery as cq
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import core_import_args as full_response_args
 from cadquery import exporters
 
 from agentcad import __version__

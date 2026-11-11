@@ -302,16 +302,13 @@ Add to `.mcp.json`:
 ```
 
 For local STEP/STP/BREP files, call `import_cad` with `file`, `cwd`, and
-`initialize=True` to start a project. Ordinary imports keep the standard CAD
-path. The enriched Inspect workflow is **WIP** and requires
-`experimental_inspect=True` on every MCP call, or `--experimental-inspect` on
-each CLI `import`, `run` or rich `inspect` call. No environment variable, project
-setting or earlier request enables it. Missing acknowledgment returns
-`experimental_inspect_required` before starting the requested work.
-
-With opt-in, the default response includes the import
+`initialize=True` to start a project. Imports prepare typed geometry IDs,
+measurements and a compact inspection report by default. No Inspect opt-in is
+required. The default response includes the import
 JSON and up to nine inspection PNG attachments. Use `report_images=False` for
-an image-free report or `report=False` to keep the bundle on disk. Follow the
+an image-free report or `report=False` to keep the bundle on disk. Image
+attachments are delivered to the MCP client; how they appear to the user depends
+on the client. Follow the
 returned IDs and paths with `inspect` and `run`. Local paths refer to the MCP
 execution filesystem. See `agentcad docs mcp` for controls.
 
@@ -338,14 +335,14 @@ stay unchanged. If required references cannot fit, `inspection_delivery` reports
 the omission and provides a retrieval action with a larger allowance.
 Deleting `.agentcad/import_requests` deletes retry protection for those keys.
 
-With Inspect opt-in, imports return a durable `inspection_job` and wait for inspection by
+Imports return a durable `inspection_job` and wait for inspection by
 default. Use `--inspection-background` or `--inspection-wait-timeout SECONDS`
 to return before analysis finishes. A wait deadline leaves the worker running;
 follow the returned status/wait/resume/cancel actions. These wait controls do
 not change import retry identity. See [inspection jobs](docs/inspection-jobs.md)
 for CLI/MCP examples, checkpoints and cancellation behavior.
 
-Opted-in import and `inspect --report` default to a 2,000-estimated-token limit for the
+Import and `inspect --report` default to a 2,000-estimated-token limit for the
 complete JSON response, with bounded image samples and a full-response retrieval
 action. `--full-response` opts out of whole-response compaction. Agents can supply `--context-window`, `--response-budget`,
 `--response-text-budget`, `--image-budget` and a caller-estimated

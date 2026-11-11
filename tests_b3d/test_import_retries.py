@@ -402,8 +402,7 @@ def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypa
     assert result.exit_code == 0 and payload["via"] == "daemon"
     forwarded = requests[0]["argv"]
     assert forwarded[forwarded.index("--idempotency-key") + 1] == "supplier:1"
-    assert "--experimental-inspect" in forwarded
-    forwarded = [item for item in forwarded if item != "--experimental-inspect"]
+    assert "--experimental-inspect" not in forwarded
     if declared_checks:
         assert forwarded[-4:] == ["--checks", str(checks), "--defer-checks", "--full-response"]
     assert not _requests(isolated_dir)
@@ -468,7 +467,7 @@ def test_cli_and_registered_mcp_share_retry_and_checked_images(runner, isolated_
         "view": False, "diff": False, "max_images": 1,
         "build_dir": "build files", "idempotency_key": "shared",
         "full_response": True,
-    }), "experimental_inspect": True}))
+    })}))
     assert isinstance(payload, CallToolResult) and len(payload.content) == 2
     replay = payload.structuredContent
     assert replay["idempotency"]["replayed"] and replay["_exit_code"] == 0
@@ -487,7 +486,7 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
         (isolated_dir / "agentcad.toml").write_text("build_dir = " + json.dumps(build_dir) + "\n", encoding="utf-8")
     options = dict(initialize=True, view=False, diff=False, max_images=1,
                    text_budget=text_budget, idempotency_key="subdir", build_dir=build_dir, label=label)
-    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), experimental_inspect=True, experimental_changes=True, **options, full_response=True)
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), experimental_changes=True, **options, full_response=True)
     first = first_result.structuredContent if isinstance(first_result, CallToolResult) else first_result
     assert first["status"] == "success" and "inspection" in first
     root = isolated_dir / build_dir if build_dir else isolated_dir
@@ -509,7 +508,7 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
         guard.setattr("agentcad.commands.import_cmd._import_impl", unexpected)
         guard.setattr("agentcad.inspection_report._analysis", unexpected)
         guard.setattr("agentcad.geometry_images.geometry_image", unexpected)
-        replay_result = server.import_cad(str(REAL_SOURCE), str(subdir), experimental_inspect=True, experimental_changes=True, **options, full_response=True)
+        replay_result = server.import_cad(str(REAL_SOURCE), str(subdir), experimental_changes=True, **options, full_response=True)
     replay = replay_result.structuredContent if isinstance(replay_result, CallToolResult) else replay_result
     assert replay["idempotency"]["replayed"] and replay["version"] == 1
     assert replay["change"] == first["change"]
@@ -563,7 +562,7 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
     from agentcad import inspection_report as reports
 
     options = dict(initialize=True, view=False, diff=False, max_images=1, idempotency_key="budget_failure")
-    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), experimental_inspect=True, experimental_changes=True, **options, full_response=True)
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), experimental_changes=True, **options, full_response=True)
     first = first_result.structuredContent
     step = isolated_dir / first["outputs"]["step"]
     cache = Path(first["idempotency"]["request"]).with_name("response.json")
@@ -579,7 +578,7 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
 
     with monkeypatch.context() as guard:
         guard.setattr(reports, "compact_report", too_small)
-        replay = server.import_cad(str(REAL_SOURCE), str(subdir), experimental_inspect=True, experimental_changes=True, **options, full_response=True)
+        replay = server.import_cad(str(REAL_SOURCE), str(subdir), experimental_changes=True, **options, full_response=True)
     assert isinstance(replay, dict) and replay["_exit_code"] == 0
     assert replay["status"] == replay["core"]["status"] == "success"
     assert "inspection" not in replay
@@ -597,7 +596,7 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
 
 @pytest.mark.parametrize("full_response", [False, True])
 @pytest.mark.parametrize("transport", ["cli", "mcp"])
-def test_wip_budget_overflow_preserves_committed_import(
+def test_minimum_report_budget_survives_default_delivery(
     runner, isolated_dir, monkeypatch, full_response, transport,
 ):
     from agentcad import inspection_report as reports
@@ -612,7 +611,7 @@ def test_wip_budget_overflow_preserves_committed_import(
             return result
         report = deepcopy(result["inspection"])
         # Locate the actual minimum for this report, independent of OS/path
-        # lengths. Preparation fits; only the later WIP retrieval field fails.
+        # lengths. The report must still fit after current-response presentation.
         low, high = 1, report["budget"]["text_tokens"]
         while low < high:
             mid = (low + high) // 2
@@ -625,10 +624,6 @@ def test_wip_budget_overflow_preserves_committed_import(
                 high = mid
         report["budget"]["text_tokens"] = low
         report = reports.compact_report(report)
-        decorated = deepcopy(report)
-        decorated["inventory"]["retrieve"]["experimental_inspect"] = True
-        with pytest.raises(reports.ReportBudgetError):
-            reports.compact_report(decorated)
         boundary.update(tokens=low, manifest_id=report["manifest_id"])
         result["inspection"] = report
         return result
@@ -636,7 +631,7 @@ def test_wip_budget_overflow_preserves_committed_import(
     with monkeypatch.context() as guard:
         guard.setattr(cli_mod, "format_response", format_at_budget_boundary)
         if transport == "cli":
-            args = ["import", str(REAL_SOURCE), "--label", "audit", "--experimental-inspect",
+            args = ["import", str(REAL_SOURCE), "--label", "audit",
                     "--max-images", "0", "--no-view", "--no-diff", "--no-daemon"]
             if full_response:
                 args.append("--full-response")
@@ -646,19 +641,18 @@ def test_wip_budget_overflow_preserves_committed_import(
         else:
             response = asyncio.run(server.mcp.call_tool("import_cad", {
                 "file": str(REAL_SOURCE), "cwd": str(isolated_dir), "label": "audit",
-                "experimental_inspect": True, "max_images": 0, "view": False,
+                "max_images": 0, "view": False,
                 "diff": False, "full_response": full_response,
             }))
             result = response.structuredContent if isinstance(response, CallToolResult) else json.loads(response[0].text)
             assert result["_exit_code"] == 0
 
     assert result["status"] == result["core"]["status"] == "success"
-    assert result["version"] == 1 and "inspection" not in result
+    assert result["version"] == 1 and "inspection" in result
+    assert result["inspection"]["budget"]["text_tokens"] == boundary["tokens"]
+    assert result["inspection"]["inventory"]["retrieve"] == {"artifact": "manifest"}
     step = isolated_dir / result["outputs"]["step"]
     assert step.is_file()
-    omission = result["inspection_delivery"]
-    assert omission["status"] == "omitted" and omission["reason"] == "text_budget_too_small"
-    assert omission["text_tokens"] == boundary["tokens"]
     reports_before = list(step.parent.glob("inspection/report_*.json"))
     assert reports_before
     protected = [step, step.with_name("geometry_manifest.json"), *reports_before,
@@ -666,13 +660,7 @@ def test_wip_budget_overflow_preserves_committed_import(
                  *step.parent.glob("inspection/jobs/*/result_*.json"),
                  step.with_name("meta.json"), isolated_dir / "agentcad.json"]
     before = {path: path.read_bytes() for path in protected}
-    action = shlex.split(omission["next_actions"][0])
-    assert "--experimental-inspect" in action
-    assert int(action[action.index("--text-budget") + 1]) > boundary["tokens"]
-    child = isolated_dir / "caller"
-    child.mkdir()
-    monkeypatch.chdir(child)
-    recovery = runner.invoke(cli, [*action[1:], "--no-daemon", "--full-response"])
+    recovery = runner.invoke(cli, ["inspect", str(step), "--report", "--max-images", "0", "--no-daemon", "--full-response"])
     assert recovery.exit_code == 0, (recovery.stdout, recovery.exception)
     assert json.loads(recovery.stdout)["manifest_id"] == boundary["manifest_id"]
     assert {path: path.read_bytes() for path in protected} == before
@@ -724,7 +712,7 @@ elif mode == "hold":
         return original(*a, **kw)
     command._export_step = export
 
-cli.main(args=["import", source, "--experimental-inspect", "--experimental-changes", "--init", "--no-view", "--no-diff",
+cli.main(args=["import", source, "--experimental-changes", "--init", "--no-view", "--no-diff",
                "--no-daemon", "--no-inspection-image", "--idempotency-key", "process:1"])
 '''
 

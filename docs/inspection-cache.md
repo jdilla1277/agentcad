@@ -1,11 +1,7 @@
 # Retaining inspection reports and images
 
-**WIP — explicit opt-in required on every call.** Use `--experimental-inspect`
-on CLI `import`, `run` and enriched `inspect`, or `experimental_inspect=true`
-in local MCP. Ordinary import/build and basic numeric topology inspection stay
-available without this flag. No environment/project setting or previous call
-enables it. Opted-in replies identify `experimental_inspect.status=work_in_progress`;
-copy the generated flagged recovery/continuation actions.
+Import reports, typed geometry IDs, four-view images, jobs and artifact retrieval
+are available by default through the CLI and local MCP. No opt-in is required.
 
 Inspection analysis, image sheets, catalogues and completed job result payloads
 share a **512 MiB cache per selected build root**, with a **30-day** default age
@@ -49,8 +45,8 @@ fresh `inspect --report` or `inspect --id ID --image` to rebuild derived artifac
 against the same baseline and issued IDs.
 
 ```sh
-agentcad inspect --experimental-inspect v1_supplier/output.step --report
-agentcad inspect --experimental-inspect v1_supplier/output.step --id face_v1_1 --image
+agentcad inspect v1_supplier/output.step --report
+agentcad inspect v1_supplier/output.step --id face_v1_1 --image
 ```
 
 The fresh request creates current evidence. It does not recover an evicted
@@ -76,7 +72,7 @@ retry action. Corrupt protected checkpoint bytes require restoration before
 resumption; another request cannot overwrite that evidence.
 
 ```sh
-agentcad inspect --experimental-inspect v1_supplier/output.step --report --job RETURNED_JOB_ID \
+agentcad inspect v1_supplier/output.step --report --job RETURNED_JOB_ID \
   --job-action resume --build-dir /project/build
 ```
 

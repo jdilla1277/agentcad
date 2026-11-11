@@ -39,7 +39,7 @@ def test_cache_expiry_preserves_ids_and_expired_snapshot_images_are_not_replaced
     recovered = asyncio.run(server.mcp.call_tool('inspect', {**({
         'file': str(step), 'cwd': str(isolated_dir), 'report': True,
         'response_snapshot': report['response_snapshot']['id'], 'response_text_budget': 6000,
-}), "experimental_inspect": True}))
+})}))
     historical = _payload(recovered)
     assert historical['historical_response'] and historical['_exit_code'] == 1
     assert historical['status'] == 'error' and 'expired' in historical['image']['message']
@@ -78,7 +78,7 @@ def test_import_resource_limit_resumes_same_job_without_another_version(runner, 
     result = asyncio.run(server.mcp.call_tool('inspect', {**({
         'file': str(step), 'cwd': str(isolated_dir), 'report': True,
         'job_id': job['id'], 'job_action': 'wait', 'response_text_budget': 6000,
-}), "experimental_inspect": True}))
+})}))
     resumed = _payload(result)
     assert resumed['_exit_code'] == 0 and resumed['inspection_job']['status'] == 'complete', resumed
     assert resumed['inspection_job']['id'] == job['id']
@@ -222,7 +222,7 @@ def test_id_image_retention_and_mcp_record_agree(runner, isolated_dir):
     face = next(e['id'] for e in saved['entities'].values() if e['kind'] == 'face')
     result = asyncio.run(server.mcp.call_tool('inspect', {**({
         'file': str(step), 'cwd': str(isolated_dir), 'entity_id': face, 'image': True,
-    }), "experimental_inspect": True}))
+    })}))
     payload = _payload(result)
     assert payload['_exit_code'] == 0 and payload['entity']['id'] == face
     assert payload['image']['request']['object_id'] == face

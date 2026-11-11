@@ -23,8 +23,8 @@ class AgentCADMCP(FastMCP):
         tools = await super().list_tools()
         for tool in tools:
             if "experimental_inspect" in tool.inputSchema.get("properties", {}):
-                tool.inputSchema["properties"]["experimental_inspect"]["description"] = "Explicit per-call WIP opt-in for enriched Inspect/import workflows; default false."
-                tool.description += "\nWIP enriched Inspect requires experimental_inspect=true on every call; ordinary CAD operations default to false."
+                tool.inputSchema["properties"]["experimental_inspect"]["description"] = "Deprecated compatibility input; ignored. Milestone 2 import and Inspect features are available without opt-in."
+                tool.inputSchema["properties"]["experimental_inspect"]["deprecated"] = True
             if "experimental_changes" in tool.inputSchema.get("properties", {}):
                 tool.inputSchema["properties"]["experimental_changes"]["description"] = (
                     "Explicit per-call WIP opt-in. Must be true for retained changes, declared checks, stage, promote and authored-run retry/status; default false."
@@ -375,17 +375,16 @@ def import_cad(
     full_response: bool = False,
     experimental_inspect: bool = False,
 ) -> Any:
-    """Import a local STEP/STP/BREP baseline; enriched inspection is WIP.
+    """Import a local STEP/STP/BREP baseline with inspection images and measured IDs.
 
     file and cwd refer to the MCP execution filesystem. No cloud account is
     needed; cloud_import uploads to a hosted project instead. initialize=True
     maps to CLI --init and can create the selected project/build root. New
     projects default to build123d; runtime only pins a newly initialized project.
 
-    WIP: experimental_inspect=True is required on every enriched call.
-    Ordinary imports skip Inspect enrichment. report/report_images=None use
-    the opted-in defaults; explicit True requests require acknowledgment.
-    With opt-in: complete CLI JSON limited to 2000 estimated text tokens, including
+    Inspection is available by default; experimental_inspect is a deprecated,
+    ignored compatibility input. report/report_images=None use the defaults.
+    Complete CLI JSON is limited to 2000 estimated text tokens, including
     import/job metadata, with nested inspection, a delivery audit and full saved
     response_snapshot retrieval. Includes quality, dimensions, saved inventories
     and up to nine actual PNG image blocks (overall + up to four part/four raw
@@ -474,9 +473,9 @@ def import_cad(
         args.append("--no-report")
     if report_images is False:
         args.append("--no-inspection-image")
-    if experimental_inspect or max_images != 9:
+    if max_images != 9:
         args.extend(["--max-images", str(max_images)])
-    if experimental_inspect or text_budget != 2000:
+    if text_budget != 2000:
         args.extend(["--text-budget", str(text_budget)])
     if checks_file is not None:
         args.extend(["--checks", checks_file])
@@ -522,9 +521,8 @@ def run(
 
     New projects use build123d. Existing CadQuery compatibility projects follow
     the runtime pinned in their agentcad.json.
-    With experimental_inspect=True, saved STEP versions issue typed geometry IDs.
-    Each enriched inspect call also needs that explicit per-call opt-in. Use inspect
-    with report=True or entity_id to inspect the result without re-importing.
+    Saved STEP versions issue typed geometry IDs by default.
+    Use inspect with report=True or entity_id to inspect the result without re-importing.
     Reports/images are prepared on request; dry runs do not issue IDs.
 
     Args:
@@ -743,8 +741,8 @@ def inspect(
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
-    WIP: typed IDs, images, reports, jobs, snapshots and byte retrieval require
-    experimental_inspect=True on every call; ordinary numeric topology does not.
+    Typed IDs, images, reports, jobs, snapshots and artifact-byte retrieval are
+    available without opt-in. experimental_inspect is an ignored compatibility input.
 
     Args:
         file: Path to the STEP file.

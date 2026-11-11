@@ -1,11 +1,7 @@
 # Default budgets for inspection delivery
 
-**WIP — explicit opt-in required on every call.** Use `--experimental-inspect`
-on CLI `import`, `run` and enriched `inspect`, or `experimental_inspect=true`
-in local MCP. Ordinary import/build and basic numeric topology inspection stay
-available without this flag. No environment/project setting or previous call
-enables it. Opted-in replies identify `experimental_inspect.status=work_in_progress`;
-copy the generated flagged recovery/continuation actions.
+Import reports, typed geometry IDs, four-view images, jobs and artifact retrieval
+are available by default through the CLI and local MCP. No opt-in is required.
 
 Import and `inspect --report` bound the **complete JSON response** by default,
 including import metadata and job fields. With no context size supplied, the
@@ -27,12 +23,12 @@ value when more report detail is needed. `--no-report` still omits inline
 inspection while keeping bounded import status and saved artifact references.
 
 ```sh
-agentcad import --experimental-inspect supplier.step --init --idempotency-key supplier-001 \
+agentcad import supplier.step --init --idempotency-key supplier-001 \
   --context-window 128000 \
   --response-text-budget 3000 \
   --vision-profile '{"name":"my-host","tokens_per_image":1000}'
 
-agentcad inspect --experimental-inspect v1_supplier/output.step --report \
+agentcad inspect v1_supplier/output.step --report \
   --response-budget 5000 --image-budget 2000 \
   --vision-profile '{"name":"my-host","tokens_per_image":1000}'
 ```
@@ -97,7 +93,7 @@ Every bounded response references a complete pre-budget snapshot containing
 the original JSON and its original path base. Copy its exact retrieval action:
 
 ```sh
-agentcad inspect --experimental-inspect /project/v1_supplier/output.step --report \
+agentcad inspect /project/v1_supplier/output.step --report \
   --response-snapshot delivery_RETURNED_ID --build-dir /project
 ```
 

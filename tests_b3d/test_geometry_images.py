@@ -81,14 +81,14 @@ def test_unsampled_edge_image_cli_mcp_and_selector_agree(runner, isolated_dir):
     assert distance.Value() < 1e-6
     metadata = _assert_sheet(sheet)
     assert {p["id"] for p in metadata["projections"]} == {edge}
-    response = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), entity_id=edge, image=True)
+    response = mcp_inspect(file=str(step), cwd=str(isolated_dir), entity_id=edge, image=True)
     assert isinstance(response, CallToolResult)
     data = response.structuredContent
     assert data.pop("_exit_code") == 0
     assert data == actual
     assert base64.b64decode(response.content[1].data) == Path(sheet["png"]).read_bytes()
     # Exercise FastMCP's registered transport conversion, not only the Python function.
-    converted = asyncio.run(mcp.call_tool("inspect", {**({"file": str(step), "cwd": str(isolated_dir), "entity_id": edge, "image": True}), "experimental_inspect": True}))
+    converted = asyncio.run(mcp.call_tool("inspect", {**({"file": str(step), "cwd": str(isolated_dir), "entity_id": edge, "image": True})}))
     assert isinstance(converted, CallToolResult)
     assert [c.type for c in converted.content] == ["text", "image"]
 
