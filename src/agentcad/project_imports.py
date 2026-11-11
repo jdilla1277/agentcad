@@ -25,11 +25,16 @@ def is_local_import(name):
     return False
 
 
-def _local_spec(spec, roots):
+def _local_spec(spec, roots, name):
     if spec is None:
         return False
-    paths = [spec.origin] if spec.origin else spec.submodule_search_locations or ()
-    return any(Path(path).is_relative_to(root) for path in paths for root in roots)
+    for root in roots:
+        path = root.joinpath(*name.split("."))
+        if spec.origin and Path(spec.origin) == path.with_suffix(".py"):
+            return True
+        if any(Path(location) == path for location in spec.submodule_search_locations or ()):
+            return True
+    return False
 
 
 def _local_names(roots):
@@ -44,7 +49,7 @@ def _local_names(roots):
         name for name in candidates if name.isidentifier() and name != "agentcad"
         and BuiltinImporter.find_spec(name) is None
         and FrozenImporter.find_spec(name) is None
-        and _local_spec(PathFinder.find_spec(name, search), roots)
+        and _local_spec(PathFinder.find_spec(name, search), roots, name)
     )
 
 
@@ -61,7 +66,7 @@ class _LocalSourceFinder(MetaPathFinder):
             return None
         spec = PathFinder.find_spec(fullname, path)
         if (spec is not None and isinstance(spec.loader, SourceFileLoader)
-                and any(Path(spec.origin).is_relative_to(root) for root in _roots.get())):
+                and _local_spec(spec, _roots.get(), fullname)):
             spec.loader = _FreshSourceLoader(fullname, spec.origin)
             return spec
         return None
@@ -77,6 +82,7 @@ def script_imports(script, project_root):
     """
     roots = tuple(dict.fromkeys((Path(script).resolve().parent, Path(project_root).resolve())))
     with _lock:
+        importlib.invalidate_caches()
         names = _local_names(roots)
         previous = {name: module for name, module in sys.modules.copy().items()
                     if name.split(".")[0] in names}
@@ -88,7 +94,6 @@ def script_imports(script, project_root):
             sys.modules.pop(name, None)
         sys.path[:0] = [str(root) for root in roots]
         sys.meta_path.insert(0, finder)
-        importlib.invalidate_caches()
         try:
             yield
         finally:

@@ -117,15 +117,16 @@ def test_python_helper_named_like_stdlib_is_deferred_and_scoped(tmp_path, monkey
         assert "calendar" not in sys.modules
 
 
-def test_namespace_folder_does_not_reload_installed_regular_package(tmp_path, monkeypatch):
+@pytest.mark.parametrize("venv_in_project", [False, True])
+def test_namespace_folder_does_not_reload_installed_regular_package(tmp_path, monkeypatch, venv_in_project):
     from agentcad.project_imports import script_imports
-    installed = tmp_path / "installed"
+    project = tmp_path / "project"
+    installed = project / ".venv" / "site-packages" if venv_in_project else tmp_path / "installed"
     package = installed / "installed_fixture_pkg"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("VALUE = 12\n")
     monkeypatch.syspath_prepend(str(installed))
     original = importlib.import_module("installed_fixture_pkg")
-    project = tmp_path / "project"
     (project / "installed_fixture_pkg").mkdir(parents=True)  # No __init__.py.
     try:
         with script_imports(project / "model.py", project):
@@ -139,3 +140,25 @@ def test_project_file_cannot_replace_builtin_module(tmp_path):
     (tmp_path / "sys.py").write_text("raise AssertionError('must not replace built-in sys')\n")
     with script_imports(tmp_path / "model.py", tmp_path):
         assert importlib.import_module("sys") is sys
+
+
+def test_new_helper_invalidates_directory_cache_before_validation(tmp_path):
+    from agentcad.project_imports import script_imports
+    from agentcad.validate import validate_script
+    from importlib.machinery import PathFinder
+    import os
+    stamp = tmp_path.stat().st_mtime_ns
+    assert PathFinder.find_spec("new_helper_module", [str(tmp_path)]) is None
+    marker = tmp_path / "executed.txt"
+    (tmp_path / "new_helper_module.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('once')\ndef make_part(): return 12\n"
+    )
+    os.utime(tmp_path, ns=(stamp, stamp))
+    try:
+        with script_imports(tmp_path / "model.py", tmp_path):
+            assert validate_script("from new_helper_module import make_part\nshow_object(make_part())") == []
+            assert not marker.exists()
+            assert importlib.import_module("new_helper_module").make_part() == 12
+        assert "new_helper_module" not in sys.modules
+    finally:
+        sys.modules.pop("new_helper_module", None)
