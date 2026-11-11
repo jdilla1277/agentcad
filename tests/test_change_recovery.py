@@ -619,7 +619,11 @@ def test_imported_cad_restores_exact_source_and_geometry_but_rejects_script_repa
     )
     assert (
         Path(restored["change"]["source"]).read_bytes()
-        == Path(invoke(runner, ["changes", "show", imported["change"]["revision_id"], FLAG])["source"]["path"]).read_bytes()
+        == Path(
+            invoke(
+                runner, ["changes", "show", imported["change"]["revision_id"], FLAG]
+            )["source"]["path"]
+        ).read_bytes()
     )
     assert (
         Path(restored["change"]["geometry"]).read_bytes()
