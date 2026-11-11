@@ -108,3 +108,36 @@ def test_daemon_requests_do_not_inherit_opt_in(runner, isolated_dir):
     assert refused["exit_code"] == 1 and payload["reason"] == "experimental_inspect_required"
     plain, payload = request(["run", "part.py", "--label", "ordinary-again", *QUIET])
     assert plain["exit_code"] == 0 and "geometry_manifest" not in payload and "experimental_inspect" not in payload
+
+
+def test_inspect_and_changes_gates_are_independent_and_combine(runner, isolated_dir):
+    invoke(runner, ["init", "--name", "independent-gates"])
+    (isolated_dir / "part.py").write_text("show_object(Box(10,20,5))\n")
+    inspected = invoke(runner, ["run", "part.py", "--label", "inspect-only", FLAG, *QUIET])
+    assert inspected["geometry_manifest"] and "change" not in inspected
+    changed = invoke(runner, ["run", "part.py", "--label", "changes-only", "--experimental-changes", *QUIET])
+    assert changed["change"] and "geometry_manifest" not in changed
+    assert "experimental_inspect" not in changed
+
+    both = unpack(asyncio.run(server.mcp.call_tool("run", {
+        "script": "part.py", "cwd": str(isolated_dir), "output": "both",
+        "preview": False, "diff": False, "view": False, "idempotency_key": "both",
+        "experimental_inspect": True, "experimental_changes": True,
+    })))
+    assert both["geometry_manifest"] and both["change"] and both["status"] == "success"
+    (isolated_dir / "part.py").unlink()
+    status = {"idempotency_key": "both", "cwd": str(isolated_dir)}
+    for supplied, missing in (("experimental_changes", "experimental_inspect"),
+                              ("experimental_inspect", "experimental_changes")):
+        denied = unpack(asyncio.run(server.mcp.call_tool("run_status", {**status, supplied: True})))
+        assert denied["reason"] == missing + "_required"
+    saved = unpack(asyncio.run(server.mcp.call_tool("run_status", {
+        **status, "experimental_inspect": True, "experimental_changes": True,
+    })))
+    assert saved["status"] == "success" and saved["version"] == both["version"]
+    assert saved["geometry_manifest"] == both["geometry_manifest"]
+
+    (isolated_dir / "part.py").write_text("show_object(Box(12,20,5))\n")
+    plain = invoke(runner, ["run", "part.py", "--label", "ordinary-again", *QUIET])
+    assert "change" not in plain and "geometry_manifest" not in plain
+    assert "experimental_inspect" not in plain and "experimental_changes" not in plain

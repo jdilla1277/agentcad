@@ -25,7 +25,7 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
     assert runner.invoke(cli, ["init", "--name", "blocked-checks"]).exit_code == 0
     script = isolated_dir / "model.py"
     script.write_text(SCRIPT)
-    result = runner.invoke(cli, ["run", str(script), "--label", "accepted",
+    result = runner.invoke(cli, ["run", "--experimental-changes", str(script), "--label", "accepted",
                                 "--no-preview", "--no-diff", "--no-daemon"])
     assert result.exit_code == 0, result.output
     accepted = json.loads(result.stdout)
@@ -56,7 +56,7 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
                         "actor": "test", "rationale": "Exercise each blocked-attempt status."}))
                     label = f"{command}-{status}"
                     source = str(script) if command == "run" else accepted["outputs"]["step"]
-                    args = [command, source, "--label", label, "--checks", str(requirements),
+                    args = [command, "--experimental-changes", source, "--label", label, "--checks", str(requirements),
                             "--no-view", "--no-diff", "--no-daemon"]
                     if command == "run":
                         args.append("--no-preview")
@@ -88,7 +88,7 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
             requirements.write_text(json.dumps({"schema_version": 1, "checks": [{
                 "check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 60,
             }], "actor": "test", "rationale": "Exercise superseded valid geometry."}))
-            refused = runner.invoke(cli, ["run", str(script), "--label", "selection-conflict",
+            refused = runner.invoke(cli, ["run", "--experimental-changes", str(script), "--label", "selection-conflict",
                                           "--checks", str(requirements), "--no-preview", "--no-view",
                                           "--no-diff", "--no-daemon"])
             assert refused.exit_code == 1, refused.output
@@ -100,13 +100,13 @@ def test_blocked_checks_update_live_status_while_accepted_frame_stays(runner, is
             assert page.locator("iframe").count() == 1
             assert page.locator("#snapshot").get_attribute("href") == snapshot
             monkeypatch.setattr(PromotionStore, "commit", original_commit)
-            staged = runner.invoke(cli, ["run", str(script), "--label", "staged-review", "--stage",
+            staged = runner.invoke(cli, ["run", "--experimental-changes", str(script), "--label", "staged-review", "--stage",
                                          "--checks", str(requirements), "--no-preview", "--no-view", "--no-diff", "--no-daemon"])
             assert staged.exit_code == 0, staged.output
             revision = json.loads(staged.stdout)["change"]["revision_id"]
             page.wait_for_function("document.querySelector('#status').textContent.includes('staged; checks passed')")
             assert element.evaluate("element => element.isConnected")
-            promoted = runner.invoke(cli, ["promote", revision, "--idempotency-key", "human-reviewed"])
+            promoted = runner.invoke(cli, ["promote", "--experimental-changes", revision, "--idempotency-key", "human-reviewed"])
             assert promoted.exit_code == 0, promoted.output
             page.wait_for_function("document.querySelector('#status').textContent.includes('Accepted')")
             assert "showing previous model" in page.locator("#status").inner_text()

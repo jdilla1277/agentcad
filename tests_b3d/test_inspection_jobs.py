@@ -225,7 +225,9 @@ def test_import_deadline_retry_cli_mcp_and_executable_actions(runner, isolated_d
     assert first.exit_code == 0 and imported["core"]["status"] == "success"
     job_id = imported["inspection_job"]["id"]
     root = isolated_dir / "CAD artifacts"
-    protected = {p: p.read_bytes() for p in [root / "agentcad.json", root / ".agentcad/changes/working.json",
+    assert "change" not in imported
+    assert not (root / ".agentcad/changes").exists()
+    protected = {p: p.read_bytes() for p in [root / "agentcad.json",
                  Path(imported["outputs"]["step"]), Path(imported["outputs"]["geometry_manifest"])]}
     args[args.index("--inspection-wait-timeout") + 1] = "30"  # Caller wait is not part of request identity.
     retry, replay = _invoke(runner, args)
@@ -248,7 +250,7 @@ def test_import_deadline_retry_cli_mcp_and_executable_actions(runner, isolated_d
     mcp_payload.pop("_exit_code", None)
     assert mcp_payload == complete
     assert {p: p.read_bytes() for p in protected} == protected
-    assert len(list((root / ".agentcad/changes/attempts").glob("*/request.json"))) == 1
+    assert not (root / ".agentcad/changes").exists()
     polled, status = _invoke(runner, shlex.split(imported["inspection_job"]["actions"]["status"])[1:])
     assert polled.exit_code == 0 and status["inspection_job"]["status"] == "complete"
     assert "inspection" not in status  # Polling doesn't attach the gallery.

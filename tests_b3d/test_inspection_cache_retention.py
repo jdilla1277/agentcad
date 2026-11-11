@@ -66,8 +66,10 @@ def test_import_resource_limit_resumes_same_job_without_another_version(runner, 
     else:
         assert set(job['actions']) == {'resume'}
     step = Path(response['outputs']['step'])
+    assert 'change' not in response
+    assert not (isolated_dir / '.agentcad/changes').exists()
     before = _hashes([step, step.with_name('geometry_manifest.json'), isolated_dir / 'agentcad.json',
-                      isolated_dir / '.agentcad/changes/working.json', isolated_dir / 'edit.py',
+                      isolated_dir / 'edit.py',
                       step.parent / 'inspection/jobs' / job['id'] / 'request.json'])
     _config(isolated_dir, max_bytes=10485760)
     invoked, completed = _invoke(runner, shlex.split(job['actions']['resume'])[1:])
@@ -85,6 +87,7 @@ def test_import_resource_limit_resumes_same_job_without_another_version(runner, 
     assert resumed['inspection']['retention']['expires_at']
     _assert_budget(resumed)
     assert _hashes(before) == before
+    assert not (isolated_dir / '.agentcad/changes').exists()
     assert len(list(isolated_dir.glob('v*_*/output.step'))) == 1
 
 

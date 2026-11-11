@@ -1,5 +1,6 @@
 {
   "commands": [
+    "changes",
     "check-spec",
     "cloud",
     "context",
@@ -27,6 +28,7 @@
     "artifacts",
     "build123d",
     "cadquery",
+    "changes",
     "check-spec",
     "cloud",
     "commands",

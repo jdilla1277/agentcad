@@ -277,6 +277,8 @@ def project_options(function):
         if name in {"run", "import", "inspect"}:
             from agentcad.experimental_inspect import validate
             validate(ctx, kwargs)
+        from agentcad.experimental_changes import validate
+        validate(ctx, kwargs)
         if name == "feedback" and (
             kwargs.get("show_template")
             or (kwargs.get("message") is None and kwargs.get("feedback_file") is None)
@@ -315,7 +317,8 @@ def project_options(function):
             layout.preflight()
         return function(*args, **kwargs)
 
-    return wrapped
+    from agentcad.experimental_changes import _COMMANDS, option
+    return option(wrapped) if function.__name__ in _COMMANDS else wrapped
 
 
 def derived_dir(command: str, *inputs: Path, create: bool = True) -> Path:

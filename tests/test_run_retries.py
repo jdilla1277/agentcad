@@ -55,7 +55,7 @@ def setup(runner, root, runtime="build123d", source=SOURCES[0][1]):
 
 def args(key="edit:1", *extra):
     return [
-        "run",
+        "run", "--experimental-changes",
         "part.py",
         "--label",
         "bracket",
@@ -67,7 +67,7 @@ def args(key="edit:1", *extra):
 
 
 def status(runner, key="edit:1", code=0):
-    return invoke(runner, ["run", "--idempotency-key", key, "--status"], code)
+    return invoke(runner, ["run", "--experimental-changes", "--idempotency-key", key, "--status"], code)
 
 
 @pytest.mark.parametrize("runtime,source", SOURCES)
@@ -114,7 +114,7 @@ def test_status_reads_original_result_after_newer_work_and_source_removal(
 ):
     setup(runner, isolated_dir)
     first = invoke(runner, args())
-    newer = invoke(runner, ["run", "part.py", "--label", "newer", *QUIET])
+    newer = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "newer", *QUIET])
     (isolated_dir / "part.py").unlink()
     paths = [
         isolated_dir / "agentcad.json",
@@ -184,7 +184,7 @@ def test_registered_mcp_run_and_status_support_retry_keys(runner, isolated_dir):
     setup(runner, isolated_dir)
 
     def call(name, arguments):
-        result = asyncio.run(mcp.call_tool(name, arguments))
+        result = asyncio.run(mcp.call_tool(name, {**arguments, "experimental_changes": True}))
         return result[1] if isinstance(result, tuple) else json.loads(result[0].text)
 
     arguments = {
@@ -278,7 +278,7 @@ def test_deferred_run_recovery_keeps_original_checks_after_completion(
     assert original_checks["validation_state"] == "pending"
     before_completion = status(runner, "deferred:1", 1)
     assert before_completion["change"]["validation_checks"] == original_checks
-    completed = invoke(runner, ["check-spec", revision, "--complete"])
+    completed = invoke(runner, ["check-spec", "--experimental-changes", revision, "--complete"])
     assert completed["validation_state"] == "valid"
     protected = [
         isolated_dir / "agentcad.json",
@@ -300,7 +300,7 @@ def test_deferred_run_recovery_keeps_original_checks_after_completion(
             assert recovered["change"] == original_response["change"]
             assert recovered["current_advanced"] is False
     assert {p: p.read_bytes() for p in protected} == before
-    assert invoke(runner, ["check-spec", revision])["validation_state"] == "valid"
+    assert invoke(runner, ["check-spec", "--experimental-changes", revision])["validation_state"] == "valid"
 
 
 def test_execution_uses_the_source_saved_before_work_begins(
@@ -339,7 +339,7 @@ def test_configured_roots_scope_keys_and_status_works_from_subdirectory(
         saved = invoke(
             runner,
             [
-                "run",
+                "run", "--experimental-changes",
                 "--idempotency-key",
                 "edit:1",
                 "--status",
@@ -371,14 +371,14 @@ def test_status_rejects_execution_options_and_registered_mcp_unknown_options(
     from agentcad.mcp.server import mcp
 
     setup(runner, isolated_dir)
-    assert invoke(runner, ["run", "--status"], 1)["reason"] == "run_key_required"
+    assert invoke(runner, ["run", "--experimental-changes", "--status"], 1)["reason"] == "run_key_required"
     for extra in (
         ["--label", "bad"],
         ["--no-preview"],
         ["--validation-profile", "kernel"],
     ):
         error = invoke(
-            runner, ["run", "--idempotency-key", "edit:1", "--status", *extra], 1
+            runner, ["run", "--experimental-changes", "--idempotency-key", "edit:1", "--status", *extra], 1
         )
         assert error["reason"] == "run_status_options"
     assert not (isolated_dir / ".agentcad/run_requests").exists()
@@ -437,7 +437,7 @@ elif mode == "hold":
     runner.execute = execute
 elif mode == "busy":
     requests._LOCK_WAIT_SECONDS = .1
-cli.main(args=['run','part.py','--label','bracket','--idempotency-key','process:1',
+cli.main(args=['run','--experimental-changes','part.py','--label','bracket','--idempotency-key','process:1',
                '--no-preview','--no-diff','--no-view','--no-daemon'])
 """
 
@@ -489,7 +489,7 @@ def test_process_death_never_reexecutes_or_reselects_older_work(
         else not (isolated_dir / "executions").exists()
     )
     (isolated_dir / "newer.py").write_text(SOURCES[0][1])
-    newer = invoke(runner, ["run", "newer.py", "--label", "newer", *QUIET])
+    newer = invoke(runner, ["run", "--experimental-changes", "newer.py", "--label", "newer", *QUIET])
     protected = [
         isolated_dir / "agentcad.json",
         isolated_dir / ".agentcad/changes/working.json",
