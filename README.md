@@ -18,6 +18,7 @@ A coding agent designing in agentcad, live. See more at [agentcad.dev](https://a
 
 ## Recently from agentcad
 
+- **November 11, 2026 — [From PDFs, images, and drawings to Revit](https://agentcad.dev/revit):** Model from drawings, photos, and measurements, review the geometry, and bring checked STEP files into Revit.
 - **November 6, 2026 — [v0.7.2: Retry builds without creating duplicate versions](https://agentcad.dev/changelog/v0.7.2):** Recover saved results after a lost response, keep projects separate, and preserve non-English text on Windows.
 - **October 28, 2026 — [Measuring agentcad's effectiveness, again](https://agentcad.dev/measuring-agentcad-effectiveness-again):** The workflow candidate behind v0.7.0 scored 33% higher overall than the previous agentcad result, with editing up 42% and 80 of 81 valid outputs.
 - **September 29, 2026 — [Using Meta's Muse agent for 3D printing and CAD](https://agentcad.dev/muse-3d-printing):** A CAD workflow from a phone with Meta's Muse agent, including a video walkthrough.
