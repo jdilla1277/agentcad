@@ -134,7 +134,7 @@ def test_mcp_saved_run_and_inspection_match_cli_with_configured_paths(runner, is
     (isolated_dir / "agentcad.toml").write_text('build_dir = "artifacts with spaces"\n', encoding="utf-8")
     _json(runner, ["init"])
     (isolated_dir / "edit.py").write_text("show_object(Box(10,20,5))", encoding="utf-8")
-    saved = mcp_run(experimental_inspect=True, script="edit.py", cwd=str(isolated_dir), output="generated", preview=False, diff=False, view=False)
+    saved = mcp_run(script="edit.py", cwd=str(isolated_dir), output="generated", preview=False, diff=False, view=False)
     assert saved["_exit_code"] == 0
     step = Path(saved["outputs"]["step"])
     assert step.is_absolute()
@@ -142,7 +142,7 @@ def test_mcp_saved_run_and_inspection_match_cli_with_configured_paths(runner, is
     assert Path(saved["outputs"]["geometry_manifest"]).is_file()
     assert saved["geometry_manifest"]["manifest_id"] == read_manifest(step)["manifest_id"]
     cli_report = _json(runner, ["inspect", str(step), "--report", "--max-images", "1"])
-    mcp_report = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, max_images=1, full_response=True)
+    mcp_report = mcp_inspect(file=str(step), cwd=str(isolated_dir), report=True, max_images=1, full_response=True)
     assert isinstance(mcp_report, CallToolResult)
     assert mcp_report.structuredContent.pop("_exit_code") == 0
     assert mcp_report.structuredContent == cli_report
@@ -150,7 +150,7 @@ def test_mcp_saved_run_and_inspection_match_cli_with_configured_paths(runner, is
     assert base64.b64decode(mcp_report.content[1].data) == png.read_bytes()
     assert hashlib.sha256(png.read_bytes()).hexdigest() == cli_report["media"][0]["sha256"]
     face_id = saved["geometry_manifest"]["sample_ids"]["face"]
-    looked_up = mcp_inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), entity_id=face_id)
+    looked_up = mcp_inspect(file=str(step), cwd=str(isolated_dir), entity_id=face_id)
     assert looked_up["entity"] == load_geometry(step).record(face_id)
 
 
@@ -179,7 +179,7 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         from agentcad.mcp.server import run as mcp_run
 
         (isolated_dir / "edit.py").write_text("show_object(Box(10,20,5))", encoding="utf-8")
-        saved = mcp_run(experimental_inspect=True, script="edit.py", cwd=str(isolated_dir), output="saved part", preview=False, diff=False, view=False)
+        saved = mcp_run(script="edit.py", cwd=str(isolated_dir), output="saved part", preview=False, diff=False, view=False)
         assert saved["_exit_code"] == 0
     assert saved["status"] == saved["core"]["status"] == "success"
     assert saved["artifacts"]["geometry_manifest"]["status"] == ("failed" if failure == "exception" else "timeout")
@@ -195,8 +195,7 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         assert "typed-ID inventory timed out" in saved["suggestion"]
         assert "inspect --ids" in saved["suggestion"]
         action = shlex.split(saved["next_actions"][0])
-        assert "--experimental-inspect" in action
-        action.remove("--experimental-inspect")
+        assert "--experimental-inspect" not in action
         assert action[:2] == ["agentcad", "inspect"]
         assert action[2] == saved["outputs"]["step"]
         assert "--ids" in action

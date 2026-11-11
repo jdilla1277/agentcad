@@ -926,6 +926,9 @@ class _LoggingGroup(click.Group):
                                outputs={"step": None})
             click.echo(json.dumps(payload))
             sys.exit(1)
+        except click.exceptions.Exit:
+            # Help and explicit Click exits are control flow, not import failures.
+            raise
         except Exception as exc:
             # Import has no run-style outer recovery boundary. Once its source
             # is retained, preserve unexpected parser/metric failures as a

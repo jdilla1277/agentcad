@@ -244,7 +244,7 @@ def test_import_deadline_retry_cli_mcp_and_executable_actions(runner, isolated_d
         "file": imported["outputs"]["step"], "cwd": str(subdir), "report": True,
         "job_id": job_id, "job_action": "wait", "build_dir": str(root),
         "full_response": True,
-    }), "experimental_inspect": True}))
+    })}))
     blocks = mcp.content if isinstance(mcp, CallToolResult) else mcp
     mcp_payload = mcp.structuredContent if isinstance(mcp, CallToolResult) else json.loads(blocks[0].text)
     mcp_payload.pop("_exit_code", None)
@@ -261,7 +261,7 @@ def test_background_report_delivers_pngs_on_wait(runner, isolated_dir):
     first, response = _invoke(runner, ["inspect", str(step), "--report", "--background", "--max-images", "1"])
     assert first.exit_code == 0
     assert response["inspection_job"]["id"] == job.job_id
-    output = server.inspect(str(step), str(isolated_dir), experimental_inspect=True, report=True,
+    output = server.inspect(str(step), str(isolated_dir), report=True,
                             job_id=job.job_id, job_action="wait", wait_timeout=30, full_response=True)
     assert isinstance(output, CallToolResult), output
     assert output.structuredContent["inspection_job"]["status"] == "complete"
@@ -363,9 +363,9 @@ def test_mcp_job_controls_are_thin_cli_arguments(monkeypatch):
         return {"status": "running"}
 
     monkeypatch.setattr(server, "_invoke", invoked)
-    server.inspect("part.step", "/project", experimental_inspect=True, report=True, job_id="inspection_ID",
+    server.inspect("part.step", "/project", report=True, job_id="inspection_ID",
                    job_action="resume", background=True, build_dir="CAD files", full_response=True)
-    assert calls == [(["inspect", "part.step", "--experimental-inspect", "--full-response", "--report", "--background", "--job", "inspection_ID",
+    assert calls == [(["inspect", "part.step", "--full-response", "--report", "--background", "--job", "inspection_ID",
                        "--job-action", "resume", "--max-images", "9", "--text-budget", "2000",
                        "--build-dir", "CAD files"], "/project")]
 
@@ -461,7 +461,7 @@ def test_external_baseline_returned_actions_keep_original_job_root(runner, isola
         "file": str(step), "cwd": str(caller), "report": True,
         "job_id": job["id"], "job_action": "wait", "build_dir": str(caller),
         "full_response": True,
-    }), "experimental_inspect": True}))
+    })}))
     assert not isinstance(response, CallToolResult)  # Image-free job.
     mcp_payload = json.loads(response[0].text)
     assert mcp_payload["_exit_code"] == 0

@@ -92,7 +92,7 @@ def test_default_mcp(isolated_dir, kind):
     result = asyncio.run(server.mcp.call_tool('import_cad', {**({
         'file': str(source(isolated_dir, kind)), 'cwd': str(isolated_dir),
         'initialize': True, 'view': False, 'diff': False,
-    }), "experimental_inspect": True}))
+    })}))
     assert isinstance(result, CallToolResult)
     data = payload(result)
     _assert_budget(data)
@@ -109,11 +109,11 @@ def test_default_mcp(isolated_dir, kind):
         assert hashlib.sha256(png).hexdigest() == item['sha256']
         assert png == (image_root / item['png']).read_bytes()
     step = Path(data['outputs']['step'])
-    report = payload(server.inspect(str(step), str(isolated_dir), experimental_inspect=True, report=True))
+    report = payload(server.inspect(str(step), str(isolated_dir), report=True))
     _assert_budget(report)
     assert report['inspection']['manifest_id'] == data['inspection']['manifest_id']
     assert report['delivery']['limits']['text_tokens'] == 2000
-    raw = payload(server.inspect(str(step), str(isolated_dir), experimental_inspect=True, entity_id=data['inspection']['media'][-1]['id']))
+    raw = payload(server.inspect(str(step), str(isolated_dir), entity_id=data['inspection']['media'][-1]['id']))
     assert 'delivery' not in raw and raw['entity']['id'] == data['inspection']['media'][-1]['id']
 
 
@@ -180,7 +180,7 @@ def test_default_quota_recovery(runner, isolated_dir, monkeypatch):
 def test_default_snapshot_failure(isolated_dir, monkeypatch):
     monkeypatch.setattr('agentcad.inspection_snapshots.SnapshotStore.publish',
                         lambda *a: (_ for _ in ()).throw(OSError('disk full')))
-    result = server.import_cad(str(REAL), str(isolated_dir), experimental_inspect=True, initialize=True, view=False, diff=False)
+    result = server.import_cad(str(REAL), str(isolated_dir), initialize=True, view=False, diff=False)
     data = payload(result)
     assert data['_exit_code'] == 0 and data['core']['status'] == 'success'
     assert data['delivery']['status'] == 'snapshot_unavailable'

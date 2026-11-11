@@ -8,11 +8,8 @@ from pathlib import Path
 
 
 def experimental_args(args):
-    """Explicit opt-in for tests exercising the enriched Inspect contract."""
-    args = list(args)
-    if args and args[0] in {'import', 'inspect', 'run'} and '--experimental-inspect' not in args:
-        args.append('--experimental-inspect')
-    return args
+    """Retained helper name; graduated Inspect needs no opt-in."""
+    return list(args)
 
 
 def experimental_full_response_args(args):
@@ -30,3 +27,15 @@ def full_response_args(args):
 def snapshot_path(response):
     """Locate stored bytes for integrity assertions, even if inline path is omitted."""
     return Path(response['build_root']) / '.agentcad/inspection_delivery' / (response['response_snapshot']['id'] + '.json')
+
+
+def core_import_args(args):
+    """Core intake/scaffold tests avoid preparing nine unrelated sample sheets.
+
+    Default sheet delivery has dedicated CLI/MCP, budget and real-model tests.
+    Keep report/index creation and the ordinary preview/viewer paths enabled.
+    """
+    args = full_response_args(args)
+    if args and args[0] == 'import' and not any(value in args for value in ('--inspection-image', '--no-inspection-image')):
+        args.append('--no-inspection-image')
+    return args
