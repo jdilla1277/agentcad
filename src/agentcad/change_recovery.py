@@ -442,12 +442,23 @@ class RecoveryRequest:
             self.directory / "geometry.step" if "geometry.step" in snapshots else None
         )
         if geometry:
-            with silence_native_stdout():
-                response["metrics"], response["validation"] = validated_metrics(
-                    load_cad_shape(geometry),
-                    profile=plan["model"].get("validation_profile", "deliverable"),
-                    source_path=geometry,
-                )
+            try:
+                with silence_native_stdout():
+                    response["metrics"], response["validation"] = validated_metrics(
+                        load_cad_shape(geometry),
+                        profile=plan["model"].get("validation_profile", "deliverable"),
+                        source_path=geometry,
+                    )
+            except (ValueError, RuntimeError, OSError) as exc:
+                # A faithfully retained failed export is recoverable evidence,
+                # not corruption of its snapshot. Keep its exact bytes and
+                # leave validation unavailable so it cannot be promoted.
+                response["metrics"] = None
+                response["validation"] = {
+                    "is_valid": None,
+                    "status": "unavailable",
+                    "reason": str(exc),
+                }
         ctx = click.get_current_context()
         ctx.meta["change_stage"] = True
         attempt = begin_change(

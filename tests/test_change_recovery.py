@@ -662,3 +662,35 @@ def test_busy_request_still_rejects_conflicting_operation_or_inputs(
         conflict = invoke(runner, args, 1)
     assert conflict["reason"] == "idempotency_conflict"
     assert files(isolated_dir) == before
+
+
+def test_restore_keeps_a_recorded_failed_step_instead_of_losing_the_recoverable_revision(
+    runner, isolated_dir
+):
+    from agentcad.change_store import ChangeStore
+
+    setup(runner, isolated_dir)
+    failed = ChangeStore(isolated_dir).begin(
+        command="run",
+        label="failed-export",
+        source=SOURCE.encode(),
+        source_name="part.py",
+        model={"runtime": "build123d", "validation_profile": "deliverable"},
+        promotion_mode="staged",
+    )
+    broken = isolated_dir / "failed.step"
+    broken.write_bytes(b"ISO-10303-21;\ntruncated writer output\n")
+    response = {
+        "command": "run",
+        "status": "error",
+        "message": "STEP writer failed",
+        "outputs": {"step": None},
+    }
+    failed.prepare(response, geometry=broken)
+    failed.finish(response)
+    restored = invoke(runner, recovery_args("restore", failed.revision_id))
+    assert Path(restored["change"]["geometry"]).read_bytes() == broken.read_bytes()
+    assert restored["change"]["validation_checks"]["promotion_ready"] is False
+    shown = invoke(runner, ["changes", "show", restored["change"]["revision_id"], FLAG])
+    assert shown["diagnostics"]["message"] == "STEP writer failed"
+    assert shown["checks"]["validation_state"] != "valid"
