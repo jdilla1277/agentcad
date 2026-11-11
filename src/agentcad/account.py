@@ -19,8 +19,9 @@ CREDENTIAL = re.compile(r"^acli_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a
 
 
 class AccountError(Exception):
-    def __init__(self, reason, message):
+    def __init__(self, reason, message, *, credential_rejected=False):
         self.reason, self.message = reason, message
+        self.credential_rejected = credential_rejected
         super().__init__(message)
 
 
@@ -176,17 +177,26 @@ class AccountClient:
                     raw.extend(chunk)
                     if len(raw) > 16384:
                         raise AccountError("invalid_response", "The account service returned an oversized response.")
-                if response.status_code in {401, 403, 404, 410}:
+                is_json = response.headers.get("content-type", "").split(";")[0].strip().lower() == "application/json"
+                try:
+                    result = json.loads(raw) if is_json else None
+                except (ValueError, UnicodeError, RecursionError):
+                    result = None
+                reason = result.get("reason") if isinstance(result, dict) else None
+                credential_rejected = bool(credential and response.status_code == 401 and reason == "invalid_credentials")
+                request_unavailable = not credential and isinstance(reason, str) and (response.status_code, reason) in {
+                    (404, "installation_unavailable"), (410, "request_expired"),
+                }
+                if credential_rejected or request_unavailable:
                     message = ("This CLI installation is revoked, disabled, or unavailable. Clear its local state with agentcad account disconnect --forget, then connect again."
                                if credential else "This approval request is expired, canceled, or unavailable. Clear pending state with agentcad account disconnect --forget, then connect again.")
-                    raise AccountError("not_connected", message)
+                    raise AccountError("not_connected", message, credential_rejected=credential_rejected)
                 if response.status_code == 429:
                     raise AccountError("rate_limited", "Too many connection requests. Keep the existing request and try later.")
                 if not 200 <= response.status_code < 300:
                     raise AccountError("account_unavailable", f"The account service returned HTTP {response.status_code}. Your saved account state is preserved; retry later.")
-                result = json.loads(raw)
                 if not isinstance(result, dict):
-                    raise ValueError()
+                    raise AccountError("invalid_response", "The account service returned an invalid response. Retry without deleting your saved state.")
                 return result
         except self.httpx.HTTPError:
             raise AccountError("request_failed", "The response was not received. Your saved account state is preserved; retry the same command.") from None
@@ -246,13 +256,23 @@ class AccountClient:
         if not credential and self.saved.get("pending"):
             pending = self.saved["pending"]
             credential = f"acli_{pending['id']}.{pending['secret']}"
+        server_revoked = False
+        already_invalid = False
         if credential and not forget:
             try:
-                self._request("POST", "/api/account/cli/disconnect", credential=credential, json={})
+                result = self._request("POST", "/api/account/cli/disconnect", credential=credential, json={})
+                if result.get("state") != "disconnected":
+                    raise AccountError("invalid_response", "The service did not confirm disconnection. Your saved account state is preserved; retry later.")
+                server_revoked = True
             except AccountError as error:
-                if error.reason != "not_connected":
+                # Only the account protocol's explicit credential rejection
+                # proves this saved credential no longer grants access.
+                if not error.credential_rejected:
                     raise
-        self.saved = {}
+                already_invalid = True
         self.state.save({})
-        return self._output("not_connected", message="Local connection cleared." if forget else "Installation disconnected.",
-                            server_revoked=bool(credential and not forget))
+        self.saved = {}
+        message = ("Local connection cleared." if forget else
+                   "The installation is already unavailable; local connection cleared." if already_invalid else
+                   "Installation disconnected.")
+        return self._output("not_connected", message=message, server_revoked=server_revoked)

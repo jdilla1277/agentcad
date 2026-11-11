@@ -135,3 +135,86 @@ def test_revoked_connection_gives_reconnect_guidance_instead_of_retry_loop(tmp_p
     assert result.exit_code == 1
     assert "disconnect --forget" in payload["suggestion"]
     assert "Retry" not in payload["suggestion"]
+
+
+def connected_state(tmp_path):
+    state = AccountState(tmp_path / "profile")
+    state.save({"site": "https://accounts.example.test", "api_url": "https://api.example.test",
+                "credential": "acli_12345678-1234-4234-8234-123456789abc." + "s" * 43})
+    return state
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(404, text="The deployment route is unavailable"),
+    httpx.Response(403, text="Proxy access denied"),
+    httpx.Response(401, json={"reason": "invalid_service_credential"}),
+    httpx.Response(401, json={"reason": "invalid_credentials"}, headers={"Content-Type": "text/html"}),
+    httpx.Response(404, json={"reason": "invalid_credentials"}),
+    httpx.Response(401, content=b'{"reason":'),
+    httpx.Response(401, json=["invalid_credentials"]),
+    httpx.Response(401, json={"reason": "invalid_credentials", "padding": "x" * 16384}),
+    httpx.Response(200, json={}),
+    httpx.Response(200, json={"state": "connected"}),
+    httpx.Response(200, json={"state": "disconnected"}, headers={"Content-Type": "text/html"}),
+])
+def test_unconfirmed_disconnect_preserves_the_original_credential(tmp_path, response):
+    state = connected_state(tmp_path)
+    original = state.path.read_bytes()
+    with AccountClient(state, transport=httpx.MockTransport(lambda _: response)) as client:
+        with pytest.raises(AccountError):
+            client.disconnect()
+        assert state.path.read_bytes() == original
+        assert client.saved == state.load()
+
+
+def test_disconnect_clears_local_state_only_after_the_service_acknowledges(tmp_path):
+    state = connected_state(tmp_path)
+    def handle(request):
+        assert request.url.path == "/api/account/cli/disconnect" and request.method == "POST"
+        assert request.headers["Authorization"].startswith("Bearer acli_")
+        return httpx.Response(200, json={"state": "disconnected"})
+    with AccountClient(state, transport=httpx.MockTransport(handle)) as client:
+        result = client.disconnect()
+    assert result["connection"] == "not_connected" and result["server_revoked"] is True
+    assert state.load() == {}
+
+
+def test_explicitly_rejected_credential_can_be_forgotten_without_claiming_a_new_revocation(tmp_path):
+    state = connected_state(tmp_path)
+    with AccountClient(state, transport=httpx.MockTransport(lambda _: httpx.Response(401, json={"reason": "invalid_credentials"}))) as client:
+        result = client.disconnect()
+    assert state.load() == {} and result["connection"] == "not_connected"
+    assert result["server_revoked"] is False
+
+
+def test_disconnect_forget_remains_an_explicit_local_only_escape_hatch(tmp_path):
+    state = connected_state(tmp_path)
+    with AccountClient(state, transport=httpx.MockTransport(lambda _: pytest.fail("--forget must not call the service"))) as client:
+        result = client.disconnect(forget=True)
+    assert state.load() == {} and result["server_revoked"] is False
+
+
+def test_status_keeps_a_service_denial_retryable_instead_of_suggesting_reconnection(tmp_path):
+    state = connected_state(tmp_path)
+    with AccountClient(state, transport=httpx.MockTransport(lambda _: httpx.Response(401, json={"reason": "invalid_service_credential"}))) as client:
+        with pytest.raises(AccountError) as caught:
+            client.status()
+    assert caught.value.reason == "account_unavailable"
+    assert state.load()["credential"]
+
+
+def test_cli_disconnect_reports_proxy_failure_without_erasing_the_connection(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from agentcad.cli import cli
+    from agentcad.commands import account as commands
+    state = connected_state(tmp_path)
+    original = state.path.read_bytes()
+    monkeypatch.setattr(commands, "AccountClient", lambda: AccountClient(state, transport=httpx.MockTransport(
+        lambda _: httpx.Response(404, text="The deployment route is unavailable"))))
+    result = CliRunner().invoke(cli, ["account", "disconnect"])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1 and payload["status"] == "error"
+    assert payload["reason"] == "account_unavailable"
+    assert "server_revoked" not in payload and "disconnect --forget" not in payload["suggestion"]
+    assert "acli_" not in result.stdout
+    assert state.path.read_bytes() == original

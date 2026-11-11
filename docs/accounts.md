@@ -56,8 +56,10 @@ continue. Reconnect with a new approval request after clearing the old profile.
 agentcad account disconnect
 ```
 
-Ordinary disconnect revokes the installation online before clearing local state.
-If the service is unavailable, it preserves state so revocation can be retried.
+Ordinary disconnect clears local state after the service confirms disconnection.
+An explicit rejection of an already-invalid credential also allows local cleanup,
+without claiming a new server revocation. A deployment/proxy denial or an
+unrecognized acknowledgment preserves the credential so disconnection can be retried.
 `disconnect --forget` only clears local state; revoke any approved installation
 on the website as well. Browser sign-out and CLI disconnect are separate actions.
 
