@@ -40,7 +40,7 @@ jobs:
         run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
 
       - name: Run cloud adapter and local MCP contracts
-        run: pytest tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py tests/test_experimental_inspect.py -q
+        run: pytest tests/test_account.py tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py tests/test_experimental_inspect.py -q
 
       - name: Run session logging and MCP audit regressions
         run: pytest tests/test_session_log.py tests/test_session_logging_integration.py -q
