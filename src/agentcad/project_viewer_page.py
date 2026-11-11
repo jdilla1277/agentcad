@@ -35,6 +35,14 @@ let current = null, pending = null, latestState = null, reconnecting = false;
 let restoreWarning = '';
 let pinnedRevision = new URL(location.href).searchParams.get('revision');
 let evidenceKey = null;
+let evidenceInFlight = null, evidenceSequence = 0;
+function acceptedIdentity(value) {
+  return JSON.stringify([value?.revision_id ?? null, value?.version ?? null]);
+}
+function evidenceContext() {
+  return JSON.stringify([latestState?.selected?.revision_id, latestState?.selected?.status,
+    pinnedRevision, acceptedIdentity(latestState?.accepted)]);
+}
 const pin = document.querySelector('#pin'), follow = document.querySelector('#follow');
 const accepted = document.querySelector('#accepted');
 const evidenceToggle = document.querySelector('#evidence-toggle');
@@ -51,16 +59,22 @@ follow.onclick = () => setPin(null);
 evidenceToggle.onclick = () => { evidencePanel.hidden = !evidencePanel.hidden; if (!evidencePanel.hidden) loadEvidence(); };
 async function loadEvidence() {
   const revision = latestState?.selected?.revision_id;
-  if (!revision) return;
-  const key = revision + ':' + latestState.selected.status;
-  if (key === evidenceKey) return;
+  if (!revision || (pinnedRevision && pinnedRevision !== revision)) return;
+  const key = evidenceContext();
+  if (key === evidenceKey || key === evidenceInFlight) return;
+  const baseline = acceptedIdentity(latestState?.accepted);
+  const sequence = ++evidenceSequence;
+  evidenceInFlight = key;
   const container = document.querySelector('#evidence-content');
   container.textContent = 'Loading saved checks…';
   try {
     const response = await fetch('evidence/' + revision + '.json', {cache:'no-store', signal:AbortSignal.timeout(4000)});
     if (!response.ok) throw new Error('Saved evidence unavailable');
     const data = await response.json();
-    if (revision !== latestState?.selected?.revision_id) return;
+    // A late response must not replace evidence for a newer accepted target,
+    // including legacy accepted versions that have no retained revision ID.
+    if (sequence !== evidenceSequence || key !== evidenceContext()
+        || acceptedIdentity(data.accepted) !== baseline) return;
     container.textContent = '';
     const text = (tag, value) => { const node = document.createElement(tag); node.textContent = value; container.appendChild(node); };
     text('p', 'Revision ' + revision + '. Viewing does not accept this candidate.');
@@ -78,11 +92,18 @@ async function loadEvidence() {
     if (data.diagnostics.static_checks?.length) {
       for (const check of data.diagnostics.static_checks) text('p', check.message);
     }
-    text('h3', 'Compared with accepted');
+    const acceptedLabel = data.accepted?.revision_id || (data.accepted?.version ? 'v' + data.accepted.version : 'none');
+    text('h3', 'Compared with accepted ' + acceptedLabel);
     text('p', data.comparison ? data.notes.join(' ') : 'No retained accepted revision is available for comparison.');
     if (data.comparison) { const details = document.createElement('details'); const title = document.createElement('summary'); title.textContent = 'Saved measurement and check differences'; details.appendChild(title); const pre = document.createElement('pre'); pre.textContent = JSON.stringify(data.comparison, null, 2); details.appendChild(pre); container.appendChild(details); }
     evidenceKey = key;
-  } catch (_) { container.textContent = 'Saved evidence unavailable. Retry after checking the retained revision.'; }
+  } catch (_) {
+    if (sequence === evidenceSequence && key === evidenceContext()) {
+      container.textContent = 'Saved evidence unavailable. Retry after checking the retained revision.';
+    }
+  } finally {
+    if (sequence === evidenceSequence) evidenceInFlight = null;
+  }
 }
 function showStatus() {
   if (latestState?.experimental_changes) {

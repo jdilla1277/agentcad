@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 
 import pytest
 
@@ -104,11 +105,20 @@ def test_candidate_follow_pin_diagnostics_and_acceptance(
             page.click("#evidence-toggle")
             page.click("#pin")
             assert "revision=" + failed in page.url
+            page.click("#evidence-toggle")
+            page.wait_for_function(
+                "r => JSON.parse(document.querySelector('#evidence-content details pre')?.textContent || 'null')?.baseline?.revision_id === r",
+                arg=accepted,
+            )
             script.write_text(SOURCE.replace("length=60", "length=80"))
             staged = build("--stage")["change"]["revision_id"]
             invoke(["promote", staged, "--idempotency-key", "human-reviewed", FLAG])
             page.wait_for_function(
                 "r => document.querySelector('#status').dataset.acceptedRevision === r",
+                arg=staged,
+            )
+            page.wait_for_function(
+                "r => JSON.parse(document.querySelector('#evidence-content details pre')?.textContent || 'null')?.baseline?.revision_id === r",
                 arg=staged,
             )
             assert (
@@ -141,6 +151,102 @@ def test_candidate_follow_pin_diagnostics_and_acceptance(
         finally:
             browser.close()
             live.stop_service()
+
+
+@pytest.mark.browser
+@pytest.mark.timeout(60)
+def test_evidence_ignores_old_baseline_response_and_refreshes_after_reopen():
+    if os.environ.get("AGENTCAD_BROWSER_SMOKE") != "1":
+        pytest.skip("set AGENTCAD_BROWSER_SMOKE=1")
+    from playwright.sync_api import sync_playwright
+    from agentcad.project_viewer_page import PAGE
+
+    selected = "r_" + "1" * 32
+    baseline = {"revision_id": "r_" + "2" * 32, "version": 1}
+    requests, held = [], []
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        def response_for(accepted):
+            return {
+                "accepted": accepted,
+                "checks": {"results": []},
+                "diagnostics": {},
+                "comparison": (
+                    {"baseline": accepted} if accepted["revision_id"] else None
+                ),
+                "notes": ["Stored comparison"],
+            }
+
+        def route(request):
+            path = request.request.url.split("?")[0]
+            if path.endswith("/state"):
+                request.fulfill(
+                    json={
+                        "experimental_changes": True,
+                        "selected": {
+                            "revision_id": selected,
+                            "status": "Failed",
+                            "geometry_available": True,
+                        },
+                        "accepted": baseline,
+                        "latest": None,
+                    }
+                )
+            elif "/evidence/" in path:
+                captured = dict(baseline)
+                requests.append(captured)
+                if len(requests) == 1:
+                    held.append((request, captured))
+                else:
+                    request.fulfill(json=response_for(captured))
+            else:
+                request.fulfill(body=PAGE, content_type="text/html")
+
+        page.route("http://127.0.0.1:38765/**", route)
+        try:
+            page.goto("http://127.0.0.1:38765/projects/test/?revision=" + selected)
+            page.locator("#evidence-toggle").click()
+            # Keep the first baseline's response in flight while promotion
+            # changes only the accepted target, not selected ID/status.
+            deadline = time.monotonic() + 5
+            while not held:
+                assert time.monotonic() < deadline
+                page.wait_for_timeout(20)
+            baseline = {"revision_id": "r_" + "3" * 32, "version": 2}
+            page.wait_for_function(
+                "r => document.querySelector('#status').dataset.acceptedRevision === r",
+                arg=baseline["revision_id"],
+            )
+            page.wait_for_function(
+                "r => JSON.parse(document.querySelector('#evidence-content details pre')?.textContent || 'null')?.baseline?.revision_id === r",
+                arg=baseline["revision_id"],
+            )
+            first, old = held.pop()
+            first.fulfill(json=response_for(old))
+            page.wait_for_timeout(1200)
+            actual = page.locator("#evidence-content details pre").text_content()
+            assert (
+                json.loads(actual)["baseline"]["revision_id"] == baseline["revision_id"]
+            )
+            assert len(requests) == 2
+            page.locator("#evidence-toggle").click()
+            baseline = {"revision_id": None, "version": 3}
+            page.wait_for_function(
+                "document.querySelector('#status').textContent.includes('Accepted deliverable: v3')"
+            )
+            page.locator("#evidence-toggle").click()
+            page.locator("#evidence-content").get_by_text(
+                "Compared with accepted v3", exact=True
+            ).wait_for()
+            baseline = {"revision_id": None, "version": 4}
+            page.locator("#evidence-content").get_by_text(
+                "Compared with accepted v4", exact=True
+            ).wait_for()
+            assert len(requests) == 4
+        finally:
+            browser.close()
 
 
 @pytest.mark.browser

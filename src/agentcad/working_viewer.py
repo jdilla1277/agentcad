@@ -186,100 +186,113 @@ def _available(root, record, visual):
         return False
 
 
+def _unavailable(revision, error):
+    return {
+        "revision_id": revision,
+        "status": "Unavailable",
+        "message": str(error)[:2000],
+    }
+
+
+def _read_summary(history, revision, selection, promotion_state):
+    if revision is None:
+        return None
+    try:
+        return _summary(history._show(revision, selection, promotion_state))
+    except Exception as exc:
+        return _unavailable(revision, exc)
+
+
+def _verified_visual(root, record, chosen, *, follow, generation=None):
+    """Use the same media checks even when revision evidence is unreadable."""
+    visual = record.get("working_snapshots", {}).get(chosen)
+    missing_preview = visual is not None and not _available(root, record, visual)
+    if visual is not None and not missing_preview:
+        return visual, False
+    if not follow:
+        return None, missing_preview
+    candidates = [
+        record.get("last_working_visual"),
+        *sorted(
+            record.get("working_snapshots", {}).values(),
+            key=lambda item: item["generation"],
+            reverse=True,
+        ),
+        record.get("latest"),
+    ]
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate["artifact"] in seen:
+            continue
+        seen.add(candidate["artifact"])
+        if generation is not None and candidate.get("generation", 0) > generation:
+            continue
+        if _available(root, record, candidate):
+            return candidate, missing_preview
+    return None, missing_preview
+
+
 def state(root, record, revision=None):
     history = ChangeHistory(root)
-    chosen, working_id, accepted, working = revision, None, None, None
+    chosen, working_id, accepted, generation = revision, None, None, None
     try:
         selection, promotion_state = history._selection()
         working_id = selection["working_revision_id"]
+        generation = selection["selection_generation"]
         chosen = revision or working_id
         accepted = {
             "revision_id": selection["accepted_revision_id"],
             "version": selection["accepted_version"]["version"],
             "label": selection["accepted_version"]["label"],
         }
-        working = (
-            _summary(history._show(working_id, selection, promotion_state))
-            if working_id
-            else None
-        )
+    except Exception as exc:
+        working = _unavailable(working_id, exc)
+        selected = _unavailable(chosen, exc)
+    else:
+        # Each revision has its own evidence failure. Damage to newer work must
+        # not suppress an independently verified historical review pin.
+        working = _read_summary(history, working_id, selection, promotion_state)
         selected = (
-            _summary(history._show(revision, selection, promotion_state))
-            if revision
+            _read_summary(history, revision, selection, promotion_state)
+            if revision and revision != working_id
             else working
         )
-        if selected and chosen in record.get("view_failures", {}):
-            selected.update(
-                preview_state="unavailable", message=record["view_failures"][chosen]
-            )
-        visual = record.get("working_snapshots", {}).get(chosen)
-        if visual and not _available(root, record, visual):
-            visual = None
-            selected.update(
-                preview_state="unavailable",
-                message="Prepared viewer media is missing or changed; inspect retained evidence.",
-            )
-        if not revision and visual is None:
-            candidates = [
-                record.get("last_working_visual"),
-                *sorted(
-                    record.get("working_snapshots", {}).values(),
-                    key=lambda item: item["generation"],
-                    reverse=True,
-                ),
-                record.get("latest"),
-            ]
-            seen = set()
-            for candidate in candidates:
-                if not candidate or candidate["artifact"] in seen:
-                    continue
-                seen.add(candidate["artifact"])
-                if candidate.get("generation", 0) > selection["selection_generation"]:
-                    continue
-                if _available(root, record, candidate):
-                    visual = candidate
-                    break
-        return {
-            "experimental_changes": True,
-            "working": working,
-            "selected": selected,
-            "attempt": {
-                "status": (
-                    "success"
-                    if working and working["status"] == "Accepted"
-                    else (working or {}).get("result_status") or "checking"
-                ),
-                "label": (working or {}).get("label"),
-            },
-            "accepted": accepted,
-            "displayed": visual,
-            "latest": visual,
-            "pinned_revision_id": revision,
-            "older_geometry": bool(visual and visual.get("revision_id") != chosen),
-        }
-    except Exception as exc:
-        # Never disguise damaged evidence as a successful current model.
-        visual = (
-            None
-            if revision
-            else record.get("last_working_visual") or record.get("latest")
+    visual, missing_preview = _verified_visual(
+        root, record, chosen, follow=revision is None, generation=generation
+    )
+    if selected and chosen in record.get("view_failures", {}):
+        selected.update(
+            preview_state="unavailable", message=record["view_failures"][chosen]
         )
-        unknown = {
-            "revision_id": chosen,
-            "status": "Unavailable",
-            "message": str(exc)[:2000],
-        }
-        return {
-            "experimental_changes": True,
-            "working": working
-            or ({**unknown, "revision_id": working_id} if working_id else None),
-            "selected": unknown,
-            "accepted": accepted,
-            "displayed": visual,
-            "latest": visual,
-            "pinned_revision_id": revision,
-            "older_geometry": bool(visual),
-        }
+    if selected and missing_preview:
+        selected["preview_state"] = "unavailable"
+        selected.setdefault(
+            "message",
+            "Prepared viewer media is missing or changed; inspect retained evidence.",
+        )
+    attempt_status = (working or {}).get("result_status")
+    if working and working["status"] == "Accepted":
+        attempt_status = "success"
+    elif not attempt_status:
+        attempt_status = (
+            "unavailable"
+            if working and working["status"] == "Unavailable"
+            else "checking"
+        )
+    return {
+        "experimental_changes": True,
+        "working": working,
+        "selected": selected,
+        "attempt": {
+            "status": attempt_status,
+            "label": (working or {}).get("label"),
+        },
+        "accepted": accepted,
+        "displayed": visual,
+        "latest": visual,
+        "pinned_revision_id": revision,
+        "older_geometry": bool(visual and visual.get("revision_id") != chosen),
+    }
 
 
 def evidence(root, revision):
@@ -294,6 +307,10 @@ def evidence(root, revision):
             comparison = {"status": "unavailable", "message": str(exc)[:2000]}
     return {
         "revision_id": revision,
+        "accepted": {
+            "revision_id": accepted,
+            "version": shown["selection"]["accepted_version"]["version"],
+        },
         "checks": shown["checks"],
         "diagnostics": shown["diagnostics"],
         "comparison": comparison,

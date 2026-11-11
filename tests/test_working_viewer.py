@@ -213,10 +213,14 @@ def test_status_history_and_execution_replay_do_not_write_viewer_state(runner, p
     def files():
         # The CLI audit log can record an invocation, including a retry. It is
         # separate from immutable revision and viewer state.
+        # OS coordination files are not evidence; Windows denies reads of the
+        # service lock while the viewer owns it for its process lifetime.
         return {
             str(p.relative_to(project)): p.read_bytes()
             for p in project.rglob("*")
-            if p.is_file() and p != project / ".agentcad/session.jsonl"
+            if p.is_file()
+            and p.suffix != ".lock"
+            and p != project / ".agentcad/session.jsonl"
         }
 
     before = files()
@@ -342,3 +346,60 @@ def test_ordinary_build_returns_to_standard_follow_without_breaking_existing_pin
     assert pinned["displayed"]["revision_id"] == original
     assert pinned["accepted"]["revision_id"] is None
     assert pinned["accepted"]["version"] == ordinary["version"]
+
+
+@pytest.mark.parametrize("damaged_record", ["geometry", "request"])
+def test_healthy_pin_is_independent_of_damaged_newer_working_evidence(
+    runner, project, damaged_record
+):
+    original = run(runner)["change"]["revision_id"]
+    staged = run(runner, "--stage")
+    newer = staged["change"]["revision_id"]
+    url = open_viewer(runner)
+    Path(staged["change"][damaged_record]).write_bytes(b"damaged newer evidence")
+    before = (project / "agentcad.json").read_bytes()
+    for state in (
+        read(url + "state?revision=" + original),
+        invoke(runner, ["viewer", "status", "--revision", original, FLAG]),
+    ):
+        assert state["working"]["revision_id"] == newer
+        assert state["working"]["status"] == "Unavailable"
+        assert state["selected"]["revision_id"] == original
+        assert state["selected"]["status"] == "Accepted"
+        assert state["displayed"]["revision_id"] == original
+        assert state["accepted"]["revision_id"] == original
+        assert "message" not in state["selected"]
+        with urlopen(url + state["displayed"]["artifact"]) as response:
+            assert b"change_receipt" in response.read()
+    assert (project / "agentcad.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("media_damage", ["missing", "tampered"])
+def test_damaged_working_evidence_uses_only_available_fallback_media(
+    runner, project, media_damage
+):
+    original = run(runner)["change"]["revision_id"]
+    staged = run(runner, "--stage")
+    newer = staged["change"]["revision_id"]
+    url = open_viewer(runner)
+    current = read(url + "state")["displayed"]
+    Path(staged["change"]["geometry"]).write_bytes(b"damaged newer STEP")
+    media = project / current["html"]
+    if media_damage == "missing":
+        media.unlink()
+    else:
+        media.write_text("tampered candidate preview")
+    record = live.read_json(live.project_record(live.project_token(project)))
+    cache_paths = list((project / ".agentcad/working_viewer").rglob("*"))
+    before = {p: p.read_bytes() for p in cache_paths if p.is_file()}
+    state = read(url + "state")
+    assert state["working"]["revision_id"] == newer
+    assert state["selected"]["status"] == "Unavailable"
+    assert state["selected"]["preview_state"] == "unavailable"
+    assert state["displayed"]["revision_id"] == original
+    assert state["older_geometry"] is True
+    assert {p: p.read_bytes() for p in before} == before
+    (project / record["working_snapshots"][original]["html"]).unlink()
+    empty = read(url + "state")
+    assert empty["displayed"] is None
+    assert empty["latest"] is None
