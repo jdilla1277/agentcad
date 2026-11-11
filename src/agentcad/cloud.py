@@ -73,7 +73,7 @@ def _input(value, limit, cwd=None, suffixes=None):
 
 
 class CloudClient:
-    def __init__(self, api_url, key_id, secret, *, transport=None):
+    def __init__(self, api_url, key_id, secret, *, credential=None, transport=None):
         try:
             parsed = urlsplit(api_url)
             loopback = parsed.hostname == "localhost"
@@ -89,21 +89,36 @@ class CloudClient:
             valid = False
         if not valid:
             raise CloudError("invalid_config", "AGENTCAD_API_URL must be an HTTPS origin without credentials, a path, query, or fragment. HTTP is allowed only for loopback development.")
-        if not isinstance(key_id, str) or not re.fullmatch(r"key_[0-9a-f]{24}", key_id) or not isinstance(secret, str) or not 20 <= len(secret) <= 128:
+        if credential is not None:
+            from agentcad.account import CREDENTIAL
+            if not isinstance(credential, str) or not CREDENTIAL.fullmatch(credential):
+                raise CloudError("invalid_config", "Reconnect with agentcad account connect.")
+        elif not isinstance(key_id, str) or not re.fullmatch(r"key_[0-9a-f]{24}", key_id) or not isinstance(secret, str) or not 20 <= len(secret) <= 128:
             raise CloudError("invalid_config", "Set the issued AGENTCAD_KEY_ID and AGENTCAD_KEY_SECRET in the process environment.")
         try:
             import httpx
         except ImportError:
             raise CloudError("missing_dependency", "Install the cloud extra: pip install 'agentcad[cloud]' (included with agentcad[mcp]).") from None
-        self.httpx, self.secret = httpx, secret
+        self.httpx, self.secret = httpx, credential or secret
+        headers = {"Authorization": "Bearer " + credential} if credential else {"X-AgentCAD-Key-ID": key_id, "X-AgentCAD-Key-Secret": secret}
         self.http = httpx.Client(base_url=api_url.rstrip("/"), transport=transport, timeout=30,
-                                 follow_redirects=False, headers={"X-AgentCAD-Key-ID": key_id, "X-AgentCAD-Key-Secret": secret})
+                                 follow_redirects=False, headers=headers)
 
     @classmethod
     def from_env(cls):
         values = [os.environ.get(name) for name in ("AGENTCAD_API_URL", "AGENTCAD_KEY_ID", "AGENTCAD_KEY_SECRET")]
+        if not any(values[1:]):
+            from agentcad.account import AccountState, AccountError
+            try:
+                saved = AccountState().load()
+            except AccountError as error:
+                raise CloudError(error.reason, error.message) from None
+            if saved.get("credential"):
+                if values[0] and values[0].rstrip("/") != saved.get("api_url"):
+                    raise CloudError("profile_origin_mismatch", "The saved connection belongs to another cloud API. Use its original API or a separate AGENTCAD_ACCOUNT_STATE profile.")
+                return cls(saved.get("api_url"), None, None, credential=saved["credential"])
         if not all(values):
-            raise CloudError("missing_config", "Set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the CLI or MCP server process environment. Do not put secrets in project files.")
+            raise CloudError("missing_config", "Run agentcad account connect, approve in the browser, then agentcad account status. Existing pilot credentials can still use AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET.")
         return cls(*values)
 
     def __enter__(self):
@@ -255,9 +270,20 @@ class CloudClient:
         if type(wait_seconds) is not int or not 0 <= wait_seconds <= 60:
             raise CloudError("invalid_wait", "wait_seconds must be an integer from 0 to 60. Poll the same job again if it is still running.")
         deadline = time.monotonic() + wait_seconds
+        result = None
         while True:
             timeout = min(30, max(0.1, deadline - time.monotonic())) if wait_seconds else 30
-            result = self._request("GET", route, timeout=timeout)
+            try:
+                latest = self._request("GET", route, timeout=timeout)
+            except CloudError as exc:
+                # Near the end of --wait, the remaining HTTP budget may be
+                # shorter than a normal response. Keep the last observed job
+                # rather than claiming that an otherwise healthy poll failed.
+                if (wait_seconds and result is not None and exc.reason == "request_failed"
+                        and time.monotonic() >= deadline):
+                    break
+                raise
+            result = latest
             if result.get("status") in {"succeeded", "failed"} or time.monotonic() >= deadline:
                 break
             time.sleep(min(2, max(0, deadline - time.monotonic())))
