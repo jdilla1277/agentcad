@@ -1,5 +1,12 @@
 # Local inspection jobs
 
+**WIP — explicit opt-in required on every call.** Use `--experimental-inspect`
+on CLI `import`, `run` and enriched `inspect`, or `experimental_inspect=true`
+in local MCP. Ordinary import/build and basic numeric topology inspection stay
+available without this flag. No environment/project setting or previous call
+enables it. Opted-in replies identify `experimental_inspect.status=work_in_progress`;
+copy the generated flagged recovery/continuation actions.
+
 Import waits for inspection by default. Its response now includes
 `inspection_job`: the baseline, analysis revision, configuration, stage progress
 and executable status/wait/resume/cancel actions. The source STEP and issued
@@ -10,8 +17,8 @@ to the complete saved paths and hashes without repeating them in every response.
 For a large import, choose a background worker or a bounded inspection wait:
 
 ```sh
-agentcad import supplier.step --init --idempotency-key supplier-001 --inspection-background
-agentcad import supplier.step --init --idempotency-key supplier-001 --inspection-wait-timeout 2
+agentcad import --experimental-inspect supplier.step --init --idempotency-key supplier-001 --inspection-background
+agentcad import --experimental-inspect supplier.step --init --idempotency-key supplier-001 --inspection-wait-timeout 2
 ```
 
 These are alternative wait controls. They do not limit parsing, validation,
@@ -33,12 +40,12 @@ analysis or start another import.
 Both imported and script-generated baselines support the same job workflow:
 
 ```sh
-agentcad inspect v1_part/output.step --report --background
-agentcad inspect v1_part/output.step --report --wait-timeout 2
-agentcad inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action status
-agentcad inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action wait --wait-timeout 30
-agentcad inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action resume
-agentcad inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action cancel
+agentcad inspect --experimental-inspect v1_part/output.step --report --background
+agentcad inspect --experimental-inspect v1_part/output.step --report --wait-timeout 2
+agentcad inspect --experimental-inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action status
+agentcad inspect --experimental-inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action wait --wait-timeout 30
+agentcad inspect --experimental-inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action resume
+agentcad inspect --experimental-inspect v1_part/output.step --report --job inspection_RETURNED_ID --job-action cancel
 ```
 
 Copy the actual `inspection_job.actions` commands. They contain the complete

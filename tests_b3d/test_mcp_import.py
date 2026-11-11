@@ -69,7 +69,7 @@ def test_registered_import_applies_declared_checks_without_advancing_current(
     baseline = None
     if not initialize:
         baseline = _payload(server.import_cad(
-            str(source), str(project), label="accepted", initialize=True,
+            str(source), str(project), experimental_inspect=True, label="accepted", initialize=True,
             view=False, diff=False, report=False, report_images=False, build_dir="artifacts",
             full_response=True,
         ))
@@ -82,13 +82,13 @@ def test_registered_import_applies_declared_checks_without_advancing_current(
         "check_id": "length", "kind": "dimension", "axis": "x",
         "expected_mm": expected, "tolerance_mm": 0.1,
     }]}))
-    result = asyncio.run(server.mcp.call_tool("import_cad", {
+    result = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(source), "cwd": str(project), "label": "checked-import",
         "initialize": initialize, "checks_file": str(checks), "defer_checks": deferred,
         "view": False, "diff": False, "report": False, "report_images": False,
         "build_dir": "artifacts",
         "full_response": True,
-    }))
+    }), "experimental_inspect": True}))
     # The registered tool transports a refused import as one JSON text block.
     text, = result
     assert text.type == "text"
@@ -126,11 +126,11 @@ def test_registered_import_delivers_cli_json_and_checked_pngs(isolated_dir, monk
         return result
 
     monkeypatch.setattr(server, "_invoke", observed)
-    result = asyncio.run(server.mcp.call_tool("import_cad", {
+    result = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(source), "cwd": str(project), "initialize": True,
         "view": False, "diff": False, "build_dir": "build with spaces",
         "full_response": True,
-    }))
+    }), "experimental_inspect": True}))
     payload = _verify_images(result, project)
     assert payload == captured[0]
     assert payload["status"] == "success" and payload["_exit_code"] == 0
@@ -157,7 +157,7 @@ def test_registered_import_delivers_cli_json_and_checked_pngs(isolated_dir, monk
 
 def test_import_delivers_at_most_nine_ranked_images(isolated_dir):
     source = _distinct_parts(isolated_dir / "assembly.step")
-    result = server.import_cad(str(source), str(isolated_dir), initialize=True, view=False, diff=False, full_response=True)
+    result = server.import_cad(str(source), str(isolated_dir), experimental_inspect=True, initialize=True, view=False, diff=False, full_response=True)
     payload = _verify_images(result, isolated_dir)
     assert len(result.content[1:]) == 9
     assert payload["inspection"]["inventory"]["parts_total"] == 12
@@ -172,7 +172,7 @@ def test_import_delivers_at_most_nine_ranked_images(isolated_dir):
 ])
 def test_import_report_and_image_controls_preserve_saved_inventory(isolated_dir, options, count):
     source = _source(isolated_dir)
-    result = server.import_cad(str(source), str(isolated_dir), initialize=True, view=False, diff=False, **options, full_response=True)
+    result = server.import_cad(str(source), str(isolated_dir), experimental_inspect=True, initialize=True, view=False, diff=False, **options, full_response=True)
     payload = _payload(result)
     assert payload["_exit_code"] == 0
     assert isinstance(result, CallToolResult) == bool(count)
@@ -187,7 +187,7 @@ def test_import_report_and_image_controls_preserve_saved_inventory(isolated_dir,
     registry = step.with_name("geometry_manifest.json").read_bytes()
     if options.get("report", True):
         assert len(payload["inspection"]["media"]) == count
-        replay = server.inspect(file=str(step), cwd=str(isolated_dir), report=True, report_images=False, full_response=True)
+        replay = server.inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, report_images=False, full_response=True)
         assert replay["analysis_revision"] == payload["inspection"]["analysis_revision"]
     else:
         catalogue = json.loads(Path(payload["outputs"]["inspection_bundle"]).read_text())
@@ -214,7 +214,7 @@ def test_attachment_failure_preserves_core_and_supplies_retry(isolated_dir, monk
         return payload
 
     monkeypatch.setattr(server, "_invoke", tampered)
-    payload = server.import_cad(str(source), str(isolated_dir), initialize=True, view=False, diff=False, max_images=1, full_response=True)
+    payload = server.import_cad(str(source), str(isolated_dir), experimental_inspect=True, initialize=True, view=False, diff=False, max_images=1, full_response=True)
     assert isinstance(payload, dict)  # Delivery is atomic: no unchecked image blocks.
     assert payload["status"] == payload["core"]["status"] == "success"
     assert payload["_exit_code"] == 0
@@ -232,7 +232,7 @@ def test_attachment_failure_preserves_core_and_supplies_retry(isolated_dir, monk
     assert cli_retried["budget"]["max_images"] == 1
     assert cli_retried["budget"]["text_tokens"] == payload["inspection"]["budget"]["text_tokens"]
     assert len(cli_retried["media"]) == 1
-    retried = server.inspect(file=str(step), cwd=str(isolated_dir), report=True, max_images=1, full_response=True)
+    retried = server.inspect(experimental_inspect=True, file=str(step), cwd=str(isolated_dir), report=True, max_images=1, full_response=True)
     assert isinstance(retried, CallToolResult) and len(retried.content) == 2
     assert step.with_name("geometry_manifest.json").read_bytes() == registry
     history = json.loads((isolated_dir / "agentcad.json").read_text())
@@ -245,7 +245,7 @@ def test_render_failure_remains_partial_import_success(isolated_dir, monkeypatch
 
     monkeypatch.setattr("agentcad.render.render_geometry_sheet", broken)
     source = _source(isolated_dir)
-    result = server.import_cad(str(source), str(isolated_dir), initialize=True, view=False, diff=False, full_response=True)
+    result = server.import_cad(str(source), str(isolated_dir), experimental_inspect=True, initialize=True, view=False, diff=False, full_response=True)
     assert isinstance(result, dict)
     assert result["status"] == "success" and result["_exit_code"] == 0
     assert result["inspection"]["media_summary"]["state"] == "partial_failure"
@@ -270,7 +270,7 @@ def test_import_keeps_cli_errors_and_diagnostics(isolated_dir, error):
         options["runtime"] = "cadquery"  # Existing-project guard needs no CadQuery install.
     else:
         options["text_budget"] = 0
-    result = server.import_cad(str(source), str(isolated_dir), view=False, diff=False, **options, full_response=True)
+    result = server.import_cad(str(source), str(isolated_dir), experimental_inspect=True, view=False, diff=False, **options, full_response=True)
     assert isinstance(result, dict)
     assert result["_exit_code"] != 0
     assert "inspection" not in result

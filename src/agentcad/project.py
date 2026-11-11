@@ -274,6 +274,9 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        if name in {"run", "import", "inspect"}:
+            from agentcad.experimental_inspect import validate
+            validate(ctx, kwargs)
         if name == "feedback" and (
             kwargs.get("show_template")
             or (kwargs.get("message") is None and kwargs.get("feedback_file") is None)
