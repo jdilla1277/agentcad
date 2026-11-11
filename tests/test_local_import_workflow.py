@@ -2,10 +2,39 @@
 # collect-on-default-profile
 import importlib.util
 import json
+import os
 
 import pytest
 
 from agentcad.cli import cli
+
+
+@pytest.mark.parametrize("runtime", ["build123d", "cadquery"])
+def test_edited_helper_traceback_uses_fresh_source(runner, isolated_dir, runtime):
+    if importlib.util.find_spec(runtime) is None:
+        pytest.skip("optional runtime is absent")
+    helper = isolated_dir / "local_part.py"
+    helper.write_text('def make_part():\n    raise ValueError("first_error")\n')
+    stamp = helper.stat()
+    (isolated_dir / "model.py").write_text("from local_part import make_part\nshow_object(make_part())\n")
+    assert runner.invoke(cli, ["init", "--runtime", runtime, "--no-agent-setup"]).exit_code == 0
+    results = []
+    for label, error in [("first", "first_error"), ("edited", "other_error")]:
+        helper.write_text(f'def make_part():\n    raise ValueError("{error}")\n')
+        assert helper.stat().st_size == stamp.st_size
+        os.utime(helper, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        response = runner.invoke(cli, ["run", "model.py", "--label", label, "--no-preview", "--no-view", "--no-diff", "--no-daemon"])
+        assert response.exit_code != 0, response.output
+        data = json.loads(response.stdout)
+        assert data["status"] == "failed"
+        assert f'raise ValueError("{error}")' in data["traceback"]
+        assert f"ValueError: {error}" in data["traceback"]
+        results.append(data)
+    assert 'raise ValueError("first_error")' not in results[1]["traceback"]
+    # Historical failure evidence must retain the source that ran then.
+    for data in results:
+        saved = json.loads((isolated_dir / data["path"] / "meta.json").read_text())
+        assert saved["traceback"] == data["traceback"]
 
 
 @pytest.mark.parametrize("runtime", ["build123d", "cadquery"])

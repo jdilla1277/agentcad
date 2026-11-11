@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from contextvars import ContextVar
 import importlib
+import linecache
 from importlib.abc import MetaPathFinder
 from importlib.machinery import BuiltinImporter, FrozenImporter, PathFinder, SourceFileLoader
 from pathlib import Path
@@ -57,7 +58,10 @@ class _FreshSourceLoader(SourceFileLoader):
     def get_code(self, fullname):
         # Helpers can be edited twice within a timestamp tick at the same size.
         # Read source directly; never reuse or delete the user's cached bytecode.
-        return self.source_to_code(self.get_data(self.path), self.path)
+        source = self.get_data(self.path)
+        # Traceback source must refresh too, even when file metadata is unchanged.
+        linecache.cache.pop(self.path, None)
+        return self.source_to_code(source, self.path)
 
 
 class _LocalSourceFinder(MetaPathFinder):
