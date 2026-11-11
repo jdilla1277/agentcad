@@ -175,17 +175,19 @@ class AccountClient:
                     if len(raw) > 16384:
                         raise AccountError("invalid_response", "The account service returned an oversized response.")
                 if response.status_code in {401, 403, 404, 410}:
-                    raise AccountError("not_connected", "This request or installation is unavailable. Reconnect, or finish approval with the correct browser account.")
+                    message = ("This CLI installation is revoked, disabled, or unavailable. Clear its local state with agentcad account disconnect --forget, then connect again."
+                               if credential else "This approval request is expired, canceled, or unavailable. Clear pending state with agentcad account disconnect --forget, then connect again.")
+                    raise AccountError("not_connected", message)
                 if response.status_code == 429:
                     raise AccountError("rate_limited", "Too many connection requests. Keep the existing request and try later.")
                 if not 200 <= response.status_code < 300:
-                    raise AccountError("account_unavailable", "The account service is unavailable. Your saved connection is preserved; retry later.")
+                    raise AccountError("account_unavailable", f"The account service returned HTTP {response.status_code}. Your saved account state is preserved; retry later.")
                 result = json.loads(raw)
                 if not isinstance(result, dict):
                     raise ValueError()
                 return result
         except self.httpx.HTTPError:
-            raise AccountError("request_failed", "The response was not received. Your saved connection is preserved; retry the same command.") from None
+            raise AccountError("request_failed", "The response was not received. Your saved account state is preserved; retry the same command.") from None
         except (ValueError, UnicodeError):
             raise AccountError("invalid_response", "The account service returned an invalid response. Retry without deleting your saved state.") from None
 

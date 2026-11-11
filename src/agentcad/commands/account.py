@@ -14,7 +14,11 @@ def _call(operation, **kwargs):
     except (OSError, AccountError) as error:
         result = {"command": "account", "status": "error", "reason": getattr(error, "reason", "state_unavailable"),
                   "message": getattr(error, "message", "Account state is unavailable. Check your private state file and retry."),
-                  "suggestion": "Retry the same command. For an expired or revoked request, run agentcad account disconnect --forget, then agentcad account connect.",
+                  "suggestion": ("Run agentcad account disconnect --forget, then agentcad account connect."
+                    if getattr(error, "reason", "") == "not_connected" else
+                    "Preserve the state file for recovery or choose a new AGENTCAD_ACCOUNT_STATE path."
+                    if getattr(error, "reason", "") == "invalid_state" else
+                    "Retry the same command when the service is available; keep the saved account state."),
                   "more_at": "agentcad docs account"}
     return result
 

@@ -105,3 +105,33 @@ def test_cli_reports_invalid_state_as_json_without_creating_project_files(tmp_pa
     assert "never-print-this-secret" not in result.stdout
     assert not (tmp_path / "agentcad.toml").exists()
     assert not (tmp_path / ".agentcad").exists()
+
+
+def test_service_outage_preserves_pending_state_and_reports_http_status(tmp_path):
+    state = AccountState(tmp_path / "profile")
+    def handle(request):
+        return httpx.Response(503, json={"private_detail": "never-print-provider-secrets"})
+    with AccountClient(state, site="https://accounts.example.test", transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(AccountError) as caught:
+            client.connect("Laptop")
+    assert "HTTP 503" in caught.value.message
+    assert "saved account state" in caught.value.message
+    assert "never-print-provider-secrets" not in caught.value.message
+    assert state.load()["pending"]["id"]
+
+
+def test_revoked_connection_gives_reconnect_guidance_instead_of_retry_loop(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from agentcad.cli import cli
+    def denied(*args, **kwargs):
+        raise AccountError("not_connected", "This CLI installation is revoked, disabled, or unavailable.")
+    monkeypatch.setattr(AccountClient, "status", denied)
+    monkeypatch.setenv("AGENTCAD_ACCOUNT_STATE", str(tmp_path / "profile"))
+    monkeypatch.setattr(AccountClient, "__init__", lambda self: setattr(self, "state", AccountState(tmp_path / "profile")))
+    monkeypatch.setattr(AccountClient, "__enter__", lambda self: self)
+    monkeypatch.setattr(AccountClient, "__exit__", lambda self, *args: None)
+    result = CliRunner().invoke(cli, ["account", "status"])
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert "disconnect --forget" in payload["suggestion"]
+    assert "Retry" not in payload["suggestion"]

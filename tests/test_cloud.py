@@ -235,3 +235,28 @@ def test_symlink_destination_never_replaces_its_target(tmp_path):
     with client(lambda _: pytest.fail("Symlink destination made a request")) as api, pytest.raises(CloudError):
         api.download(PROJECT, str(destination), version=1, path="v1_model/output.step", overwrite=True)
     assert original.read_bytes() == b"keep me"
+
+
+@pytest.mark.parametrize("deadline_expired", [True, False])
+def test_poll_deadline_keeps_last_pending_result_but_does_not_hide_earlier_outages(monkeypatch, deadline_expired):
+    import agentcad.cloud as module
+    clock = {"now": 0.0}
+    calls = []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(module.time, "sleep", lambda _: clock.update(now=59.8))
+    with client(lambda _: pytest.fail("Test uses explicit poll responses")) as api:
+        def response(*args, **kwargs):
+            calls.append(kwargs.get("timeout"))
+            if len(calls) == 1:
+                return queued()
+            clock["now"] = 60.1 if deadline_expired else 59.9
+            raise CloudError("request_failed", "The poll response was not received.")
+        monkeypatch.setattr(api, "_request", response)
+        if deadline_expired:
+            result = api.job(PROJECT, JOB, wait_seconds=60)
+            assert result["id"] == JOB and result["status"] == "queued"
+            assert result["next_actions"] == [f"agentcad cloud job {PROJECT} {JOB} --wait"]
+        else:
+            with pytest.raises(CloudError):
+                api.job(PROJECT, JOB, wait_seconds=60)
+    assert len(calls) == 2 and calls[1] < 1

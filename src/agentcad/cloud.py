@@ -270,9 +270,20 @@ class CloudClient:
         if type(wait_seconds) is not int or not 0 <= wait_seconds <= 60:
             raise CloudError("invalid_wait", "wait_seconds must be an integer from 0 to 60. Poll the same job again if it is still running.")
         deadline = time.monotonic() + wait_seconds
+        result = None
         while True:
             timeout = min(30, max(0.1, deadline - time.monotonic())) if wait_seconds else 30
-            result = self._request("GET", route, timeout=timeout)
+            try:
+                latest = self._request("GET", route, timeout=timeout)
+            except CloudError as exc:
+                # Near the end of --wait, the remaining HTTP budget may be
+                # shorter than a normal response. Keep the last observed job
+                # rather than claiming that an otherwise healthy poll failed.
+                if (wait_seconds and result is not None and exc.reason == "request_failed"
+                        and time.monotonic() >= deadline):
+                    break
+                raise
+            result = latest
             if result.get("status") in {"succeeded", "failed"} or time.monotonic() >= deadline:
                 break
             time.sleep(min(2, max(0, deadline - time.monotonic())))
