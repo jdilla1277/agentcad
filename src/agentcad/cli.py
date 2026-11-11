@@ -520,6 +520,8 @@ class _InvocationOutput:
                         from agentcad.change_retention import attach_change
 
                         payload = attach_change(payload)
+                        from agentcad.working_viewer import finish_response as finish_working_view
+                        payload = finish_working_view(payload)
                         from agentcad.change_recovery import finish_response as finish_recovery
                         payload = finish_recovery(payload)
                         from agentcad.experimental_changes import present
@@ -946,6 +948,8 @@ class _LoggingGroup(click.Group):
                                     complete_result=output.complete_result)
 
     def _record_live_build(self, ctx, captured, root, exception=None, *, complete_result=None):
+        if ctx.meta.get("working_viewer_handled"):
+            return
         if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay") or ctx.meta.get("run_replay"):
             return
         layout = ctx.meta.get("project_layout")
@@ -953,6 +957,12 @@ class _LoggingGroup(click.Group):
             root = layout.build_root
         if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
             return
+        if not ctx.meta.get("experimental_changes"):
+            try:
+                from agentcad.working_viewer import use_standard
+                use_standard(root)
+            except Exception:
+                pass  # Viewer availability cannot change an ordinary CAD result.
         result = complete_result or {}
         for line in reversed(captured) if complete_result is None else ():
             try:
@@ -999,6 +1009,8 @@ class _LoggingGroup(click.Group):
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
         if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "changes"):
+            return
+        if ctx.meta.get("working_viewer_status"):
             return
         if cmd_name == "check-spec" and not ctx.meta.get("experimental_check_completion", False) and ctx.meta.get("experimental_revision_read"):
             return

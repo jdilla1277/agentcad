@@ -30,7 +30,7 @@ class AgentCADMCP(FastMCP):
                     "Explicit per-call WIP opt-in. Must be true for retained changes, declared checks, stage, promote and authored-run retry/status; default false."
                 )
                 tool.description += "\nWIP change workflows require experimental_changes=true on every call; ordinary CAD calls default to false."
-            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair"}:
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair", "viewer"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
@@ -41,7 +41,7 @@ class AgentCADMCP(FastMCP):
             raise ValueError(f"Invalid {name} arguments: experimental_changes must be a boolean.")
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair"}:
+        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair", "viewer"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -1088,13 +1088,35 @@ def diff(ref1: str, ref2: str, cwd: str, build_dir: str | None = None) -> dict:
 
 
 @mcp.tool()
+def viewer(cwd: str, action: Literal["open", "status", "stop"] = "open",
+           build_dir: str | None = None, experimental_changes: bool = False,
+           revision: str | None = None) -> dict:
+    """Open/follow a project, read viewer state, or stop the local service.
+
+    Experimental projects require experimental_changes=true to open. They
+    follow working geometry, distinguish accepted delivery, and label older
+    geometry after no-output failures. Status with opt-in returns the same
+    working/selected/displayed/accepted IDs as the human viewer without preparing
+    media or changing selection. Use view(file=REVISION) for a pinned historical
+    review. Existing pins stay fixed across builds, checks and acceptance.
+    Optional revision selects a pinned revision's read-only status (status only).
+    """
+    args = _experimental(["viewer", action], experimental_changes)
+    if revision is not None:
+        args.extend(["--revision", revision])
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
 def view(file: str, cwd: str, build_dir: str | None = None, validation: bool = False,
          experimental_changes: bool = False) -> dict:
     """Open a GLB, STEP, or retained revision in the browser via three.js.
 
     Args:
         file: GLB/STEP path, or retained revision ID to review its diagnostic
-            geometry and pinned check receipt without changing current.
+            geometry and check receipt without changing current. Its response
+            includes an immutable file URL and project_viewer.url, pinned to that
+            revision. The human can explicitly switch back to Follow working.
         validation: Show failure markers and conditional repair guidance for a STEP file.
         cwd: Source project directory (or a subdirectory).
         build_dir: Optional artifact/history root, relative to the project root.
