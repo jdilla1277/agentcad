@@ -292,8 +292,8 @@ def inspect_cmd(
     """Inspect any file. STEP/BREP get a full topology report; other formats
     get a structured 'recognized but not editable here' response. Never throws.
 
-    WIP: typed --id, --image, --report, --artifact and inspection job controls
-    require --experimental-inspect on every call. Basic --ids/--summary do not.
+    Typed --id, --image, --report, --artifact and inspection job controls are
+    available without opt-in. IDs and images refer to the same saved baseline.
     """
     if artifact is None and (artifact_offset or artifact_bytes != 3072 or artifact_sha256 is not None or artifact_expires_at is not None):
         raise click.UsageError("--artifact-offset, --artifact-bytes, --artifact-sha256 and --artifact-expires-at require --artifact.")

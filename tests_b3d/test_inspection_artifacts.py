@@ -62,7 +62,7 @@ def test_cli_mcp_complete_inventory_and_reloaded_selectors(runner, isolated_dir,
     report = invoke(runner, ["inspect", str(step), "--report"])
     assert estimate(report) + RESERVE <= 2000
     inventory = report["inspection"]["inventory"]
-    assert inventory["retrieve"] == {"artifact": "manifest", "experimental_inspect": True}
+    assert inventory["retrieve"] == {"artifact": "manifest"}
     original = step.read_bytes(), step.with_name("geometry_manifest.json").read_bytes()
     # Retrieve through both adapters after disabling every native preparation path.
     def no_work(*args, **kwargs):
@@ -73,7 +73,7 @@ def test_cli_mcp_complete_inventory_and_reloaded_selectors(runner, isolated_dir,
     manifest = cli_bytes(runner, ["inspect", str(step), "--artifact", inventory["retrieve"]["artifact"], "--artifact-bytes", "49152"])
     assert manifest == original[1]
     assert set(json.loads(manifest)["entities"]) == set(saved["entities"])
-    response = asyncio.run(server.mcp.call_tool("inspect", {**({"file": str(step), "cwd": str(isolated_dir), "artifact": "manifest"}), "experimental_inspect": True}))
+    response = asyncio.run(server.mcp.call_tool("inspect", {**({"file": str(step), "cwd": str(isolated_dir), "artifact": "manifest"})}))
     first = unpack(response)
     cli_first = invoke(runner, ["inspect", str(step), "--artifact", "manifest"])
     assert {k: v for k, v in first.items() if k != "_exit_code"} == cli_first
@@ -148,7 +148,7 @@ def test_actual_stdio_round_trip_without_client_reading_server_paths(runner, iso
                         args = {"file": str(step), "cwd": str(isolated_dir), "artifact": reference, "artifact_bytes": 49152}
                         raw = bytearray()
                         while args:
-                            result = await session.call_tool("inspect", {**(args), "experimental_inspect": True})
+                            result = await session.call_tool("inspect", {**(args)})
                             assert not result.isError
                             data = unpack(result)
                             assert data["status"] == "success", data

@@ -22,10 +22,16 @@ jobs:
           pip install build
           python -m build
 
-      - name: Verify installed Inspect release gate
+      - name: Install Linux inspection render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri
+
+      - name: Verify installed default Inspect contract
         run: |
           pip install dist/*.whl
-          python scripts/check_inspect_release_gate.py
+          xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
+            env LIBGL_ALWAYS_SOFTWARE=1 python scripts/check_inspect_release_gate.py
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
