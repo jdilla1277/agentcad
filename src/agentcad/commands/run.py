@@ -1195,8 +1195,8 @@ def _assign_part_identity(raw_parts):
 
 @click.command()
 @click.argument("script", required=False)
-@click.option("--idempotency-key", default=None, help="Save one key per intended run; retry identical source/options to recover its result without executing again.")
-@click.option("--status", "request_status", is_flag=True, default=False, help="Read the saved run by --idempotency-key without reading or executing SCRIPT. No --label needed.")
+@click.option("--idempotency-key", default=None, help="Python runs: WIP, requires --experimental-changes. Save one key; retry identical source/options without executing again. CAD-file dispatch uses ordinary import keys.")
+@click.option("--status", "request_status", is_flag=True, default=False, help="WIP, requires --experimental-changes: read the saved run by key without SCRIPT or --label.")
 @click.option(
     "--label",
     default=None,
@@ -1295,7 +1295,7 @@ def run(
         if not idempotency_key:
             raise ProjectError("run_key_required", "Run status requires --idempotency-key.",
                                "Read a saved run with agentcad run --idempotency-key KEY --status.")
-        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon"}
+        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon", "experimental_changes"}
         if any(name not in allowed and ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE for name in ctx.params):
             raise ProjectError("run_status_options", "Status accepts only a key and optional build directory.",
                                "Omit SCRIPT and build options when reading a saved run.")
@@ -1382,6 +1382,7 @@ def run(
             checks_file=ctx.meta.get("change_checks_file"),
             defer_checks=ctx.meta.get("change_defer_checks", False),
             stage=ctx.meta.get("change_stage", False),
+            experimental_changes=ctx.meta.get("experimental_changes", False),
             idempotency_key=idempotency_key,
         )
         return

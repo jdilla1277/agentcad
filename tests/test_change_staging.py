@@ -34,7 +34,7 @@ def init(runner, runtime="build123d"):
 
 
 def promote(runner, revision, key, *, exit_code=0):
-    return invoke(runner, ["promote", revision, "--idempotency-key", key], exit_code)
+    return invoke(runner, ["promote", "--experimental-changes", revision, "--idempotency-key", key], exit_code)
 
 
 @pytest.mark.parametrize(
@@ -57,13 +57,13 @@ def test_stage_and_promote_saved_bytes_without_executing_mutated_source(
     init(runner, runtime)
     script = isolated_dir / "part.py"
     script.write_text(source)
-    baseline = invoke(runner, ["run", "part.py", "--label", "accepted", *QUIET])
+    baseline = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "accepted", *QUIET])
     manifest_before = (isolated_dir / "agentcad.json").read_bytes()
     accepted_bytes = Path(baseline["outputs"]["step"]).read_bytes()
     script.write_text(
         source.replace("60, 30, 6", "80, 30, 6").replace("60,30,6", "80,30,6")
     )
-    staged = invoke(runner, ["run", "part.py", "--label", "longer", "--stage", *QUIET])
+    staged = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "longer", "--stage", *QUIET])
     revision = staged["change"]["revision_id"]
     assert staged["status"] == "staged"
     assert staged["promotion_mode"] == "staged"
@@ -77,7 +77,7 @@ def test_stage_and_promote_saved_bytes_without_executing_mutated_source(
         ChangeStore(isolated_dir).read(revision)["candidate"]["promotion_mode"]
         == "staged"
     )
-    context = invoke(runner, ["context"])
+    context = invoke(runner, ["context", "--experimental-changes"])
     assert context["working_change"]["revision_id"] == revision
     assert context["working_change"]["promotion_mode"] == "staged"
     script.write_text("raise RuntimeError('must never execute during promotion')\n")
@@ -97,7 +97,7 @@ def test_stage_and_promote_saved_bytes_without_executing_mutated_source(
 def test_staged_import_is_keyed_separately_from_automatic_import(runner, isolated_dir):
     source = Path(__file__).parent / "fixtures/real_world/cadgenbench_101_agentcad.step"
     args = [
-        "import",
+        "import", "--experimental-changes",
         str(source),
         "--init",
         "--no-view",
@@ -163,7 +163,7 @@ def test_staged_promotion_preserves_parts_groups_and_parameter_overrides(
     )
     baseline = invoke(
         runner,
-        ["run", "assembly.py", "--label", "accepted", "--params", "length=60", *QUIET],
+        ["run", "--experimental-changes", "assembly.py", "--label", "accepted", "--params", "length=60", *QUIET],
     )
     options = []
     if deferred:
@@ -186,7 +186,7 @@ def test_staged_promotion_preserves_parts_groups_and_parameter_overrides(
     staged = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "assembly.py",
             "--label",
             "longer",
@@ -203,7 +203,7 @@ def test_staged_promotion_preserves_parts_groups_and_parameter_overrides(
     saved_source = script.read_bytes()
     script.write_text("raise RuntimeError('promotion must use the saved candidate')\n")
     if deferred:
-        invoke(runner, ["check-spec", revision, "--complete"])
+        invoke(runner, ["check-spec", "--experimental-changes", revision, "--complete"])
     accepted = promote(runner, revision, "accept-assembly")
     parts = invoke(runner, ["parts", "list", "current"])
     assert parts["part_count"] == 2
@@ -246,7 +246,7 @@ def test_failed_staged_check_requires_new_promotion_key_after_completion(
     staged = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "part.py",
             "--label",
             "experiment",
@@ -265,7 +265,7 @@ def test_failed_staged_check_requires_new_promotion_key_after_completion(
         row["reason"] == "required_check_pending"
         for row in refused["promotion"]["blockers"]
     )
-    completed = invoke(runner, ["check-spec", revision, "--complete"])
+    completed = invoke(runner, ["check-spec", "--experimental-changes", revision, "--complete"])
     assert completed["current_advanced"] is False
     assert (
         json.loads((isolated_dir / "agentcad.json").read_text()).get("current") is None
@@ -282,16 +282,16 @@ def test_promotion_replay_and_status_never_restore_an_older_selection(
     init(runner)
     (isolated_dir / "part.py").write_text(BRACKET)
     staged = invoke(
-        runner, ["run", "part.py", "--label", "experiment", "--stage", *QUIET]
+        runner, ["run", "--experimental-changes", "part.py", "--label", "experiment", "--stage", *QUIET]
     )
     revision = staged["change"]["revision_id"]
     accepted = promote(runner, revision, "one")
-    newer = invoke(runner, ["run", "part.py", "--label", "newer", *QUIET])
+    newer = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "newer", *QUIET])
     before = (isolated_dir / "agentcad.json").read_bytes()
     working = (isolated_dir / ".agentcad/changes/working.json").read_bytes()
     for args in (
-        ["promote", revision, "--idempotency-key", "one"],
-        ["promote", "--idempotency-key", "one", "--status"],
+        ["promote", "--experimental-changes", revision, "--idempotency-key", "one"],
+        ["promote", "--experimental-changes", "--idempotency-key", "one", "--status"],
     ):
         replay = invoke(runner, args)
         assert replay["promotion"] == accepted["promotion"]
@@ -306,15 +306,15 @@ def test_promotion_replay_and_status_never_restore_an_older_selection(
 def test_superseded_stage_is_refused_and_dry_run_cannot_stage(runner, isolated_dir):
     init(runner)
     (isolated_dir / "part.py").write_text(BRACKET)
-    staged = invoke(runner, ["run", "part.py", "--label", "old", "--stage", *QUIET])
-    newer = invoke(runner, ["run", "part.py", "--label", "newer", *QUIET])
+    staged = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "old", "--stage", *QUIET])
+    newer = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "newer", *QUIET])
     refused = promote(runner, staged["change"]["revision_id"], "old", exit_code=1)
     assert refused["promotion"]["reason_codes"] == ["selection_changed"]
     assert refused["current_advanced"] is False
     assert refused["accepted_revision_now"] == newer["change"]["revision_id"]
     bad = invoke(
         runner,
-        ["run", "part.py", "--label", "bad", "--stage", "--dry-run", *QUIET],
+        ["run", "--experimental-changes", "part.py", "--label", "bad", "--stage", "--dry-run", *QUIET],
         exit_code=1,
     )
     assert bad["reason"] == "checks_need_retention"
@@ -326,7 +326,7 @@ def test_repair_action_preserves_explicit_staging(runner, isolated_dir):
     script.write_text(BRACKET + "raise RuntimeError('repair me')\n")
     failed = invoke(
         runner,
-        ["run", "part.py", "--label", "experiment", "--stage", *QUIET],
+        ["run", "--experimental-changes", "part.py", "--label", "experiment", "--stage", *QUIET],
         exit_code=1,
     )
     action = failed["next_actions"][0]
@@ -342,13 +342,13 @@ def test_repair_action_preserves_explicit_staging(runner, isolated_dir):
 def test_status_and_terminal_replay_do_not_need_mutable_source(runner, isolated_dir):
     init(runner)
     (isolated_dir / "part.py").write_text(BRACKET)
-    stage = invoke(runner, ["run", "part.py", "--label", "save", "--stage", *QUIET])
+    stage = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "save", "--stage", *QUIET])
     revision = stage["change"]["revision_id"]
     accepted = promote(runner, revision, "saved")
     Path(stage["change"]["source"]).write_text("corrupted after the original decision")
     for args in (
-        ["promote", "--idempotency-key", "saved", "--status"],
-        ["promote", revision, "--idempotency-key", "saved"],
+        ["promote", "--experimental-changes", "--idempotency-key", "saved", "--status"],
+        ["promote", "--experimental-changes", revision, "--idempotency-key", "saved"],
     ):
         replay = invoke(runner, args)
         assert replay["promotion"] == accepted["promotion"]
@@ -363,7 +363,7 @@ def test_pending_promotion_can_be_looked_up_resumed_and_not_accepted_by_legacy_r
     init(runner)
     (isolated_dir / "part.py").write_text(BRACKET)
     stage = invoke(
-        runner, ["run", "part.py", "--label", "experiment", "--stage", *QUIET]
+        runner, ["run", "--experimental-changes", "part.py", "--label", "experiment", "--stage", *QUIET]
     )
     revision = stage["change"]["revision_id"]
     original = module._write_bytes_once
@@ -377,14 +377,14 @@ def test_pending_promotion_can_be_looked_up_resumed_and_not_accepted_by_legacy_r
         patch.setattr(module, "_write_bytes_once", interrupt_output)
         failed = promote(runner, revision, "resume", exit_code=1)
     assert failed["reason"] == "promotion_unavailable"
-    status = invoke(runner, ["promote", "--idempotency-key", "resume", "--status"])
+    status = invoke(runner, ["promote", "--experimental-changes", "--idempotency-key", "resume", "--status"])
     assert status["status"] == "pending"
     assert status["outputs"]["step"] is None
     operation = module.PromotionStore(isolated_dir).read("resume")
     directory = operation["materialization"]["dir_name"]
     # Even if metadata is lost, the saved reservation still binds these bytes.
     (isolated_dir / directory / "meta.json").unlink()
-    refused = invoke(runner, ["recover", directory, "--make-current"], exit_code=1)
+    refused = invoke(runner, ["recover", "--experimental-changes", directory, "--make-current"], exit_code=1)
     assert refused["reason"] == "promotion_required"
     accepted = promote(runner, revision, "resume")
     assert accepted["version"] == 1
@@ -400,7 +400,7 @@ def test_registered_mcp_stage_and_promote_use_selected_build_root(
     from agentcad.mcp.server import mcp
 
     def call(name, args):
-        result = asyncio.run(mcp.call_tool(name, args))
+        result = asyncio.run(mcp.call_tool(name, {**args, "experimental_changes": True}))
         if isinstance(result, tuple):
             return result[1]
         if hasattr(result, "structuredContent"):
