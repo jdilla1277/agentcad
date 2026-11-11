@@ -191,15 +191,20 @@ class RecoveryRequest:
                 "No recovery exists for this key in the selected build directory.",
             )
         with _locked(self.directory / "execution.lock", wait_seconds=0) as acquired:
+            # The request is atomically published and immutable. Even while
+            # execution owns the lock, it can reject another operation's key.
+            if (self.directory / "request.json").exists():
+                self.record = self.read("request.json")
+                if self.record["action"] != self.action:
+                    raise _error(
+                        "idempotency_conflict",
+                        "This key belongs to a different recovery operation.",
+                    )
             if not acquired:
                 self.in_progress()
                 return
-            self.record = self.read("request.json")
-            if self.record["action"] != self.action:
-                raise _error(
-                    "idempotency_conflict",
-                    "This key belongs to a different recovery operation.",
-                )
+            if self.record is None:
+                self.record = self.read("request.json")
             self.replay()
 
     def in_progress(self):
@@ -241,9 +246,6 @@ class RecoveryRequest:
         fingerprint = _digest(semantic)
         self.directory.mkdir(parents=True, exist_ok=True)
         with _locked(self.directory / "execution.lock") as acquired:
-            if not acquired:
-                self.in_progress()
-                return
             if (self.directory / "request.json").exists():
                 self.record = self.read("request.json")
                 if (
@@ -254,6 +256,10 @@ class RecoveryRequest:
                         "idempotency_conflict",
                         "This recovery key already names different inputs. Use --status for the original result, or a new key for new work.",
                     )
+            if not acquired:
+                self.in_progress()
+                return
+            if self.record is not None:
                 self.replay()
                 return
             plan, source_bytes, snapshots = self.plan(revision, source, source_bytes)

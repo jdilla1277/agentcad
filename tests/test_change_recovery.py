@@ -639,3 +639,26 @@ def test_imported_cad_restores_exact_source_and_geometry_but_rejects_script_repa
     )
     assert refused["reason"] == "repair_requires_script"
     assert (isolated_dir / ".agentcad/changes/working.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("status", [False, True])
+def test_busy_request_still_rejects_conflicting_operation_or_inputs(
+    runner, isolated_dir, monkeypatch, status
+):
+    from agentcad.import_requests import _locked
+
+    setup(runner, isolated_dir)
+    restored = invoke(runner, recovery_args("restore"))
+    directory = Path(restored["idempotency"]["request"]).parent
+    before = files(isolated_dir)
+    monkeypatch.setattr("agentcad.import_requests._LOCK_WAIT_SECONDS", 0)
+    args = (
+        ["changes", "repair", "--idempotency-key", "recover:1", "--status", FLAG]
+        if status
+        else [a if a != "recovered" else "different" for a in recovery_args("restore")]
+    )
+    with _locked(directory / "execution.lock") as acquired:
+        assert acquired
+        conflict = invoke(runner, args, 1)
+    assert conflict["reason"] == "idempotency_conflict"
+    assert files(isolated_dir) == before
