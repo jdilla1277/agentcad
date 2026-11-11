@@ -46,7 +46,7 @@ def _local_names(roots):
     }
     search = [str(root) for root in roots] + sys.path
     return frozenset(
-        name for name in candidates if name.isidentifier() and name != "agentcad"
+        name for name in candidates if name.isidentifier() and name not in {"agentcad", "__main__"}
         and BuiltinImporter.find_spec(name) is None
         and FrozenImporter.find_spec(name) is None
         and _local_spec(PathFinder.find_spec(name, search), roots, name)

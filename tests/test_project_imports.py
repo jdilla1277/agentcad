@@ -135,11 +135,13 @@ def test_namespace_folder_does_not_reload_installed_regular_package(tmp_path, mo
         sys.modules.pop("installed_fixture_pkg", None)
 
 
-def test_project_file_cannot_replace_builtin_module(tmp_path):
+@pytest.mark.parametrize("name", ["sys", "__main__"])
+def test_project_file_cannot_replace_runtime_module(tmp_path, name):
     from agentcad.project_imports import script_imports
-    (tmp_path / "sys.py").write_text("raise AssertionError('must not replace built-in sys')\n")
+    original = importlib.import_module(name)
+    (tmp_path / f"{name}.py").write_text("raise AssertionError('must not replace runtime module')\n")
     with script_imports(tmp_path / "model.py", tmp_path):
-        assert importlib.import_module("sys") is sys
+        assert importlib.import_module(name) is original
 
 
 def test_new_helper_invalidates_directory_cache_before_validation(tmp_path):
