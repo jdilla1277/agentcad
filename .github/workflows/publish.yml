@@ -26,3 +26,14 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
+
+  sync-skill:
+    needs: publish
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/sync-skill.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
+    secrets:
+      SKILL_SYNC_SSH_KEY: ${{ secrets.SKILL_SYNC_SSH_KEY }}
