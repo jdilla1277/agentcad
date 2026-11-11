@@ -1,5 +1,12 @@
 # Retrieve inspection artifacts
 
+**WIP — explicit opt-in required on every call.** Use `--experimental-inspect`
+on CLI `import`, `run` and enriched `inspect`, or `experimental_inspect=true`
+in local MCP. Ordinary import/build and basic numeric topology inspection stay
+available without this flag. No environment/project setting or previous call
+enables it. Opted-in replies identify `experimental_inspect.status=work_in_progress`;
+copy the generated flagged recovery/continuation actions.
+
 An inspection path names a file on the AgentCAD server. A calling agent can
 retrieve its bytes through the existing `inspect` tool without opening that
 path on its own machine. No storage service or database is required.
@@ -7,18 +14,18 @@ path on its own machine. No storage service or database is required.
 Start with the complete geometry inventory:
 
 ```sh
-agentcad inspect /server/project/v1_import/output.step --artifact manifest
+agentcad inspect --experimental-inspect /server/project/v1_import/output.step --artifact manifest
 ```
 
 The equivalent MCP call is:
 
 ```json
-{"file":"/server/project/v1_import/output.step","cwd":"/server/project","artifact":"manifest"}
+{"file":"/server/project/v1_import/output.step","cwd":"/server/project","artifact":"manifest","experimental_inspect":true}
 ```
 
 Pass `build_dir` / `--build-dir` when the original response uses a separate
 artifact root. The default report includes
-`inspection.inventory.retrieve: {"artifact":"manifest"}`: pass that argument
+`inspection.inventory.retrieve: {"artifact":"manifest","experimental_inspect":true}`: pass that argument
 to `inspect` with the same baseline, server `cwd` and build root. CLI callers
 add `--artifact manifest` to their existing `inspect FILE` invocation.
 

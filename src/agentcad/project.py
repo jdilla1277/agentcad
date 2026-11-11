@@ -274,6 +274,9 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        if name in {"run", "import", "inspect"}:
+            from agentcad.experimental_inspect import validate
+            validate(ctx, kwargs)
         from agentcad.experimental_changes import validate
         validate(ctx, kwargs)
         if name == "feedback" and (
@@ -463,22 +466,27 @@ def _format_import_presentation(result, original_step, layout):
 
     report = result.get("inspection")
     if report is not None and report.get("budget", {}).get("scope") == "inspection_report":
-        from agentcad.inspection_report import ReportBudgetError, compact_report, _estimated_tokens
+        from agentcad.inspection_report import ReportBudgetError, compact_report
 
         try:
             result["inspection"] = compact_report(report)
         except ReportBudgetError as exc:
-            # Presentation failure cannot revoke the already committed CAD or
-            # mutate the original response/analysis to fit this caller's cwd.
-            result.pop("inspection")
-            recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
-                                  _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
-            result["inspection_delivery"] = {
-                "status": "omitted", "reason": "text_budget_too_small",
-                "text_tokens": report["budget"]["text_tokens"], "message": str(exc),
-                "next_actions": [shlex.join([
-                    "agentcad", "inspect", str(layout.artifact_path(original_step)),
-                    "--report", "--no-images", "--text-budget", str(recovery_budget),
-                    "--build-dir", str(layout.build_root),
-                ])],
-            }
+            _omit_import_report(result, report, original_step, layout, exc)
+
+
+def _omit_import_report(result, report, original_step, layout, error):
+    """Keep committed CAD success when caller-specific report additions overflow."""
+    from agentcad.inspection_report import _estimated_tokens
+
+    result.pop("inspection")
+    recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
+                          _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
+    result["inspection_delivery"] = {
+        "status": "omitted", "reason": "text_budget_too_small",
+        "text_tokens": report["budget"]["text_tokens"], "message": str(error),
+        "next_actions": [shlex.join([
+            "agentcad", "inspect", str(layout.artifact_path(original_step)),
+            "--report", "--no-images", "--text-budget", str(recovery_budget),
+            "--build-dir", str(layout.build_root),
+        ])],
+    }

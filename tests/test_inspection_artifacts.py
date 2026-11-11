@@ -1,5 +1,6 @@
 """Bounded saved-byte retrieval without CAD imports or file-system escape."""
 
+from tests.inspection_helpers import experimental_args
 import base64
 import hashlib
 import json
@@ -47,7 +48,7 @@ def test_saved_bytes_complete_hash_and_pinned_cli_continuation(evidence, runner,
     child = step.parent / "caller"
     child.mkdir()
     monkeypatch.chdir(child)
-    result = runner.invoke(cli, [*args, "--no-daemon"])
+    result = runner.invoke(cli, experimental_args([*args, "--no-daemon"]))
     assert result.exit_code == 0, result.stdout
     second = json.loads(result.stdout)
     assert second["artifact"]["offset"] == 17
@@ -170,7 +171,7 @@ def test_wrong_baseline_report(evidence):
     ["--artifact", "manifest", "--image"], ["--artifact", "manifest", "--response-text-budget", "2000"],
 ])
 def test_cli_rejects_conflicting_or_orphaned_controls(evidence, runner, options):
-    result = runner.invoke(cli, ["inspect", str(evidence[0]), *options, "--no-daemon"])
+    result = runner.invoke(cli, experimental_args(["inspect", str(evidence[0]), *options, "--no-daemon"]))
     assert result.exit_code != 0
     data = json.loads(result.stdout)
     assert data["status"] == "error" and "artifact" not in data
@@ -283,14 +284,14 @@ def test_external_standalone_cache_continuation_keeps_original_location(evidence
     caller = isolated_dir / "other caller"
     caller.mkdir()
     monkeypatch.chdir(caller)
-    first = runner.invoke(cli, ["inspect", str(step), "--artifact", str(path), "--artifact-bytes", "10", "--no-daemon"])
+    first = runner.invoke(cli, experimental_args(["inspect", str(step), "--artifact", str(path), "--artifact-bytes", "10", "--no-daemon"]))
     assert first.exit_code == 0, first.stdout
     payload = json.loads(first.stdout)
     assert payload["artifact"]["retention"]["state"] == "unmanaged"
     child = caller / "child"
     child.mkdir()
     monkeypatch.chdir(child)
-    second = runner.invoke(cli, [*shlex.split(payload["next"]["cli"])[1:], "--no-daemon"])
+    second = runner.invoke(cli, experimental_args([*shlex.split(payload["next"]["cli"])[1:], "--no-daemon"]))
     assert second.exit_code == 0, second.stdout
     copied = json.loads(second.stdout)
     assert copied["artifact"]["sha256"] == payload["artifact"]["sha256"]
@@ -303,7 +304,7 @@ def test_corrupt_image_request_returns_structured_error(evidence, runner):
     path = step.parent / "inspection" / ("face_v1_1_isolated_" + "a" * 16 + ".json")
     data = {"request": None, "png_sha256": "a" * 64}
     write_json(path, {**data, "metadata_sha256": _digest(data)})
-    result = runner.invoke(cli, ["inspect", str(step), "--artifact", str(path), "--no-daemon"])
+    result = runner.invoke(cli, experimental_args(["inspect", str(step), "--artifact", str(path), "--no-daemon"]))
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["reason"] == "inspection_artifact_unavailable" and "artifact" not in payload
