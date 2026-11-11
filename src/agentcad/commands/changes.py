@@ -7,6 +7,7 @@ import sys
 import click
 
 from agentcad.change_history import ChangeHistory
+from agentcad.experimental_changes import option
 from agentcad.manifest import load_manifest
 from agentcad.project import ProjectError, get_project, project_options, resolve_project
 
@@ -47,8 +48,11 @@ class ChangesGroup(click.Group):
     metavar="PATH",
     help="Artifact/history root; may also be supplied after the subcommand.",
 )
+@option
 def changes(build_dir):
-    """Read saved attempts, including failures. Never select, accept or rerun CAD.
+    """WIP: read saved attempts; requires --experimental-changes.
+
+    Never select, accept or rerun CAD.
 
     Use returned r_ revision IDs; working and accepted resolve the current
     retained selections once. Labels and file paths are not revision IDs.

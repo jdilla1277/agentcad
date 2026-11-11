@@ -93,15 +93,15 @@ def test_pending_intent_is_not_a_refusal_and_readers_never_finish_it(
     key = "auto:" + attempt.revision_id
     original = (store.root / "agentcad.json").read_bytes()
     for args in (
-        ["check-spec", attempt.revision_id],
-        ["promote", "--idempotency-key", key, "--status"],
+        ["check-spec", "--experimental-changes", attempt.revision_id],
+        ["promote", "--experimental-changes", "--idempotency-key", key, "--status"],
     ):
         payload = invoke(runner, args)
         assert payload["promotion"]["lifecycle"] == "pending"
         assert payload["promotion"]["outcome"] is None
         assert payload["promotion"]["jobs"][0]["revision_id"] == attempt.revision_id
         assert payload["current_advanced"] is False
-    resumed = invoke(runner, ["promote", attempt.revision_id, "--idempotency-key", key])
+    resumed = invoke(runner, ["promote", "--experimental-changes", attempt.revision_id, "--idempotency-key", key])
     assert resumed["status"] == "pending"
     assert (store.root / "agentcad.json").read_bytes() == original
 
@@ -113,7 +113,7 @@ def test_completion_after_restart_accepts_exact_saved_bytes_once(
     monkeypatch.chdir(store.root)
     original = {p: p.read_bytes() for p in attempt.directory.glob("*.json")}
     working = (store.root / ".agentcad/changes/working.json").read_bytes()
-    completed = invoke(runner, ["check-spec", attempt.revision_id, "--complete"])
+    completed = invoke(runner, ["check-spec", "--experimental-changes", attempt.revision_id, "--complete"])
     assert completed["passed"] is True
     assert completed["current_advanced"] is True
     assert completed["promotion"]["outcome"] == "promoted"
@@ -129,7 +129,7 @@ def test_completion_after_restart_accepts_exact_saved_bytes_once(
     assert "view" in completed["next_actions"][0]
     assert manifest(store.root)["current"] == "longer"
     before = (store.root / "agentcad.json").read_bytes()
-    replay = invoke(runner, ["check-spec", attempt.revision_id, "--complete"])
+    replay = invoke(runner, ["check-spec", "--experimental-changes", attempt.revision_id, "--complete"])
     assert replay["promotion"] == completed["promotion"]
     assert replay["current_advanced"] is False
     assert (store.root / "agentcad.json").read_bytes() == before
@@ -175,7 +175,7 @@ def test_selecting_newer_work_cancels_before_checks_and_away_back_never_revives(
     assert completed["current_advanced"] is False
     assert manifest(store.root)["current"] == "baseline"
     monkeypatch.chdir(store.root)
-    read = invoke(runner, ["check-spec", attempt.revision_id])
+    read = invoke(runner, ["check-spec", "--experimental-changes", attempt.revision_id])
     assert read["passed"] is True
     assert read["promotion"]["validation_state"] == "pending"
     assert any("Repeating --complete cannot reopen" in note for note in read["notes"])
@@ -416,7 +416,7 @@ def test_completion_before_original_run_response_does_not_create_a_second_versio
     pending = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "part.py",
             "--label",
             "longer",
@@ -437,7 +437,7 @@ def test_completion_before_original_run_response_does_not_create_a_second_versio
     assert pending["accepted_version_after"] is None
     assert len(manifest(isolated_dir)["versions"]) == 1
     assert len(list(isolated_dir.glob("v*_longer"))) == 1
-    current = invoke(runner, ["check-spec", pending["change"]["revision_id"]])
+    current = invoke(runner, ["check-spec", "--experimental-changes", pending["change"]["revision_id"]])
     assert current["promotion"]["outcome"] == "promoted"
     assert current["validation_state"] == "valid"
 
@@ -475,7 +475,7 @@ def test_cli_pending_to_acceptance_preserves_parts_and_original_run_response(
     pending = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "assembly.py",
             "--label",
             "longer",
@@ -501,7 +501,7 @@ def test_cli_pending_to_acceptance_preserves_parts_and_original_run_response(
     (isolated_dir / "checks.json").write_text(
         "{}"
     )  # Completion uses the pinned policy.
-    completed = invoke(runner, ["check-spec", revision, "--complete"])
+    completed = invoke(runner, ["check-spec", "--experimental-changes", revision, "--complete"])
     assert completed["passed"] is True
     assert completed["current_advanced"] is (not staged)
     assert manifest(isolated_dir).get("current") == (None if staged else "longer")
@@ -515,7 +515,7 @@ def test_cli_pending_to_acceptance_preserves_parts_and_original_run_response(
         assert meta["params"] == {"length": 80}
         assert invoke(runner, ["parts", "list", "current"])["part_count"] == 2
     original = invoke(
-        runner, ["run", "--idempotency-key", "edit-1", "--status", "--no-daemon"], 1
+        runner, ["run", "--experimental-changes", "--idempotency-key", "edit-1", "--status", "--no-daemon"], 1
     )
     assert original["change"] == pending["change"]
     assert original.get("promotion") == pending.get("promotion")
@@ -528,7 +528,7 @@ def test_registered_mcp_import_completion_respects_configured_build_root(
     from agentcad.mcp.server import mcp
 
     def call(name, args):
-        result = asyncio.run(mcp.call_tool(name, args))
+        result = asyncio.run(mcp.call_tool(name, {**args, "experimental_changes": True}))
         if isinstance(result, tuple):
             return result[1]
         if hasattr(result, "structuredContent"):

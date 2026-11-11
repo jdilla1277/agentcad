@@ -34,7 +34,7 @@ def no_viewer_service(monkeypatch):
 
 def _args(source=REAL_SOURCE, key="supplier:1", *options):
     return ["import", str(source), "--init", "--no-view", "--no-diff",
-            "--no-daemon", "--no-inspection-image", "--idempotency-key", key, *options]
+            "--no-daemon", "--no-inspection-image", "--idempotency-key", key, "--experimental-changes", *options]
 
 
 def _invoke(runner, args):
@@ -459,7 +459,7 @@ def test_cli_and_registered_mcp_share_retry_and_checked_images(runner, isolated_
     result, first = _invoke(runner, args)
     assert result.exit_code == 0
     payload = asyncio.run(server.mcp.call_tool("import_cad", {
-        "file": str(REAL_SOURCE), "cwd": str(project), "initialize": True,
+        "file": str(REAL_SOURCE), "cwd": str(project), "initialize": True, "experimental_changes": True,
         "view": False, "diff": False, "max_images": 1,
         "build_dir": "build files", "idempotency_key": "shared",
         "full_response": True,
@@ -482,7 +482,7 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
         (isolated_dir / "agentcad.toml").write_text("build_dir = " + json.dumps(build_dir) + "\n", encoding="utf-8")
     options = dict(initialize=True, view=False, diff=False, max_images=1,
                    text_budget=text_budget, idempotency_key="subdir", build_dir=build_dir, label=label)
-    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options, full_response=True)
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), experimental_changes=True, **options, full_response=True)
     first = first_result.structuredContent if isinstance(first_result, CallToolResult) else first_result
     assert first["status"] == "success" and "inspection" in first
     root = isolated_dir / build_dir if build_dir else isolated_dir
@@ -504,7 +504,7 @@ def test_subdirectory_replay_actions_and_budget(runner, isolated_dir, monkeypatc
         guard.setattr("agentcad.commands.import_cmd._import_impl", unexpected)
         guard.setattr("agentcad.inspection_report._analysis", unexpected)
         guard.setattr("agentcad.geometry_images.geometry_image", unexpected)
-        replay_result = server.import_cad(str(REAL_SOURCE), str(subdir), **options, full_response=True)
+        replay_result = server.import_cad(str(REAL_SOURCE), str(subdir), experimental_changes=True, **options, full_response=True)
     replay = replay_result.structuredContent if isinstance(replay_result, CallToolResult) else replay_result
     assert replay["idempotency"]["replayed"] and replay["version"] == 1
     assert replay["change"] == first["change"]
@@ -558,7 +558,7 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
     from agentcad import inspection_report as reports
 
     options = dict(initialize=True, view=False, diff=False, max_images=1, idempotency_key="budget_failure")
-    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), **options, full_response=True)
+    first_result = server.import_cad(str(REAL_SOURCE), str(isolated_dir), experimental_changes=True, **options, full_response=True)
     first = first_result.structuredContent
     step = isolated_dir / first["outputs"]["step"]
     cache = Path(first["idempotency"]["request"]).with_name("response.json")
@@ -574,7 +574,7 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
 
     with monkeypatch.context() as guard:
         guard.setattr(reports, "compact_report", too_small)
-        replay = server.import_cad(str(REAL_SOURCE), str(subdir), **options, full_response=True)
+        replay = server.import_cad(str(REAL_SOURCE), str(subdir), experimental_changes=True, **options, full_response=True)
     assert isinstance(replay, dict) and replay["_exit_code"] == 0
     assert replay["status"] == replay["core"]["status"] == "success"
     assert "inspection" not in replay
@@ -635,7 +635,7 @@ elif mode == "hold":
         return original(*a, **kw)
     command._export_step = export
 
-cli.main(args=["import", source, "--init", "--no-view", "--no-diff",
+cli.main(args=["import", "--experimental-changes", source, "--init", "--no-view", "--no-diff",
                "--no-daemon", "--no-inspection-image", "--idempotency-key", "process:1"])
 '''
 

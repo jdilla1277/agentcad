@@ -23,7 +23,7 @@ from agentcad.commands.measure import measure_tier0_payload, validity_from_metri
 @click.argument("file")
 @click.argument("spec_file", required=False)
 @click.option("--complete", "complete", is_flag=True, default=False,
-              help="Complete deferred checks and settle any still-current automatic acceptance; staged work stays unaccepted.")
+              help="WIP, requires --experimental-changes: complete deferred checks and settle still-current automatic acceptance; stages stay unaccepted.")
 @click.option(
     "--no-daemon",
     is_flag=True,

@@ -1025,8 +1025,8 @@ SECTIONS = {
     "check-spec": (
         "Spec checks:\n"
         "\nDeclared checks on retained changes:\n"
-        "  agentcad run bracket.py --label longer --checks checks.json\n"
-        "  agentcad import lab.step --checks checks.json\n"
+        "  agentcad run bracket.py --experimental-changes --label longer --checks checks.json\n"
+        "  agentcad import lab.step --experimental-changes --checks checks.json\n"
         "  Write {\"schema_version\":1,\"checks\":[...]} using these declarations:\n"
         "    {\"check_id\":\"length\",\"kind\":\"dimension\",\"axis\":\"x\",\"expected_mm\":80,\"tolerance_mm\":0.1}\n"
         "    {\"check_id\":\"bore\",\"kind\":\"cylinders\",\"axis\":\"z\",\"diameter_mm\":12,\"count\":1,\"tolerance_mm\":0.1}\n"
@@ -1047,7 +1047,7 @@ SECTIONS = {
         "  Required fail, pending or unavailable evidence keeps current unchanged,\n"
         "  with diagnostic geometry at change.geometry and all results under\n"
         "  change.validation_checks. Optional failures remain visible warnings.\n"
-        "  Normal successful run/import responses also include promotion: a\n"
+        "  Opted-in successful run/import responses also include promotion: a\n"
         "  durable receipt naming the exact accepted revision, pinned policy,\n"
         "  prior/new revision IDs, and verified STEP hashes. Acceptance and\n"
         "  the receipt commit together in agentcad.json (promotion_state).\n"
@@ -1059,9 +1059,9 @@ SECTIONS = {
         "  kind=external with validator=NAME reports unavailable; no adapter is\n"
         "  inferred or executed. Missing evidence never becomes a measured pass.\n"
         "  --defer-checks saves pending results (no background worker is started).\n"
-        "  agentcad check-spec r_RETURNED_ID                 # read saved receipt\n"
-        "  agentcad check-spec r_RETURNED_ID --complete      # complete deferred work\n"
-        "  agentcad view r_RETURNED_ID                       # geometry + same receipt\n"
+        "  agentcad check-spec r_RETURNED_ID --experimental-changes # read saved receipt\n"
+        "  agentcad check-spec r_RETURNED_ID --complete --experimental-changes\n"
+        "  agentcad view r_RETURNED_ID --experimental-changes # geometry + same receipt\n"
         "  Normal deferred run/import saves automatic intent with the original\n"
         "  candidate, policy, selection generation, and accepted predecessor.\n"
         "  --complete accepts the exact saved STEP/source when checks pass and\n"
@@ -1080,7 +1080,7 @@ SECTIONS = {
         "  A replay returns the original decision without moving current again.\n"
         "  Pending responses include promotion.request_key (auto:REVISION), jobs,\n"
         "  and no terminal outcome. Read live operation status with:\n"
-        "    agentcad promote --idempotency-key auto:r_RETURNED_ID --status\n"
+        "    agentcad promote --experimental-changes --idempotency-key auto:r_RETURNED_ID --status\n"
         "  Run/import retry results remain historical, including original pending\n"
         "  evidence after acceptance. check-spec reads the latest checks/decision.\n"
         "  If completion stops, retry --complete to resume the same reservation.\n"
@@ -2941,6 +2941,25 @@ def get_sections(runtime):
         # dropping them keeps compatibility mode free of build123d code.
         for name in ("build123d", "examples"):
             merged.pop(name, None)
+    notice = (
+        "WIP: retained change/check/stage/promote workflows require explicit\n"
+        "--experimental-changes on EVERY CLI call, or experimental_changes=true\n"
+        "on each local MCP call. No environment/config default enables it.\n"
+        "Ordinary run/import and file+spec checks keep standard CAD behavior;\n"
+        "authored-run retry keys/status and revision-based check/view/history\n"
+        "require opt-in. Import retry keys remain available without it.\n"
+        "An unflagged mutation refuses before execution/writes if selected\n"
+        "experimental requirements or unpromoted work exist, including older\n"
+        "pre-flag histories. Damaged selected state fails closed.\n\n"
+    )
+    import re
+    for name in ("changes", "promote", "run-retries"):
+        merged[name] = notice + re.sub(
+            r"agentcad (changes (?:list|show|compare)|run|import|promote|check-spec|view|context|recover)(?=\s|$)",
+            r"agentcad \1 --experimental-changes", merged[name],
+        )
+    for name in ("check-spec", "recovery", "commands", "editing", "mcp", "artifacts", "viewer"):
+        merged[name] = notice + merged[name]
     for name in ("quickstart", "commands", "editing", "schema"):
         merged[name] += (
             "\nArtifact locations: use returned paths. To separate generated files\n"

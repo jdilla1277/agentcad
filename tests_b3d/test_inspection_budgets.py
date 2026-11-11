@@ -87,7 +87,7 @@ def test_import_retry_new_delivery_limits_preserve_acceptance_and_job(runner, is
     monkeypatch.setattr("agentcad.project_viewer.handoff", lambda *a, **kw: None)
     build_name = "CAD — owner's files"
     (isolated_dir / "agentcad.toml").write_text("build_dir = " + json.dumps(build_name) + "\n")
-    args = ["import", str(REAL), "--init", "--no-view", "--no-diff", "--idempotency-key", "delivery",
+    args = ["import", "--experimental-changes", str(REAL), "--init", "--no-view", "--no-diff", "--idempotency-key", "delivery",
             "--response-text-budget", "5000", "--image-budget", "0"]
     first_result, first = _invoke(runner, args)
     assert first_result.exit_code == 0
@@ -146,7 +146,7 @@ def test_import_retry_new_delivery_limits_preserve_acceptance_and_job(runner, is
 
 def test_unknown_vision_profile_and_tiny_limit_keep_core_success(runner, isolated_dir, monkeypatch):
     monkeypatch.setattr("agentcad.project_viewer.handoff", lambda *a, **kw: None)
-    imported, payload = _invoke(runner, ["import", str(REAL), "--init", "--no-view", "--no-diff",
+    imported, payload = _invoke(runner, ["import", "--experimental-changes", str(REAL), "--init", "--no-view", "--no-diff",
         "--context-window", "20", "--max-images", "1"])
     assert imported.exit_code == 0
     assert payload["core"]["status"] == payload["status"] == "success"
@@ -277,7 +277,7 @@ def test_outer_import_errors_keep_snapshot_exit_code(runner, isolated_dir, monke
     else:
         checks = isolated_dir / "checks.json"
         checks.write_text("invalid JSON")
-        args += ["--checks", str(checks)]
+        args += ["--checks", str(checks), "--experimental-changes"]
     failed, response = _invoke(runner, args)
     assert failed.exit_code == 1, response
     if not unexpected:

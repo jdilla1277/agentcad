@@ -18,30 +18,30 @@ def change_options(function):
     """Share requirement options without duplicating command callback signatures."""
 
     @click.option("--stage", is_flag=True, default=False,
-                  help="Retain and check this candidate without replacing the accepted model; accept later with promote.")
+                  help="WIP, requires --experimental-changes: retain and check without replacing the accepted model; accept later with promote.")
     @click.option(
         "--checks",
         "checks_file",
         type=click.Path(dir_okay=False),
         default=None,
-        help="JSON dimension/preservation requirements; omitted on repairs, inherits the selected policy.",
+        help="WIP, requires --experimental-changes: JSON dimension/preservation requirements; repairs inherit the selected policy.",
     )
     @click.option(
         "--defer-checks",
         is_flag=True,
         default=False,
-        help="Retain pending checks; complete later with check-spec REVISION --complete.",
+        help="WIP, requires --experimental-changes: retain pending checks; complete later with check-spec REVISION --complete.",
     )
     @wraps(function)
     def wrapped(*args, checks_file=None, defer_checks=False, stage=False, **kwargs):
         ctx = click.get_current_context()
-        if kwargs.get("dry_run") and (checks_file or defer_checks or stage):
+        if kwargs.get("dry_run") and (checks_file is not None or defer_checks or stage):
             raise ProjectError(
                 "checks_need_retention",
                 "Declared checks need a retained attempt, not --dry-run.",
                 "Remove --dry-run to retain and evaluate the requirements.",
             )
-        if checks_file:
+        if checks_file is not None:
             try:
                 ctx.meta["change_requirements"] = json.loads(Path(checks_file).read_text())
                 if not isinstance(ctx.meta["change_requirements"], dict):
@@ -62,6 +62,8 @@ def change_options(function):
 
 def forward_check_options(argv):
     ctx = click.get_current_context()
+    if ctx.meta.get("experimental_changes"):
+        argv.append("--experimental-changes")
     if ctx.meta.get("change_checks_file"):
         argv.extend(["--checks", ctx.meta["change_checks_file"]])
     if ctx.meta.get("change_defer_checks"):
@@ -120,7 +122,7 @@ def current_attempt():
 
 def begin_change(*, command: str, label: str, source: bytes, source_name: str, model: dict):
     ctx = click.get_current_context(silent=True)
-    if ctx is None or ctx.meta.get("project_dry_run") or ctx.meta.get("viewer_dry_run"):
+    if ctx is None or not ctx.meta.get("experimental_changes") or ctx.meta.get("project_dry_run") or ctx.meta.get("viewer_dry_run"):
         return None
     if current_attempt() is not None:
         return current_attempt()

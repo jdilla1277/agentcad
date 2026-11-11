@@ -69,7 +69,7 @@ def test_import_quota_eviction_and_oversized_retry_keep_accepted_geometry(runner
     build_name = "CAD — owner's files"
     config = isolated_dir / "agentcad.toml"
     config.write_text("build_dir = " + json.dumps(build_name) + "\n[inspection.snapshots]\nmax_bytes = 1048576\n")
-    args = ["import", str(REAL), "--init", "--no-view", "--no-diff", "--idempotency-key", "retention",
+    args = ["import", "--experimental-changes", str(REAL), "--init", "--no-view", "--no-diff", "--idempotency-key", "retention",
             "--response-text-budget", "6000", "--max-images", "1"]
     result, first = _invoke(runner, args)
     assert result.exit_code == 0 and first["promotion"]["outcome"] == "promoted"
@@ -100,6 +100,7 @@ def test_import_quota_eviction_and_oversized_retry_keep_accepted_geometry(runner
     mcp = asyncio.run(server.mcp.call_tool("import_cad", {
         "file": str(REAL), "cwd": str(isolated_dir), "initialize": True, "view": False, "diff": False,
         "idempotency_key": "retention", "response_text_budget": 6000, "max_images": 1,
+        "experimental_changes": True,
     }))
     payload = _payload(mcp)
     assert payload["_exit_code"] == 0 and payload["delivery"]["status"] == "resource_limit"

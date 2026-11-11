@@ -84,10 +84,14 @@ NAMED PARTS AND GROUPS
   Use `agentcad parts` after a run to list, isolate, hide, ghost, or focus
   captured parts and groups. Run `agentcad docs parts` for the full API.
 
-RETAINED CHANGE HISTORY
-  agentcad changes list                         # find failures and saved IDs
-  agentcad changes show working                 # source, checks and diagnostics
-  agentcad changes compare accepted working     # saved measurements/evidence
+EXPERIMENTAL CHANGE WORKFLOW (WIP)
+  Explicitly include --experimental-changes on every change-workflow call.
+  Ordinary run/import calls keep standard CAD behavior. --stage, --checks,
+  --defer-checks and authored-run retry/status require the flag. Existing
+  experimental requirements or unpromoted work cannot be bypassed by omitting it.
+  agentcad changes list --experimental-changes
+  agentcad changes show working --experimental-changes
+  agentcad changes compare accepted working --experimental-changes
   These reads never select, accept, complete checks, or execute CAD. Use the
   returned r_ IDs for exact revisions; see `agentcad docs changes`.
 
@@ -516,6 +520,8 @@ class _InvocationOutput:
                         from agentcad.change_retention import attach_change
 
                         payload = attach_change(payload)
+                        from agentcad.experimental_changes import present
+                        payload = present(payload)
                         if payload.get("command") == "import":
                             from agentcad.import_requests import finish_response
                             payload = finish_response(payload)
@@ -921,7 +927,7 @@ class _LoggingGroup(click.Group):
             # is retained, preserve unexpected parser/metric failures as a
             # structured terminal attempt rather than leaving an empty stdout.
             attempt = ctx.meta.get("change_attempt")
-            if attempt is None:
+            if attempt is None and ctx.invoked_subcommand != "import":
                 raise
             ctx.meta["command_exit_code"] = 1
             click.echo(json.dumps({
@@ -990,6 +996,10 @@ class _LoggingGroup(click.Group):
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
         if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "changes"):
+            return
+        if cmd_name == "check-spec" and not ctx.meta.get("experimental_check_completion", False) and ctx.meta.get("experimental_revision_read"):
+            return
+        if cmd_name == "promote" and ctx.meta.get("experimental_promotion_status"):
             return
         # Parse the last JSON output (commands may echo multiple things)
         result = {}

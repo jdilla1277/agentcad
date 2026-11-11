@@ -36,12 +36,12 @@ def history(runner, isolated_dir):
     script.write_text(
         "plate=Box(60,30,6)-Pos(-20,0,0)*Cylinder(3,12)-Pos(20,0,0)*Cylinder(3,12)\nshow_object(plate)\n"
     )
-    base = invoke(runner, ["run", "part.py", "--label", "same-label", *QUIET])
+    base = invoke(runner, ["run", "--experimental-changes", "part.py", "--label", "same-label", *QUIET])
     script.write_text(
         "denominator=int('0')\nvalue=1/denominator\nshow_object(Box(80,30,6))\n"
     )
     failed = invoke(
-        runner, ["run", "part.py", "--label", "same-label", "--stage", *QUIET], 1
+        runner, ["run", "--experimental-changes", "part.py", "--label", "same-label", "--stage", *QUIET], 1
     )
     script.unlink()
     return base, failed
@@ -52,7 +52,7 @@ def test_history_list_show_use_ids_and_preserve_every_saved_byte(
 ):
     base, failed = history
     before = snapshot(isolated_dir)
-    page = invoke(runner, ["changes", "list"])
+    page = invoke(runner, ["changes", "--experimental-changes", "list"])
     assert page["current_advanced"] is False
     assert [row["revision_id"] for row in page["changes"]] == [
         failed["change"]["revision_id"],
@@ -62,7 +62,7 @@ def test_history_list_show_use_ids_and_preserve_every_saved_byte(
     assert page["changes"][0]["is_accepted"] is False
     assert page["changes"][1]["is_accepted"] is True
     assert page["changes"][0]["result_status"] == "failed"
-    shown = invoke(runner, ["changes", "show", "working"])
+    shown = invoke(runner, ["changes", "--experimental-changes", "show", "working"])
     assert shown["change"]["revision_id"] == failed["change"]["revision_id"]
     assert (
         Path(shown["source"]["path"]).read_bytes()
@@ -70,7 +70,7 @@ def test_history_list_show_use_ids_and_preserve_every_saved_byte(
     )
     assert shown["diagnostics"]["message"] or shown["diagnostics"]["error"]
     assert shown["checks"]["validation_state"] == "invalid"
-    accepted = invoke(runner, ["changes", "show", "accepted"])
+    accepted = invoke(runner, ["changes", "--experimental-changes", "show", "accepted"])
     assert accepted["change"]["revision_id"] == base["change"]["revision_id"]
     assert accepted["promotions"][0]["promotion"]["outcome"] == "promoted"
     assert "current_advanced" not in accepted["promotions"][0]
@@ -84,7 +84,7 @@ def test_history_pagination_is_stable_when_newer_attempts_arrive(
     runner, isolated_dir, history
 ):
     base, failed = history
-    first = invoke(runner, ["changes", "list", "--limit", "1"])
+    first = invoke(runner, ["changes", "--experimental-changes", "list", "--limit", "1"])
     assert first["next_before"] == failed["change"]["revision_id"]
     store = ChangeStore(isolated_dir)
     store.begin(
@@ -95,13 +95,13 @@ def test_history_pagination_is_stable_when_newer_attempts_arrive(
         model={},
     )
     second = invoke(
-        runner, ["changes", "list", "--limit", "1", "--before", first["next_before"]]
+        runner, ["changes", "--experimental-changes", "list", "--limit", "1", "--before", first["next_before"]]
     )
     assert [row["revision_id"] for row in second["changes"]] == [
         base["change"]["revision_id"]
     ]
     assert second["next_before"] is None
-    newest = invoke(runner, ["changes", "show", "working"])
+    newest = invoke(runner, ["changes", "--experimental-changes", "show", "working"])
     assert newest["change"]["lifecycle"] == "in_progress"
     assert newest["change"]["result_status"] is None
     assert newest["geometry"] is None
@@ -114,15 +114,15 @@ def test_damaged_attempt_does_not_hide_other_history_and_cannot_compare(
     base, failed = history
     Path(failed["change"]["source"]).write_bytes(b"damaged retained bytes")
     before = snapshot(isolated_dir)
-    page = invoke(runner, ["changes", "list"])
+    page = invoke(runner, ["changes", "--experimental-changes", "list"])
     assert page["changes"][0]["integrity"] == "unavailable"
     assert page["changes"][1]["integrity"] == "verified"
-    shown = invoke(runner, ["changes", "show", failed["change"]["revision_id"]], 1)
+    shown = invoke(runner, ["changes", "--experimental-changes", "show", failed["change"]["revision_id"]], 1)
     assert shown["reason"] == "change_evidence_unavailable"
     compared = invoke(
         runner,
         [
-            "changes",
+            "changes", "--experimental-changes",
             "compare",
             base["change"]["revision_id"],
             failed["change"]["revision_id"],
@@ -138,7 +138,7 @@ def test_labels_paths_and_unknown_revisions_never_select_or_create(
     runner, isolated_dir, history, ref
 ):
     before = snapshot(isolated_dir)
-    result = invoke(runner, ["changes", "show", ref], 1)
+    result = invoke(runner, ["changes", "--experimental-changes", "show", ref], 1)
     assert result["current_advanced"] is False
     assert result["reason"] in {
         "invalid_revision_reference",
@@ -170,7 +170,7 @@ def test_compare_saved_measurements_checks_and_policy_without_claiming_geometry_
     invoke(runner, ["init", "--name", "bracket", "--runtime", runtime])
     script = isolated_dir / "assembly.py"
     script.write_text(source)
-    baseline = invoke(runner, ["run", "assembly.py", "--label", "accepted", *QUIET])
+    baseline = invoke(runner, ["run", "--experimental-changes", "assembly.py", "--label", "accepted", *QUIET])
     base_id = baseline["change"]["revision_id"]
     checks = {
         "schema_version": 1,
@@ -196,7 +196,7 @@ def test_compare_saved_measurements_checks_and_policy_without_claiming_geometry_
     candidate = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "assembly.py",
             "--label",
             "failed-edit",
@@ -209,7 +209,7 @@ def test_compare_saved_measurements_checks_and_policy_without_claiming_geometry_
     )
     script.write_text("raise RuntimeError('never execute history source')\n")
     before = snapshot(isolated_dir)
-    comparison = invoke(runner, ["changes", "compare", "accepted", "working"])
+    comparison = invoke(runner, ["changes", "--experimental-changes", "compare", "accepted", "working"])
     assert comparison["baseline"]["revision_id"] == base_id
     assert comparison["candidate"]["revision_id"] == candidate["change"]["revision_id"]
     assert comparison["metrics"]["dimensions"]["x"]["delta"] == 20
@@ -229,7 +229,7 @@ def test_compare_no_output_failure_retains_evidence_without_using_accepted_geome
     runner, isolated_dir, history
 ):
     base, failed = history
-    result = invoke(runner, ["changes", "compare", "accepted", "working"])
+    result = invoke(runner, ["changes", "--experimental-changes", "compare", "accepted", "working"])
     assert result["geometry_comparison"]["status"] == "unavailable"
     assert result["geometry_comparison"]["candidate"] is None
     assert result["metrics"]["dimensions"]["x"]["delta"] is None
@@ -261,7 +261,7 @@ def test_compare_aliases_remain_bound_if_another_caller_selects_newer_work(
         return result
 
     monkeypatch.setattr(ChangeHistory, "_show", select_after_baseline)
-    compared = invoke(runner, ["changes", "compare", "accepted", "working"])
+    compared = invoke(runner, ["changes", "--experimental-changes", "compare", "accepted", "working"])
     assert compared["baseline"]["revision_id"] == base["change"]["revision_id"]
     assert compared["candidate"]["revision_id"] == failed["change"]["revision_id"]
     assert ChangeStore(isolated_dir).working_revision_id == selected[0]
@@ -279,8 +279,8 @@ def test_explicit_root_after_subcommand_bypasses_a_damaged_default_history(
     (isolated_dir / "agentcad.toml").write_text('build_dir = "./broken"\n')
     before = snapshot(isolated_dir)
     for args in (
-        ["changes", "list", "--build-dir", str(root)],
-        ["changes", "--build-dir", str(root), "list"],
+        ["changes", "--experimental-changes", "list", "--build-dir", str(root)],
+        ["changes", "--experimental-changes", "--build-dir", str(root), "list"],
     ):
         result = invoke(runner, args)
         assert result["changes"] == []
@@ -305,7 +305,7 @@ def test_policy_redefinition_is_not_reported_as_a_geometry_repair(runner, isolat
     old = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "bracket.py",
             "--label",
             "failed",
@@ -322,7 +322,7 @@ def test_policy_redefinition_is_not_reported_as_a_geometry_repair(runner, isolat
     new = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "bracket.py",
             "--label",
             "redefined",
@@ -336,7 +336,7 @@ def test_policy_redefinition_is_not_reported_as_a_geometry_repair(runner, isolat
     result = invoke(
         runner,
         [
-            "changes",
+            "changes", "--experimental-changes",
             "compare",
             old["change"]["revision_id"],
             new["change"]["revision_id"],
@@ -360,12 +360,12 @@ def test_same_source_with_different_params_remains_a_model_change(runner, isolat
         "length=60\nshow_object(Box(length,30,6)-Cylinder(3,12))\n"
     )
     old = invoke(
-        runner, ["run", "part.py", "--label", "short", "--params", "length=60", *QUIET]
+        runner, ["run", "--experimental-changes", "part.py", "--label", "short", "--params", "length=60", *QUIET]
     )
     new = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "part.py",
             "--label",
             "long",
@@ -378,7 +378,7 @@ def test_same_source_with_different_params_remains_a_model_change(runner, isolat
     result = invoke(
         runner,
         [
-            "changes",
+            "changes", "--experimental-changes",
             "compare",
             old["change"]["revision_id"],
             new["change"]["revision_id"],
@@ -395,18 +395,18 @@ def test_same_source_with_different_params_remains_a_model_change(runner, isolat
 
 
 def test_empty_legacy_and_uninitialized_histories_are_read_only(runner, isolated_dir):
-    missing = invoke(runner, ["changes", "list"], 1)
+    missing = invoke(runner, ["changes", "--experimental-changes", "list"], 1)
     assert missing["status"] == "error"
     assert snapshot(isolated_dir) == {}
     invoke(runner, ["init", "--name", "legacy"])
     before = snapshot(isolated_dir)
-    assert invoke(runner, ["changes", "list"])["changes"] == []
+    assert invoke(runner, ["changes", "--experimental-changes", "list"])["changes"] == []
     assert (
-        invoke(runner, ["changes", "show", "accepted"], 1)["reason"]
+        invoke(runner, ["changes", "--experimental-changes", "show", "accepted"], 1)["reason"]
         == "accepted_change_unavailable"
     )
     assert (
-        invoke(runner, ["changes", "show", "working"], 1)["reason"]
+        invoke(runner, ["changes", "--experimental-changes", "show", "working"], 1)["reason"]
         == "working_change_unavailable"
     )
     assert snapshot(isolated_dir) == before
@@ -420,11 +420,11 @@ def test_empty_legacy_and_uninitialized_histories_are_read_only(runner, isolated
     )
     path.write_text(json.dumps(legacy))
     before = snapshot(isolated_dir)
-    listed = invoke(runner, ["changes", "list"])
+    listed = invoke(runner, ["changes", "--experimental-changes", "list"])
     assert listed["selection"]["accepted_revision_id"] is None
     assert listed["selection"]["accepted_version"]["label"] == "old"
     assert (
-        invoke(runner, ["changes", "show", "accepted"], 1)["reason"]
+        invoke(runner, ["changes", "--experimental-changes", "show", "accepted"], 1)["reason"]
         == "accepted_change_unavailable"
     )
     assert snapshot(isolated_dir) == before
@@ -435,10 +435,10 @@ def test_show_includes_specific_static_failure_without_an_extra_record_read(
 ):
     invoke(runner, ["init", "--name", "static-failure"])
     (isolated_dir / "missing.py").write_text("value = 3\n")
-    failed = invoke(runner, ["run", "missing.py", "--label", "no-capture", *QUIET], 1)
+    failed = invoke(runner, ["run", "--experimental-changes", "missing.py", "--label", "no-capture", *QUIET], 1)
     assert failed["status"] == "validation_error"
     before = snapshot(isolated_dir)
-    shown = invoke(runner, ["changes", "show", failed["change"]["revision_id"]])
+    shown = invoke(runner, ["changes", "--experimental-changes", "show", failed["change"]["revision_id"]])
     assert shown["diagnostics"]["static_checks"][0]["check"] == "show_object_missing"
     assert "show_object" in shown["diagnostics"]["static_checks"][0]["message"]
     assert shown["diagnostics"]["static_check_count"] == 1
@@ -474,7 +474,7 @@ def test_bounded_diagnostics_and_artifacts_keep_full_immutable_records(
         }
     )
     before = snapshot(isolated_dir)
-    shown = invoke(runner, ["changes", "show", attempt.revision_id])
+    shown = invoke(runner, ["changes", "--experimental-changes", "show", attempt.revision_id])
     assert shown["diagnostics"]["truncated"] is True
     assert all(
         len(shown["diagnostics"][key]) == 2000
@@ -505,7 +505,7 @@ def test_bad_cursor_and_damaged_request_preserve_other_rows(
     (request.parent.parent / ("r_" + "0" * 32)).write_text("not a directory")
     (request.parent.parent / "unrelated").mkdir()
     before = snapshot(isolated_dir)
-    page = invoke(runner, ["changes", "list"])
+    page = invoke(runner, ["changes", "--experimental-changes", "list"])
     assert page["total"] == 2
     assert page["count"] == 2
     assert page["changes"][0]["revision_id"] == healthy["change"]["revision_id"]
@@ -515,26 +515,26 @@ def test_bad_cursor_and_damaged_request_preserve_other_rows(
     assert page["changes"][1]["message"]
     assert page["changes"][1]["is_working"] is (damaged_index == 1)
     assert page["changes"][1]["is_accepted"] is (damaged_index == 0)
-    first = invoke(runner, ["changes", "list", "--limit", "1"])
+    first = invoke(runner, ["changes", "--experimental-changes", "list", "--limit", "1"])
     last = invoke(
-        runner, ["changes", "list", "--limit", "1", "--before", first["next_before"]]
+        runner, ["changes", "--experimental-changes", "list", "--limit", "1", "--before", first["next_before"]]
     )
     assert last["total"] == 2
     assert last["changes"] == [page["changes"][1]]
     assert last["next_before"] is None
     assert (
-        invoke(runner, ["changes", "show", healthy["change"]["revision_id"]])["change"][
+        invoke(runner, ["changes", "--experimental-changes", "show", healthy["change"]["revision_id"]])["change"][
             "integrity"
         ]
         == "verified"
     )
     assert (
-        invoke(runner, ["changes", "show", damaged["change"]["revision_id"]], 1)[
+        invoke(runner, ["changes", "--experimental-changes", "show", damaged["change"]["revision_id"]], 1)[
             "reason"
         ]
         == "change_evidence_unavailable"
     )
-    bad = invoke(runner, ["changes", "list", "--before", "r_" + "f" * 32], 1)
+    bad = invoke(runner, ["changes", "--experimental-changes", "list", "--before", "r_" + "f" * 32], 1)
     assert bad["reason"] == "invalid_history_cursor"
     assert snapshot(isolated_dir) == before
 
@@ -562,7 +562,7 @@ def test_pending_checks_and_automatic_intent_remain_pending_when_read(
     result = invoke(
         runner,
         [
-            "run",
+            "run", "--experimental-changes",
             "part.py",
             "--label",
             "pending",
@@ -574,11 +574,11 @@ def test_pending_checks_and_automatic_intent_remain_pending_when_read(
         1,
     )
     before = snapshot(isolated_dir)
-    shown = invoke(runner, ["changes", "show", "working"])
+    shown = invoke(runner, ["changes", "--experimental-changes", "show", "working"])
     assert shown["checks"]["validation_state"] == "pending"
     assert shown["promotions"][0]["promotion"]["lifecycle"] == "pending"
     compared = invoke(
-        runner, ["changes", "compare", result["change"]["revision_id"], "working"]
+        runner, ["changes", "--experimental-changes", "compare", result["change"]["revision_id"], "working"]
     )
     assert compared["candidate"]["validation_state"] == "pending"
     assert snapshot(isolated_dir) == before
@@ -594,11 +594,11 @@ def test_registered_mcp_history_with_configured_root_rejects_unknown_options(
     (isolated_dir / "part.py").write_text("show_object(Box(60,30,6)-Cylinder(3,12))\n")
     built = invoke(
         runner,
-        ["run", "part.py", "--label", "accepted", "--build-dir", str(root), *QUIET],
+        ["run", "--experimental-changes", "part.py", "--label", "accepted", "--build-dir", str(root), *QUIET],
     )
 
     def call(name, args):
-        result = asyncio.run(mcp.call_tool(name, args))
+        result = asyncio.run(mcp.call_tool(name, {**args, "experimental_changes": True}))
         if isinstance(result, tuple):
             return result[1]
         if hasattr(result, "structuredContent"):
