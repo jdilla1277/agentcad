@@ -595,6 +595,90 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
     assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 1
 
 
+@pytest.mark.parametrize("full_response", [False, True])
+@pytest.mark.parametrize("transport", ["cli", "mcp"])
+def test_wip_budget_overflow_preserves_committed_import(
+    runner, isolated_dir, monkeypatch, full_response, transport,
+):
+    from agentcad import inspection_report as reports
+
+    assert runner.invoke(cli, ["init", "--name", "wip-budget"]).exit_code == 0
+    original_format = cli_mod.format_response
+    boundary = {}
+
+    def format_at_budget_boundary(payload, layout):
+        result = original_format(payload, layout)
+        if result.get("command") != "import" or "inspection" not in result:
+            return result
+        report = deepcopy(result["inspection"])
+        # Locate the actual minimum for this report, independent of OS/path
+        # lengths. Preparation fits; only the later WIP retrieval field fails.
+        low, high = 1, report["budget"]["text_tokens"]
+        while low < high:
+            mid = (low + high) // 2
+            report["budget"]["text_tokens"] = mid
+            try:
+                reports.compact_report(report)
+            except reports.ReportBudgetError:
+                low = mid + 1
+            else:
+                high = mid
+        report["budget"]["text_tokens"] = low
+        report = reports.compact_report(report)
+        decorated = deepcopy(report)
+        decorated["inventory"]["retrieve"]["experimental_inspect"] = True
+        with pytest.raises(reports.ReportBudgetError):
+            reports.compact_report(decorated)
+        boundary.update(tokens=low, manifest_id=report["manifest_id"])
+        result["inspection"] = report
+        return result
+
+    with monkeypatch.context() as guard:
+        guard.setattr(cli_mod, "format_response", format_at_budget_boundary)
+        if transport == "cli":
+            args = ["import", str(REAL_SOURCE), "--label", "audit", "--experimental-inspect",
+                    "--max-images", "0", "--no-view", "--no-diff", "--no-daemon"]
+            if full_response:
+                args.append("--full-response")
+            response = runner.invoke(cli, args)
+            assert response.exit_code == 0, (response.stdout, response.exception)
+            result = json.loads(response.stdout)
+        else:
+            response = asyncio.run(server.mcp.call_tool("import_cad", {
+                "file": str(REAL_SOURCE), "cwd": str(isolated_dir), "label": "audit",
+                "experimental_inspect": True, "max_images": 0, "view": False,
+                "diff": False, "full_response": full_response,
+            }))
+            result = response.structuredContent if isinstance(response, CallToolResult) else json.loads(response[0].text)
+            assert result["_exit_code"] == 0
+
+    assert result["status"] == result["core"]["status"] == "success"
+    assert result["version"] == 1 and "inspection" not in result
+    step = isolated_dir / result["outputs"]["step"]
+    assert step.is_file()
+    omission = result["inspection_delivery"]
+    assert omission["status"] == "omitted" and omission["reason"] == "text_budget_too_small"
+    assert omission["text_tokens"] == boundary["tokens"]
+    reports_before = list(step.parent.glob("inspection/report_*.json"))
+    assert reports_before
+    protected = [step, step.with_name("geometry_manifest.json"), *reports_before,
+                 *step.parent.glob("inspection/bundle_*.json"),
+                 *step.parent.glob("inspection/jobs/*/result_*.json"),
+                 step.with_name("meta.json"), isolated_dir / "agentcad.json"]
+    before = {path: path.read_bytes() for path in protected}
+    action = shlex.split(omission["next_actions"][0])
+    assert "--experimental-inspect" in action
+    assert int(action[action.index("--text-budget") + 1]) > boundary["tokens"]
+    child = isolated_dir / "caller"
+    child.mkdir()
+    monkeypatch.chdir(child)
+    recovery = runner.invoke(cli, [*action[1:], "--no-daemon", "--full-response"])
+    assert recovery.exit_code == 0, (recovery.stdout, recovery.exception)
+    assert json.loads(recovery.stdout)["manifest_id"] == boundary["manifest_id"]
+    assert {path: path.read_bytes() for path in protected} == before
+    assert len(_history(isolated_dir)) == 1
+
+
 # Real processes prove OS lock lifetime and persisted recovery; no CLI thread
 # tests (Click and cwd are process globals). The commit hook kills at the exact
 # boundary after registration, before any request-side completion is recorded.

@@ -2,6 +2,7 @@
 
 from functools import wraps
 import hashlib
+from pathlib import Path
 import re
 import shlex
 
@@ -155,14 +156,24 @@ def present(payload, *, acknowledged=False):
     if report is None and "media_summary" in result and "inventory" in result:
         report = result
     if isinstance(report, dict) and report.get("budget", {}).get("scope") == "inspection_report":
-        from agentcad.inspection_report import compact_report
+        from agentcad.inspection_report import ReportBudgetError, compact_report
         # MCP adds its exit code after the CLI report is prepared. The flat
         # report's estimate remains the CLI estimate; whole-response budgets
         # account for transport fields separately.
         transport = {}
         if report is result and "_exit_code" in result:
             transport["_exit_code"] = result.pop("_exit_code")
-        compact = compact_report(report)
+        try:
+            compact = compact_report(report)
+        except ReportBudgetError as exc:
+            if report is result or result.get("command") != "import":
+                raise
+            from agentcad.project import ProjectLayout, _omit_import_report
+
+            layout = ProjectLayout(Path(result["project_root"]), Path(result["build_root"]))
+            _omit_import_report(result, report, result["outputs"]["step"], layout, exc)
+            result["inspection_delivery"] = visit(result["inspection_delivery"])
+            return result
         if report is result:
             result = {**compact, **transport}
         else:
