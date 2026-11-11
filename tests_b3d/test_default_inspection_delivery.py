@@ -210,7 +210,7 @@ def test_default_preserves_live_success(runner, isolated_dir, monkeypatch):
 
 @pytest.mark.parametrize('stage', [False, True])
 def test_default_unaccepted_import(runner, isolated_dir, stage):
-    args = ['import', str(REAL), '--init', '--no-view', '--no-diff']
+    args = ['import', '--experimental-changes', str(REAL), '--init', '--no-view', '--no-diff']
     if stage:
         args.append('--stage')
     else:
