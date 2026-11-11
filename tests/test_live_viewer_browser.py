@@ -1,7 +1,6 @@
 """The actual conversational loop: real CAD builds and a persistent browser."""
 import json
 import os
-import shlex
 
 import pytest
 
@@ -188,11 +187,11 @@ def test_live_loop_twenty_builds_failure_import_and_restart(engine, runner, isol
                                           "--label", "imported", "--no-diff", "--no-daemon"])
             assert imported.exit_code == 0, imported.output
             delivered = json.loads(imported.stdout)
-            # The bounded default can omit optional viewer metadata. Fetch the
-            # complete reply while keeping the browser on the same live page.
-            recovered = runner.invoke(cli, [*shlex.split(delivered["response_snapshot"]["retrieve"])[1:], "--no-daemon"])
-            assert recovered.exit_code == 0, recovered.output
-            assert json.loads(recovered.stdout)["project_viewer"]["url"] == url
+            # Ordinary import keeps the live viewer without activating WIP
+            # Inspect reports, jobs or delivery snapshots.
+            assert "response_snapshot" not in delivered
+            assert "inspection_job" not in delivered and "inspection" not in delivered
+            assert delivered["project_viewer"]["url"] == url
             frame = showing(21)
             assert frame.evaluate("window.agentcadViewer.debugState().mode") == "single-a"
             assert "Previous mode unavailable" in page.locator("#status").inner_text()
