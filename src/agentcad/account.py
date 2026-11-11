@@ -41,6 +41,8 @@ def origin(value):
 class AccountState:
     """One origin-bound profile in a private file, independent of CAD projects."""
     def __init__(self, path=None):
+        if os.name == "nt":
+            raise AccountError("unsupported_credential_storage", "Browser-assisted CLI connection currently supports macOS and Linux. Windows can use the existing issued pilot credentials; native secure credential storage is not available yet.")
         self.path = Path(path or os.environ.get("AGENTCAD_ACCOUNT_STATE") or Path.home() / ".config" / "agentcad" / "account.json").expanduser().absolute()
 
     def load(self):

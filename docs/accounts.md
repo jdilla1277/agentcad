@@ -1,7 +1,9 @@
 # Connect a CLI installation
 
 Local CAD commands do not require an account. Connecting authorizes this CLI
-installation to use your private cloud workspace.
+installation to use your private cloud workspace. This first browser-assisted
+connection supports macOS and Linux; Windows can continue using issued pilot
+credentials until native secure credential storage is added.
 
 Install the cloud adapter, then start from your terminal:
 
