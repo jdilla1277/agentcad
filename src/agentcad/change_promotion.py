@@ -332,14 +332,32 @@ class PromotionStore:
                 and selection["selection_generation"] == request["selection_generation"]
             ):
                 continue
-            saved = self.changes.read(revision)
+            # Cancellation retires intent; it does not accept or revalidate CAD.
+            # Verify the saved evidence records, without opening obsolete source,
+            # geometry or optional artifacts that may now be missing/damaged.
+            attempt = Attempt(self.changes, revision)
+            candidate = attempt._read("candidate.json", "candidate", shared=True)
+            policy = attempt._read("policy.json", "target_policy", shared=True)
+            receipt_name = (
+                "checks_complete.json"
+                if (attempt.directory / "checks_complete.json").exists()
+                else "receipt.json"
+            )
+            recorded = attempt._read(receipt_name, "change_receipt", shared=True)
+            if (
+                contract.make_change_receipt(candidate, policy, recorded["checks"])
+                != recorded
+            ):
+                raise ChangeStoreError(
+                    "Cancellation evidence does not match its pinned candidate and policy."
+                )
             before = (_current_target(manifest, state, request["target_id"]) or {}).get(
                 "revision_id"
             )
             checked = contract.make_change_receipt(
-                saved["candidate"],
-                saved["policy"],
-                self.changes.read_checks(revision)["receipt"]["checks"],
+                candidate,
+                policy,
+                recorded["checks"],
                 promoted_revision_id=before,
             )
             operation["result"] = contract.make_promotion_receipt(

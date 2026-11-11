@@ -242,15 +242,26 @@ class ChangeStore:
                 **({"automatic_promotion": automatic} if automatic else {}),
             )
             _write_json_once(attempt.directory / "request.json", request)
+            selection_path = self._path(_STATE / "working.json")
+            had_selection = selection_path.exists()
             atomic_write_json(
-                self._path(_STATE / "working.json"),
+                selection_path,
                 {
                     "schema_version": 1,
                     "revision_id": revision_id,
                     "selection_generation": request["selection_generation"],
                 },
             )
-            promotions.cancel_superseded()
+            try:
+                promotions.cancel_superseded()
+            except BaseException:
+                # Keep the failed attempt/source for inspection, but a begin()
+                # that did not finish must not strand it as the selected work.
+                if had_selection:
+                    atomic_write_json(selection_path, state)
+                else:
+                    selection_path.unlink(missing_ok=True)
+                raise
         return attempt
 
     def read(self, revision_id: str) -> dict:

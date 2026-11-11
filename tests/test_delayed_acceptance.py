@@ -394,6 +394,115 @@ def test_corrupted_geometry_cannot_accept_and_restored_bytes_can_resume(deferred
     )
 
 
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        "build123d",
+        pytest.param(
+            "cadquery",
+            marks=pytest.mark.skipif(
+                importlib.util.find_spec("cadquery") is None,
+                reason="optional CadQuery extra",
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("damage", ["corrupt", "missing"])
+def test_damaged_pending_geometry_does_not_block_healthy_successors(
+    runner, isolated_dir, runtime, damage
+):
+    invoke(runner, ["init", "--name", "supersede-damaged", "--runtime", runtime])
+    source = (
+        "plate=Box(80,30,6)-Pos(-20,0,0)*Cylinder(3,12)-Pos(20,0,0)*Cylinder(3,12)\n"
+        "show_object(fillet(plate.edges().filter_by(Axis.Z),1), id='bracket')\n"
+        "show_object(Pos(0,50,0)*Cylinder(2,12), id='pin')\n"
+        if runtime == "build123d"
+        else "import cadquery as cq\n"
+        "plate=cq.Workplane('XY').box(80,30,6).faces('>Z').workplane().pushPoints([(-20,0),(20,0)]).hole(6)\n"
+        "show_object(plate.edges('|Z').fillet(1), id='bracket')\n"
+        "show_object(cq.Workplane('XY').center(0,50).circle(2).extrude(12), id='pin')\n"
+    )
+    (isolated_dir / "part.py").write_text(source)
+    (isolated_dir / "checks.json").write_text(json.dumps(REQUIREMENTS))
+    pending = invoke(
+        runner,
+        [
+            "run",
+            "part.py",
+            "--label",
+            "pending",
+            "--checks",
+            "checks.json",
+            "--defer-checks",
+            "--experimental-changes",
+            *QUIET,
+        ],
+        1,
+    )
+    revision = pending["change"]["revision_id"]
+    geometry = Path(pending["change"]["geometry"])
+    original = geometry.read_bytes()
+    if damage == "corrupt":
+        geometry.write_bytes(b"damaged old STEP")
+    else:
+        geometry.unlink()
+    for label in ("healthy", "healthy-again"):
+        healthy = invoke(
+            runner,
+            ["run", "part.py", "--label", label, "--experimental-changes", *QUIET],
+        )
+        assert healthy["current_advanced"] is True
+        assert healthy["change"]["validation_checks"]["validation_state"] == "valid"
+    cancelled = PromotionStore(isolated_dir).read("auto:" + revision)["result"]
+    assert cancelled["outcome"] == "not_promoted"
+    assert cancelled["reason_codes"] == ["selection_changed"]
+    assert cancelled["verified_artifacts"] == []
+    # Restoring evidence and finishing old checks cannot revive cancelled intent.
+    geometry.write_bytes(original)
+    before = (isolated_dir / "agentcad.json").read_bytes()
+    working = (isolated_dir / ".agentcad/changes/working.json").read_bytes()
+    completed = invoke(
+        runner, ["check-spec", revision, "--complete", "--experimental-changes"]
+    )
+    assert completed["passed"] is True
+    assert completed["current_advanced"] is False
+    assert completed["promotion"] == cancelled
+    assert (isolated_dir / "agentcad.json").read_bytes() == before
+    assert (isolated_dir / ".agentcad/changes/working.json").read_bytes() == working
+    assert manifest(isolated_dir)["current"] == "healthy-again"
+
+
+@pytest.mark.parametrize("existing_selection", [False, True])
+def test_failed_cancellation_does_not_leave_new_work_selected(
+    deferred, monkeypatch, existing_selection
+):
+    store, old = deferred
+    working = store.root / ".agentcad/changes/working.json"
+    if not existing_selection:
+        working.unlink()
+    before = working.read_bytes() if working.exists() else None
+
+    def fail(*args):
+        raise OSError("cannot save supersession")
+
+    monkeypatch.setattr(PromotionStore, "cancel_superseded", fail)
+    with pytest.raises(OSError, match="cannot save supersession"):
+        store.begin(
+            command="run",
+            label="failed-start",
+            source=b"new source",
+            source_name="new.py",
+            model={},
+        )
+    assert (working.read_bytes() if working.exists() else None) == before
+    assert store.working_revision_id == (
+        old.revision_id if existing_selection else None
+    )
+    # Failed startup remains inspectable without replacing the previous selection.
+    requests = list(store.root.glob(".agentcad/changes/attempts/*/request.json"))
+    assert len(requests) == 2
+
+
 def test_completion_before_original_run_response_does_not_create_a_second_version(
     runner, isolated_dir, monkeypatch
 ):
