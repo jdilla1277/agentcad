@@ -64,7 +64,7 @@ def apply_validation(metrics: dict, report: dict) -> dict:
     when a gating layer could not finish). The kernel check's own result
     stays in ``report.layers.brep_check``. ``metrics.reliable`` is false when
     the shape has no solid or an open shell, because volume and surface area
-    are not physical quantities then.
+    are not physical quantities then, or occupied-volume measurement fell back.
     """
     layers = report["layers"]
     metrics["is_valid"] = report["is_valid"]
@@ -77,6 +77,7 @@ def apply_validation(metrics: dict, report: dict) -> dict:
     closure = layers.get("shell_closure", {})
     metrics["reliable"] = bool(
         structure.get("solid_count", 0) >= 1 and closure.get("status") != "fail"
+        and metrics.get("volume_measurement", {}).get("status") != "fallback"
     )
     return metrics
 

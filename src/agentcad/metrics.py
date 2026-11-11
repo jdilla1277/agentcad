@@ -6,7 +6,7 @@ from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepTools import BRepTools
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
-from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_WIRE
+from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID, TopAbs_WIRE
 from OCP.TopExp import TopExp_Explorer as TopExp_Exp
 from OCP.TopExp import TopExp
 from OCP.TopTools import TopTools_IndexedMapOfShape
@@ -78,9 +78,31 @@ def compute_metrics(topo_shape, *, check_validity=True):
         "z": round(zmax - zmin, 4),
     }
 
-    # Volume and center of mass
+    # Measure occupied space, not the sum of overlapping solid members.
+    # Partition only a derived copy; exported geometry keeps its original parts.
+    volume_shape = topo_shape
+    volume_measurement = None
+    warnings = []
+    solids = TopExp_Exp(topo_shape, TopAbs_SOLID)
+    if solids.More():
+        solids.Next()
+    if solids.More():
+        from agentcad.helpers import _canonical_occupied_shape
+        try:
+            volume_shape, _ = _canonical_occupied_shape(topo_shape, "metrics")
+            volume_measurement = {"status": "success", "basis": "occupied_space"}
+        except Exception as exc:
+            volume_measurement = {
+                "status": "fallback", "basis": "sum_of_members", "reason": str(exc),
+            }
+            warnings.append(
+                "Occupied volume could not be measured. Volume and center_of_mass "
+                "use the original members; overlapping material may be double-counted."
+            )
+
+    # Volume and center of mass must use the same occupied geometry.
     vol_props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(topo_shape, vol_props)
+    BRepGProp.VolumeProperties_s(volume_shape, vol_props)
     volume = round(vol_props.Mass(), 4)
     if volume == 0:
         volume = 0.0
@@ -118,6 +140,8 @@ def compute_metrics(topo_shape, *, check_validity=True):
         "face_count": face_count,
         "edge_count": edge_count,
     }
+    if volume_measurement is not None:
+        result["volume_measurement"] = volume_measurement
 
     # Validity
     if check_validity:
@@ -131,7 +155,6 @@ def compute_metrics(topo_shape, *, check_validity=True):
                 result["validity_errors"] = errors
 
     # Negative volume warning
-    warnings = []
     if volume < 0:
         warnings.append(
             "Negative volume detected — shape may have inverted normals. "

@@ -5,6 +5,73 @@ import pytest
 from agentcad.metrics import compute_metrics
 
 
+def _compound(*shapes):
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+    result = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(result)
+    for shape in shapes:
+        builder.Add(result, shape)
+    return result
+
+
+@pytest.mark.parametrize("offset,expected", [(5, 1500), (10, 2000), (20, 2000)])
+def test_compound_measures_occupied_volume(offset, expected):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+    shape = _compound(_make_box(), BRepPrimAPI_MakeBox(gp_Pnt(offset - 5, -5, -5), 10, 10, 10).Shape())
+    metrics = compute_metrics(shape)
+    assert metrics["volume"] == pytest.approx(expected)
+    assert metrics["center_of_mass"]["x"] == pytest.approx(offset / 2)
+
+
+def test_contained_member_does_not_move_center_of_mass():
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+    contained = BRepPrimAPI_MakeBox(gp_Pnt(1, 1, 1), 2, 2, 2).Shape()
+    metrics = compute_metrics(_compound(_make_box(), contained))
+    assert metrics["volume"] == pytest.approx(1000)
+    assert metrics["center_of_mass"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+
+
+def test_imported_compound_duplicate_counts_once_and_preserves_source(real_world_step):
+    from agentcad.helpers import copy_shape
+    from agentcad.step_io import load_cad_shape
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    source_bytes = real_world_step.read_bytes()
+    shape = load_cad_shape(real_world_step)
+    expected = compute_metrics(shape)
+    compound = _compound(shape, copy_shape(shape))
+    actual = compute_metrics(compound)
+    assert actual["volume"] == pytest.approx(expected["volume"])
+    assert actual["center_of_mass"] == expected["center_of_mass"]
+    explorer = TopExp_Explorer(compound, TopAbs_SOLID)
+    count = 0
+    while explorer.More():
+        count += 1
+        explorer.Next()
+    assert count == 2
+    assert real_world_step.read_bytes() == source_bytes
+
+
+def test_failed_occupied_volume_is_explicit_fallback(monkeypatch):
+    def fail(*args, **kwargs):
+        raise ValueError("CAD kernel could not partition the members")
+    monkeypatch.setattr("agentcad.helpers._canonical_occupied_shape", fail)
+    metrics = compute_metrics(_compound(_make_box(), _make_box()))
+    assert metrics["volume"] == pytest.approx(2000)
+    assert metrics["volume_measurement"]["status"] == "fallback"
+    assert metrics["volume_measurement"]["basis"] == "sum_of_members"
+    assert any("double-counted" in w for w in metrics["warnings"])
+    from agentcad.core_build import apply_validation
+    report = {"is_valid": True, "layers": {
+        "structure": {"solid_count": 2}, "shell_closure": {"status": "pass"},
+    }}
+    assert apply_validation(metrics, report)["reliable"] is False
+
+
 def _make_box(dx=10, dy=10, dz=10):
     """Create a TopoDS_Shape box centered at origin."""
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
