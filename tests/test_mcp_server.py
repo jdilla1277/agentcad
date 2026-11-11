@@ -174,8 +174,9 @@ def test_import_cad_schema_is_closed_and_rejects_unknown_options(monkeypatch, tm
     declared = next(tool for tool in asyncio.run(mcp.list_tools()) if tool.name == "import_cad")
     assert declared.inputSchema["additionalProperties"] is False
     assert set(declared.inputSchema["required"]) == {"file", "cwd"}
-    assert declared.inputSchema["properties"]["report"]["default"] is True
-    assert declared.inputSchema["properties"]["report_images"]["default"] is True
+    assert declared.inputSchema["properties"]["report"]["default"] is None
+    assert declared.inputSchema["properties"]["report_images"]["default"] is None
+    assert declared.inputSchema["properties"]["experimental_inspect"]["default"] is False
     assert declared.inputSchema["properties"]["checks_file"]["default"] is None
     assert declared.inputSchema["properties"]["defer_checks"]["default"] is False
     assert declared.outputSchema is None  # Image-bearing CallToolResult must pass through.

@@ -520,6 +520,8 @@ class _InvocationOutput:
                         from agentcad.change_retention import attach_change
 
                         payload = attach_change(payload)
+                        from agentcad.change_recovery import finish_response as finish_recovery
+                        payload = finish_recovery(payload)
                         from agentcad.experimental_changes import present
                         payload = present(payload)
                         if payload.get("command") == "import":
@@ -529,7 +531,8 @@ class _InvocationOutput:
                             from agentcad.run_requests import finish_response
                             payload = finish_response(payload)
                         from agentcad.inspection_delivery import apply_delivery
-                        formatted = format_response(payload, layout)
+                        from agentcad.experimental_inspect import present
+                        formatted = present(format_response(payload, layout))
                         if self.ctx.meta.get("inspection_delivery_policy") is not None:
                             # Presentation may omit viewer fields; lifecycle
                             # decisions must still use the complete outcome.
