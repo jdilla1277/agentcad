@@ -698,7 +698,7 @@ def test_import_routes_no_diff_flag_through_daemon(
 
     assert result.exit_code == 0, result.output
     assert requests[0]["argv"] == [
-        "import", "any.step", "--label", "fast", "--no-view", "--no-diff", "--full-response",
+        "import", "any.step", "--label", "fast", "--no-view", "--no-diff", "--no-inspection-image", "--full-response",
     ]
 
 

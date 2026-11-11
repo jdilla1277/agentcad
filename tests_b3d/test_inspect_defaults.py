@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+from pathlib import Path
 import shlex
 
 import pytest
@@ -36,6 +37,7 @@ def test_default_import_lookup_and_recovery_need_no_acknowledgment(runner, isola
     imported = invoke(runner, ["import", built["outputs"]["step"], "--label", "baseline", "--no-view", "--no-diff", "--no-daemon"])
     assert imported["core"]["status"] == "success"
     assert imported["inspection"]["media"] and imported["response_snapshot"]
+    assert "geometry = load_geometry(" in (isolated_dir / "edit.py").read_text()
     assert "experimental_inspect" not in imported
     assert "--experimental-inspect" not in imported["response_snapshot"]["retrieve"]
     step = imported["outputs"]["step"]
@@ -44,6 +46,8 @@ def test_default_import_lookup_and_recovery_need_no_acknowledgment(runner, isola
     assert all("--experimental-inspect" not in action for action in lookup["next_actions"])
     restored = invoke(runner, [*shlex.split(imported["response_snapshot"]["retrieve"])[1:], "--no-daemon"])
     assert restored["core"]["status"] == "success" and restored["version"] == 2
+    assert Path(restored["scaffold"]) == isolated_dir / "edit.py"
+    assert "edit.py" in restored["next_actions"][0]
 
 
 @pytest.mark.parametrize("compatibility", [None, False, True])
