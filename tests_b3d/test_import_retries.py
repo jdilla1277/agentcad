@@ -1,5 +1,6 @@
 """Retry identity survives response loss, competing callers and process death."""
 
+from tests.inspection_helpers import experimental_args
 import asyncio
 from copy import deepcopy
 import hashlib
@@ -15,7 +16,7 @@ import time
 import click
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 from mcp.types import CallToolResult
 
 from agentcad import cli as cli_mod
@@ -38,7 +39,7 @@ def _args(source=REAL_SOURCE, key="supplier:1", *options):
 
 
 def _invoke(runner, args):
-    result = runner.invoke(cli, full_response_args(args))
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.stdout, (result.exit_code, result.exception)
     return result, json.loads(result.stdout)
 
@@ -66,7 +67,7 @@ def test_lost_response_replays_without_new_version_or_side_effects(runner, isola
         original_echo(message, **kwargs)
 
     monkeypatch.setattr(cli_mod, "_CLICK_ECHO", lose_response)
-    first = runner.invoke(cli, full_response_args(_args()))
+    first = runner.invoke(cli, experimental_args(full_response_args(_args())))
     assert first.exit_code != 0 and first.stdout == ""
     assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 1
     request = _requests(isolated_dir)[0]
@@ -84,6 +85,8 @@ def test_lost_response_replays_without_new_version_or_side_effects(runner, isola
     result, replay = _invoke(runner, _args())
     assert result.exit_code == 0
     expected = deepcopy(recorded)
+    from agentcad.experimental_inspect import present
+    expected = present(expected, acknowledged=True)
     expected["idempotency"]["replayed"] = True
     expected["viewer_opened"] = False
     for field, value in recorded.items():
@@ -106,7 +109,7 @@ def test_interrupted_import_recovers_original_promotion_without_moving_selection
     from agentcad.core_build import ArtifactLifecycle
 
     if legacy_baseline:
-        initialized = runner.invoke(cli, full_response_args(["init", "--name", "legacy"]))
+        initialized = runner.invoke(cli, experimental_args(full_response_args(["init", "--name", "legacy"])))
         assert initialized.exit_code == 0, initialized.output
         legacy = isolated_dir / "v1_legacy"
         legacy.mkdir()
@@ -132,7 +135,7 @@ def test_interrupted_import_recovers_original_promotion_without_moving_selection
             patch.setattr(versioning, "commit_version", stop_after_core)
         else:
             patch.setattr(ArtifactLifecycle, "persist", stop_after_optional_metadata)
-        first = runner.invoke(cli, full_response_args(_args()))
+        first = runner.invoke(cli, experimental_args(full_response_args(_args())))
     assert first.exit_code != 0 and first.stdout == ""
     assert len(_history(isolated_dir)) == baseline_count + 1
     promotions = PromotionStore(isolated_dir)
@@ -399,6 +402,7 @@ def test_key_is_forwarded_before_daemon_execution(runner, isolated_dir, monkeypa
     assert result.exit_code == 0 and payload["via"] == "daemon"
     forwarded = requests[0]["argv"]
     assert forwarded[forwarded.index("--idempotency-key") + 1] == "supplier:1"
+    assert "--experimental-inspect" not in forwarded
     if declared_checks:
         assert forwarded[-4:] == ["--checks", str(checks), "--defer-checks", "--full-response"]
     assert not _requests(isolated_dir)
@@ -458,12 +462,12 @@ def test_cli_and_registered_mcp_share_retry_and_checked_images(runner, isolated_
     args = _args(REAL_SOURCE, "shared", "--inspection-image", "--max-images", "1", "--build-dir", "build files")
     result, first = _invoke(runner, args)
     assert result.exit_code == 0
-    payload = asyncio.run(server.mcp.call_tool("import_cad", {
+    payload = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(REAL_SOURCE), "cwd": str(project), "initialize": True, "experimental_changes": True,
         "view": False, "diff": False, "max_images": 1,
         "build_dir": "build files", "idempotency_key": "shared",
         "full_response": True,
-    }))
+    })}))
     assert isinstance(payload, CallToolResult) and len(payload.content) == 2
     replay = payload.structuredContent
     assert replay["idempotency"]["replayed"] and replay["_exit_code"] == 0
@@ -590,6 +594,79 @@ def test_presentation_budget_failure_preserves_core_and_offers_retrieval(runner,
     assert len(_history(isolated_dir)) == len(_attempts(isolated_dir)) == 1
 
 
+@pytest.mark.parametrize("full_response", [False, True])
+@pytest.mark.parametrize("transport", ["cli", "mcp"])
+def test_minimum_report_budget_survives_default_delivery(
+    runner, isolated_dir, monkeypatch, full_response, transport,
+):
+    from agentcad import inspection_report as reports
+
+    assert runner.invoke(cli, ["init", "--name", "wip-budget"]).exit_code == 0
+    original_format = cli_mod.format_response
+    boundary = {}
+
+    def format_at_budget_boundary(payload, layout):
+        result = original_format(payload, layout)
+        if result.get("command") != "import" or "inspection" not in result:
+            return result
+        report = deepcopy(result["inspection"])
+        # Locate the actual minimum for this report, independent of OS/path
+        # lengths. The report must still fit after current-response presentation.
+        low, high = 1, report["budget"]["text_tokens"]
+        while low < high:
+            mid = (low + high) // 2
+            report["budget"]["text_tokens"] = mid
+            try:
+                reports.compact_report(report)
+            except reports.ReportBudgetError:
+                low = mid + 1
+            else:
+                high = mid
+        report["budget"]["text_tokens"] = low
+        report = reports.compact_report(report)
+        boundary.update(tokens=low, manifest_id=report["manifest_id"])
+        result["inspection"] = report
+        return result
+
+    with monkeypatch.context() as guard:
+        guard.setattr(cli_mod, "format_response", format_at_budget_boundary)
+        if transport == "cli":
+            args = ["import", str(REAL_SOURCE), "--label", "audit",
+                    "--max-images", "0", "--no-view", "--no-diff", "--no-daemon"]
+            if full_response:
+                args.append("--full-response")
+            response = runner.invoke(cli, args)
+            assert response.exit_code == 0, (response.stdout, response.exception)
+            result = json.loads(response.stdout)
+        else:
+            response = asyncio.run(server.mcp.call_tool("import_cad", {
+                "file": str(REAL_SOURCE), "cwd": str(isolated_dir), "label": "audit",
+                "max_images": 0, "view": False,
+                "diff": False, "full_response": full_response,
+            }))
+            result = response.structuredContent if isinstance(response, CallToolResult) else json.loads(response[0].text)
+            assert result["_exit_code"] == 0
+
+    assert result["status"] == result["core"]["status"] == "success"
+    assert result["version"] == 1 and "inspection" in result
+    assert result["inspection"]["budget"]["text_tokens"] == boundary["tokens"]
+    assert result["inspection"]["inventory"]["retrieve"] == {"artifact": "manifest"}
+    step = isolated_dir / result["outputs"]["step"]
+    assert step.is_file()
+    reports_before = list(step.parent.glob("inspection/report_*.json"))
+    assert reports_before
+    protected = [step, step.with_name("geometry_manifest.json"), *reports_before,
+                 *step.parent.glob("inspection/bundle_*.json"),
+                 *step.parent.glob("inspection/jobs/*/result_*.json"),
+                 step.with_name("meta.json"), isolated_dir / "agentcad.json"]
+    before = {path: path.read_bytes() for path in protected}
+    recovery = runner.invoke(cli, ["inspect", str(step), "--report", "--max-images", "0", "--no-daemon", "--full-response"])
+    assert recovery.exit_code == 0, (recovery.stdout, recovery.exception)
+    assert json.loads(recovery.stdout)["manifest_id"] == boundary["manifest_id"]
+    assert {path: path.read_bytes() for path in protected} == before
+    assert len(_history(isolated_dir)) == 1
+
+
 # Real processes prove OS lock lifetime and persisted recovery; no CLI thread
 # tests (Click and cwd are process globals). The commit hook kills at the exact
 # boundary after registration, before any request-side completion is recorded.
@@ -635,7 +712,7 @@ elif mode == "hold":
         return original(*a, **kw)
     command._export_step = export
 
-cli.main(args=["import", "--experimental-changes", source, "--init", "--no-view", "--no-diff",
+cli.main(args=["import", source, "--experimental-changes", "--init", "--no-view", "--no-diff",
                "--no-daemon", "--no-inspection-image", "--idempotency-key", "process:1"])
 '''
 

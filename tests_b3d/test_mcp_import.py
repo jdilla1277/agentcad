@@ -82,14 +82,14 @@ def test_registered_import_applies_declared_checks_without_advancing_current(
         "check_id": "length", "kind": "dimension", "axis": "x",
         "expected_mm": expected, "tolerance_mm": 0.1,
     }]}))
-    result = asyncio.run(server.mcp.call_tool("import_cad", {
+    result = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(source), "cwd": str(project), "label": "checked-import",
         "initialize": initialize, "checks_file": str(checks), "defer_checks": deferred,
         "experimental_changes": True,
         "view": False, "diff": False, "report": False, "report_images": False,
         "build_dir": "artifacts",
         "full_response": True,
-    }))
+    })}))
     # The registered tool transports a refused import as one JSON text block.
     text, = result
     assert text.type == "text"
@@ -127,11 +127,11 @@ def test_registered_import_delivers_cli_json_and_checked_pngs(isolated_dir, monk
         return result
 
     monkeypatch.setattr(server, "_invoke", observed)
-    result = asyncio.run(server.mcp.call_tool("import_cad", {
+    result = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(source), "cwd": str(project), "initialize": True,
         "view": False, "diff": False, "build_dir": "build with spaces",
         "full_response": True,
-    }))
+    })}))
     payload = _verify_images(result, project)
     assert payload == captured[0]
     assert payload["status"] == "success" and payload["_exit_code"] == 0

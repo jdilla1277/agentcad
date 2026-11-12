@@ -1,5 +1,6 @@
 """Real import/report/retry/snapshot delivery with complete response limits."""
 
+from tests.inspection_helpers import experimental_args
 import asyncio
 from copy import deepcopy
 import json
@@ -8,7 +9,7 @@ import shlex
 
 import pytest
 
-from tests.inspection_helpers import full_response_args, snapshot_path
+from tests.inspection_helpers import experimental_full_response_args as full_response_args, snapshot_path
 from mcp.types import CallToolResult
 
 from agentcad.cli import cli
@@ -25,7 +26,7 @@ def _payload(result):
 
 
 def _invoke(runner, args):
-    result = runner.invoke(cli, full_response_args([*args, "--no-daemon"]))
+    result = runner.invoke(cli, experimental_args(full_response_args([*args, "--no-daemon"])))
     assert result.stdout, (result.exit_code, result.exception)
     return result, json.loads(result.stdout)
 
@@ -53,10 +54,10 @@ def test_complete_cli_mcp_report_budgets_and_saved_full_retrieval(runner, isolat
     assert 0 < first["delivery"]["media"]["returned"] <= 2
     before = {p: p.read_bytes() for p in [step, step.with_name("geometry_manifest.json"), snapshot_path(first)]}
     before.update({p: p.read_bytes() for p in step.parent.joinpath("inspection").glob("*.*") if p.is_file()})
-    mcp = asyncio.run(server.mcp.call_tool("inspect", {
+    mcp = asyncio.run(server.mcp.call_tool("inspect", {**({
         "file": str(step), "cwd": str(isolated_dir), "report": True, "response_text_budget": 3000,
         "response_budget": 5500, "image_budget": 2500, "vision_profile": {"name": "host", "tokens_per_image": 1000},
-    }))
+    })}))
     assert isinstance(mcp, CallToolResult)
     actual = mcp.structuredContent
     _assert_budget(actual)
@@ -195,7 +196,7 @@ def test_snapshot_missing_corrupt_baseline_and_project_bindings(runner, isolated
 ])
 def test_invalid_caller_limits_do_not_import(runner, isolated_dir, monkeypatch, options):
     monkeypatch.setattr("agentcad.commands.import_cmd._import_impl", lambda *a, **kw: pytest.fail("Invalid budget executed import"))
-    result = runner.invoke(cli, ["import", str(REAL), "--init", *options, "--no-daemon"])
+    result = runner.invoke(cli, experimental_args(["import", str(REAL), "--init", *options, "--no-daemon"]))
     assert result.exit_code != 0
     assert not (isolated_dir / "agentcad.json").exists()
 
@@ -258,11 +259,11 @@ def _assert_failed_snapshot(runner, cwd, response, status):
     restored, historical = _invoke(runner, shlex.split(response["response_snapshot"]["retrieve"])[1:])
     assert restored.exit_code == 1
     assert historical["status"] == status and historical["historical_response"]
-    result = asyncio.run(server.mcp.call_tool("inspect", {
+    result = asyncio.run(server.mcp.call_tool("inspect", {**({
         "file": snapshot["baseline"], "cwd": str(cwd), "report": True,
         "build_dir": snapshot["build_root"], "response_snapshot": snapshot["id"],
         "response_text_budget": 6000, "image_budget": 0,
-    }))
+    })}))
     payload = _payload(result)
     assert payload["_exit_code"] == 1 and payload["status"] == status
 
@@ -291,7 +292,7 @@ def test_daemon_failure_keeps_snapshot_exit_code(runner, isolated_dir, monkeypat
     monkeypatch.setattr("agentcad.commands._daemon_routing._route_through_daemon", lambda *a, **kw: {
         "output": json.dumps({"command": "import", "status": "error", "reason": "invalid_checks"}), "exit_code": 1,
     })
-    failed = runner.invoke(cli, ["import", str(REAL), "--init", "--no-view", "--response-text-budget", "6000"])
+    failed = runner.invoke(cli, experimental_args(["import", str(REAL), "--init", "--no-view", "--response-text-budget", "6000"]))
     assert failed.exit_code == 1, failed.output
     response = json.loads(failed.stdout)
     _assert_failed_snapshot(runner, isolated_dir, response, "error")
@@ -343,7 +344,7 @@ def test_caller_budgets_reach_daemon_before_any_work(runner, isolated_dir, monke
 
     module = importlib.import_module("agentcad.commands." + ("import_cmd" if command == "import" else "inspect_cmd"))
     monkeypatch.setattr(module, "maybe_route_through_daemon", routed)
-    invoked = runner.invoke(cli, [command, "missing.step", *options])
+    invoked = runner.invoke(cli, experimental_args([command, "missing.step", *options]))
     assert invoked.exit_code == 0
     for i, value in enumerate(options):
         if value.startswith("--"):
@@ -357,18 +358,18 @@ def test_caller_budgets_reach_daemon_before_any_work(runner, isolated_dir, monke
 def test_registered_inspect_rejects_unknown_budget_fields_before_execution(isolated_dir, monkeypatch):
     monkeypatch.setattr(server, "_invoke", lambda *a, **kw: pytest.fail("Unknown budget option executed inspection"))
     with pytest.raises(ValueError, match="Invalid inspect arguments"):
-        asyncio.run(server.mcp.call_tool("inspect", {"file": "missing.step", "cwd": str(isolated_dir),
-                                                     "report": True, "response_buget": 1000}))
+        asyncio.run(server.mcp.call_tool("inspect", {**({"file": "missing.step", "cwd": str(isolated_dir),
+                                                     "report": True, "response_buget": 1000})}))
 
 
 @pytest.mark.parametrize("prepare_images", [False, True])
 def test_text_only_mcp_serializes_exactly_what_was_measured(isolated_dir, prepare_images):
     import math
     step, _ = _baseline(isolated_dir)
-    response = asyncio.run(server.mcp.call_tool("inspect", {
+    response = asyncio.run(server.mcp.call_tool("inspect", {**({
         "file": str(step), "cwd": str(isolated_dir), "report": True,
         "report_images": prepare_images, "image_budget": 0, "response_text_budget": 3000,
-    }))
+    })}))
     assert isinstance(response, CallToolResult)
     assert [block.type for block in response.content] == ["text"]
     text = response.content[0].text

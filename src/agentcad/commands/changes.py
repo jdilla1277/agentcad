@@ -50,9 +50,10 @@ class ChangesGroup(click.Group):
 )
 @option
 def changes(build_dir):
-    """WIP: read saved attempts; requires --experimental-changes.
+    """WIP: inspect or recover saved attempts; requires --experimental-changes.
 
-    Never select, accept or rerun CAD.
+    List/show/compare are read-only. Restore/repair create staged successors;
+    neither accepts a model. Repair executes edited Python source.
 
     Use returned r_ revision IDs; working and accepted resolve the current
     retained selections once. Labels and file paths are not revision IDs.
@@ -151,3 +152,83 @@ def compare_changes(baseline, revision):
             f"agentcad changes show {result['candidate']['revision_id']}{_root()} — inspect retained source and failure evidence"
         ]
     _emit("compare", result, actions)
+
+
+def _recover(
+    action, revision, source, label, idempotency_key, request_status, params=None
+):
+    from agentcad.change_recovery import RecoveryRequest
+
+    load_manifest(command="changes")
+    if request_status:
+        if (
+            revision is not None
+            or source is not None
+            or label is not None
+            or params is not None
+        ):
+            raise ProjectError(
+                "recovery_status_options",
+                "Status accepts only the key and build directory.",
+                "Omit revision, source, label and params with --status.",
+            )
+        return RecoveryRequest(action, idempotency_key).status()
+    if revision is None or label is None or (action == "repair" and source is None):
+        raise ProjectError(
+            "recovery_inputs_required",
+            "Supply a revision, --label, and an edited Python source for repair.",
+            "See agentcad docs changes; use --status with a key to read an existing operation.",
+        )
+    return RecoveryRequest(action, idempotency_key).run(revision, source, label, params)
+
+
+@changes.command("restore")
+@click.argument("revision", required=False)
+@click.option("--label", default=None, help="Label for the new staged work.")
+@click.option(
+    "--idempotency-key", required=True, help="One durable key per intended recovery."
+)
+@click.option(
+    "--status",
+    "request_status",
+    is_flag=True,
+    help="Read a known key without source or side effects.",
+)
+@project_options
+def restore_change(revision, label, idempotency_key, request_status):
+    """Copy saved source/model/artifacts into new staged work; never execute CAD.
+
+    Current intended requirements apply, even when older geometry fails them.
+    No accepted version or intervening history is replaced.
+    """
+    return _recover("restore", revision, None, label, idempotency_key, request_status)
+
+
+@changes.command("repair")
+@click.argument("revision", required=False)
+@click.argument("source", required=False, type=click.Path(dir_okay=False))
+@click.option("--label", default=None, help="Label for the new staged work.")
+@click.option(
+    "--idempotency-key", required=True, help="One durable key per intended repair."
+)
+@click.option(
+    "--params",
+    default=None,
+    help="Replace pinned overrides using key=value,key2=value2; use an empty string to clear them.",
+)
+@click.option(
+    "--status",
+    "request_status",
+    is_flag=True,
+    help="Read a known key without source or side effects.",
+)
+@project_options
+def repair_change(revision, source, label, idempotency_key, request_status, params):
+    """Execute edited Python source as staged work linked to a saved revision.
+
+    Keeps its runtime/overrides and today's intended requirements. Review then
+    explicitly promote. Imported CAD can be restored, but not script-repaired.
+    """
+    return _recover(
+        "repair", revision, source, label, idempotency_key, request_status, params
+    )

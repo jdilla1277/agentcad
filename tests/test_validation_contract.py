@@ -86,6 +86,8 @@ def test_run_kernel_profile_restores_the_old_behavior_and_records_it(runner, iso
     assert payload["validation"]["profile"] == "kernel"
     assert payload["validation"]["layers"]["shell_closure"]["status"] == "skipped"
     assert payload["validation"]["layers"]["mesh_manifold"]["status"] == "skipped"
+    assert any("no closed solid" in warning for warning in payload["warnings"])
+    assert not any("Occupied-volume measurement failed" in warning for warning in payload["warnings"])
     meta = json.loads((isolated_dir / "v1_surface" / "meta.json").read_text())
     assert meta["validation_profile"] == "kernel"
     assert meta["validation"]["is_valid"] is True
@@ -146,7 +148,7 @@ def test_import_rejects_an_open_shell_and_kernel_profile_accepts_it(runner, isol
     _init(runner)
     shutil.copy(FIXTURES / "open_shell.step", isolated_dir / "open_shell.step")
 
-    result = runner.invoke(cli, ["import", "open_shell.step", "--no-view", "--no-diff", "--no-daemon"])
+    result = runner.invoke(cli, ["import", "open_shell.step", "--full-response", "--no-view", "--no-diff", "--no-daemon"])
     payload = json.loads(result.stdout)
     assert result.exit_code == 1, result.output
     assert payload["status"] == "invalid_geometry"
@@ -155,7 +157,7 @@ def test_import_rejects_an_open_shell_and_kernel_profile_accepts_it(runner, isol
 
     result = runner.invoke(cli, [
         "import", "open_shell.step", "--label", "surface",
-        "--validation-profile", "kernel", "--no-view", "--no-diff", "--no-daemon",
+        "--validation-profile", "kernel", "--full-response", "--no-view", "--no-diff", "--no-daemon",
     ])
     payload = json.loads(result.stdout)
     assert result.exit_code == 0, result.output

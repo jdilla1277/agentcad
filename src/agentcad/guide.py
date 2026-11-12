@@ -64,6 +64,11 @@ stage whose assumptions were wrong, then build and validate again.
 
 Understand the available evidence before writing geometry.
 
+Typed geometry IDs, reports, highlighted images, inspection jobs and artifact
+retrieval are available by default through the CLI and local MCP. Imports
+include a compact report and sampled four-view images. Follow the returned
+IDs to retrieve specific surfaces and edges before editing the saved baseline.
+
 - For generation, inspect every supplied drawing, image, and requirement. Note
   units, views, orientation, repeated features, and which dimensions are
   explicit versus inferred.

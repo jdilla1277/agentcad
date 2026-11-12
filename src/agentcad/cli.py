@@ -15,6 +15,7 @@ from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
 from agentcad.commands.changes import changes
 from agentcad.commands.cloud import cloud
+from agentcad.commands.account import account
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
@@ -520,6 +521,8 @@ class _InvocationOutput:
                         from agentcad.change_retention import attach_change
 
                         payload = attach_change(payload)
+                        from agentcad.change_recovery import finish_response as finish_recovery
+                        payload = finish_recovery(payload)
                         from agentcad.experimental_changes import present
                         payload = present(payload)
                         if payload.get("command") == "import":
@@ -529,7 +532,8 @@ class _InvocationOutput:
                             from agentcad.run_requests import finish_response
                             payload = finish_response(payload)
                         from agentcad.inspection_delivery import apply_delivery
-                        formatted = format_response(payload, layout)
+                        from agentcad.experimental_inspect import present
+                        formatted = present(format_response(payload, layout))
                         if self.ctx.meta.get("inspection_delivery_policy") is not None:
                             # Presentation may omit viewer fields; lifecycle
                             # decisions must still use the complete outcome.
@@ -922,6 +926,9 @@ class _LoggingGroup(click.Group):
                                outputs={"step": None})
             click.echo(json.dumps(payload))
             sys.exit(1)
+        except click.exceptions.Exit:
+            # Help and explicit Click exits are control flow, not import failures.
+            raise
         except Exception as exc:
             # Import has no run-style outer recovery boundary. Once its source
             # is retained, preserve unexpected parser/metric failures as a
@@ -995,7 +1002,7 @@ class _LoggingGroup(click.Group):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
-        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "changes"):
+        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "account", "changes"):
             return
         if cmd_name == "check-spec" and not ctx.meta.get("experimental_check_completion", False) and ctx.meta.get("experimental_revision_read"):
             return
@@ -1031,6 +1038,7 @@ def cli():
     """agentcad — CLI CAD tool for AI agents. Command results are JSON."""
 
 
+cli.add_command(account)
 cli.add_command(context)
 cli.add_command(check_spec)
 cli.add_command(changes)
