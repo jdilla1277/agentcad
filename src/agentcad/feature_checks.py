@@ -17,6 +17,10 @@ AXIS_INDEX = {"x": 0, "+x": 0, "y": 1, "+y": 1, "z": 2, "+z": 2}
 # matching stays predictable in time and recursion depth.
 MAX_POSITIONED_CYLINDERS = 200
 
+# OCCT rejects very thin Boolean tools. Keep probe boxes at or above one micron
+# on every side so a bad probe cannot abort unrelated measurements.
+MIN_PROBE_EXTENT_MM = 1e-6
+
 
 def _number(value, name, *, minimum=None):
     if type(value) not in (int, float):
@@ -100,36 +104,82 @@ def extract_cylinders(shape):
     cylinders = {}
     for index, raw in enumerate(_iter_indexed_map(shape, TopAbs_FACE), 1):
         face = TopoDS.Face_s(raw)
-        try:
-            adaptor = BRepAdaptor_Surface(face)
-            if adaptor.GetType() == GeomAbs_Cylinder:
-                cylinder = adaptor.Cylinder()
-                axis = cylinder.Axis()
-                direction = list(axis.Direction().Coord())
-                if next((v for v in direction if abs(v) > 1e-12), 1) < 0:
-                    direction = [-v for v in direction]
-                point = list(axis.Location().Coord())
-                projection = sum(p * d for p, d in zip(point, direction))
-                center = [p - projection * d for p, d in zip(point, direction)]
-                diameter = cylinder.Radius() * 2
-                key = tuple(round(v, 9) for v in [diameter, *direction, *center])
-                row = cylinders.setdefault(
-                    key,
-                    {
-                        "diameter_mm": diameter,
-                        "direction": direction,
-                        "center_mm": center,
-                        "face_indices": [],
-                    },
-                )
-                row["face_indices"].append(index)
-        except Exception:
-            pass
+        adaptor = BRepAdaptor_Surface(face)
+        if adaptor.GetType() == GeomAbs_Cylinder:
+            cylinder = adaptor.Cylinder()
+            axis = cylinder.Axis()
+            direction = list(axis.Direction().Coord())
+            if next((v for v in direction if abs(v) > 1e-12), 1) < 0:
+                direction = [-v for v in direction]
+            point = list(axis.Location().Coord())
+            projection = sum(p * d for p, d in zip(point, direction))
+            center = [p - projection * d for p, d in zip(point, direction)]
+            diameter = cylinder.Radius() * 2
+            key = tuple(round(v, 9) for v in [diameter, *direction, *center])
+            row = cylinders.setdefault(
+                key,
+                {
+                    "diameter_mm": diameter,
+                    "direction": direction,
+                    "center_mm": center,
+                    "face_indices": [],
+                },
+            )
+            row["face_indices"].append(index)
     return list(cylinders.values())
 
 
+def validate_solid_occupancy(shape):
+    """Return per-solid signed volumes, rejecting inverted or mixed solids.
+
+    OCCT Boolean intersections interpret a reversed solid as its complement, so
+    an interior probe can measure zero while an exterior probe measures the
+    tool volume. Reject those inputs instead of reporting misleading material
+    claims. A compound needs every solid to be positive; a positive aggregate
+    volume does not prove the individual solids are consistent.
+    """
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopoDS import TopoDS
+
+    from agentcad.topo_ids import _iter_indexed_map
+
+    solids = []
+    for index, raw in enumerate(_iter_indexed_map(_shape(shape), TopAbs_SOLID), 1):
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(TopoDS.Solid_s(raw), props)
+        solids.append({"solid_index": index, "volume_mm3": props.Mass()})
+    if not solids:
+        raise ValueError(
+            "Material probes require at least one solid; this shape contains none."
+        )
+    invalid = [
+        row
+        for row in solids
+        if not math.isfinite(row["volume_mm3"]) or row["volume_mm3"] <= 0
+    ]
+    if invalid:
+        details = "; ".join(
+            f"solid {row['solid_index']} has signed volume "
+            f"{row['volume_mm3']!r} mm^3"
+            for row in invalid
+        )
+        raise ValueError(
+            "Material probes are unavailable because every solid must have a "
+            "positive finite signed volume (reversed or mixed orientations are "
+            f"unsupported): {details}."
+        )
+    return solids
+
+
 def material_volumes(shape, boxes):
-    """Measure material volume inside each probe box, deduplicated by box."""
+    """Measure material volume inside each probe box, deduplicated by box.
+
+    A failed probe produces an error row for that box only, so dimension and
+    cylinder evidence from the same measurement stays usable. Callers must
+    treat error rows as unavailable evidence, never as zero material.
+    """
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
     from OCP.BRepGProp import BRepGProp
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
@@ -138,29 +188,63 @@ def material_volumes(shape, boxes):
 
     shape = _shape(shape)
     result = {}
+    occupancy_error = None
     for raw_box in boxes:
         box = normalize_box(raw_box)
-        key = box_key(box)
-        if key in result:
+        if box_key(box) in result:
+            continue
+        result[box_key(box)] = box
+    if not result:
+        return []
+
+    try:
+        validate_solid_occupancy(shape)
+    except Exception as exc:  # OCCT raises non-Python exception types.
+        occupancy_error = str(exc) or type(exc).__name__
+
+    rows = {}
+    for key, box in result.items():
+        if occupancy_error is not None:
+            rows[key] = {"box_mm": list(box), "error": occupancy_error}
+            continue
+        small_axes = [
+            axis
+            for index, axis in enumerate("xyz")
+            if box[index + 3] - box[index] < MIN_PROBE_EXTENT_MM
+        ]
+        if small_axes:
+            rows[key] = {
+                "box_mm": list(box),
+                "error": (
+                    f"probe extent on {', '.join(small_axes)} is below the "
+                    f"{MIN_PROBE_EXTENT_MM:g} mm minimum required by OCCT"
+                ),
+            }
             continue
         xmin, ymin, zmin, xmax, ymax, zmax = box
-        tool = BRepPrimAPI_MakeBox(
-            gp_Pnt(xmin, ymin, zmin), gp_Pnt(xmax, ymax, zmax)
-        ).Shape()
-        common = BRepAlgoAPI_Common(shape, tool)
-        common.Build()
-        if not common.IsDone():
-            raise ValueError(f"Material probe failed for box {list(box)}.")
-        props = GProp_GProps()
-        BRepGProp.VolumeProperties_s(common.Shape(), props)
-        volume = props.Mass()
-        if abs(volume) < 1e-12:
-            volume = 0.0
-        result[key] = {
-            "box_mm": list(box),
-            "volume_mm3": volume,
-        }
-    return list(result.values())
+        try:
+            tool = BRepPrimAPI_MakeBox(
+                gp_Pnt(xmin, ymin, zmin), gp_Pnt(xmax, ymax, zmax)
+            ).Shape()
+            common = BRepAlgoAPI_Common(shape, tool)
+            common.Build()
+            if not common.IsDone():
+                raise ValueError("OCCT did not complete the Boolean intersection")
+            props = GProp_GProps()
+            BRepGProp.VolumeProperties_s(common.Shape(), props)
+            volume = props.Mass()
+            if not math.isfinite(volume):
+                raise ValueError(f"measured a non-finite volume ({volume!r})")
+            if abs(volume) < 1e-12:
+                volume = 0.0
+            rows[key] = {
+                "box_mm": list(box),
+                "volume_mm3": volume,
+            }
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            rows[key] = {"box_mm": list(box), "error": detail}
+    return list(rows.values())
 
 
 def volume_lookup(rows):
@@ -325,6 +409,7 @@ def check_positioned_cylinders(
     observed = {
         "expected_count": len(positions),
         "measured_count": len(candidates),
+        "axis": axis,
         "positions_mm": positions,
         "diameter_mm": float(diameter_mm),
         "diameter_tolerance_mm": float(diameter_tolerance_mm),
@@ -361,7 +446,20 @@ def check_probe(rows, *, kind, box_mm, threshold_mm3):
         raise ValueError(
             f"Material probe evidence is unavailable for box {list(box)}."
         )
+    if "error" in row:
+        detail = row.get("error") or "unknown probe failure"
+        raise ValueError(
+            f"Material probe failed for box {list(box)}: {detail}."
+        )
+    if "volume_mm3" not in row:
+        raise ValueError(
+            f"Material probe evidence is incomplete for box {list(box)}."
+        )
     volume = float(row["volume_mm3"])
+    if not math.isfinite(volume):
+        raise ValueError(
+            f"Material probe measured a non-finite volume for box {list(box)}."
+        )
     threshold = float(threshold_mm3)
     passed = (
         volume <= threshold + 1e-9

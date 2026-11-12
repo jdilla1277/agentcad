@@ -86,6 +86,8 @@ def test_policy_inherits_and_requires_audited_changes_instead_of_dropping_requir
         dimension(expected_mm=float("nan")),
         dimension(axis="all"),
         dimension(kind="guessed"),
+        dimension(kind=[]),
+        dimension(kind={}),
         dimension(misspelled=True),
     ],
 )
@@ -528,3 +530,117 @@ def test_probe_policy_flows_from_policy_to_measurement_to_result(tmp_path):
     assert [result["state"] for result in results] == ["pass", "fail"]
     assert results[0]["observed"]["volume_mm3"] == pytest.approx(1.0)
     assert results[1]["observed"]["volume_mm3"] == pytest.approx(1.0)
+
+
+def test_thin_advisory_probe_keeps_the_required_dimension_usable(tmp_path):
+    from build123d import Box, export_step
+
+    path = tmp_path / "cube.step"
+    export_step(Box(10, 10, 10), path)
+    policy = compile_policy(
+        declaration(
+            dimension(expected_mm=10),
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": [0, 0, 0, 1, 1, 1e-8],
+                "required": False,
+            },
+        )
+    )
+
+    measured = measure_geometry(path, probe_boxes=probe_boxes_for_policy(policy))
+    assert measured["material_volumes"][0]["error"]
+    results = evaluate_checks(candidate(policy), policy, measured)
+
+    assert results[0]["state"] == "pass"
+    assert results[0]["observed"]["measured_mm"] == pytest.approx(10)
+    assert results[1]["state"] == "unavailable"
+    assert "box" in results[1]["observed"]["reason"]
+    assert "minimum required by OCCT" in results[1]["observed"]["reason"]
+    receipt = contract.make_change_receipt(candidate(policy), policy, results)
+    assert receipt["validation_state"] == "valid"
+
+
+def test_reversed_brep_probe_evidence_is_unavailable_not_passing(tmp_path):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.BRepTools import BRepTools
+    from OCP.gp import gp_Pnt
+
+    reversed_box = BRepPrimAPI_MakeBox(
+        gp_Pnt(0, 0, 0), gp_Pnt(10, 10, 10)
+    ).Shape().Reversed()
+    path = tmp_path / "reversed.brep"
+    assert BRepTools.Write_s(reversed_box, str(path))
+    box = [0, 0, 0, 1, 1, 1]
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": box,
+                "max_volume_mm3": 0,
+            },
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": box,
+                "min_volume_mm3": 0.5,
+            },
+        )
+    )
+
+    measured = measure_geometry(path, probe_boxes=probe_boxes_for_policy(policy))
+    results = evaluate_checks(candidate(policy), policy, measured)
+
+    assert [result["state"] for result in results] == ["unavailable", "unavailable"]
+    for result in results:
+        assert "positive finite signed volume" in result["observed"]["reason"]
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        {
+            "check_id": "no_pins",
+            "kind": "cylinders",
+            "axis": "z",
+            "diameter_mm": 4,
+            "count": 0,
+            "tolerance_mm": 0.1,
+        },
+        {
+            "check_id": "mounts",
+            "kind": "positioned_cylinders",
+            "axis": "z",
+            "diameter_mm": 4,
+            "positions_mm": [[0, 0]],
+            "position_tolerance_mm": 0.1,
+            "tolerance_mm": 0.1,
+        },
+    ],
+)
+def test_cylinder_inspection_failure_is_unavailable_not_a_pass(
+    tmp_path, monkeypatch, check
+):
+    from build123d import Box, export_step
+
+    path = tmp_path / "pins.step"
+    export_step(Box(10, 10, 10), path)
+    policy = compile_policy(declaration(check))
+
+    def fail(shape):
+        raise RuntimeError("injected surface inspection failure")
+
+    monkeypatch.setattr("agentcad.feature_checks.extract_cylinders", fail)
+    with pytest.raises(RuntimeError, match="injected surface inspection failure"):
+        measure_geometry(path)
+
+    result = evaluate_checks(
+        candidate(policy),
+        policy,
+        None,
+        reason="injected surface inspection failure",
+    )[0]
+    assert result["state"] == "unavailable"
+    assert "injected surface inspection failure" in result["observed"]["reason"]

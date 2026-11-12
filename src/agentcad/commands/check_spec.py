@@ -308,12 +308,22 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
                 if feature_type == "keepout"
                 else target["min_volume_mm3"]
             )
-            passed, observed = check_probe(
-                rows,
-                kind=feature_type,
-                box_mm=target["box_mm"],
-                threshold_mm3=threshold,
-            )
+            try:
+                passed, observed = check_probe(
+                    rows,
+                    kind=feature_type,
+                    box_mm=target["box_mm"],
+                    threshold_mm3=threshold,
+                )
+            except ValueError as exc:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": feature_type,
+                    "target": target,
+                    "measured": None,
+                    "reason": str(exc),
+                })
+                continue
             matched_features.append({
                 "name": target["name"],
                 "type": feature_type,
@@ -448,7 +458,7 @@ def _validate_spec(data) -> list[str]:
             errors.append(f"{prefix}.name must be a non-empty string")
 
         feature_type = feature.get("type")
-        if feature_type not in {
+        if not isinstance(feature_type, str) or feature_type not in {
             "cylinder",
             "positioned_cylinders",
             "keepout",

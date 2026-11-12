@@ -387,3 +387,87 @@ class TestCheckSpecCommand:
         assert "positions_mm" in errors
         assert "box_mm" in errors
         assert "min_volume_mm3" in errors
+
+    @pytest.mark.parametrize("bad_type", [[], {}])
+    def test_check_spec_rejects_non_string_feature_types(
+        self, runner, isolated_dir, bad_type
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(
+            isolated_dir,
+            {"features": [{"name": "bad", "type": bad_type}]},
+        )
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("type" in error for error in parsed["errors"])
+
+    def test_check_spec_identifies_a_thin_probe_without_malformed_file(
+        self, runner, isolated_dir
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "thin_void",
+                    "type": "keepout",
+                    "box_mm": [0, 0, 0, 1, 1, 1e-8],
+                    "max_volume_mm3": 0,
+                }
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["passed"] is False
+        missing = {row["name"]: row for row in parsed["missing_features"]}
+        assert "thin_void" in missing
+        assert "minimum required by OCCT" in missing["thin_void"]["reason"]
+        assert "[0.0, 0.0, 0.0, 1.0, 1.0, 1e-08]" in missing["thin_void"]["reason"]
+
+    def test_check_spec_reports_reversed_brep_probes_as_unavailable(
+        self, runner, isolated_dir
+    ):
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+        from OCP.BRepTools import BRepTools
+        from OCP.gp import gp_Pnt
+
+        reversed_box = BRepPrimAPI_MakeBox(
+            gp_Pnt(0, 0, 0), gp_Pnt(10, 10, 10)
+        ).Shape().Reversed()
+        brep = isolated_dir / "reversed.brep"
+        assert BRepTools.Write_s(reversed_box, str(brep))
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "inside_keepout",
+                    "type": "keepout",
+                    "box_mm": [1, 1, 1, 2, 2, 2],
+                    "max_volume_mm3": 0,
+                },
+                {
+                    "name": "outside_material",
+                    "type": "material",
+                    "box_mm": [20, 20, 20, 21, 21, 21],
+                    "min_volume_mm3": 0.5,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(brep), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["passed"] is False
+        missing = {row["name"]: row for row in parsed["missing_features"]}
+        assert set(missing) == {"inside_keepout", "outside_material"}
+        for row in missing.values():
+            assert "positive finite signed volume" in row["reason"]
+            assert "box" in row["reason"]

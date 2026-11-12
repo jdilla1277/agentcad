@@ -79,6 +79,10 @@ def compile_policy(declaration, *, previous=None, core=False, profile="deliverab
                 "Use a unique check_id (letters, digits, hyphens, underscores); core IDs are reserved."
             )
         kind = row.get("kind")
+        if not isinstance(kind, str):
+            raise ValueError(
+                "kind must be a string naming a supported check."
+            )
         fields = {
             "dimension": {"axis", "expected_mm", "tolerance_mm"},
             "cylinders": {"axis", "diameter_mm", "count", "tolerance_mm"},
