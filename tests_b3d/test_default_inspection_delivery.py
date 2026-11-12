@@ -1,5 +1,6 @@
 """The real no-options import/report response is bounded and still actionable."""
 
+from tests.inspection_helpers import experimental_args
 import asyncio
 import base64
 import hashlib
@@ -21,7 +22,7 @@ from tests_b3d.test_step_assembly import _nested_step
 def invoke(runner, args):
     # Deliberately no full_response_args compatibility helper: these calls
     # exercise the public defaults, including copied recovery actions.
-    result = runner.invoke(cli, [*args, '--no-daemon'])
+    result = runner.invoke(cli, experimental_args([*args, '--no-daemon']))
     assert result.stdout, (result.exit_code, result.exception)
     return result, json.loads(result.stdout)
 
@@ -88,10 +89,10 @@ def test_default_import(runner, isolated_dir, monkeypatch, kind):
 
 @pytest.mark.parametrize('kind', ['real', 'assembly'])
 def test_default_mcp(isolated_dir, kind):
-    result = asyncio.run(server.mcp.call_tool('import_cad', {
+    result = asyncio.run(server.mcp.call_tool('import_cad', {**({
         'file': str(source(isolated_dir, kind)), 'cwd': str(isolated_dir),
         'initialize': True, 'view': False, 'diff': False,
-    }))
+    })}))
     assert isinstance(result, CallToolResult)
     data = payload(result)
     _assert_budget(data)
@@ -210,7 +211,7 @@ def test_default_preserves_live_success(runner, isolated_dir, monkeypatch):
 
 @pytest.mark.parametrize('stage', [False, True])
 def test_default_unaccepted_import(runner, isolated_dir, stage):
-    args = ['import', str(REAL), '--init', '--no-view', '--no-diff']
+    args = ['import', '--experimental-changes', str(REAL), '--init', '--no-view', '--no-diff']
     if stage:
         args.append('--stage')
     else:

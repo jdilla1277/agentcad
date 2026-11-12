@@ -102,6 +102,9 @@ class ImportRequest:
         self.layout = get_project()
         self.request_id = "import_" + hashlib.sha256(key.encode()).hexdigest()
         self.directory = self.layout.artifact_path(".agentcad/import_requests/" + self.request_id)
+        if (self.directory / "attempt.json").exists():
+            from agentcad.experimental_changes import required
+            required("This import retry belongs to an experimental retained change.")
         self.key = key
         try:
             if not Path(file).is_file():

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import click
 from agentcad.project import ProjectError, get_project, project_options, validate_version_label
+from agentcad.experimental_inspect import option as inspect_option, enabled as inspect_enabled, forward as forward_inspect, ordinary_semantic
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -1195,8 +1196,8 @@ def _assign_part_identity(raw_parts):
 
 @click.command()
 @click.argument("script", required=False)
-@click.option("--idempotency-key", default=None, help="Save one key per intended run; retry identical source/options to recover its result without executing again.")
-@click.option("--status", "request_status", is_flag=True, default=False, help="Read the saved run by --idempotency-key without reading or executing SCRIPT. No --label needed.")
+@click.option("--idempotency-key", default=None, help="Python runs: WIP, requires --experimental-changes. Save one key; retry identical source/options without executing again. CAD-file dispatch uses ordinary import keys.")
+@click.option("--status", "request_status", is_flag=True, default=False, help="WIP, requires --experimental-changes: read the saved run by key without SCRIPT or --label.")
 @click.option(
     "--label",
     default=None,
@@ -1265,6 +1266,7 @@ def _assign_part_identity(raw_parts):
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@inspect_option
 @click.pass_context
 @project_options
 @change_options
@@ -1295,7 +1297,7 @@ def run(
         if not idempotency_key:
             raise ProjectError("run_key_required", "Run status requires --idempotency-key.",
                                "Read a saved run with agentcad run --idempotency-key KEY --status.")
-        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon"}
+        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon", "experimental_inspect", "experimental_changes"}
         if any(name not in allowed and ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE for name in ctx.params):
             raise ProjectError("run_status_options", "Status accepts only a key and optional build directory.",
                                "Omit SCRIPT and build options when reading a saved run.")
@@ -1373,6 +1375,7 @@ def run(
         from agentcad.commands.import_cmd import import_cmd
         ctx.invoke(
             import_cmd,
+            experimental_inspect=inspect_enabled(),
             file=script,
             label=output,
             init_flag=False,
@@ -1382,6 +1385,7 @@ def run(
             checks_file=ctx.meta.get("change_checks_file"),
             defer_checks=ctx.meta.get("change_defer_checks", False),
             stage=ctx.meta.get("change_stage", False),
+            experimental_changes=ctx.meta.get("experimental_changes", False),
             idempotency_key=idempotency_key,
         )
         return
@@ -1396,6 +1400,7 @@ def run(
     if idempotency_key is not None:
         from agentcad.run_requests import RunRequest
         semantic = {
+            **ordinary_semantic(),
             "label": output, "render": render, "export": export,
             "preview": preview, "auto_diff": auto_diff, "open_view": open_view,
             "params": params, "runtime": runtime,
@@ -1516,6 +1521,7 @@ def _run_impl(
         argv.extend(["--validation-profile", validation_profile])
     from agentcad.change_retention import forward_check_options
     forward_check_options(argv)
+    forward_inspect(argv)
     # Check syntax/capture locally before contacting a daemon or importing CAD.
     _t = _start_phase("validation")
 
@@ -2136,6 +2142,8 @@ def _run_impl(
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
 
+    if not inspect_enabled():
+        meta["artifacts"].pop("geometry_manifest", None)
     prepare_change(meta, geometry=version_dir / "output.step")
     from agentcad.change_promotion import PromotionRefused
     try:
@@ -2152,33 +2160,34 @@ def _run_impl(
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     _phase_tracker.lifecycle = lifecycle
 
-    # Issue IDs only from the delivered STEP, never the script's in-memory
-    # traversal. Inventory is post-core work: failure cannot undo a valid run.
-    _heartbeat("indexing saved geometry IDs…")
-    _t = _start_phase("geometry_manifest")
-    from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
+    if inspect_enabled():
+        # Issue IDs only from the delivered STEP, never the script's in-memory
+        # traversal. Inventory is post-core work: failure cannot undo a valid run.
+        _heartbeat("indexing saved geometry IDs…")
+        _t = _start_phase("geometry_manifest")
+        from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
 
-    try:
-        geometry_data = create_manifest(version_dir / "output.step", version_num, source={
-            "kind": "script", "filename": script_path.name,
-            "sha256": hashlib.sha256((version_dir / "script.py").read_bytes()).hexdigest(),
-            "runtime": runtime_name, "assembly_metadata": "derived_normalized_geometry",
-        })
-        lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
-        lifecycle.meta["geometry_manifest"] = geometry_summary(
-            Path(get_project().response_path(version_dir / "output.step")), geometry_data,
-        )
-        lifecycle.set_artifact("geometry_manifest", "success")
-    except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        lifecycle.set_artifact("geometry_manifest", "failed", message=message)
-        warnings.append(
-            "Typed-ID inventory unavailable; the saved STEP/script remain usable. "
-            "Use inspect --ids or import the saved STEP as a new baseline. " + message
-        )
-        lifecycle.meta["warnings"] = warnings
-        lifecycle.persist()
-    _finish_phase("geometry_manifest", _t)
+        try:
+            geometry_data = create_manifest(version_dir / "output.step", version_num, source={
+                "kind": "script", "filename": script_path.name,
+                "sha256": hashlib.sha256((version_dir / "script.py").read_bytes()).hexdigest(),
+                "runtime": runtime_name, "assembly_metadata": "derived_normalized_geometry",
+            })
+            lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
+            lifecycle.meta["geometry_manifest"] = geometry_summary(
+                Path(get_project().response_path(version_dir / "output.step")), geometry_data,
+            )
+            lifecycle.set_artifact("geometry_manifest", "success")
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            lifecycle.set_artifact("geometry_manifest", "failed", message=message)
+            warnings.append(
+                "Typed-ID inventory unavailable; the saved STEP/script remain usable. "
+                "Use inspect --ids or import the saved STEP as a new baseline. " + message
+            )
+            lifecycle.meta["warnings"] = warnings
+            lifecycle.persist()
+        _finish_phase("geometry_manifest", _t)
 
     comparison_recorder = None
     if comparison_enabled:

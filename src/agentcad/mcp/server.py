@@ -22,14 +22,26 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
-            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote"}:
+            if "experimental_inspect" in tool.inputSchema.get("properties", {}):
+                tool.inputSchema["properties"]["experimental_inspect"]["description"] = "Deprecated compatibility input; ignored. Milestone 2 import and Inspect features are available without opt-in."
+                tool.inputSchema["properties"]["experimental_inspect"]["deprecated"] = True
+            if "experimental_changes" in tool.inputSchema.get("properties", {}):
+                tool.inputSchema["properties"]["experimental_changes"]["description"] = (
+                    "Explicit per-call WIP opt-in. Must be true for retained changes, declared checks, stage, promote and authored-run retry/status; default false."
+                )
+                tool.description += "\nWIP change workflows require experimental_changes=true on every call; ordinary CAD calls default to false."
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
     async def call_tool(self, name, arguments):
+        if arguments and "experimental_inspect" in arguments and type(arguments["experimental_inspect"]) is not bool:
+            raise ValueError(f"Invalid {name} arguments: experimental_inspect must be a boolean.")
+        if arguments and "experimental_changes" in arguments and type(arguments["experimental_changes"]) is not bool:
+            raise ValueError(f"Invalid {name} arguments: experimental_changes must be a boolean.")
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote"}:
+        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -243,6 +255,10 @@ def _build_args(args: list[str], build_dir: str | None) -> list[str]:
     return [*args, "--build-dir", build_dir] if build_dir is not None else args
 
 
+def _experimental(args, experimental_changes):
+    return [*args, "--experimental-changes"] if experimental_changes else args
+
+
 def _invoke(args: list[str], cwd: str | None = None) -> dict:
     """Invoke an agentcad CLI command and return parsed JSON response."""
     runner = CliRunner()
@@ -339,8 +355,8 @@ def import_cad(
     validation_profile: Literal["deliverable", "kernel"] = "deliverable",
     view: bool = True,
     diff: bool = True,
-    report: bool = True,
-    report_images: bool = True,
+    report: bool | None = None,
+    report_images: bool | None = None,
     max_images: int = 9,
     text_budget: int = 2000,
     build_dir: str | None = None,
@@ -348,6 +364,7 @@ def import_cad(
     checks_file: str | None = None,
     defer_checks: bool = False,
     stage: bool = False,
+    experimental_changes: bool = False,
     inspection_background: bool = False,
     inspection_wait_timeout: float | None = None,
     context_window: int | None = None,
@@ -356,15 +373,18 @@ def import_cad(
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
     full_response: bool = False,
+    experimental_inspect: bool = False,
 ) -> Any:
-    """Import a local STEP/STP/BREP as a versioned baseline with inspection PNGs.
+    """Import a local STEP/STP/BREP baseline with inspection images and measured IDs.
 
     file and cwd refer to the MCP execution filesystem. No cloud account is
     needed; cloud_import uploads to a hosted project instead. initialize=True
     maps to CLI --init and can create the selected project/build root. New
     projects default to build123d; runtime only pins a newly initialized project.
 
-    Default: complete CLI JSON limited to 2000 estimated text tokens, including
+    Inspection is available by default; experimental_inspect is a deprecated,
+    ignored compatibility input. report/report_images=None use the defaults.
+    Complete CLI JSON is limited to 2000 estimated text tokens, including
     import/job metadata, with nested inspection, a delivery audit and full saved
     response_snapshot retrieval. Includes quality, dimensions, saved inventories
     and up to nine actual PNG image blocks (overall + up to four part/four raw
@@ -419,14 +439,21 @@ def import_cad(
     Requirements are inherited when omitted; changing them requires actor and
     rationale in the checks JSON. defer_checks maps to --defer-checks: retain
     geometry with pending checks without advancing current. Failed checks also
-    leave current unchanged; check_spec(file=revision_id, complete=True) records
-    deferred evidence without changing current.
+    leave current unchanged; check_spec(file=revision_id, complete=True) settles
+    still-current automatic acceptance after recording deferred evidence.
+    Superseded automatic intent stays cancelled, even after selection back.
     stage=True saves a checked candidate without accepting it, including when
     checks pass. Inspect it with view(file=revision_id), then explicitly promote
     it using a caller-known idempotency key. Staging prepares source/STEP/checks;
     optional inspection media can be prepared later with inspect.
     """
-    args = ["import", file]
+    args = _experimental(["import", file], experimental_changes)
+    if experimental_inspect:
+        args.append("--experimental-inspect")
+    if report is True:
+        args.append("--report")
+    if report_images is True:
+        args.append("--inspection-image")
     if full_response:
         args.append("--full-response")
     if idempotency_key is not None:
@@ -442,11 +469,14 @@ def import_cad(
         args.append("--no-view")
     if not diff:
         args.append("--no-diff")
-    if not report:
+    if report is False:
         args.append("--no-report")
-    if not report_images:
+    if report_images is False:
         args.append("--no-inspection-image")
-    args.extend(["--max-images", str(max_images), "--text-budget", str(text_budget)])
+    if max_images != 9:
+        args.extend(["--max-images", str(max_images)])
+    if text_budget != 2000:
+        args.extend(["--text-budget", str(text_budget)])
     if checks_file is not None:
         args.extend(["--checks", checks_file])
     if defer_checks:
@@ -484,13 +514,15 @@ def run(
     defer_checks: bool = False,
     stage: bool = False,
     idempotency_key: str | None = None,
+    experimental_inspect: bool = False,
+    experimental_changes: bool = False,
 ) -> dict:
     """Execute a build123d script and produce a versioned STEP file with metrics.
 
     New projects use build123d. Existing CadQuery compatibility projects follow
     the runtime pinned in their agentcad.json.
-    Saved STEP versions also issue version-local geometry IDs. Use inspect
-    with report=True or entity_id to inspect the result without re-importing.
+    Saved STEP versions issue typed geometry IDs by default.
+    Use inspect with report=True or entity_id to inspect the result without re-importing.
     Reports/images are prepared on request; dry runs do not issue IDs.
 
     Args:
@@ -514,7 +546,8 @@ def run(
             inherit the selected policy when omitted. See docs check-spec.
         defer_checks: Retain pending declared checks instead of evaluating them
             now. Complete with check_spec(revision_id, complete=True); completion
-            records evidence without changing current.
+            accepts a still-current normal-run intent if checks pass. Staged or
+            superseded work stays unaccepted; reads never change current.
         diff: Compare automatically with the prior successful version. Pass
             False to skip it; explicit diff remains available.
         view: Open or reuse the live project viewer. Share project_viewer.url
@@ -523,7 +556,9 @@ def run(
             and diff=False to also bypass viewer generation on the core-only
             fast path.
     """
-    args = ["run", script]
+    args = _experimental(["run", script], experimental_changes)
+    if experimental_inspect:
+        args.append("--experimental-inspect")
     if output is not None:
         args.extend(["--label", output])
     if render:
@@ -552,14 +587,18 @@ def run(
 
 
 @mcp.tool()
-def run_status(idempotency_key: str, cwd: str, build_dir: str | None = None) -> dict:
+def run_status(idempotency_key: str, cwd: str, build_dir: str | None = None,
+               experimental_inspect: bool = False, experimental_changes: bool = False) -> dict:
     """Read the original authored run by key without executing source or selecting work.
 
     Works after the working script is edited or removed. Returned artifacts and
     check results belong to the original run; they may differ from current work.
     In-progress or interrupted results never authorize an automatic second run.
     """
-    return _invoke(_build_args(["run", "--idempotency-key", idempotency_key, "--status"], build_dir), cwd=cwd)
+    args = _experimental(["run", "--idempotency-key", idempotency_key, "--status"], experimental_changes)
+    if experimental_inspect:
+        args.append("--experimental-inspect")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
 
 
 @mcp.tool()
@@ -698,8 +737,12 @@ def inspect(
     image_budget: int | None = None,
     vision_profile: dict[str, Any] | None = None,
     full_response: bool = False,
+    experimental_inspect: bool = False,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
+
+    Typed IDs, images, reports, jobs, snapshots and artifact-byte retrieval are
+    available without opt-in. experimental_inspect is an ignored compatibility input.
 
     Args:
         file: Path to the STEP file.
@@ -758,6 +801,8 @@ def inspect(
             combine with caller budgets. Harmless for already-unbounded ID lookups.
     """
     args = ["inspect", file]
+    if experimental_inspect:
+        args.append("--experimental-inspect")
     if artifact is not None:
         args.extend(["--artifact", artifact])
     if artifact_offset:
@@ -816,7 +861,7 @@ def inspect(
 
 @mcp.tool()
 def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, build_dir: str | None = None,
-               complete: bool = False) -> dict:
+               complete: bool = False, experimental_changes: bool = False) -> dict:
     """Check a file/spec or inspect a retained revision's pinned check receipt.
 
     File checks return passed, matched_features, and missing_features. Revision
@@ -826,13 +871,15 @@ def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, 
         file: STEP/STP/BREP path, or a returned retained revision ID.
         spec_file: JSON cylindrical-feature spec for file checks. Omit for a
             retained revision: its requirements are already pinned.
-        complete: Complete deferred checks on a retained revision; never changes
-            current or accepts an older candidate. A normal read is read-only.
+        complete: Complete deferred checks and settle the original automatic
+            acceptance if still current. Staged/superseded work stays unaccepted.
+            current_advanced reports a fresh acceptance; promotion is its durable
+            decision, separate from passed/validation_state. Reads are read-only.
         cwd: Source project directory (or a subdirectory); defaults to current.
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    args = ["check-spec", file]
+    args = _experimental(["check-spec", file], experimental_changes)
     if spec_file is not None:
         args.append(spec_file)
     if complete:
@@ -843,7 +890,7 @@ def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, 
 @mcp.tool()
 def promote(idempotency_key: str, cwd: str, revision: str | None = None,
             status: bool = False, target: Literal["cad"] = "cad",
-            build_dir: str | None = None) -> dict:
+            build_dir: str | None = None, experimental_changes: bool = False) -> dict:
     """Accept an exact saved CAD revision or read its durable operation status.
 
     Save idempotency_key before sending. revision is a returned retained ID;
@@ -856,10 +903,114 @@ def promote(idempotency_key: str, cwd: str, revision: str | None = None,
     identifies the original receipt versus the currently accepted revision.
     build_dir selects the same artifact/history root used to stage the candidate.
     """
-    args = ["promote"]
+    args = _experimental(["promote"], experimental_changes)
     if revision is not None:
         args.append(revision)
     args.extend(["--idempotency-key", idempotency_key, "--target", target])
+    if status:
+        args.append("--status")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_list(cwd: str, build_dir: str | None = None, limit: int = 20, before: str | None = None,
+                 experimental_changes: bool = False) -> dict:
+    """Read retained CAD attempts, including failures and interrupted work.
+
+    Newest first, limit 1..100 (default 20). Unreadable/missing request records
+    follow attempts with known ordering. Continue with returned next_before.
+    Each row uses its immutable r_ revision ID, not a display label. Working and
+    accepted selections are separate. Damaged rows report integrity=unavailable;
+    other history stays readable. Never selects, accepts, checks or reruns CAD.
+    """
+    args = _experimental(["changes", "list", "--limit", str(limit)], experimental_changes)
+    if before is not None:
+        args.extend(["--before", before])
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_show(revision: str, cwd: str, build_dir: str | None = None,
+                 experimental_changes: bool = False) -> dict:
+    """Read a retained revision's verified source, geometry, checks and diagnostics.
+
+    revision is a returned r_ ID, working, or accepted (resolved once per call).
+    Labels and paths are not accepted as IDs. Source/geometry/artifact paths name
+    immutable retained files; edited working scripts are not read. Checks are
+    latest saved evidence; promotion receipts preserve their original decisions.
+    Diagnostic text is capped at 2000 characters per field; use records.outcome
+    for full logs/artifact references. Artifacts/promotions are bounded with
+    omitted counts. No geometry is substituted for a no-output failed revision.
+    This is read-only and does not complete checks or accept the candidate.
+    """
+    return _invoke(_build_args(_experimental(["changes", "show", revision], experimental_changes), build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_compare(baseline: str, revision: str, cwd: str, build_dir: str | None = None,
+                    experimental_changes: bool = False) -> dict:
+    """Compare exact retained revisions' saved measurements, checks and policies.
+
+    Each reference is an r_ ID, working, or accepted, resolved once. Reports
+    policy/definition changes separately from pass/fail changes, so a relaxed
+    requirement cannot masquerade as preserved geometry. Numeric deltas use
+    stored execution metrics; they do not prove occupied-space equality. No CAD
+    executes, checks complete, selection changes or promotion occurs. For a new
+    geometric analysis use the returned diff action on the two verified STEPs;
+    missing geometry is explicit and never replaced by the accepted model.
+    """
+    return _invoke(_build_args(_experimental(["changes", "compare", baseline, revision], experimental_changes), build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_restore(idempotency_key: str, cwd: str, revision: str | None = None,
+                    label: str | None = None, status: bool = False,
+                    build_dir: str | None = None, experimental_changes: bool = False) -> dict:
+    """Restore verified saved source/model/artifacts as NEW STAGED work.
+
+    Supply revision (r_ ID, working, accepted), label and a unique key. Current
+    intended requirements apply; older geometry can fail them. No CAD executes,
+    accepted model/history is unchanged. Copied review assets are historical;
+    use view on the returned revision for a fresh review. Retry identical inputs
+    with the same key. status=true needs only the key/cwd/build_dir and reads
+    the original result without executing, selecting or checking again.
+    """
+    args = _experimental(["changes", "restore"], experimental_changes)
+    if revision is not None:
+        args.append(revision)
+    args.extend(["--idempotency-key", idempotency_key])
+    if label is not None:
+        args.extend(["--label", label])
+    if status:
+        args.append("--status")
+    return _invoke(_build_args(args, build_dir), cwd=cwd)
+
+
+@mcp.tool()
+def changes_repair(idempotency_key: str, cwd: str, revision: str | None = None,
+                   source: str | None = None, label: str | None = None,
+                   params: str | None = None, status: bool = False,
+                   build_dir: str | None = None, experimental_changes: bool = False) -> dict:
+    """Execute edited Python CAD source as NEW STAGED work linked to a revision.
+
+    Supply revision, source, label and a unique key. Inherits saved runtime and
+    parameter overrides, plus current intended requirements. params optionally
+    replaces pinned overrides using key=value,key2=value2 (empty string clears). Never accepts the result;
+    review, then explicitly promote. Imported CAD supports restore only.
+    Identical retry/key replays; changed inputs need a new key. status=true
+    accepts only the key/cwd/build_dir, works without source, and never executes
+    source or changes selection. Interrupted requests never automatically rerun.
+    """
+    args = _experimental(["changes", "repair"], experimental_changes)
+    if revision is not None:
+        args.append(revision)
+    if source is not None:
+        args.append(source)
+    args.extend(["--idempotency-key", idempotency_key])
+    if label is not None:
+        args.extend(["--label", label])
+    if params is not None:
+        args.extend(["--params", params])
     if status:
         args.append("--status")
     return _invoke(_build_args(args, build_dir), cwd=cwd)
@@ -891,7 +1042,7 @@ def docs(
 
 
 @mcp.tool()
-def context(cwd: str, build_dir: str | None = None) -> dict:
+def context(cwd: str, build_dir: str | None = None, experimental_changes: bool = False) -> dict:
     """Show project state, including interrupted-version recovery candidates.
 
     Args:
@@ -899,11 +1050,12 @@ def context(cwd: str, build_dir: str | None = None) -> dict:
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Initialize this root first.
     """
-    return _invoke(_build_args(["context"], build_dir), cwd=cwd)
+    return _invoke(_build_args(_experimental(["context"], experimental_changes), build_dir), cwd=cwd)
 
 
 @mcp.tool()
-def recover(version_dir: str, cwd: str, make_current: bool = False, build_dir: str | None = None) -> dict:
+def recover(version_dir: str, cwd: str, make_current: bool = False, build_dir: str | None = None,
+            experimental_changes: bool = False) -> dict:
     """Validate and reconcile an interrupted version directory safely.
 
     Args:
@@ -913,7 +1065,7 @@ def recover(version_dir: str, cwd: str, make_current: bool = False, build_dir: s
             Overrides agentcad.toml for this call only. Use returned artifact paths.
         make_current: Explicitly make the recovered successful version current.
     """
-    args = ["recover", version_dir]
+    args = _experimental(["recover", version_dir], experimental_changes)
     if make_current:
         args.append("--make-current")
     return _invoke(_build_args(args, build_dir), cwd=cwd)
@@ -934,7 +1086,8 @@ def diff(ref1: str, ref2: str, cwd: str, build_dir: str | None = None) -> dict:
 
 
 @mcp.tool()
-def view(file: str, cwd: str, build_dir: str | None = None, validation: bool = False) -> dict:
+def view(file: str, cwd: str, build_dir: str | None = None, validation: bool = False,
+         experimental_changes: bool = False) -> dict:
     """Open a GLB, STEP, or retained revision in the browser via three.js.
 
     Args:
@@ -945,7 +1098,7 @@ def view(file: str, cwd: str, build_dir: str | None = None, validation: bool = F
         build_dir: Optional artifact/history root, relative to the project root.
             Overrides agentcad.toml for this call only. Use returned artifact paths.
     """
-    args = ["view", file]
+    args = _experimental(["view", file], experimental_changes)
     if validation:
         args.append("--validation")
     return _invoke(_build_args(args, build_dir), cwd=cwd)

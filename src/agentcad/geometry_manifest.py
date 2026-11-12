@@ -14,6 +14,7 @@ from agentcad.versioning import atomic_write_json
 
 MANIFEST_NAME = "geometry_manifest.json"
 SCHEMA_VERSION = 1
+INVENTORY_REVISION = 2
 
 
 def _digest(value: dict) -> str:
@@ -24,10 +25,10 @@ def _kernel_version() -> str:
     return importlib.metadata.version("cadquery-ocp")
 
 
-def _inventory(shape) -> dict:
+def _inventory(shape, *, legacy_normals=False) -> dict:
     from agentcad.topo_ids import solid_entries, face_entries, edge_entries
 
-    return {"solid": solid_entries(shape), "face": face_entries(shape), "edge": edge_entries(shape)}
+    return {"solid": solid_entries(shape), "face": face_entries(shape, legacy_normals=legacy_normals), "edge": edge_entries(shape)}
 
 
 def create_manifest(step_path: Path, version: int, *, source: dict) -> dict:
@@ -94,7 +95,7 @@ def create_manifest(step_path: Path, version: int, *, source: dict) -> dict:
         if parent:
             entities[parent]["children"].append(occurrence_id)
     payload = {
-        "schema_version": SCHEMA_VERSION, "version": version,
+        "schema_version": SCHEMA_VERSION, "inventory_revision": INVENTORY_REVISION, "version": version,
         "baseline": {"file": step_path.name, "sha256": hashlib.sha256(step_path.read_bytes()).hexdigest()},
         "kernel_version": _kernel_version(), "source": source,
         "hierarchy_status": document.hierarchy_status,
@@ -124,6 +125,9 @@ def read_manifest(step_path: str | Path) -> dict:
         payload = json.loads(path.read_text())
         if payload["schema_version"] != SCHEMA_VERSION:
             raise ValueError("Unsupported geometry manifest schema; re-import the source.")
+        revision = payload.get("inventory_revision", 1)
+        if type(revision) is not int or revision not in (1, INVENTORY_REVISION):
+            raise ValueError("Unsupported geometry inventory revision; re-import before selecting.")
         manifest_id = payload.pop("manifest_id")
         if _digest(payload) != manifest_id:
             raise ValueError("Geometry manifest integrity check failed; restore the original manifest.")
@@ -146,7 +150,11 @@ def record(payload: dict, object_id: str) -> dict:
         raise ValueError(f"ID {object_id} belongs to another version; this baseline is v{payload['version']}.")
     if object_id not in payload["entities"]:
         raise ValueError(f"Unknown geometry ID {object_id}; inspect this baseline's geometry manifest.")
-    return deepcopy(payload["entities"][object_id])
+    result = deepcopy(payload["entities"][object_id])
+    if result["kind"] == "face" and payload.get("inventory_revision", 1) == 1:
+        # Preserve historical measurements while making their frame explicit.
+        result["normal_coordinate_frame"] = "surface_local"
+    return result
 
 
 def summary(step_path: str | Path, payload: dict) -> dict:
@@ -192,10 +200,11 @@ class BaselineGeometry:
                 expected[entry["kind"]].append({k: v for k, v in entry.items() if k not in {"kind", "index", "units", "coordinate_frame", "occurrence_ids"}} | {"id": entry["index"]})
         for entries in expected.values():
             entries.sort(key=lambda e: e["id"])
-        if _inventory(document.shape) != expected:
+        legacy_normals = self._manifest.get("inventory_revision", 1) == 1
+        if _inventory(document.shape, legacy_normals=legacy_normals) != expected:
             raise ValueError("Reloaded geometry no longer matches the issued ID mapping; re-import before selecting.")
         self._shape = _flat_part(document.shape).wrapped
-        if _inventory(self._shape) != expected:
+        if _inventory(self._shape, legacy_normals=legacy_normals) != expected:
             raise ValueError("Build123d baseline container changed the issued ID mapping; re-import before selecting.")
         self._maps = {
             "face": _indexed_map(self._shape, TopAbs_FACE),

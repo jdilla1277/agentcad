@@ -50,11 +50,11 @@ def test_report_snapshot_expiry_cli_mcp_and_fresh_recovery(runner, isolated_dir,
         expired, error = _invoke(runner, shlex.split(ref["retrieve"])[1:])
         assert expired.exit_code == 1 and error["reason"] == "response_snapshot_expired"
         assert "fresh" in error["suggestion"] and not Path(ref["path"]).exists()
-        mcp = _payload(asyncio.run(server.mcp.call_tool("inspect", {
+        mcp = _payload(asyncio.run(server.mcp.call_tool("inspect", {**({
             "file": str(step), "cwd": str(child), "report": True,
             "response_snapshot": ref["id"], "build_dir": str(isolated_dir),
             "response_text_budget": 5000, "image_budget": 0,
-        })))
+        })})))
         assert mcp["_exit_code"] == 1 and mcp["reason"] == "response_snapshot_unavailable"
         assert mcp["next_actions"] == error["next_actions"]
     fresh, current = _invoke(runner, shlex.split(error["next_actions"][0])[1:])
@@ -69,7 +69,7 @@ def test_import_quota_eviction_and_oversized_retry_keep_accepted_geometry(runner
     build_name = "CAD — owner's files"
     config = isolated_dir / "agentcad.toml"
     config.write_text("build_dir = " + json.dumps(build_name) + "\n[inspection.snapshots]\nmax_bytes = 1048576\n")
-    args = ["import", str(REAL), "--init", "--no-view", "--no-diff", "--idempotency-key", "retention",
+    args = ["import", "--experimental-changes", str(REAL), "--init", "--no-view", "--no-diff", "--idempotency-key", "retention",
             "--response-text-budget", "6000", "--max-images", "1"]
     result, first = _invoke(runner, args)
     assert result.exit_code == 0 and first["promotion"]["outcome"] == "promoted"
@@ -97,10 +97,10 @@ def test_import_quota_eviction_and_oversized_retry_keep_accepted_geometry(runner
     assert response["delivery"]["status"] == "resource_limit" and not response["delivery"]["budget_satisfied"]
     assert response["delivery"]["media"]["returned"] == 0 and "max_bytes" in response["delivery"]["message"]
     assert Path(second["response_snapshot"]["path"]).read_bytes() == kept
-    mcp = asyncio.run(server.mcp.call_tool("import_cad", {
+    mcp = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(REAL), "cwd": str(isolated_dir), "initialize": True, "view": False, "diff": False,
         "idempotency_key": "retention", "response_text_budget": 6000, "max_images": 1,
-    }))
+    }), "experimental_changes": True}))
     payload = _payload(mcp)
     assert payload["_exit_code"] == 0 and payload["delivery"]["status"] == "resource_limit"
     assert all(block.type == "text" for block in mcp.content)

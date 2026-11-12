@@ -1,12 +1,13 @@
 """Issued IDs agree across real pixels, records, instances and edit selectors."""
 
+from tests.inspection_helpers import experimental_args
 import base64
 import json
 from pathlib import Path
 
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 from PIL import Image
 
 from agentcad.cli import cli
@@ -25,7 +26,7 @@ def _baseline(root, source=None):
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, full_response_args(args))
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
@@ -87,7 +88,7 @@ def test_unsampled_edge_image_cli_mcp_and_selector_agree(runner, isolated_dir):
     assert data == actual
     assert base64.b64decode(response.content[1].data) == Path(sheet["png"]).read_bytes()
     # Exercise FastMCP's registered transport conversion, not only the Python function.
-    converted = asyncio.run(mcp.call_tool("inspect", {"file": str(step), "cwd": str(isolated_dir), "entity_id": edge, "image": True}))
+    converted = asyncio.run(mcp.call_tool("inspect", {**({"file": str(step), "cwd": str(isolated_dir), "entity_id": edge, "image": True})}))
     assert isinstance(converted, CallToolResult)
     assert [c.type for c in converted.content] == ["text", "image"]
 
@@ -206,7 +207,7 @@ def test_sheet_failure_preserves_core_and_retry_and_opt_out_work(runner, isolate
     assert imported["artifacts"]["inspection_image"]["status"] == "failed"
     assert (isolated_dir / "edit.py").is_file()
     assert load_geometry(imported["outputs"]["step"]).pick_edge("edge_v1_1").length > 0
-    failed = runner.invoke(cli, ["inspect", imported["outputs"]["step"], "--id", "face_v1_1", "--image"])
+    failed = runner.invoke(cli, experimental_args(["inspect", imported["outputs"]["step"], "--id", "face_v1_1", "--image"]))
     assert failed.exit_code == 1
     assert json.loads(failed.stdout)["entity"]["id"] == "face_v1_1"
     monkeypatch.setattr(renderer, "render_geometry_sheet", original)
@@ -220,6 +221,6 @@ def test_sheet_failure_preserves_core_and_retry_and_opt_out_work(runner, isolate
 def test_wrong_id_and_incompatible_image_options_fail_before_render(runner, isolated_dir, monkeypatch):
     step, _ = _baseline(isolated_dir)
     for extra in (["--isolate"], ["--image", "--isolate"], ["--image", "--ids"], ["--id", "face_v2_1", "--image"]):
-        result = runner.invoke(cli, ["inspect", str(step), *extra])
+        result = runner.invoke(cli, experimental_args(["inspect", str(step), *extra]))
         assert result.exit_code != 0
     assert not (isolated_dir / "inspection").exists()

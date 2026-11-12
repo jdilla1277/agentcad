@@ -92,7 +92,8 @@ def context():
         "agent_setup": agent_setup,
         **reviews,
     }
-    if (get_project().build_root / ".agentcad/changes/working.json").exists():
+    from agentcad.experimental_changes import enabled
+    if enabled() and (get_project().build_root / ".agentcad/changes/working.json").exists():
         from agentcad.change_store import ChangeStore
         try:
             changes = ChangeStore(get_project().build_root)
