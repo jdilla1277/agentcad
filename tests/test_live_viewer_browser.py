@@ -171,6 +171,18 @@ def test_live_loop_twenty_builds_failure_import_and_restart(engine, runner, isol
                 assert len(page.context.pages) == 1
             assert opened == [url]
 
+            # Review an actual older CAD snapshot without rebuilding or
+            # changing the current model, then resume the live feed.
+            manifest_before = (isolated_dir / "agentcad.json").read_bytes()
+            page.select_option("#history", "1")
+            frame = showing(1)
+            assert frame.evaluate("window.agentcadViewer.captureState().position") == pytest.approx(initial["position"])
+            assert "artifacts/1/viewer.html" in frame.url
+            assert (isolated_dir / "agentcad.json").read_bytes() == manifest_before
+            page.click("#latest")
+            frame = showing(20)
+            assert "version=" not in page.url
+
             script.write_text("this is invalid python !")
             failed = runner.invoke(cli, ["run", str(script), "--label", "broken", "--no-daemon"])
             assert failed.exit_code != 0

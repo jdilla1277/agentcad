@@ -200,12 +200,26 @@ points to this version's snapshot. An active page prevents another browser tab
 opening. Updates are checked about once a second (less often in background
 tabs). A new model replaces the previous one only after it loads successfully.
 
+Use **Revision** to list all saved versions and open an older preview. Its
+number, label and date remain visible; versions without a saved preview are
+listed as unavailable. Selecting a revision does not rebuild it or make it
+current. The selected revision stays open across refresh and later builds.
+Choose **Return to latest** to resume following new builds. Camera and
+compatible review settings carry across switches and refreshes; unfinished comments and
+exports wait for you to finish before the model changes.
+
+Older saved viewers can still be opened without rebuilding the model. If a
+preview predates the live page's update support, choose **Open vN snapshot**
+to open that saved viewer directly in a new tab. The live page keeps its current
+model visible, and **Return to latest** resumes normal viewing. View settings
+cannot be carried into those older standalone viewers.
+
 `--no-view` never launches a browser or starts the viewer service. If it still
 generates viewer artifacts, an already-open project page can receive them.
 The core-only `--no-preview --no-diff --no-view` combination generates no viewer;
 the page retains the older model and reports that the new preview is unavailable.
 
-The service binds to `127.0.0.1` and serves only registered viewer snapshots at
+The service binds to `127.0.0.1` and serves only validated saved viewer snapshots at
 private project URLs. These are local bookmarks, not public share links. URLs
 survive service restarts and builds, but moving the project folder changes its
 identity. Viewer state lives in `~/.cache/agentcad/viewer` (override with
