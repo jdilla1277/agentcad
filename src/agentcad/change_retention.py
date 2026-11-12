@@ -161,6 +161,11 @@ def begin_change(*, command: str, label: str, source: bytes, source_name: str, m
     request = ctx.meta.get("change_recovery_request") or ctx.meta.get("import_request") or ctx.meta.get("run_request")
     if request is not None:
         request.bind_attempt(attempt)
+    try:
+        from agentcad.working_viewer import enable
+        enable(layout.build_root)
+    except Exception:
+        pass  # Optional viewer availability cannot prevent a retained edit.
     return attempt
 
 

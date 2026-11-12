@@ -1,17 +1,28 @@
-name: Sync SKILL.md to public skill repo
+name: Sync released skill to public mirror
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      SKILL_SYNC_SSH_KEY:
+        required: true
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "src/agentcad/guide.py"
-      - "src/agentcad/commands/skill.py"
-      - "pyproject.toml"
-      - "scripts/generate_skill_md.py"
-      - ".github/workflows/sync-skill.yml"
+    inputs:
+      tag:
+        description: Published stable package tag to retry (for example v0.7.2)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: agentcad-stable-skill-publication
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -20,23 +31,37 @@ jobs:
       - name: Require mirror deploy key
         env:
           SKILL_SYNC_SSH_KEY: ${{ secrets.SKILL_SYNC_SSH_KEY }}
-        run: |
-          if [ -z "$SKILL_SYNC_SSH_KEY" ]; then
-            echo "SKILL_SYNC_SSH_KEY is not configured."
-            exit 1
-          fi
+        run: test -n "$SKILL_SYNC_SSH_KEY"
 
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: publisher
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install generator dependencies
         run: pip install pyyaml
 
-      - name: Generate SKILL.md
-        run: python scripts/generate_skill_md.py > /tmp/SKILL.md
+      - name: Verify release and successful package upload
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python publisher/scripts/prepare_skill_release.py resolve --tag "$RELEASE_TAG" --manifest release-source.json
+
+      - name: Checkout exact released source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.source_revision }}
+          path: released
+
+      - name: Match the published wheel and generate the released skill
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python publisher/scripts/prepare_skill_release.py prepare --source released --manifest release-source.json --output prepared
 
       - name: Checkout public skill repo
         uses: actions/checkout@v4
@@ -45,16 +70,19 @@ jobs:
           ssh-key: ${{ secrets.SKILL_SYNC_SSH_KEY }}
           path: public-skill
 
-      - name: Commit and push if changed
-        working-directory: public-skill
+      - name: Recheck publication and commit only changed content
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cp /tmp/SKILL.md SKILL.md
+          python publisher/scripts/prepare_skill_release.py verify --manifest release-source.json --mirror public-skill
+          cp prepared/SKILL.md prepared/release.json public-skill/
+          cd public-skill
           git config user.name "agentcad-sync[bot]"
           git config user.email "agentcad-sync@users.noreply.github.com"
-          if git diff --quiet -- SKILL.md; then
-            echo "SKILL.md is already up to date."
+          git add SKILL.md release.json
+          if git diff --cached --quiet; then
+            echo "The stable skill already matches this published package."
             exit 0
           fi
-          git add SKILL.md
-          git commit -m "Sync SKILL.md from jdilla1277/agentcad@${GITHUB_SHA}"
+          git commit -m "Sync skill with verified published package"
           git push

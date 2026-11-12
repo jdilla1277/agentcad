@@ -69,6 +69,12 @@ def check_spec(file, spec_file, no_daemon, complete=False):
                 for a in (saved["candidate"] or {}).get("inputs", []) if a["role"] == "geometry"
             ), None)
             warnings = []
+            if complete:
+                try:
+                    from agentcad.working_viewer import prepare
+                    prepare(store.root, file)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    warnings.append(f"Checks saved, but candidate view could not update: {exc}")
             if checked.get("current_advanced"):
                 accepted = checked["accepted_version_after"]
                 try:
