@@ -173,11 +173,12 @@ def test_recover_cannot_accept_a_superseded_interrupted_promotion(runner, isolat
 
 @pytest.mark.parametrize("command", ["run", "import"])
 @pytest.mark.parametrize("status", ["checks_failed", "checks_pending", "checks_unavailable"])
-def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
-    runner, isolated_dir, command, status
+def test_blocked_checks_follow_candidate_without_replacing_accepted_delivery(
+    runner, isolated_dir, command, status, monkeypatch
 ):
     from urllib.request import urlopen
 
+    monkeypatch.setenv("AGENTCAD_VIEWER_HOME", str(isolated_dir / "runtime"))
     init(runner)
     (isolated_dir / "script.py").write_text(BRACKET)
     accepted = runner.invoke(
@@ -215,7 +216,10 @@ def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
         after = json.load(response)
     assert after["attempt"]["status"] == status
     assert after["attempt"]["label"] == label
-    assert after["latest"] == before["latest"]
+    revision = json.loads(blocked.stdout)["change"]["revision_id"]
+    assert after["displayed"]["revision_id"] == revision
+    assert after["accepted"]["revision_id"] == accepted["change"]["revision_id"]
+    assert after["latest"] != before["latest"]
     assert accepted_step.read_bytes() == accepted_bytes
     current_manifest = json.loads((isolated_dir / "agentcad.json").read_text())
     previous = json.loads(accepted_manifest)
@@ -232,8 +236,9 @@ def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
         assert json.loads(completed.stdout)["current_advanced"] is True
         with urlopen(url + "state", timeout=3) as response:
             accepted_after_checks = json.load(response)
-        assert accepted_after_checks["attempt"]["status"] == "accepted_without_viewer"
-        assert accepted_after_checks["latest"] == before["latest"]
+        assert accepted_after_checks["selected"]["status"] == "Accepted"
+        assert accepted_after_checks["displayed"]["revision_id"] == revision
+        assert accepted_after_checks["accepted"]["revision_id"] == revision
 
 
 @pytest.mark.parametrize(
@@ -721,7 +726,8 @@ def test_import_checks_measure_and_deliver_the_same_normalized_bytes(
     )
 
 
-def test_failed_revision_opens_viewer_with_the_same_receipt(runner, isolated_dir):
+def test_failed_revision_opens_viewer_with_the_same_receipt(runner, isolated_dir, monkeypatch):
+    monkeypatch.setenv("AGENTCAD_VIEWER_HOME", str(isolated_dir / "runtime"))
     init(runner)
     (isolated_dir / "script.py").write_text(BRACKET)
     (isolated_dir / "checks.json").write_text(

@@ -141,6 +141,8 @@ class RecoveryRequest:
         }
 
     def complete(self, payload):
+        from agentcad.working_viewer import finish_response
+        payload = finish_response({"command": "changes", **payload})
         result = self.present(payload)
         code = 0 if result.get("status") in ("success", "staged") else 1
         self.save("response.json", payload=result, exit_code=code)
