@@ -1,5 +1,8 @@
 # Local inspection jobs
 
+Import reports, typed geometry IDs, four-view images, jobs and artifact retrieval
+are available by default through the CLI and local MCP. No opt-in is required.
+
 Import waits for inspection by default. Its response now includes
 `inspection_job`: the baseline, analysis revision, configuration, stage progress
 and executable status/wait/resume/cancel actions. The source STEP and issued

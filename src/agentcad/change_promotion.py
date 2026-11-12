@@ -198,6 +198,10 @@ class PromotionStore:
         operation = self.find(request_key)
         if operation is None:
             return {}
+        return self._response_fields(operation)
+
+    @staticmethod
+    def _response_fields(operation: dict) -> dict:
         return {
             "promotion": operation["result"],
             "current_advanced": operation["result"].get("outcome") == "promoted",
@@ -209,8 +213,195 @@ class PromotionStore:
             ),
         }
 
+    def automatic_seed(self, revision_id: str) -> dict:
+        """Pin the predecessor before CAD execution, under the version lock."""
+        manifest = self._manifest()
+        state = self._state(manifest)
+        if "promotion_state" not in manifest:
+            self._write(manifest, state)
+        accepted = _current_target(manifest, state, "cad") or {}
+        return {
+            "request_key": "auto:" + revision_id,
+            "project_id": state["project_id"],
+            "expected_promoted_revision_id": accepted.get("revision_id"),
+            "legacy_before": _legacy_current(manifest),
+        }
+
+    def ensure_automatic(self, revision_id: str) -> None:
+        """Recover enrollment even if execution stopped just after core sealing.
+
+        Only new normal deferred requests carry a seed. Older retained attempts
+        and staged experiments cannot acquire automatic intent retroactively.
+        """
+        if (
+            not Attempt(self.changes, revision_id)
+            ._read("request.json", "attempt_request")
+            .get("automatic_promotion")
+        ):
+            return
+        saved = self.changes.read(revision_id)
+        if (
+            saved["request"].get("automatic_promotion")
+            and saved["receipt"]
+            and any(
+                row["reason"] == "required_check_pending"
+                for row in saved["receipt"]["blockers"]
+            )
+        ):
+            self.begin(revision_id, request_key="auto:" + revision_id, automatic=True)
+
+    def automatic_fields(self, revision_id: str, *, original: bool = False) -> dict:
+        """Read the live operation separately from immutable execution results."""
+        key = "auto:" + revision_id
+        manifest = self._manifest()
+        state = self._state(manifest)
+        operation = state["operations"].get(_key(key))
+        if not operation or not operation.get("automatic_intent"):
+            return {}
+        if original:
+            # A deferred execution response describes the original pending
+            # handoff, even if another caller already completed its checks.
+            operation = copy.deepcopy(operation)
+            operation["result"] = self._automatic_pending(operation["request"])
+        accepted = (
+            operation["accepted_version"]
+            if operation["result"].get("outcome") == "promoted"
+            else None
+        )
+        plan = operation.get("materialization")
+        now = _current_target(manifest, state, "cad")
+        return {
+            **self._response_fields(operation),
+            "current_advanced": False,
+            "request_key": key,
+            "accepted_revision_now": now["revision_id"] if now else None,
+            "accepted_version_now": _legacy_current(manifest)["version"],
+            "working_revision_now": self.changes.working_revision_id,
+            "outputs": (
+                (
+                    dict(plan["meta"]["outputs"])
+                    if plan
+                    else {"step": accepted["path"] + "output.step"}
+                )
+                if accepted
+                else {"step": None}
+            ),
+        }
+
+    @staticmethod
+    def _automatic_pending(request: dict) -> dict:
+        return contract.make_operation_status(
+            request,
+            "pending",
+            jobs=[
+                {
+                    "kind": "declared_checks",
+                    "revision_id": request["candidate"]["revision_id"],
+                    "action": "complete_checks",
+                }
+            ],
+        )
+
+    def complete_automatic(self, revision_id: str) -> dict:
+        self.ensure_automatic(revision_id)
+        operation = self.find("auto:" + revision_id)
+        if not operation or not operation.get("automatic_intent"):
+            return {}
+        result = self.promote(revision_id, request_key="auto:" + revision_id)
+        return {
+            **self.automatic_fields(revision_id),
+            "current_advanced": not result["replayed"]
+            and result["promotion"].get("outcome") == "promoted",
+            "replayed": result["replayed"],
+        }
+
+    def _cancel_superseded(self, manifest: dict, state: dict) -> bool:
+        """Cancel under the selection writer's root lock; never revive on return."""
+        selection = self.changes._state()
+        changed = False
+        for operation in state["operations"].values():
+            request = operation["request"]
+            revision = request["candidate"]["revision_id"]
+            if (
+                not operation.get("automatic_intent")
+                or operation["result"]["kind"] == "promotion_receipt"
+            ):
+                continue
+            if (
+                selection["revision_id"] == revision
+                and selection["selection_generation"] == request["selection_generation"]
+            ):
+                continue
+            # Cancellation retires intent; it does not accept or revalidate CAD.
+            # Verify the saved evidence records, without opening obsolete source,
+            # geometry or optional artifacts that may now be missing/damaged.
+            attempt = Attempt(self.changes, revision)
+            candidate = attempt._read("candidate.json", "candidate", shared=True)
+            policy = attempt._read("policy.json", "target_policy", shared=True)
+            receipt_name = (
+                "checks_complete.json"
+                if (attempt.directory / "checks_complete.json").exists()
+                else "receipt.json"
+            )
+            recorded = attempt._read(receipt_name, "change_receipt", shared=True)
+            if (
+                contract.make_change_receipt(candidate, policy, recorded["checks"])
+                != recorded
+            ):
+                raise ChangeStoreError(
+                    "Cancellation evidence does not match its pinned candidate and policy."
+                )
+            before = (_current_target(manifest, state, request["target_id"]) or {}).get(
+                "revision_id"
+            )
+            checked = contract.make_change_receipt(
+                candidate,
+                policy,
+                recorded["checks"],
+                promoted_revision_id=before,
+            )
+            operation["result"] = contract.make_promotion_receipt(
+                request,
+                checked,
+                outcome="not_promoted",
+                promoted_revision_after=before,
+                operation_diagnostics=[
+                    {
+                        "reason": "selection_changed",
+                        "observed": {
+                            "candidate": None,
+                            "policy": None,
+                            "selection_generation": selection["selection_generation"],
+                            "promoted_revision_id": before,
+                        },
+                        "actions": [
+                            {
+                                "action": "reconcile",
+                                "revision_id": revision,
+                                "message": "Automatic acceptance was cancelled by a newer selection. Inspect the revisions and use a new promotion key for a deliberate attempt.",
+                            }
+                        ],
+                    }
+                ],
+            )
+            operation["accepted_version"] = _legacy_current(manifest)["version"]
+            changed = True
+        return changed
+
+    def cancel_superseded(self) -> None:
+        """Called by selection writers while they already own the version lock."""
+        manifest = self._manifest()
+        state = self._state(manifest)
+        if self._cancel_superseded(manifest, state):
+            self._write(manifest, state)
+
     def begin(
-        self, revision_id: str, *, request_key: str, target_id: str = "cad"
+        self,
+        revision_id: str,
+        *,
+        request_key: str,
+        target_id: str = "cad",
+        automatic: bool = False,
     ) -> dict:
         """Persist a known-key request before an acceptance transaction starts.
 
@@ -248,20 +439,42 @@ class PromotionStore:
                 contract.validate_replay(existing["request"], retry)
                 return copy.deepcopy(existing["request"])
             accepted = _current_target(manifest, state, target_id) or {}
+            seed = saved["request"].get("automatic_promotion") if automatic else None
+            if automatic and (
+                not seed
+                or seed["project_id"] != state["project_id"]
+                or seed["request_key"] != request_key
+                or candidate["promotion_mode"] != "automatic"
+            ):
+                raise ChangeStoreError(
+                    "Automatic intent must match its original normal-run request."
+                )
             request = contract.make_promotion_request(
                 candidate,
                 policy,
                 project_id=state["project_id"],
                 request_key=request_key,
                 selection_generation=saved["request"]["selection_generation"],
-                expected_promoted_revision_id=accepted.get("revision_id"),
+                expected_promoted_revision_id=(
+                    seed["expected_promoted_revision_id"]
+                    if seed
+                    else accepted.get("revision_id")
+                ),
             )
             state["operations"][key] = {
                 "request": request,
-                "result": contract.make_operation_status(request, "pending"),
-                "legacy_before": _legacy_current(manifest),
+                "result": (
+                    self._automatic_pending(request)
+                    if automatic
+                    else contract.make_operation_status(request, "pending")
+                ),
+                "legacy_before": (
+                    seed["legacy_before"] if seed else _legacy_current(manifest)
+                ),
                 "accepted_version": None,
+                **({"automatic_intent": True} if automatic else {}),
             }
+            self._cancel_superseded(manifest, state)
             self._write(manifest, state)
             return copy.deepcopy(request)
 
@@ -361,6 +574,18 @@ class PromotionStore:
                     for reason in reasons
                 ]
             promote = checked["promotion_ready"] and not reasons
+            # Pending is an operation state, not a terminal refusal. Failures,
+            # unavailable requirements, and supersession still settle forever.
+            if (
+                operation.get("automatic_intent")
+                and not reasons
+                and checked["blockers"]
+                and all(
+                    blocker["reason"] == "required_check_pending"
+                    for blocker in checked["blockers"]
+                )
+            ):
+                return copy.deepcopy(operation["result"])
             result = contract.make_promotion_receipt(
                 request,
                 checked,

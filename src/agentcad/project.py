@@ -274,6 +274,11 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        if name in {"run", "import", "inspect"}:
+            from agentcad.experimental_inspect import validate
+            validate(ctx, kwargs)
+        from agentcad.experimental_changes import validate
+        validate(ctx, kwargs)
         if name == "feedback" and (
             kwargs.get("show_template")
             or (kwargs.get("message") is None and kwargs.get("feedback_file") is None)
@@ -293,8 +298,10 @@ def project_options(function):
             "feedback",
         } or (name == "diff" and kwargs.get("visual")) or (
             name == "inspect" and (kwargs.get("with_image") or kwargs.get("with_report"))
-        ) or (name == "check-spec" and kwargs.get("complete"))
-        if kwargs.get("dry_run") or (name == "run" and kwargs.get("request_status")):
+        ) or (name == "check-spec" and kwargs.get("complete")) or (
+            name in {"restore", "repair"} and not kwargs.get("request_status")
+        )
+        if kwargs.get("dry_run") or (name in {"run", "restore", "repair"} and kwargs.get("request_status")):
             writes = False
             ctx.meta["project_dry_run"] = True
         if name in {"run", "context", "recover", "parts"} or (
@@ -312,7 +319,8 @@ def project_options(function):
             layout.preflight()
         return function(*args, **kwargs)
 
-    return wrapped
+    from agentcad.experimental_changes import _COMMANDS, option
+    return option(wrapped) if function.__name__ in _COMMANDS else wrapped
 
 
 def derived_dir(command: str, *inputs: Path, create: bool = True) -> Path:
@@ -460,22 +468,27 @@ def _format_import_presentation(result, original_step, layout):
 
     report = result.get("inspection")
     if report is not None and report.get("budget", {}).get("scope") == "inspection_report":
-        from agentcad.inspection_report import ReportBudgetError, compact_report, _estimated_tokens
+        from agentcad.inspection_report import ReportBudgetError, compact_report
 
         try:
             result["inspection"] = compact_report(report)
         except ReportBudgetError as exc:
-            # Presentation failure cannot revoke the already committed CAD or
-            # mutate the original response/analysis to fit this caller's cwd.
-            result.pop("inspection")
-            recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
-                                  _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
-            result["inspection_delivery"] = {
-                "status": "omitted", "reason": "text_budget_too_small",
-                "text_tokens": report["budget"]["text_tokens"], "message": str(exc),
-                "next_actions": [shlex.join([
-                    "agentcad", "inspect", str(layout.artifact_path(original_step)),
-                    "--report", "--no-images", "--text-budget", str(recovery_budget),
-                    "--build-dir", str(layout.build_root),
-                ])],
-            }
+            _omit_import_report(result, report, original_step, layout, exc)
+
+
+def _omit_import_report(result, report, original_step, layout, error):
+    """Keep committed CAD success when caller-specific report additions overflow."""
+    from agentcad.inspection_report import _estimated_tokens
+
+    result.pop("inspection")
+    recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
+                          _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
+    result["inspection_delivery"] = {
+        "status": "omitted", "reason": "text_budget_too_small",
+        "text_tokens": report["budget"]["text_tokens"], "message": str(error),
+        "next_actions": [shlex.join([
+            "agentcad", "inspect", str(layout.artifact_path(original_step)),
+            "--report", "--no-images", "--text-budget", str(recovery_budget),
+            "--build-dir", str(layout.build_root),
+        ])],
+    }

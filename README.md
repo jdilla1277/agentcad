@@ -16,17 +16,22 @@ agentcad is open source under the Apache License 2.0. It runs locally and requir
 
 A coding agent designing in agentcad, live. See more at [agentcad.dev](https://agentcad.dev).
 
-### On CADGenBench: 48% higher CAD Score and 21.8% lower model cost
+## Recently from agentcad
 
-[![Watch measuring agentcad's effectiveness](https://img.youtube.com/vi/IacqGZH8Gu4/maxresdefault.jpg)](https://www.youtube.com/watch?v=IacqGZH8Gu4)
+- **November 11, 2026 — [From PDFs, images, and drawings to Revit](https://agentcad.dev/revit):** Model from drawings, photos, and measurements, review the geometry, and bring checked STEP files into Revit.
+- **November 6, 2026 — [v0.7.2: Retry builds without creating duplicate versions](https://agentcad.dev/changelog/v0.7.2):** Recover saved results after a lost response, keep projects separate, and preserve non-English text on Windows.
+- **October 28, 2026 — [Measuring agentcad's effectiveness, again](https://agentcad.dev/measuring-agentcad-effectiveness-again):** The workflow candidate behind v0.7.0 scored 33% higher overall than the previous agentcad result, with editing up 42% and 80 of 81 valid outputs.
+- **September 29, 2026 — [Using Meta's Muse agent for 3D printing and CAD](https://agentcad.dev/muse-3d-printing):** A CAD workflow from a phone with Meta's Muse agent, including a video walkthrough.
+- **September 3, 2026 — [The original effectiveness benchmark](https://agentcad.dev/measuring-agentcad-effectiveness):** The earlier comparison against direct build123d, with its [video walkthrough](https://www.youtube.com/watch?v=IacqGZH8Gu4).
 
-In a GPT-5 Nano comparison, the agent using agentcad also produced 2.5 times as many valid outputs. Watch the [video](https://www.youtube.com/watch?v=IacqGZH8Gu4), read the [benchmark results](https://agentcad.dev/measuring-agentcad-effectiveness), or [view the change log](https://agentcad.dev/changelog) for more recent updates.
+Browse the [change log](https://agentcad.dev/changelog) for more updates.
 
-The v0.7.0 release brings the five-stage workflow below to the installed guide
-and built-in help. In its [Candidate L CADGenBench run](https://huggingai4engineering-cadgenbench.hf.space/reports/james-dillard_gpt-5-nano-candidate-l-pi-harness-five-s_20261001-001100.html),
+The five-stage workflow below was evaluated in the v0.7.0
+[Candidate L CADGenBench run](https://huggingai4engineering-cadgenbench.hf.space/reports/james-dillard_gpt-5-nano-candidate-l-pi-harness-five-s_20261001-001100.html).
 GPT-5 Nano scored .245 overall (.175 generation, .353 editing) with 80 of 81
-valid outputs. That is a single run, not a new matched direct-build123d
-comparison; see the [experiment closeout](docs/product-plans/agentcad-performance-next-steps.md)
+valid outputs. This was a single release-candidate run, not an evaluation of
+the current release or a fresh matched direct-build123d comparison; see the
+[experiment closeout](docs/product-plans/agentcad-performance-next-steps.md)
 for the baseline, caveats, and next evaluations.
 
 ## Quick start
@@ -304,9 +309,13 @@ Add to `.mcp.json`:
 ```
 
 For local STEP/STP/BREP files, call `import_cad` with `file`, `cwd`, and
-`initialize=True` to start a project. The default response includes the import
+`initialize=True` to start a project. Imports prepare typed geometry IDs,
+measurements and a compact inspection report by default. No Inspect opt-in is
+required. The default response includes the import
 JSON and up to nine inspection PNG attachments. Use `report_images=False` for
-an image-free report or `report=False` to keep the bundle on disk. Follow the
+an image-free report or `report=False` to keep the bundle on disk. Image
+attachments are delivered to the MCP client; how they appear to the user depends
+on the client. Follow the
 returned IDs and paths with `inspect` and `run`. Local paths refer to the MCP
 execution filesystem. See `agentcad docs mcp` for controls.
 
@@ -333,7 +342,7 @@ stay unchanged. If required references cannot fit, `inspection_delivery` reports
 the omission and provides a retrieval action with a larger allowance.
 Deleting `.agentcad/import_requests` deletes retry protection for those keys.
 
-Imports now return a durable `inspection_job` and wait for inspection by
+Imports return a durable `inspection_job` and wait for inspection by
 default. Use `--inspection-background` or `--inspection-wait-timeout SECONDS`
 to return before analysis finishes. A wait deadline leaves the worker running;
 follow the returned status/wait/resume/cancel actions. These wait controls do

@@ -1,5 +1,11 @@
 # Retrieve inspection artifacts
 
+Import reports, typed geometry IDs, four-view images, jobs and artifact retrieval
+are available by default through the CLI and local MCP. No opt-in is required. The old CLI `--experimental-inspect` flag and MCP
+`experimental_inspect` boolean are accepted as ignored compatibility inputs.
+Retained retry keys replay their original inspection settings; use a new key
+for an intentional import with different report/image options.
+
 An inspection path names a file on the AgentCAD server. A calling agent can
 retrieve its bytes through the existing `inspect` tool without opening that
 path on its own machine. No storage service or database is required.
@@ -104,3 +110,13 @@ stdio forwarded to another machine. It does not add a hosted MCP endpoint or
 extend the separate `cloud_*` HTTPS service. Its deployed inspection API still
 has its own capabilities. The full cloud/remote capability matrix remains
 separate release work.
+
+## Older face-normal measurements
+
+New ID manifests declare `inventory_revision: 2`; face normals include the full
+placed assembly rotation. Earlier manifests retain their original measurements
+and ID mapping. Live face lookups qualify those older normals with
+`normal_coordinate_frame: surface_local`; their bounding boxes and centroids
+remain in assembly coordinates. Reimport into a new version for corrected
+assembly-frame normal measurements. Existing manifests and saved responses are
+never rewritten during lookup or recovery.

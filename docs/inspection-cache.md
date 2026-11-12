@@ -1,5 +1,8 @@
 # Retaining inspection reports and images
 
+Import reports, typed geometry IDs, four-view images, jobs and artifact retrieval
+are available by default through the CLI and local MCP. No opt-in is required.
+
 Inspection analysis, image sheets, catalogues and completed job result payloads
 share a **512 MiB cache per selected build root**, with a **30-day** default age
 limit. Configure positive integer limits in the source project's `agentcad.toml`:
