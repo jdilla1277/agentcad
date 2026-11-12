@@ -21,14 +21,14 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from agentcad.versioning import atomic_write_json
 
-PROTOCOL = 2
+PROTOCOL = 3
 
 
 class ViewerUnavailable(RuntimeError):
     pass
 
 
-def runtime_dir() -> Path:
+def runtime_dir(*, create=True) -> Path:
     import click
     ctx = click.get_current_context(silent=True)
     layout = ctx.meta.get("project_layout") if ctx else None
@@ -36,7 +36,8 @@ def runtime_dir() -> Path:
     # receives this directory explicitly in its environment at startup.
     path = (layout.artifact_path(".agentcad/viewer") if layout and layout.configured
             else Path(os.environ.get("AGENTCAD_VIEWER_HOME", Path.home() / ".cache/agentcad/viewer")))
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if create:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
     return path.resolve()
 
 
@@ -225,7 +226,8 @@ def stop_service():
 
 def open_project(root: Path, open_browser):
     token = project_token(Path(root))
-    if not read_json(project_record(token), {}).get("latest"):
+    record = read_json(project_record(token), {})
+    if not record.get("latest") and not record.get("experimental_changes"):
         raise ViewerUnavailable("No completed project viewer. Run a build with viewing enabled first.")
     config = ensure_service()
     claim = request(config, "open", {"project": token})

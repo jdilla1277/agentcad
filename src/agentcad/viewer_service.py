@@ -16,6 +16,7 @@ from agentcad import project_viewer as live
 from agentcad.project_viewer_page import PAGE
 from agentcad.versioning import atomic_write_json
 from agentcad import reviews
+from agentcad.project import ProjectError
 
 
 class Server(ThreadingHTTPServer):
@@ -94,6 +95,9 @@ class Handler(BaseHTTPRequestHandler):
         token, route = match.groups()
         try:
             record = live.read_json(live.project_record(token))
+            if record and (Path(record["root"]).resolve() != Path(record["root"]) or not Path(record["root"]).is_dir()):
+                self.reply(403, {"error": "Project path changed"})
+                return
             if record is None:
                 self.reply(404, {"error": "Unknown project"})
             elif route == "":
@@ -112,7 +116,21 @@ class Handler(BaseHTTPRequestHandler):
                         self.server.clients[token] = {key: seen for key, seen in clients.items() if now - seen < 90}
                         self.server.claims.pop(token, None)
                         self.server.persist_clients()
-                self.reply(200, {"latest": record.get("latest"), "attempt": record.get("attempt")})
+                result = {"latest": record.get("latest"), "attempt": record.get("attempt")}
+                revision = parse_qs(urlsplit(self.path).query).get("revision", [None])[0]
+                if record.get("experimental_changes") or (revision and record.get("working_snapshots")):
+                    from agentcad.working_viewer import state
+                    if revision is not None and not re.fullmatch(r"r_[a-f0-9]{32}", revision):
+                        self.reply(400, {"error": "Use an exact retained revision ID for a pin"})
+                        return
+                    result.update(state(record["root"], record, revision))
+                self.reply(200, result)
+            elif record.get("working_snapshots") and re.fullmatch(r"evidence/r_[a-f0-9]{32}\.json", route):
+                from agentcad.working_viewer import evidence
+                self.reply(200, evidence(record["root"], route[9:-5]))
+            elif route in record.get("revision_artifacts", {}):
+                from agentcad.working_viewer import artifact
+                self.reply(200, artifact(record["root"], record["revision_artifacts"][route]), "text/html; charset=utf-8")
             else:
                 artifact = re.fullmatch(r"artifacts/(\d+)/viewer.html", route)
                 source = record.get("versions", {}).get(artifact[1]) if artifact else None
@@ -127,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(403, {"error": "Viewer path changed"})
                     return
                 self.reply(200, file.read_bytes(), "text/html; charset=utf-8")
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError, ProjectError):
             self.reply(503, {"error": "Viewer artifact unavailable; retry after rebuilding"})
 
     def do_POST(self):
@@ -163,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"[a-f0-9]{64}", token):
                 raise ValueError()
             record = live.read_json(live.project_record(token), {})
-            if not record.get("latest"):
+            if not record.get("latest") and not record.get("experimental_changes"):
                 self.reply(404, {"error": "Unknown project"})
                 return
             with self.server.guard:
@@ -173,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
                               or now - self.server.claims.get(token, float('-inf')) < 5)
                     if not reused:
                         self.server.claims[token] = now
-                    self.reply(200, {"reused": reused, "version": record["latest"]["version"]})
+                    self.reply(200, {"reused": reused, "version": (record.get("latest") or {}).get("version")})
                 elif route == "/release":
                     self.server.claims.pop(token, None)
                     self.reply(200, {"status": "released"})
