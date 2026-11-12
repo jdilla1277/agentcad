@@ -17,6 +17,7 @@ _COMMANDS = {
     "view",
     "context",
     "recover",
+    "viewer",
     "list_changes",
     "show_change",
     "compare_changes",
@@ -145,7 +146,7 @@ def validate(ctx, values):
 
 
 _ACTION = re.compile(
-    r"^(agentcad (?:changes (?:list|show|compare|restore|repair)|run|import|promote|check-spec|view|context|recover))(?=\s|$)"
+    r"^(agentcad (?:changes (?:list|show|compare|restore|repair)|run|import|promote|check-spec|view|viewer|context|recover))(?=\s|$)"
 )
 
 

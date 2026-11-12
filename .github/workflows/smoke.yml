@@ -39,6 +39,9 @@ jobs:
       - name: Run cloud adapter and local MCP contracts
         run: pytest tests/test_account.py tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py tests/test_experimental_inspect.py -q
 
+      - name: Run stable skill publication guardrails
+        run: pytest tests/test_skill_publication.py tests/test_generate_skill_md.py -q
+
       - name: Run session logging and MCP audit regressions
         run: pytest tests/test_session_log.py tests/test_session_logging_integration.py -q
 
@@ -68,7 +71,7 @@ jobs:
             tests/test_change_contract.py tests/test_change_checks.py tests/test_change_store.py tests/test_change_promotion.py tests/test_change_staging.py tests/test_run_retries.py tests/test_versioning.py tests/test_change_retention.py \
             tests/test_check_spec.py tests/test_view.py \
             tests/test_delayed_acceptance.py \
-            tests/test_change_history.py tests/test_change_recovery.py tests/test_experimental_changes.py \
+            tests/test_change_history.py tests/test_change_recovery.py tests/test_working_viewer.py tests/test_experimental_changes.py \
             tests/test_render.py::test_linux_render_window_uses_virtual_x11_drawable \
             tests/test_render.py::test_linux_display_connection_failure_is_actionable \
             tests/test_render.py::test_render_shape_produces_png \
@@ -128,7 +131,7 @@ jobs:
             tests/test_change_contract.py tests/test_change_checks.py tests/test_change_store.py tests/test_change_promotion.py tests/test_change_staging.py tests/test_run_retries.py tests/test_versioning.py tests/test_change_retention.py \
             tests/test_feature_checks.py tests_b3d/test_feature_checks.py \
             tests/test_delayed_acceptance.py \
-            tests/test_change_history.py tests/test_change_recovery.py tests/test_experimental_changes.py \
+            tests/test_change_history.py tests/test_change_recovery.py tests/test_working_viewer.py tests/test_experimental_changes.py \
             tests/test_build123d_primitive_aliases.py \
             tests/test_bbox_coordinates.py \
             tests_b3d/test_duplicate_capture.py \
@@ -184,7 +187,7 @@ jobs:
         run: pytest tests/test_delayed_acceptance.py -q
 
       - name: Run retained history guardrails
-        run: pytest tests/test_change_history.py tests/test_change_recovery.py tests/test_experimental_changes.py -q
+        run: pytest tests/test_change_history.py tests/test_change_recovery.py tests/test_working_viewer.py tests/test_experimental_changes.py -q
 
   browser-smoke:
     runs-on: ubuntu-22.04
@@ -216,5 +219,5 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
-            tests/test_viewer_browser.py tests/test_viewer_regressions_browser.py tests/test_live_viewer_browser.py tests/test_live_review_browser.py \
+            tests/test_viewer_browser.py tests/test_viewer_regressions_browser.py tests/test_live_viewer_browser.py tests/test_working_viewer_browser.py tests/test_live_review_browser.py \
             tests/test_validation_guidance.py -q -k 'not webkit'
