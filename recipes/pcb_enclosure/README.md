@@ -45,7 +45,8 @@ features, and four 2.05 mm cylindrical features. Geometry tests additionally
 check the openings, supports, keepouts, and full lid screw passages.
 
 These checks establish specific geometric properties. They do not establish
-physical fit, screw length, manufacturing tolerances, or antenna performance.
+physical board fit, screw length or other hardware selection, manufacturing
+tolerances, or antenna performance.
 
 ## Adapt it
 

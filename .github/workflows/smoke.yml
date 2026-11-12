@@ -129,6 +129,9 @@ jobs:
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
 
+      - name: Run the PCB enclosure recipe tests
+        run: python -m pytest recipes/pcb_enclosure -q
+
   windows-platform:
     runs-on: windows-latest
     name: Windows platform check
