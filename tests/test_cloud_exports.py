@@ -118,3 +118,20 @@ def test_wait_deadline_never_hides_an_explicit_http_error(monkeypatch, status):
     with client(handle) as api, pytest.raises(CloudError) as caught:
         api.job(PROJECT, JOB, wait_seconds=3)
     assert caught.value.details["http_status"] == status
+
+
+def test_connected_cli_can_export_with_bearer_auth_and_client_attribution():
+    from agentcad import __version__
+    from agentcad.cloud import CloudClient
+    credential = "acli_12345678-1234-4234-8234-123456789abc." + "s" * 43
+    def handle(request):
+        assert request.headers["Authorization"] == "Bearer " + credential
+        assert "X-AgentCAD-Key-ID" not in request.headers
+        assert "X-AgentCAD-Key-Secret" not in request.headers
+        assert request.headers["X-AgentCAD-Client-Version"] == __version__
+        assert request.headers["X-AgentCAD-Client-Mode"] == "api"
+        assert request.headers["X-AgentCAD-Client-Source"] == "api"
+        return httpx.Response(202, json=queued("export"))
+    with CloudClient("https://api.example.test", None, None, credential=credential,
+                     transport=httpx.MockTransport(handle)) as api:
+        assert api.export(PROJECT, 1, ["glb"])["kind"] == "export"

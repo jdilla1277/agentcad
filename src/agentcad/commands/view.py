@@ -3836,6 +3836,22 @@ def view(file, file_b, overlay, with_measure, spec_file, with_validation=False):
         from agentcad.change_store import ChangeStore
         store = ChangeStore(get_project().build_root)
         revision_id = file
+        if not with_measure and not with_validation:
+            try:
+                from agentcad.working_viewer import prepare, reference
+                item = prepare(store.root, revision_id)
+                if item is None:
+                    _error("This revision has no renderable geometry. Inspect its retained source and diagnostics; no older model was substituted.")
+                project = reference(store.root, revision_id, open_browser=True, pinned=True)
+                html = store.root / item["html"]
+                click.echo(json.dumps({"command": "view", "status": "success", "mode": "checks",
+                    "url": html.as_uri(), "model": str(html.parent / "output.glb"),
+                    "project_viewer": project, "revision_id": revision_id,
+                    "receipt": store.read_checks(revision_id)["receipt_path"],
+                    "review": True, "current_advanced": False}))
+                return
+            except (OSError, ValueError, RuntimeError) as exc:
+                _error(str(exc))
         try:
             saved = store.read(revision_id)
             checked = store.read_checks(revision_id)

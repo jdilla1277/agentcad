@@ -37,7 +37,7 @@ def init(runner, runtime="build123d", build_dir=None):
 
 
 def run(runner, label="bracket", **kwargs):
-    args = ["run", "script.py", "--label", label, *QUIET]
+    args = ["run", "--experimental-changes", "script.py", "--label", label, *QUIET]
     if kwargs.get("build_dir"):
         args += ["--build-dir", str(kwargs["build_dir"])]
     result = runner.invoke(cli, args)
@@ -56,7 +56,7 @@ def test_success_commits_durable_promotion_receipt(runner, isolated_dir, command
         (isolated_dir / "script.py").write_text(BRACKET.replace("60, 30, 6", "80, 30, 6"))
         result, payload = run(runner, "longer")
     else:
-        result = runner.invoke(cli, ["import", baseline["outputs"]["step"], "--label", "imported",
+        result = runner.invoke(cli, ["import", "--experimental-changes", baseline["outputs"]["step"], "--label", "imported",
                                      "--no-view", "--no-diff", "--no-daemon", "--full-response"])
         payload = json.loads(result.stdout)
     assert result.exit_code == 0, result.output
@@ -106,7 +106,7 @@ Path('ready').touch()
 while not Path('continue').exists():
     time.sleep(0.01)
 """ + BRACKET.replace("60, 30, 6", "80, 30, 6"))
-    child = subprocess.Popen([sys.executable, "-m", "agentcad", "run", str(slow),
+    child = subprocess.Popen([sys.executable, "-m", "agentcad", "run", "--experimental-changes", str(slow),
                               "--label", "slow", *QUIET], cwd=isolated_dir,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
@@ -161,7 +161,7 @@ def test_recover_cannot_accept_a_superseded_interrupted_promotion(runner, isolat
     (isolated_dir / "script.py").write_text(BRACKET.replace("60, 30, 6", "100, 30, 6"))
     result, newer = run(runner, "newer")
     assert result.exit_code == 0, result.output
-    result = runner.invoke(cli, ["recover", "v2_interrupted", "--make-current"])
+    result = runner.invoke(cli, ["recover", "--experimental-changes", "v2_interrupted", "--make-current"])
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
     assert payload["status"] == "not_promoted"
@@ -173,15 +173,16 @@ def test_recover_cannot_accept_a_superseded_interrupted_promotion(runner, isolat
 
 @pytest.mark.parametrize("command", ["run", "import"])
 @pytest.mark.parametrize("status", ["checks_failed", "checks_pending", "checks_unavailable"])
-def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
-    runner, isolated_dir, command, status
+def test_blocked_checks_follow_candidate_without_replacing_accepted_delivery(
+    runner, isolated_dir, command, status, monkeypatch
 ):
     from urllib.request import urlopen
 
+    monkeypatch.setenv("AGENTCAD_VIEWER_HOME", str(isolated_dir / "runtime"))
     init(runner)
     (isolated_dir / "script.py").write_text(BRACKET)
     accepted = runner.invoke(
-        cli, ["run", "script.py", "--label", "accepted", "--no-preview", "--no-diff", "--no-daemon"]
+        cli, ["run", "--experimental-changes", "script.py", "--label", "accepted", "--no-preview", "--no-diff", "--no-daemon"]
     )
     assert accepted.exit_code == 0, accepted.output
     accepted = json.loads(accepted.stdout)
@@ -203,7 +204,7 @@ def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
     (isolated_dir / "checks.json").write_text(json.dumps({"schema_version": 1, "checks": [check]}))
     label = f"blocked-{command}"
     source = "script.py" if command == "run" else str(accepted_step)
-    args = [command, source, "--label", label, "--checks", "checks.json", *QUIET]
+    args = [command, source, "--label", label, "--checks", "checks.json", "--experimental-changes", *QUIET]
     if command == "import":
         args.remove("--no-preview")
     if status == "checks_pending":
@@ -215,10 +216,29 @@ def test_blocked_checks_update_live_attempt_without_replacing_accepted_model(
         after = json.load(response)
     assert after["attempt"]["status"] == status
     assert after["attempt"]["label"] == label
-    assert after["latest"] == before["latest"]
+    revision = json.loads(blocked.stdout)["change"]["revision_id"]
+    assert after["displayed"]["revision_id"] == revision
+    assert after["accepted"]["revision_id"] == accepted["change"]["revision_id"]
+    assert after["latest"] != before["latest"]
     assert accepted_step.read_bytes() == accepted_bytes
-    assert (isolated_dir / "agentcad.json").read_bytes() == accepted_manifest
+    current_manifest = json.loads((isolated_dir / "agentcad.json").read_text())
+    previous = json.loads(accepted_manifest)
+    assert current_manifest["versions"] == previous["versions"]
+    assert current_manifest["promotion_state"]["targets"] == previous["promotion_state"]["targets"]
+    if status == "checks_pending":
+        assert json.loads(blocked.stdout)["promotion"]["lifecycle"] == "pending"
+    else:
+        assert (isolated_dir / "agentcad.json").read_bytes() == accepted_manifest
     assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == "accepted"
+    if status == "checks_pending":
+        completed = runner.invoke(cli, ["check-spec", "--experimental-changes", json.loads(blocked.stdout)["change"]["revision_id"], "--complete"])
+        assert completed.exit_code == 0, completed.output
+        assert json.loads(completed.stdout)["current_advanced"] is True
+        with urlopen(url + "state", timeout=3) as response:
+            accepted_after_checks = json.load(response)
+        assert accepted_after_checks["selected"]["status"] == "Accepted"
+        assert accepted_after_checks["displayed"]["revision_id"] == revision
+        assert accepted_after_checks["accepted"]["revision_id"] == revision
 
 
 @pytest.mark.parametrize(
@@ -341,7 +361,7 @@ def test_dry_run_and_uninitialized_run_do_not_create_change_history(runner, isol
     assert result.exit_code == 1
     assert not (isolated_dir / ".agentcad" / "changes").exists()
     init(runner)
-    result = runner.invoke(cli, ["run", "script.py", "--dry-run", *QUIET])
+    result = runner.invoke(cli, ["run", "--experimental-changes", "script.py", "--dry-run", *QUIET])
     assert result.exit_code == 0, result.output
     assert "change" not in json.loads(result.stdout)
     assert not (isolated_dir / ".agentcad" / "changes").exists()
@@ -362,7 +382,7 @@ def test_import_retains_malformed_input_without_consuming_a_legacy_version(runne
     source = b"ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\nnot CAD\nENDSEC;\nEND-ISO-10303-21;\n"
     path = isolated_dir / "broken.step"
     path.write_bytes(source)
-    result = runner.invoke(cli, ["import", str(path), "--no-view", "--no-diff", "--no-daemon"])
+    result = runner.invoke(cli, ["import", "--experimental-changes", str(path), "--no-view", "--no-diff", "--no-daemon"])
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
     assert payload["status"] == "malformed"
@@ -397,7 +417,7 @@ def test_import_uses_pinned_source_even_if_original_is_replaced(runner, isolated
     monkeypatch.setattr(step_assembly, "read_step_assembly", replacing_source)
     result = runner.invoke(
         cli,
-        ["import", str(original), "--no-view", "--no-diff", "--no-inspection-image", "--no-daemon", "--full-response"],
+        ["import", "--experimental-changes", str(original), "--no-view", "--no-diff", "--no-inspection-image", "--no-daemon", "--full-response"],
     )
     assert result.exit_code == 0, result.output
     imported = json.loads(result.stdout)
@@ -413,7 +433,7 @@ def test_local_mcp_returns_the_same_durable_attempt(runner, isolated_dir):
     init(runner)
     (isolated_dir / "script.py").write_text(BRACKET)
     payload = server.run(
-        "script.py",
+        "script.py", experimental_changes=True,
         output="mcp-bracket",
         cwd=str(isolated_dir),
         preview=False,
@@ -501,7 +521,7 @@ def test_import_internal_exception_keeps_source_and_structured_diagnostics(
 
     monkeypatch.setattr("agentcad.metrics.compute_metrics", fail_metrics)
     result = runner.invoke(
-        cli, ["import", str(real_world_step), "--no-view", "--no-diff", "--no-daemon"]
+        cli, ["import", "--experimental-changes", str(real_world_step), "--no-view", "--no-diff", "--no-daemon"]
     )
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
@@ -529,7 +549,7 @@ def test_daemon_forwarding_preserves_worker_reference_without_duplicate_attempt(
             "output": json.dumps(worker),
         },
     )
-    result = runner.invoke(cli, ["run", "script.py", "--label", "forwarded"])
+    result = runner.invoke(cli, ["run", "--experimental-changes", "script.py", "--label", "forwarded"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert payload["via"] == "daemon"
@@ -559,7 +579,7 @@ def test_import_core_retention_failure_cleans_unaccepted_version(
 
     monkeypatch.setattr(Attempt, "prepare", fail_prepare)
     result = runner.invoke(
-        cli, ["import", str(real_world_step), "--no-view", "--no-diff", "--no-daemon"]
+        cli, ["import", "--experimental-changes", str(real_world_step), "--no-view", "--no-diff", "--no-daemon"]
     )
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
@@ -589,7 +609,7 @@ def test_declared_failure_preserves_current_and_repair_inherits_checks(runner, i
     }
     (isolated_dir / "checks.json").write_text(json.dumps(requirements))
     result = runner.invoke(
-        cli, ["run", "script.py", "--label", "wrong", "--checks", "checks.json", *QUIET]
+        cli, ["run", "--experimental-changes", "script.py", "--label", "wrong", "--checks", "checks.json", *QUIET]
     )
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)
@@ -606,7 +626,7 @@ def test_declared_failure_preserves_current_and_repair_inherits_checks(runner, i
     assert json.loads((isolated_dir / "agentcad.json").read_text())["current"] == "repaired"
 
 
-def test_deferred_check_cli_completes_without_accepting_and_mcp_reads_receipt(runner, isolated_dir):
+def test_deferred_check_cli_accepts_current_intent_and_mcp_reads_receipt(runner, isolated_dir):
     from agentcad.mcp import server
 
     init(runner)
@@ -624,7 +644,7 @@ def test_deferred_check_cli_completes_without_accepting_and_mcp_reads_receipt(ru
     result = runner.invoke(
         cli,
         [
-            "run",
+            "run", "--experimental-changes",
             "script.py",
             "--label",
             "later",
@@ -638,13 +658,15 @@ def test_deferred_check_cli_completes_without_accepting_and_mcp_reads_receipt(ru
     payload = json.loads(result.stdout)
     assert payload["status"] == "checks_pending"
     revision = payload["change"]["revision_id"]
-    pending = runner.invoke(cli, ["check-spec", revision, "--no-daemon"])
+    pending = runner.invoke(cli, ["check-spec", "--experimental-changes", revision, "--no-daemon"])
     assert json.loads(pending.stdout)["validation_state"] == "pending"
-    completed = runner.invoke(cli, ["check-spec", revision, "--complete", "--no-daemon"])
+    completed = runner.invoke(cli, ["check-spec", "--experimental-changes", revision, "--complete", "--no-daemon"])
     assert completed.exit_code == 0, completed.output
     assert json.loads(completed.stdout)["validation_state"] == "valid"
-    assert json.loads((isolated_dir / "agentcad.json").read_text()).get("current") is None
-    result = server.check_spec(revision, None, str(isolated_dir))
+    assert json.loads(completed.stdout)["current_advanced"] is True
+    assert json.loads(completed.stdout)["promotion"]["outcome"] == "promoted"
+    assert json.loads((isolated_dir / "agentcad.json").read_text()).get("current") == "later"
+    result = server.check_spec(revision, None, str(isolated_dir), experimental_changes=True)
     assert result["validation_state"] == "valid"
     assert result["current_advanced"] is False
 
@@ -676,7 +698,7 @@ def test_import_checks_measure_and_deliver_the_same_normalized_bytes(
     result = runner.invoke(
         cli,
         [
-            "import",
+            "import", "--experimental-changes",
             str(source),
             "--label",
             "checked-import",
@@ -704,7 +726,8 @@ def test_import_checks_measure_and_deliver_the_same_normalized_bytes(
     )
 
 
-def test_failed_revision_opens_viewer_with_the_same_receipt(runner, isolated_dir):
+def test_failed_revision_opens_viewer_with_the_same_receipt(runner, isolated_dir, monkeypatch):
+    monkeypatch.setenv("AGENTCAD_VIEWER_HOME", str(isolated_dir / "runtime"))
     init(runner)
     (isolated_dir / "script.py").write_text(BRACKET)
     (isolated_dir / "checks.json").write_text(
@@ -718,10 +741,10 @@ def test_failed_revision_opens_viewer_with_the_same_receipt(runner, isolated_dir
         )
     )
     result = runner.invoke(
-        cli, ["run", "script.py", "--label", "wrong", "--checks", "checks.json", *QUIET]
+        cli, ["run", "--experimental-changes", "script.py", "--label", "wrong", "--checks", "checks.json", *QUIET]
     )
     revision = json.loads(result.stdout)["change"]["revision_id"]
-    viewed = runner.invoke(cli, ["view", revision])
+    viewed = runner.invoke(cli, ["view", "--experimental-changes", revision])
     assert viewed.exit_code == 0, viewed.output
     payload = json.loads(viewed.stdout)
     assert payload["mode"] == "checks"
@@ -761,7 +784,7 @@ def test_wrong_bore_and_preserved_mounts_have_independent_pinned_results(runner,
     )
     script.write_text(source)
     result = runner.invoke(
-        cli, ["run", "script.py", "--label", "wrong-bore", "--checks", "checks.json", *QUIET]
+        cli, ["run", "--experimental-changes", "script.py", "--label", "wrong-bore", "--checks", "checks.json", *QUIET]
     )
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stdout)

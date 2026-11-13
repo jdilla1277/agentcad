@@ -13,7 +13,9 @@ from agentcad.project import ProjectError, format_response, get_project
 
 from agentcad.session_log import SessionLogger
 from agentcad.commands.check_spec import check_spec
+from agentcad.commands.changes import changes
 from agentcad.commands.cloud import cloud
+from agentcad.commands.account import account
 from agentcad.commands.context import context
 from agentcad.commands.daemon_cmd import daemon
 from agentcad.commands.diff import diff
@@ -82,6 +84,17 @@ NAMED PARTS AND GROUPS
                 options={"color": "red", "part_of": "wheels"})
   Use `agentcad parts` after a run to list, isolate, hide, ghost, or focus
   captured parts and groups. Run `agentcad docs parts` for the full API.
+
+EXPERIMENTAL CHANGE WORKFLOW (WIP)
+  Explicitly include --experimental-changes on every change-workflow call.
+  Ordinary run/import calls keep standard CAD behavior. --stage, --checks,
+  --defer-checks and authored-run retry/status require the flag. Existing
+  experimental requirements or unpromoted work cannot be bypassed by omitting it.
+  agentcad changes list --experimental-changes
+  agentcad changes show working --experimental-changes
+  agentcad changes compare accepted working --experimental-changes
+  These reads never select, accept, complete checks, or execute CAD. Use the
+  returned r_ IDs for exact revisions; see `agentcad docs changes`.
 
 EXAMPLE SESSION
   $ agentcad init --name myproject__INIT_RUNTIME__
@@ -331,8 +344,9 @@ JSON RESPONSE CONTRACT
     "success"          primary command work completed; inspect artifact statuses
     "failed"           script execution failed; consumes a version and creates
                        v{N}_{label}_failed/ with the script and metadata
-    "error"            CLI/input error; no version or artifacts
-    "validation_error" static script check failed; no version or artifacts
+    "error"            CLI/input error; no accepted CAD output
+    "validation_error" static script check failed; no numbered version;
+                       source and diagnostics may be retained under change
     "invalid_geometry" script/import produced an invalid final B-rep; records
                        a numbered diagnostic attempt unless --dry-run, writes no
                        STEP, and does not advance current; see
@@ -357,7 +371,7 @@ JSON RESPONSE CONTRACT
   this build; its diagnostic geometry remains retained and current is unchanged.
   Inspect/reconcile before rerunning the current script or import. This conflict
   is separate from a measured geometry failure. See `agentcad docs check-spec`
-  for retained requirements, receipts, and deferred-check limitations.
+  for retained requirements, receipts, and delayed automatic acceptance.
 
   Use run/import --stage to save a checked experiment without replacing the
   accepted model. Open it with view REVISION, then accept its saved bytes with
@@ -507,6 +521,12 @@ class _InvocationOutput:
                         from agentcad.change_retention import attach_change
 
                         payload = attach_change(payload)
+                        from agentcad.working_viewer import finish_response as finish_working_view
+                        payload = finish_working_view(payload)
+                        from agentcad.change_recovery import finish_response as finish_recovery
+                        payload = finish_recovery(payload)
+                        from agentcad.experimental_changes import present
+                        payload = present(payload)
                         if payload.get("command") == "import":
                             from agentcad.import_requests import finish_response
                             payload = finish_response(payload)
@@ -514,7 +534,8 @@ class _InvocationOutput:
                             from agentcad.run_requests import finish_response
                             payload = finish_response(payload)
                         from agentcad.inspection_delivery import apply_delivery
-                        formatted = format_response(payload, layout)
+                        from agentcad.experimental_inspect import present
+                        formatted = present(format_response(payload, layout))
                         if self.ctx.meta.get("inspection_delivery_policy") is not None:
                             # Presentation may omit viewer fields; lifecycle
                             # decisions must still use the complete outcome.
@@ -907,12 +928,15 @@ class _LoggingGroup(click.Group):
                                outputs={"step": None})
             click.echo(json.dumps(payload))
             sys.exit(1)
+        except click.exceptions.Exit:
+            # Help and explicit Click exits are control flow, not import failures.
+            raise
         except Exception as exc:
             # Import has no run-style outer recovery boundary. Once its source
             # is retained, preserve unexpected parser/metric failures as a
             # structured terminal attempt rather than leaving an empty stdout.
             attempt = ctx.meta.get("change_attempt")
-            if attempt is None:
+            if attempt is None and ctx.invoked_subcommand != "import":
                 raise
             ctx.meta["command_exit_code"] = 1
             click.echo(json.dumps({
@@ -928,6 +952,8 @@ class _LoggingGroup(click.Group):
                                     complete_result=output.complete_result)
 
     def _record_live_build(self, ctx, captured, root, exception=None, *, complete_result=None):
+        if ctx.meta.get("working_viewer_handled"):
+            return
         if ctx.meta.get("project_error") or ctx.meta.get("project_dry_run") or ctx.meta.get("import_replay") or ctx.meta.get("run_replay"):
             return
         layout = ctx.meta.get("project_layout")
@@ -935,6 +961,12 @@ class _LoggingGroup(click.Group):
             root = layout.build_root
         if ctx.invoked_subcommand not in ("run", "import") or ctx.meta.get("viewer_dry_run"):
             return
+        if not ctx.meta.get("experimental_changes"):
+            try:
+                from agentcad.working_viewer import use_standard
+                use_standard(root)
+            except Exception:
+                pass  # Viewer availability cannot change an ordinary CAD result.
         result = complete_result or {}
         for line in reversed(captured) if complete_result is None else ():
             try:
@@ -980,7 +1012,13 @@ class _LoggingGroup(click.Group):
             return
         # Find the subcommand name and args
         cmd_name = ctx.invoked_subcommand
-        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud"):
+        if not cmd_name or cmd_name in ("feedback", "subscribe", "cloud", "account", "changes"):
+            return
+        if ctx.meta.get("working_viewer_status"):
+            return
+        if cmd_name == "check-spec" and not ctx.meta.get("experimental_check_completion", False) and ctx.meta.get("experimental_revision_read"):
+            return
+        if cmd_name == "promote" and ctx.meta.get("experimental_promotion_status"):
             return
         # Parse the last JSON output (commands may echo multiple things)
         result = {}
@@ -1012,8 +1050,10 @@ def cli():
     """agentcad — CLI CAD tool for AI agents. Command results are JSON."""
 
 
+cli.add_command(account)
 cli.add_command(context)
 cli.add_command(check_spec)
+cli.add_command(changes)
 cli.add_command(cloud)
 cli.add_command(daemon)
 cli.add_command(diff)
