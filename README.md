@@ -96,6 +96,10 @@ and edits:
 
 ### Inspect
 
+- **`agentcad import supplier.step --init`** — import a versioned baseline with
+  a bounded inspection report, geometry IDs, and sampled four-view images.
+  Retrieve the complete inventory or saved artifacts through `inspect`; no
+  experimental flag is required. See the [artifact retrieval guide](docs/inspection-artifacts.md).
 - **`agentcad inspect output.step`** — bounded topology, orientation, addressable
   IDs, edit risk, and structural evidence
 - **`agentcad measure output.step`** — dimensions, edge lengths, face areas, and
@@ -390,7 +394,7 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 Keep credentials in a password manager, outside project files and agent prompts.
 
 For the local cloud CLI, install
-`pip install 'agentcad[cloud]==0.7.2'` (also included in `agentcad[mcp]`),
+`pip install 'agentcad[cloud]==0.8.0'` (also included in `agentcad[mcp]`),
 as shown in the guide above:
 
 ```bash
@@ -428,7 +432,7 @@ Apache License 2.0. See [LICENSE](LICENSE).
 
 If your agent struggles, run `agentcad feedback "what happened"` to capture a friction log.
 
-For a detailed session report, guided feedback is prepared for the next release:
+For a detailed session report, create and fill in a guided feedback template:
 
 ```bash
 agentcad feedback --template --output feedback.md
