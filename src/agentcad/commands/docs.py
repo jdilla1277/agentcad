@@ -446,6 +446,52 @@ SECTIONS = {
         "  automatically wake an agent; read them on the next turn.\n"
         "  `mark-addressed` remains available for compatibility.\n"
     ),
+    "recipes": (
+        "Copyable CAD recipes:\n"
+        "  The complete recipe directories are source examples in the agentcad\n"
+        "  repository, not part of the installed package. Download or copy a\n"
+        "  directory from the repository, then adapt it in your project.\n"
+        "  Index: https://github.com/jdilla1277/agentcad/tree/main/recipes\n"
+        "\n"
+        "  PCB enclosure (recipes/pcb_enclosure/, build123d runtime)\n"
+        "    Complete directory:\n"
+        "    https://github.com/jdilla1277/agentcad/tree/main/recipes/pcb_enclosure\n"
+        "    Builds a tray and screw-on lid for a rectangular circuit board:\n"
+        "    board supports, connector cutouts, mounting bosses and pilot holes,\n"
+        "    an alignment lip, and optional lid windows. Board dimensions,\n"
+        "    openings, keepouts, hardware sizes, and clearances live in\n"
+        "    board.json; geometry helpers live in enclosure.py, and example.py\n"
+        "    is a complete agentcad script. checks.json asserts the exported\n"
+        "    example STEP, and tests/ covers the recipe's geometry.\n"
+        "\n"
+        "    Requires the default build123d runtime (agentcad's standard\n"
+        "    install). The recipe helpers are local to the directory and are\n"
+        "    not exported by agentcad.api.\n"
+        "\n"
+        "    From an agentcad repository checkout, copy the whole directory\n"
+        "    into your project and run these commands from the copy:\n"
+        "      cp -r recipes/pcb_enclosure /path/to/project/\n"
+        "      cd /path/to/project/pcb_enclosure\n"
+        "      agentcad init --name pcb-enclosure --runtime build123d\n"
+        "      agentcad run example.py --label pcb_v1 --render iso\n"
+        "      agentcad check-spec <outputs.step> checks.json\n"
+        "    On Windows, use Copy-Item -Recurse recipes\\pcb_enclosure\n"
+        "    <project> instead of cp -r. Pass the STEP path reported by the\n"
+        "    run response (outputs.step) to check-spec.\n"
+        "\n"
+        "    Main assumptions: rectangular board with rounded corners; the\n"
+        "    sample board drawing is not bundled, so verify its measurements;\n"
+        "    supports, component heights, wall/floor thickness, clearances,\n"
+        "    and M2.5 fasteners are example choices. The tray and lid share an\n"
+        "    assembled coordinate frame with the board underside at z = 0.\n"
+        "\n"
+        "    Limitations: the checks establish specific geometric properties\n"
+        "    and execution behavior. They do not establish physical board fit,\n"
+        "    screw length or other hardware selection, manufacturing\n"
+        "    tolerances, or antenna performance. Rounded-end board outlines are\n"
+        "    unsupported. See recipes/pcb_enclosure/README.md for the file\n"
+        "    layout, all board fields, coordinate frame, and adaptation notes.\n"
+    ),
     "render": (
         "Rendering:\n"
         "  agentcad render <step_file> --view <spec> [--zoom N] [--size WxH] [--msaa N] [--name label] [--focus x,y,z] [--no-fit]\n"
@@ -3060,6 +3106,7 @@ WORKFLOW_SECTION_GROUPS = (
             "build123d",
         ),
     ),
+    ("Recipes", ("recipes",)),
     ("Validate", ("metrics", "validation", "viewer")),
     ("Deliver", ("promote", "export", "artifacts")),
     (
