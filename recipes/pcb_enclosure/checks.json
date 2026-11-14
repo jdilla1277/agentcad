@@ -1,0 +1,19 @@
+{
+  "expect_solids": 2,
+  "features": [
+    {
+      "name": "lid_screw_clearance",
+      "type": "cylinder",
+      "diameter_mm": 2.9,
+      "count": 4,
+      "axis": "+z"
+    },
+    {
+      "name": "case_standoff_pilots",
+      "type": "cylinder",
+      "diameter_mm": 2.05,
+      "count": 4,
+      "axis": "+z"
+    }
+  ]
+}

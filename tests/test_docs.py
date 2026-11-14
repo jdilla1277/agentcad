@@ -116,6 +116,7 @@ def test_docs_lists_sections(runner):
     assert "measure" in sections
     assert "check-spec" in sections
     assert "preamble" in sections
+    assert "recipes" in sections
     assert "validation" in sections
     assert "workflow" in sections
     assert "daemon" in sections
@@ -124,6 +125,27 @@ def test_docs_lists_sections(runner):
     assert "review" in sections
     assert "feedback" in sections
     assert "recovery" in sections
+
+
+def test_docs_recipes_section_indexes_the_pcb_enclosure(runner, isolated_dir):
+    data = json.loads(runner.invoke(cli, ["docs", "recipes"]).stdout)
+
+    assert data["status"] == "success"
+    content = data["content"]
+    assert "recipes/pcb_enclosure/" in content
+    assert "build123d runtime" in content
+    assert "cp -r recipes/pcb_enclosure" in content
+    assert "agentcad init --name pcb-enclosure --runtime build123d" in content
+    assert "agentcad run example.py --label pcb_v1 --render iso" in content
+    assert "agentcad check-spec" in content
+    assert "physical board fit" in content
+    assert "screw length" in content
+    assert "hardware selection" in content
+    assert "manufacturing" in content
+
+    rollup = json.loads(runner.invoke(cli, ["docs"]).stdout)
+    assert "=== Recipes ===" in rollup["content"]
+    assert "recipes/pcb_enclosure/" in rollup["content"]
 
 
 def test_docs_commands_section(runner):

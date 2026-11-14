@@ -37,7 +37,7 @@ jobs:
         run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
 
       - name: Run cloud adapter and local MCP contracts
-        run: pytest tests/test_account.py tests/test_cloud.py tests/test_cloud_surface.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py tests/test_experimental_inspect.py -q
+        run: pytest tests/test_account.py tests/test_cloud.py tests/test_cloud_surface.py tests/test_cloud_exports.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py tests/test_experimental_inspect.py -q
 
       - name: Run stable skill publication guardrails
         run: pytest tests/test_skill_publication.py tests/test_generate_skill_md.py -q
@@ -155,6 +155,9 @@ jobs:
 
       - name: Run OCP-free interface guardrails
         run: pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
+
+      - name: Run the PCB enclosure recipe tests
+        run: python -m pytest recipes/pcb_enclosure -q
 
   windows-platform:
     runs-on: windows-latest
