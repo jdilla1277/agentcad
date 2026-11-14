@@ -460,7 +460,8 @@ def receive(process, code):
         process.kill()
         process.communicate(timeout=10)
         raise
-    assert process.returncode == code, (out, err)
+    expected_codes = (code,) if isinstance(code, int) else code
+    assert process.returncode in expected_codes, (out, err)
     return json.loads(out) if out else None
 
 
@@ -545,7 +546,18 @@ def test_concurrent_same_key_shares_execution(runner, isolated_dir, busy):
             assert waiting["status"] == "in_progress"
         (isolated_dir / "release").touch()
         one = receive(first, 0)
-        two = receive(worker(isolated_dir, "normal") if busy else second, 0)
+        if busy:
+            two = receive(worker(isolated_dir, "normal"), 0)
+        else:
+            two = receive(second, (0, 1))
+            if two["status"] == "in_progress":
+                # A cold CAD import can outlast the normal bounded lock wait.
+                # Once the first run finishes, retry must replay it, not execute.
+                assert second.returncode == 1
+                assert two["outputs"]["step"] is None
+                two = receive(worker(isolated_dir, "normal"), 0)
+            else:
+                assert second.returncode == 0
         assert one["change"] == two["change"]
         assert two["idempotency"]["replayed"]
         assert (isolated_dir / "executions").read_text() == "1"

@@ -3,6 +3,8 @@
 import ast
 import importlib
 
+from agentcad.project_imports import is_local_import
+
 from agentcad.output_contract import (
     STEP_OUTPUT_GUIDANCE,
     manual_step_export_checks,
@@ -82,6 +84,8 @@ def validate_script(source, output_calls=None, *, check_imports=True):
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
+                if is_local_import(alias.name.split(".")[0]):
+                    continue
                 if not _can_import(alias.name):
                     errors.append({
                         "check": "import_error",
@@ -92,6 +96,8 @@ def validate_script(source, output_calls=None, *, check_imports=True):
         elif isinstance(node, ast.ImportFrom):
             if not node.module:
                 continue
+            if is_local_import(node.module.split(".")[0]):
+                continue  # Resolve names and execute side effects once, in the runner.
             module_exists = _can_import(node.module)
             for alias in node.names:
                 if alias.name == "*" and module_exists:
