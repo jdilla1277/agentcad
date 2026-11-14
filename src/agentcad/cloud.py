@@ -220,10 +220,12 @@ class CloudClient:
     def project(self, project):
         return self._request("GET", self._project_route(project))
 
-    def run(self, project, script, label, *, cwd=None, idempotency_key=None):
+    def run(self, project, script, label, *, cwd=None, idempotency_key=None, export_glb=False):
         route = self._project_route(project)
         if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", label):
             raise CloudError("invalid_label", "Supply a short label starting with a letter and containing letters, digits, _ or -.")
+        if type(export_glb) is not bool:
+            raise CloudError("invalid_export", "export_glb must be a boolean.")
         name, data = _input(script, SCRIPT_LIMIT, cwd, (".py",))
         try:
             data.decode("utf-8")
@@ -231,8 +233,14 @@ class CloudClient:
                 raise ValueError()
         except (ValueError, UnicodeError):
             raise CloudError("invalid_script", "The script must be UTF-8 Python source without NUL bytes.") from None
-        return self._submit(route + "/runs", kind="run", idempotency_key=idempotency_key,
-                            data={"label": label}, files={"file": (name, data, "text/x-python")})
+        result = self._submit(route + "/runs", kind="run", idempotency_key=idempotency_key,
+                              data={"label": label, **({"export_glb": "true"} if export_glb else {})},
+                              files={"file": (name, data, "text/x-python")})
+        if export_glb and result.get("export_glb") is not True:
+            raise CloudError("build_export_unconfirmed",
+                             "The host did not confirm the GLB request. Preserve this job and poll it; do not submit another build. Use a matching host build for build-time GLB.",
+                             job=result, idempotency_key=result["idempotency_key"])
+        return result
 
     def import_step(self, project, file, *, cwd=None, idempotency_key=None):
         route = self._project_route(project)

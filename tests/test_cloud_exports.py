@@ -135,3 +135,37 @@ def test_connected_cli_can_export_with_bearer_auth_and_client_attribution():
     with CloudClient("https://api.example.test", None, None, credential=credential,
                      transport=httpx.MockTransport(handle)) as api:
         assert api.export(PROJECT, 1, ["glb"])["kind"] == "export"
+
+
+def test_cloud_run_can_request_build_time_glb(tmp_path):
+    script = tmp_path / "model.py"
+    script.write_text("show_object(Box(10,20,5))")
+    def handle(request):
+        assert b'name="export_glb"' in request.content
+        assert b'\r\ntrue\r\n' in request.content
+        return httpx.Response(202, json={**queued("run"), "export_glb": True})
+    with client(handle) as api:
+        assert api.run(PROJECT, str(script), "first", export_glb=True)["kind"] == "run"
+
+
+def test_cli_and_mcp_expose_build_time_glb(tmp_path, monkeypatch):
+    script = tmp_path / "model.py"
+    script.write_text("show_object(Box(10,20,5))")
+    def handle(request):
+        assert b'name="export_glb"' in request.content
+        return httpx.Response(202, json={**queued("run"), "export_glb": True})
+    install(monkeypatch, handle)
+    result = CliRunner().invoke(cli, ["cloud", "run", PROJECT, str(script), "--label", "first", "--export", "glb"])
+    assert result.exit_code == 0, result.output
+    result = asyncio.run(server.cloud_run(PROJECT, str(script), "first", export_glb=True))
+    assert result["kind"] == "run"
+
+
+def test_older_host_cannot_silently_ignore_requested_build_glb(tmp_path):
+    script = tmp_path / "model.py"
+    script.write_text("show_object(Box(10,20,5))")
+    with client(lambda _: httpx.Response(202, json=queued("run"))) as api, pytest.raises(CloudError) as caught:
+        api.run(PROJECT, str(script), "first", export_glb=True, idempotency_key="keep-this-build")
+    assert caught.value.reason == "build_export_unconfirmed"
+    assert caught.value.details["job"]["id"] == JOB
+    assert caught.value.details["idempotency_key"] == "keep-this-build"
