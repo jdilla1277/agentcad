@@ -42,11 +42,24 @@ def check():
             assert (root / image["image"]["png"]).is_file()
             compatible = invoke(["inspect", str(baseline), "--id", "face_v2_1", "--experimental-inspect", "--no-daemon"])
             assert compatible == entity
+            query = json.dumps({"kind": "face", "where": {"id": "face_v2_1"}})
+            gated = invoke(["inspect", str(baseline), "--query", query, "--no-daemon"], 1)
+            assert gated["reason"] == "experimental_geometry_search_required"
+            search = invoke(["inspect", str(baseline), "--query", query, "--search-images", "0",
+                             "--experimental-geometry-search", "--no-daemon"])
+            assert search["match_count"] == 1 and search["results"][0]["id"] == "face_v2_1"
+            assert search["ranking_mode"] == "not_applicable" and search["comparison_counts"] is None
+            retained = invoke(["inspect", str(baseline), "--search-snapshot", search["search_snapshot"]["id"],
+                               "--experimental-geometry-search", "--no-daemon"])
+            assert retained["results"] == search["results"]
+            artifact = invoke(["inspect", str(baseline), "--artifact", search["candidate_manifest"]["id"],
+                               "--experimental-geometry-search", "--no-daemon"])
+            assert artifact["artifact"]["sha256"] == search["candidate_manifest"]["sha256"]
             lean = invoke(["import", str(baseline), "--label", "lean", "--no-report", "--no-inspection-image", "--no-view", "--no-diff", "--no-daemon"])
             assert "inspection" not in lean and lean["geometry_manifest"]
             refused = invoke(["run", "part.py", "--label", "staged", "--stage", *quiet], 1)
             assert refused["reason"] == "experimental_changes_required"
-    print("Installed Inspect contract passed: Milestone 2 is default-on; changes remain gated.")
+    print("Installed Inspect contract passed: Milestone 2 is default-on; geometry search and changes remain gated.")
 
 
 if __name__ == "__main__":

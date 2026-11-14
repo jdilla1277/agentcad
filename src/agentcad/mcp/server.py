@@ -22,6 +22,8 @@ class AgentCADMCP(FastMCP):
     async def list_tools(self):
         tools = await super().list_tools()
         for tool in tools:
+            if "experimental_geometry_search" in tool.inputSchema.get("properties", {}):
+                tool.inputSchema["properties"]["experimental_geometry_search"]["description"] = "Explicit per-call WIP opt-in for exact geometry queries, retained pages and candidate-manifest retrieval; default false."
             if "experimental_inspect" in tool.inputSchema.get("properties", {}):
                 tool.inputSchema["properties"]["experimental_inspect"]["description"] = "Deprecated compatibility input; ignored. Milestone 2 import and Inspect features are available without opt-in."
                 tool.inputSchema["properties"]["experimental_inspect"]["deprecated"] = True
@@ -35,6 +37,8 @@ class AgentCADMCP(FastMCP):
         return tools
 
     async def call_tool(self, name, arguments):
+        if arguments and "experimental_geometry_search" in arguments and type(arguments["experimental_geometry_search"]) is not bool:
+            raise ValueError(f"Invalid {name} arguments: experimental_geometry_search must be a boolean.")
         if arguments and "experimental_inspect" in arguments and type(arguments["experimental_inspect"]) is not bool:
             raise ValueError(f"Invalid {name} arguments: experimental_inspect must be a boolean.")
         if arguments and "experimental_changes" in arguments and type(arguments["experimental_changes"]) is not bool:
@@ -300,7 +304,8 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False, full_r
     def package(payload, attachments=()):
         # FastMCP pretty-prints bare dicts. Budgeted text must use the same
         # serialization we measured, even when no image blocks are attached.
-        if attachments or payload.get("delivery", {}).get("scope") == "complete_response":
+        if (attachments or payload.get("delivery", {}).get("scope") == "complete_response"
+                or payload.get("delivery", {}).get("scope") == "geometry_search"):
             return CallToolResult(content=[TextContent(type="text", text=json.dumps(payload)), *attachments],
                                   structuredContent=payload)
         return payload
@@ -329,6 +334,8 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False, full_r
         with cache_lease(paths[0].parent.parent, layout=layout, protect=paths) as cache:
             cache.validate(paths, declared)
             for path, item in zip(paths, media):
+                if result.get("operation") == "geometry_search":
+                    cache.validate([path], item["retention"])
                 png = path.read_bytes()
                 if hashlib.sha256(png).hexdigest() != item["sha256"]:
                     raise ValueError("Image changed before attachment; retry the image request.")
@@ -336,6 +343,18 @@ def _with_images(result, media, *, cwd, image_root=None, keep_core=False, full_r
                     raise ValueError("Inspection image is not a PNG; retry the image request.")
                 attachments.append(ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii")))
     except (OSError, ValueError) as exc:
+        if result.get("operation") == "geometry_search":
+            from agentcad.inspection_delivery import estimate, RESERVE
+            result = {**result, "media": [], "image_delivery": {
+                "status": "failed", "attached": 0, "requested": len(media), "message": str(exc)[:160]}}
+            audit = result["delivery"]
+            audit.update(images_returned=0, images_omitted=len(media), estimated_image_tokens=0,
+                         image_omission_reason="image_delivery_failed")
+            for _ in range(4):
+                audit["estimated_text_tokens"] = estimate(result)
+            limit = audit["limits"]["text_tokens"]
+            audit["budget_satisfied"] = limit is None or audit["estimated_text_tokens"] + RESERVE <= limit
+            return package(result)
         if keep_core and result.get("core", {}).get("status") == "success":
             action = ["agentcad", "inspect", result["outputs"]["step"], "--report"]
             if full_response:
@@ -752,11 +771,25 @@ def inspect(
     vision_profile: dict[str, Any] | None = None,
     full_response: bool = False,
     experimental_inspect: bool = False,
+    experimental_geometry_search: bool = False,
+    query: dict[str, Any] | None = None,
+    search_snapshot: str | None = None,
+    cursor: str | None = None,
+    search_id: str | None = None,
+    page_size: int = 10,
+    search_images: int = 10,
 ) -> Any:
     """Inspect topology of a STEP file (solids, shells, faces, edges, validity).
 
     Typed IDs, images, reports, jobs, snapshots and artifact-byte retrieval are
     available without opt-in. experimental_inspect is an ignored compatibility input.
+    Exact search requires experimental_geometry_search=true on every call.
+    query={"kind":"face","where":{"surface_type":"plane"}} starts a search;
+    returned page.next and candidate_manifest.retrieve actions pin its results.
+    See agentcad docs inspect and docs/geometry-search.md for filter schemas.
+    search_images=0 omits images; page_size defaults to 10 (maximum 100).
+    search_snapshot replays the first page; cursor continues it; search_id
+    retrieves one match from that snapshot. Retained pages do no CAD work.
 
     Args:
         file: Path to the STEP file.
@@ -815,6 +848,20 @@ def inspect(
             combine with caller budgets. Harmless for already-unbounded ID lookups.
     """
     args = ["inspect", file]
+    if experimental_geometry_search:
+        args.append("--experimental-geometry-search")
+    if query is not None:
+        args.extend(["--query", json.dumps(query)])
+    if search_snapshot is not None:
+        args.extend(["--search-snapshot", search_snapshot])
+    if cursor is not None:
+        args.extend(["--cursor", cursor])
+    if search_id is not None:
+        args.extend(["--search-id", search_id])
+    if page_size != 10:
+        args.extend(["--page-size", str(page_size)])
+    if search_images != 10:
+        args.extend(["--search-images", str(search_images)])
     if experimental_inspect:
         args.append("--experimental-inspect")
     if artifact is not None:
@@ -867,6 +914,8 @@ def inspect(
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
     report_payload = result.get("inspection", result)
     media = report_payload.get("media", []) if report else []
+    if result.get("operation") == "geometry_search":
+        media = result.get("media", [])
     if image and result.get("image", {}).get("status") == "success":
         media = [{"png": result["image"]["png"], "sha256": result["image"]["png_sha256"]}]
     return _with_images(result, media, cwd=cwd,

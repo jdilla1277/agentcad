@@ -147,6 +147,10 @@ def read_artifact(file, artifact, output_root, *, offset=0, length=DEFAULT_CHUNK
     if (not isinstance(artifact, str) or not artifact or "\x00" in artifact
             or (os.name != "nt" and "\\" in artifact) or ".." in Path(artifact).parts):
         raise ArtifactUnavailable("Use manifest, baseline, or an exact returned inspection artifact reference.")
+    if artifact.startswith("search_"):
+        from agentcad.geometry_search import read_search_artifact
+        return read_search_artifact(file, artifact, offset=offset, length=length,
+                                    expected_sha256=expected_sha256, expected_expires_at=expected_expires_at)
     source = Path(os.path.abspath(file))
     # A caller can explicitly name a baseline, but cannot use a link to expose
     # some other file as that baseline or one of its companion artifacts.
