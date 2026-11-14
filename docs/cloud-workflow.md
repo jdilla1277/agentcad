@@ -56,15 +56,16 @@ way to use the same cloud projects and results.
 
 ## 1. Install AgentCAD and supply your credentials
 
-Cloud access requires an API address, key ID, and secret issued by your host.
-There is no signup or login screen.
+This setup uses an API address, key ID, and secret issued by your host.
+Hosts that enable browser-assisted installation approval can instead use
+[`agentcad account connect`](accounts.md). Local CAD commands need no account.
 
 Install the local cloud adapter with Python 3.10–3.12; this example uses
 Python 3.12:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'agentcad[mcp]==0.7.2'
+.venv/bin/python -m pip install 'agentcad[mcp]==0.8.0'
 .venv/bin/agentcad cloud --help
 ```
 
