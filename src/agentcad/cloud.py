@@ -12,13 +12,16 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
+from agentcad import __version__
 
 JSON_LIMIT = 8 * 1024 * 1024
 SCRIPT_LIMIT = SPEC_LIMIT = 256 * 1024
 IMPORT_LIMIT = 20 * 1024 * 1024
 STEP_LIMIT = 150 * 1024 * 1024
+MESH_LIMIT = 32 * 1024 * 1024
+MESH_FORMATS = {"stl", "obj", "glb"}
 OPERATIONS = {"create_project", "projects", "project", "run", "import_step", "measure", "inspect",
-              "check_spec", "render", "diff", "job", "download"}
+              "check_spec", "render", "diff", "export", "job", "download"}
 
 
 class CloudError(Exception):
@@ -102,7 +105,9 @@ class CloudClient:
         self.httpx, self.secret = httpx, credential or secret
         headers = {"Authorization": "Bearer " + credential} if credential else {"X-AgentCAD-Key-ID": key_id, "X-AgentCAD-Key-Secret": secret}
         self.http = httpx.Client(base_url=api_url.rstrip("/"), transport=transport, timeout=30,
-                                 follow_redirects=False, headers=headers)
+                                 follow_redirects=False, headers={**headers,
+                                 "X-AgentCAD-Client-Mode": "api", "X-AgentCAD-Client-Version": __version__,
+                                 "X-AgentCAD-Client-Source": "api"})
 
     @classmethod
     def from_env(cls):
@@ -238,6 +243,15 @@ class CloudClient:
     def measure(self, project, version):
         return self._request("GET", self._version_route(project, version) + "/measure")
 
+    def export(self, project, version, formats, *, idempotency_key=None):
+        route = self._version_route(project, version)
+        if (not isinstance(formats, list) or not 1 <= len(formats) <= 3
+                or any(not isinstance(fmt, str) or fmt not in MESH_FORMATS for fmt in formats)
+                or len(set(formats)) != len(formats)):
+            raise CloudError("invalid_formats", "Choose each format once from stl, obj, glb; supply a nonempty list.")
+        return self._submit(route + "/exports", kind="export", idempotency_key=idempotency_key,
+                            json={"formats": sorted(formats)})
+
     def inspect(self, project, version, *, ids=False, summary=False, limit=100, validate_only=False, idempotency_key=None):
         route = self._version_route(project, version)
         if any(type(value) is not bool for value in (ids, summary, validate_only)) or type(limit) is not int or not 1 <= limit <= 1000 or (validate_only and (ids or summary)):
@@ -274,16 +288,17 @@ class CloudClient:
         while True:
             timeout = min(30, max(0.1, deadline - time.monotonic())) if wait_seconds else 30
             try:
-                latest = self._request("GET", route, timeout=timeout)
+                result = self._request("GET", route, timeout=timeout)
             except CloudError as exc:
-                # Near the end of --wait, the remaining HTTP budget may be
-                # shorter than a normal response. Keep the last observed job
-                # rather than claiming that an otherwise healthy poll failed.
-                if (wait_seconds and result is not None and exc.reason == "request_failed"
-                        and time.monotonic() >= deadline):
+                # A final bounded GET can outlast the remaining wait window.
+                # Preserve only an actual authorized pending response, as the
+                # hosted MCP bridge does; the caller can poll the same job again.
+                if (result is not None and result.get("status") in {"queued", "running"} and wait_seconds
+                        and time.monotonic() >= deadline and exc.reason == "request_failed"
+                        and exc.details.get("http_status") is None):
                     break
                 raise
-            result = latest
+
             if result.get("status") in {"succeeded", "failed"} or time.monotonic() >= deadline:
                 break
             time.sleep(min(2, max(0, deadline - time.monotonic())))
@@ -304,8 +319,8 @@ class CloudClient:
 
     def download(self, project, destination, *, job=None, kind="step", version=None, path=None, cwd=None, overwrite=False):
         route = self._project_route(project)
-        if kind not in {"step", "render", "report"} or type(overwrite) is not bool:
-            raise CloudError("invalid_artifact", "Choose artifact kind step, render, or report.")
+        if kind not in {"step", "render", "report"} | MESH_FORMATS or type(overwrite) is not bool:
+            raise CloudError("invalid_artifact", "Choose artifact kind step, render, report, stl, obj, or glb.")
         if job is not None:
             if version is not None or path is not None:
                 raise CloudError("invalid_artifact", "Choose a job or a version/path reference, not both.")
@@ -317,9 +332,10 @@ class CloudClient:
                     raise CloudError("artifact_unavailable", "This job has no completed STEP download.")
                 version, path = artifact.get("version"), artifact.get("path")
             else:
-                route += f"/jobs/{job}/artifacts/" + ("iso.png" if kind == "render" else "result.json")
+                filename = "output." + kind if kind in MESH_FORMATS else "iso.png" if kind == "render" else "result.json"
+                route += f"/jobs/{job}/artifacts/" + filename
         elif version is None or path is None or kind != "step":
-            raise CloudError("invalid_artifact", "STEP needs a version/path reference or job ID; render/report needs a job ID.")
+            raise CloudError("invalid_artifact", "STEP needs a version/path reference or job ID; render/report/mesh needs a job ID.")
         if kind == "step":
             _version(version)
             if (not isinstance(path, str) or len(path) > 256 or "\\" in path or path.startswith("/")
@@ -332,7 +348,7 @@ class CloudClient:
             raise CloudError("invalid_destination", "Choose a file in an existing directory; symlinks and directories are not download destinations.")
         if target.exists() and not overwrite:
             raise CloudError("destination_exists", "The destination exists. Choose a new filename or explicitly set overwrite.")
-        limit = STEP_LIMIT if kind == "step" else JSON_LIMIT
+        limit = STEP_LIMIT if kind == "step" else MESH_LIMIT if kind in MESH_FORMATS else JSON_LIMIT
         temporary = None
         try:
             with self.http.stream("GET", route) as response:
@@ -380,12 +396,14 @@ class CloudClient:
                 temporary.unlink(missing_ok=True)
 
 
-def cloud_call(operation, **kwargs):
+def cloud_call(operation, *, client_mode="remote_cli", **kwargs):
     """One execution path for CLI and MCP, without changing the process directory."""
     if operation not in OPERATIONS:
         return CloudError("invalid_operation", "Unknown cloud operation.").payload(operation)
     try:
         with CloudClient.from_env() as client:
+            client.http.headers["X-AgentCAD-Client-Mode"] = client_mode
+            client.http.headers["X-AgentCAD-Client-Source"] = "mcp_client" if client_mode == "local_mcp" else "cli"
             result = getattr(client, operation)(**kwargs)
             result.setdefault("command", "cloud")
             result.setdefault("status", "success")

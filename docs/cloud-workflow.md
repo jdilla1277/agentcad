@@ -183,11 +183,60 @@ For a ready-made multi-solid script and matching spec, use
 holes and a separate spacer. Increasing both hole diameters from 10 to 12 mm
 removes 552.9203 mm³ while leaving the spacer in place.
 
+### Export a saved model
+
+Cloud exports require a client and host that both support this operation.
+Until the client extension is released, install from a source revision that
+includes it; installing an older published client does not add the command.
+An older host can reject the export route. Check your host's supported tools.
+
+```sh
+agentcad cloud export PROJECT VERSION --format stl,obj,glb --idempotency-key meshes-v1
+agentcad cloud job PROJECT EXPORT_JOB --wait
+agentcad cloud download PROJECT model.stl --job EXPORT_JOB --kind stl
+agentcad cloud download PROJECT model.obj --job EXPORT_JOB --kind obj
+agentcad cloud download PROJECT model.glb --job EXPORT_JOB --kind glb
+agentcad cloud download PROJECT export-report.json --job EXPORT_JOB --kind report
+```
+
+Use the returned export job ID. Local and hosted MCP expose
+`cloud_export(project, version, formats=["stl", "obj", "glb"], idempotency_key=...)`.
+The local adapter saves files with `cloud_download`; hosted MCP retrieves them
+with `cloud_artifact(job=EXPORT_JOB, kind="stl"|"obj"|"glb", include_content=True)`.
+Hosted inline content is limited to 8 MiB; larger files retain an authenticated
+API download reference. Returned URLs remain private.
+
+Exports read the selected saved STEP without running its script or creating
+another model version. Choose each format once. Format order does not change
+retry identity; changing the formats or version with the same key conflicts.
+A failed export retains no partial download links. To retry a terminal failed
+export, use a new key against the same saved version. An export has a
+180-second CAD budget, a seven-minute overall deadline, 32 MiB per-file limit,
+and 64 MiB combined limit. It accepts no component or resource overrides.
+
+After completion, read `result.mesh_validation` separately for each format.
+`is_valid: false` means a written-mesh check failed; `null` means unknown.
+Files remain retrievable in either case. Neither job completion nor source
+`geometry_valid` establishes mesh validity, printability, or approval.
+
+`result.files` records file sizes, SHA-256, `length_unit`, `meters_per_unit`,
+and `up_axis`. The current engine preserves numeric millimeters in every
+format, including GLB. STL/OBJ are Z-up; GLB is Y-up. A GLB consumer assuming
+meters must scale by 0.001. Named-part/group/source-color metadata is not
+preserved by whole-model export. Use the source STEP and source reports for
+CAD evidence; meshes approximate the surfaces at the engine's tessellation.
+
+Cloud requests identify the adapter mode and package version for operational
+usage records. Local CAD commands remain offline and do not send these records.
+
 ## 5. Handle waiting and retries
 
 - A submission response acknowledges a job. It does not mean geometry passed.
 - A polling call waits at most 60 seconds. If the job is still running, poll
   again; do not submit another build to make it finish.
+- A transport timeout on the final GET at the wait deadline can return the
+  last authorized pending snapshot. Poll that same job again. Explicit HTTP
+  errors, including revoked credentials, are still returned as errors.
 - Keep the submission's `idempotency_key`. If the response is lost, retry with
   that same key and identical input. Use a new key when changing the script,
   label, or other submitted values. The client does not retry submissions for you.
