@@ -106,6 +106,12 @@ class Handler(BaseHTTPRequestHandler):
                 root = self.review_root(token, record)
                 if root is not None:
                     self.reply(200, {"comments": reviews.list_comments(root)})
+            elif route == "feedback/policy":
+                root = self.feedback_root(token, record)
+                if root is not None:
+                    from agentcad.feedback_policy import sharing_policy
+                    from agentcad.commands.feedback import _resolve_feedback_url
+                    self.reply(200, sharing_policy(root, _resolve_feedback_url()))
             elif route == "state":
                 client = parse_qs(urlsplit(self.path).query).get("client", [""])[0]
                 if re.fullmatch(r"[a-zA-Z0-9-]{1,64}", client):
@@ -150,6 +156,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self.allowed():
+            return
+        feedback = re.fullmatch(r"/projects/([a-f0-9]{64})/feedback/(policy|diagnostics)", urlsplit(self.path).path)
+        if feedback:
+            self.feedback_post(*feedback.groups())
             return
         review = re.fullmatch(r"/projects/([a-f0-9]{64})/review/(.*)", urlsplit(self.path).path)
         if review:
@@ -199,6 +209,51 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(404, {"error": "Unknown operation"})
         except (ValueError, TypeError, AttributeError):
             self.reply(400, {"error": "Invalid request"})
+
+    def feedback_root(self, token, record):
+        if not secrets.compare_digest(self.headers.get("X-AgentCAD-Feedback-Token", ""), token):
+            self.reply(403, {"error": "Invalid feedback capability"})
+            return None
+        if not record:
+            self.reply(404, {"error": "Unknown project"})
+            return None
+        root = Path(record["root"])
+        for path in (root, root / ".agentcad", root / ".agentcad/feedback-sharing.json", root / ".agentcad/feedback"):
+            if path.resolve() != path:
+                self.reply(403, {"error": "Feedback path changed"})
+                return None
+        if not root.is_dir():
+            self.reply(403, {"error": "Project path changed"})
+            return None
+        return root
+
+    def feedback_post(self, token, route):
+        try:
+            root = self.feedback_root(token, live.read_json(live.project_record(token)))
+            if root is None:
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 2_000_000:
+                raise ValueError("Feedback request is too large or empty")
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict) or body.get("human_authorized") is not True:
+                raise ValueError("Explicit human authorization is required")
+            from agentcad.commands.feedback import _resolve_feedback_url, _send_remote, deliver_payload
+            # A choice is valid only for the recipient displayed to the human.
+            if body.get("recipient") != _resolve_feedback_url():
+                raise ValueError("Recipient changed; review the sharing panel again")
+            if route == "policy":
+                from agentcad.feedback_policy import set_sharing_policy
+                self.reply(200, set_sharing_policy(root, _resolve_feedback_url(), body.get("enabled")))
+            else:
+                payload = body.get("payload")
+                if not isinstance(payload, dict) or not payload:
+                    raise ValueError("Reviewed diagnostic payload must be a nonempty JSON object")
+                self.reply(200, deliver_payload(root, payload, _send_remote))
+        except (ValueError, TypeError) as exc:
+            self.reply(400, {"error": str(exc)})
+        except OSError:
+            self.reply(503, {"error": "Feedback unavailable; retry shortly"})
 
     def review_root(self, token, record):
         # A project capability grants access only to that project's reviews.

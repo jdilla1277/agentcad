@@ -30,7 +30,7 @@ class AgentCADMCP(FastMCP):
                     "Explicit per-call WIP opt-in. Must be true for retained changes, declared checks, stage, promote and authored-run retry/status; default false."
                 )
                 tool.description += "\nWIP change workflows require experimental_changes=true on every call; ordinary CAD calls default to false."
-            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair", "viewer"}:
+            if tool.name.startswith("cloud_") or tool.name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair", "viewer", "feedback"}:
                 tool.inputSchema["additionalProperties"] = False
         return tools
 
@@ -41,7 +41,7 @@ class AgentCADMCP(FastMCP):
             raise ValueError(f"Invalid {name} arguments: experimental_changes must be a boolean.")
         # FastMCP otherwise drops unknown arguments before calling a tool.
         # Closed tool contracts must reject unsupported options before work.
-        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair", "viewer"}:
+        if name.startswith("cloud_") or name in {"import_cad", "inspect", "run", "run_status", "promote", "changes_list", "changes_show", "changes_compare", "changes_restore", "changes_repair", "viewer", "feedback"}:
             import jsonschema
 
             tool = self._tool_manager.get_tool(name)
@@ -273,7 +273,7 @@ def _experimental(args, experimental_changes):
     return [*args, "--experimental-changes"] if experimental_changes else args
 
 
-def _invoke(args: list[str], cwd: str | None = None) -> dict:
+def _invoke(args: list[str], cwd: str | None = None, *, input: str | None = None) -> dict:
     """Invoke an agentcad CLI command and return parsed JSON response."""
     runner = CliRunner()
     env = {"AGENTCAD_DAEMON": "1"}
@@ -282,7 +282,7 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     try:
         if cwd:
             os.chdir(cwd)
-        result = runner.invoke(cli, args, env=env)
+        result = runner.invoke(cli, args, env=env, input=input)
     finally:
         os.chdir(old_cwd)
 
@@ -291,6 +291,50 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     return _format_result(
         result.stdout, result.exit_code, result.exception, stderr=result.stderr,
     )
+
+
+@mcp.tool()
+async def feedback(message: str | None = None, report: str | None = None,
+                   local_only: bool = False, send: bool = False, diagnostics: bool = False,
+                   reviewed_payload: dict | None = None, max_entries: int = 10,
+                   build_dir: str | None = None, cwd: str | None = None) -> dict:
+    """Record local feedback; no input returns guided questions/template without sending.
+
+    Brief messages upload automatically ONLY if the human enabled sharing for
+    this build root in the viewer. Payload: observation and AgentCAD version;
+    no command history, paths or runtime bundle. Avoid private design details.
+    Agents must never enable sharing for the human. local_only suppresses upload.
+    report accepts complete report text without a client-side file; stays local
+    unless send=True. send=True is only for a human-requested one-off submission
+    and never changes future sharing. Supply message OR report.
+
+    diagnostics=True prepares/displays the COMPLETE local diagnostic payload;
+    it never uploads. Have the human review all fields and exclude/redact them.
+    Only with explicit human authorization, pass the reviewed JSON object in
+    reviewed_payload with send=True; exactly that object uploads, no additions.
+    Receipts distinguish local storage, upload failure (partial), remote storage
+    and notification delivery. cwd/build_dir select the project as in CLI.
+    """
+    if reviewed_payload is not None and (message is not None or report is not None):
+        return {"command": "feedback", "status": "error", "_exit_code": 2,
+                "message": "Supply reviewed_payload alone with send=True."}
+    args = ["feedback"]
+    stdin = None
+    if reviewed_payload is not None:
+        args.extend(["--send-diagnostics", "-"])
+        stdin = json.dumps(reviewed_payload)
+    if report is not None:
+        args.extend(["--file", "-"])
+        stdin = report
+    options = ["--max-entries", str(max_entries)]
+    for enabled, flag in ((local_only, "--local-only"), (send, "--send"), (diagnostics, "--diagnostics")):
+        if enabled:
+            options.append(flag)
+    if build_dir is not None:
+        options.extend(["--build-dir", build_dir])
+    if message is not None:
+        args.extend(["--", message])
+    return _invoke([args[0], *options, *args[1:]], cwd=cwd, input=stdin)
 
 
 def _with_images(result, media, *, cwd, image_root=None, keep_core=False, full_response=False):

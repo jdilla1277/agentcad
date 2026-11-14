@@ -68,6 +68,8 @@ def test_non_utf8_filename_context_survives_save_and_upload(
     args = ["feedback", "--file", "-"] if is_report else ["feedback", "The script failed"]
     if local_only:
         args.append("--local-only")
+    else:
+        args.append("--send")
     report = "\n## Feedback\nThe script failed. Привет 日本語.\n\n"
     result = runner.invoke(cli, args, input=report if is_report else None)
     assert result.exit_code == 0, result.stdout
@@ -83,7 +85,7 @@ def test_non_utf8_filename_context_survives_save_and_upload(
         assert receipt["remote"] == "skipped" and uploaded == []
     else:
         assert receipt["remote"] == "sent" and receipt["discord"] == "ok"
-        assert uploaded == [saved]
+        assert uploaded == [{"summary": report if is_report else "The script failed", "agentcad_version": saved["environment"]["agentcad_version"]}]
 
 
 def payload(result):
@@ -183,7 +185,7 @@ def test_report_preserves_full_text_and_context_with_compact_receipt(
     report.write_text(REPORT, encoding="utf-8")
     result = runner.invoke(
         cli,
-        ["feedback", "--file", "-" if use_stdin else str(report)],
+        ["feedback", "--file", "-" if use_stdin else str(report), "--send"],
         input=REPORT if use_stdin else None,
     )
     assert result.exit_code == 0, result.stdout
@@ -191,7 +193,7 @@ def test_report_preserves_full_text_and_context_with_compact_receipt(
     assert data["status"] == "success" and data["neon_row_id"] == 42
     assert "bundle" not in data and "Привет" not in result.stdout
     saved = json.loads(Path(data["bundle_file"]).read_text(encoding="utf-8"))
-    assert saved == sent[0]
+    assert sent == [{"summary": REPORT, "agentcad_version": saved["environment"]["agentcad_version"]}]
     assert saved["report"] == REPORT
     assert saved["summary"] == "The lid's mounting holes are missing."
     assert saved["report_format"] == "markdown"
@@ -267,12 +269,12 @@ def test_report_is_saved_before_network_failure(runner, isolated_dir, monkeypatc
 
     def fail_after_save(bundle):
         files = list(isolated_dir.glob(".agentcad/feedback/*.json"))
-        assert len(files) == 1
-        assert json.loads(files[0].read_text(encoding="utf-8"))["report"] == REPORT
+        assert len(files) == 2
+        assert any(json.loads(file.read_text(encoding="utf-8")).get("report") == REPORT for file in files)
         return {"err": "timed out", "discord": None, "neon_row_id": None}
 
     monkeypatch.setattr(feedback_mod, "_send_remote", fail_after_save)
-    result = runner.invoke(cli, ["feedback", "--file", "-"], input=REPORT)
+    result = runner.invoke(cli, ["feedback", "--file", "-", "--send"], input=REPORT)
     data = payload(result)
     assert data["status"] == "partial"
     assert "bundle" not in data
@@ -280,32 +282,6 @@ def test_report_is_saved_before_network_failure(runner, isolated_dir, monkeypatc
         json.loads(Path(data["bundle_file"]).read_text(encoding="utf-8"))["report"]
         == REPORT
     )
-
-
-def test_413_reduces_logs_without_truncating_report(runner, isolated_dir, monkeypatch):
-    from agentcad.cli import cli
-
-    runner.invoke(cli, ["init", "--name", "feedback-project", "--no-agent-setup"])
-    runner.invoke(cli, ["context"])
-    calls = []
-
-    def send(bundle):
-        assert bundle["report"] == REPORT
-        calls.append(len(bundle["session_log"]))
-        return {
-            "err": "HTTP Error 413" if calls[-1] > 1 else None,
-            "discord": "ok",
-            "neon_row_id": 9,
-        }
-
-    monkeypatch.setattr(feedback_mod, "_send_remote", send)
-    result = runner.invoke(
-        cli, ["feedback", "--file", "-", "--max-entries", "2"], input=REPORT
-    )
-    assert payload(result)["status"] == "success"
-    assert calls == [2, 1]
-    saved = json.loads(Path(payload(result)["bundle_file"]).read_text(encoding="utf-8"))
-    assert saved["report"] == REPORT and len(saved["session_log"]) == 1
 
 
 def test_two_reports_in_one_second_keep_both_bundles(runner, isolated_dir, monkeypatch):
