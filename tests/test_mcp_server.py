@@ -37,8 +37,8 @@ def test_mcp_no_daemon_tool():
     assert "daemon" not in _tool_names()
 
 
-def test_mcp_no_feedback_tool():
-    assert "feedback" not in _tool_names()
+def test_mcp_feedback_tool_registered():
+    assert "feedback" in _tool_names()
 
 
 def test_mcp_no_init_tool():

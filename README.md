@@ -445,7 +445,17 @@ agentcad feedback --template --output feedback.md
 agentcad feedback --file feedback.md
 ```
 
-Creating a template sends nothing. Reports include recent session context;
-review what you send, or add `--local-only` to keep it local. Partial reports,
-positive feedback, and ideas are welcome. See `agentcad docs feedback` for
-file/stdin input and upload receipts.
+After upgrading, stop the old viewer with `agentcad viewer stop`, then reopen it
+to load the new sharing controls. Feedback stays local by default. The human can enable or revoke automatic
+sharing in the live viewer's **Feedback sharing** panel for that build root.
+Automatic uploads contain only brief observation text and the AgentCAD version;
+agents should omit private design details. Files and longer reports stay local.
+`--local-only` suppresses automatic sharing; `--send` shares a particular note or
+report once when requested by the human, without changing future sharing.
+
+Diagnostics require a separate review: `agentcad feedback "what happened" --diagnostics` shows the complete local payload. Review all fields, exclude or
+redact unwanted information, then explicitly authorize the edited JSON upload
+using `--send-diagnostics reviewed.json --send`, or use the viewer's diagnostic
+panel. No diagnostics are automatically attached to observations. Local MCP's
+`feedback` tool follows the same policy and accepts report text directly.
+See `agentcad docs feedback` for scope, file/stdin input and upload receipts.

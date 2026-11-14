@@ -318,30 +318,54 @@ Before handoff, confirm:
 Export success only means a file was written. The STEP verdict does not certify
 STL, GLB, or OBJ bytes.
 
-## Share feedback
+## Record feedback
 
-When a modeling session reveals friction, a useful workaround, or something
-that worked particularly well, share it with the AgentCAD team:
+Keep recording friction, useful workarounds, and positive observations while
+modeling. Recording locally needs no permission and should not interrupt work:
 
 ```bash
+agentcad feedback "A brief observation without private design details"
 agentcad feedback --template --output feedback.md
-# Fill in the report with your actual task and observations.
+# Fill in the report, then record it locally:
 agentcad feedback --file feedback.md
 ```
 
-The template asks what you were trying to do, what happened, what you expected,
-and any evidence or workaround. Positive feedback and ideas are welcome too.
-No section is mandatory. Keep spontaneous mid-task notes easy:
-`agentcad feedback "your observation"` still works without filling in a form.
+External sharing is off by default. The human can enable or revoke **Share brief
+tool feedback automatically** in the live viewer's **Feedback sharing** panel.
+This choice persists only for the displayed build root and recipient. Agents
+must not enable sharing, click its controls, or edit its policy file on the
+human's behalf. Enabling sends no saved backlog. Once enabled, future brief
+MESSAGE observations (up to 2,000 characters) and the AgentCAD version go to the
+AgentCAD team without repeated prompts. Command history, results, paths, project
+files and runtime details are never automatically attached. The receiving
+service also records the request IP address. Keep private design
+context out of observation text. Files and longer messages stay local unless
+explicitly shared. `--local-only` keeps any observation local even when enabled.
 
-Reports include recent command arguments/results, environment and friction
-signals. Review what you are sending. `--local-only` saves without uploading.
-The full bundle is saved locally before upload; file submissions return a
-compact JSON receipt with `bundle_file`, `remote`, `discord`, and `neon_row_id`.
-`status: "partial"` means upload was not confirmed and the local copy remains. A failed
-Discord notification after remote storage does not require resubmitting.
-`agentcad feedback` alone returns a JSON guide and sends nothing. Explicit
-`--template` without `--output` exports Markdown on stdout; `--file -` reads stdin.
+Only when the human requests a particular submission, add `--send` to share that
+observation/report once. This does not enable future sharing. Local MCP's
+`feedback` tool follows the same policy: `message` or `report` records text,
+`local_only=True` suppresses sharing, and `send=True` is for a human-requested
+one-off upload. No input returns guided questions and a template without sending.
+
+Detailed diagnostics are separate. `agentcad feedback "observation" --diagnostics`
+prepares a LOCAL preview showing the complete payload, including command
+arguments/results, friction signals and runtime information. Have the human
+review every field and exclude/redact unwanted information in the JSON file.
+Upload only after explicit authorization of the complete edited payload, using
+`agentcad feedback --send-diagnostics reviewed.json --send`, or open/edit that
+JSON in the viewer's diagnostic panel and use **Send reviewed diagnostics once**.
+The exact edited JSON object uploads with no hidden additions or payload-changing
+retries. MCP supports the same preview with `diagnostics=True` and authorized
+submission with `reviewed_payload={...}, send=True`.
+
+The local bundle is saved before delivery. Receipts include `bundle_file`,
+`upload_file` (the exact upload when attempted), `remote`, `submitted`, `discord`,
+and `neon_row_id`. `status: "partial"` means remote storage was not confirmed;
+the local copy remains. A failed notification after storage does not require
+resubmission. `--file -` reads stdin. Explicit `--template` without `--output`
+exports Markdown on stdout. `AGENTCAD_FEEDBACK_URL` changes the recipient and
+requires a new human automatic-sharing choice.
 
 ## Script writing rules
 
