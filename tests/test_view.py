@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import cadquery as cq
+import pytest
 from cadquery import exporters
 
 from agentcad.cli import cli
@@ -496,6 +497,90 @@ def test_view_step_with_spec_opens_spec_check_mode(runner, isolated_dir, monkeyp
     assert '"check_spec"' in html
     assert '"passed": false' in html
     assert '"count_error": -1' in html
+
+
+def test_view_spec_requests_and_agrees_with_position_and_probe_evidence(
+    runner, isolated_dir, monkeypatch
+):
+    step = _make_two_hole_step(isolated_dir)
+    spec = isolated_dir / "spec.json"
+    spec.write_text(json.dumps({
+        "features": [
+            {
+                "name": "mounting_holes",
+                "type": "cylinder",
+                "diameter_mm": 6,
+                "count": 2,
+                "axis": "+z",
+            },
+            {
+                "name": "mount_positions",
+                "type": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 6,
+                "positions_mm": [[-10, 0], [10, 0]],
+                "position_tolerance_mm": 0.05,
+            },
+            {
+                "name": "hole_void",
+                "type": "keepout",
+                "box_mm": [-11, -1, 0.5, -9, 1, 2],
+                "max_volume_mm3": 0,
+            },
+            {
+                "name": "plate_material",
+                "type": "material",
+                "box_mm": [0, 0, 0.5, 1, 1, 1.5],
+                "min_volume_mm3": 0.5,
+            },
+        ]
+    }))
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+
+    result = runner.invoke(cli, ["view", str(step), "--spec", str(spec)])
+
+    assert result.exit_code == 0, result.output
+    html = (isolated_dir / "two_holes_viewer.html").read_text(encoding="utf-8")
+    marker = "const REVIEW = "
+    start = html.index(marker) + len(marker)
+    review = json.loads(html[start:html.index(";\nconst PART_REVIEW", start)])
+
+    assert review["measure"]["precise_cylinders"]
+    volumes = {
+        tuple(row["box_mm"]): row for row in review["measure"]["material_volumes"]
+    }
+    assert len(volumes) == 2
+    assert all("error" not in row for row in volumes.values())
+    check = review["check_spec"]
+    assert check["passed"] is True
+    by_name = {row["name"]: row for row in check["matched_features"]}
+    assert by_name["mount_positions"]["type"] == "positioned_cylinders"
+    assert by_name["mount_positions"]["measured"]["measured_count"] == 2
+    assert by_name["hole_void"]["type"] == "keepout"
+    assert by_name["plate_material"]["type"] == "material"
+    assert "max position error" in html
+    assert "mm³ in box" in html
+
+    standalone = runner.invoke(
+        cli, ["check-spec", str(step), str(spec), "--no-daemon"]
+    )
+    assert standalone.exit_code == 0, standalone.output
+    standalone_check = json.loads(standalone.stdout)
+    assert standalone_check["passed"] == check["passed"]
+    standalone_by_name = {
+        row["name"]: row for row in standalone_check["matched_features"]
+    }
+    for name, row in by_name.items():
+        other = standalone_by_name[name]
+        assert row["type"] == other["type"]
+        assert row["passed"] == other["passed"]
+        if row["type"] in ("keepout", "material"):
+            assert row["measured"]["volume_mm3"] == pytest.approx(
+                other["measured"]["volume_mm3"]
+            )
+        if row["type"] == "positioned_cylinders":
+            assert row["measured"]["positions_mm"] == other["measured"]["positions_mm"]
+            assert row["measured"]["axis"] == other["measured"]["axis"]
 
 
 def test_view_review_requires_step_source(runner, isolated_dir, monkeypatch):

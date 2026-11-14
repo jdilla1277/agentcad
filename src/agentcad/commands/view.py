@@ -2477,7 +2477,49 @@ function findMeasuredBucket(feature) {
   }) || null;
 }
 
+function positionedSummary(target, measured, reason) {
+  const expected = target || {};
+  const observed = measured || {};
+  const positions = expected.positions_mm || observed.positions_mm || [];
+  const diameter = expected.diameter_mm !== undefined ? expected.diameter_mm : observed.diameter_mm;
+  const axis = expected.axis || observed.axis || "?";
+  const expectedCount = observed.expected_count !== undefined ? observed.expected_count : positions.length;
+  const measuredCount = observed.measured_count !== undefined ? observed.measured_count : "unavailable";
+  const tolerance = expected.position_tolerance_mm !== undefined
+    ? expected.position_tolerance_mm
+    : observed.position_tolerance_mm;
+  const label = `expected ${expectedCount} Ø${fmtNumber(diameter)} mm ${axis}-axis cylinders at ${positions.length ? positions.map(p => `(${p.map(fmtNumber).join(', ')})`).join(', ') : 'no declared positions'}`;
+  if (reason) return `${label} · unavailable: ${reason}`;
+  const error = observed.max_position_error_mm;
+  const missing = (observed.missing_positions_mm || []).length;
+  const extra = (observed.extra_cylinders || []).length;
+  return `${label} · matched ${measuredCount} · max position error ${fmtNumber(error)} mm ± ${fmtNumber(tolerance)} mm`
+    + `${missing ? ` · ${missing} missing` : ""}${extra ? ` · ${extra} extra` : ""}`;
+}
+
+function probeSummary(target, measured, reason) {
+  const expected = target || {};
+  const observed = measured || {};
+  const kind = expected.kind || observed.kind || "material";
+  const box = expected.box_mm || observed.box_mm || [];
+  const threshold = kind === "keepout"
+    ? (expected.max_volume_mm3 !== undefined ? expected.max_volume_mm3 : observed.max_volume_mm3)
+    : (expected.min_volume_mm3 !== undefined ? expected.min_volume_mm3 : observed.min_volume_mm3);
+  const relation = kind === "keepout" ? "≤" : "≥";
+  const label = `${kind} ${relation} ${fmtNumber(threshold)} mm³ in box [${box.map(fmtNumber).join(', ')}]`;
+  if (reason) return `${label} · unavailable: ${reason}`;
+  const volume = observed.volume_mm3;
+  const margin = kind === "keepout" ? threshold - volume : volume - threshold;
+  return `${label} · measured ${fmtNumber(volume)} mm³ · margin ${fmtNumber(margin)} mm³`;
+}
+
 function rowSummary(feature, bucket) {
+  if (feature.type === "positioned_cylinders") {
+    return positionedSummary(feature.target, feature.measured, feature.reason);
+  }
+  if (feature.type === "keepout" || feature.type === "material") {
+    return probeSummary(feature.target, feature.measured, feature.reason);
+  }
   const target = feature.target || {};
   const measured = feature.measured || {};
   const expected = `expected Ø${fmtNumber(target.diameter_mm)} ×${fmtNumber(target.count)}`;
@@ -2486,7 +2528,8 @@ function rowSummary(feature, bucket) {
     : `measured Ø${fmtNumber(measured.diameter_mm)} ×${fmtNumber(measured.count)}`;
   const err = feature.count_error === undefined ? "" : ` · count_error ${feature.count_error}`;
   const centers = bucket && bucket.representative_centers ? ` · ${bucket.representative_centers.length} centers` : "";
-  return `${expected} · ${actual}${err}${centers}`;
+  const reason = feature.reason ? ` · ${feature.reason}` : "";
+  return `${expected} · ${actual}${err}${centers}${reason}`;
 }
 
 function makeReviewRow({ label, status, badge, summary, bucket, missing }) {
@@ -2657,8 +2700,13 @@ function setupChangeReceiptPanel() {
   const required = new Set(REVIEW.check_policy.checks.filter(c => c.require_completion).map(c => c.check_id));
   for (const check of receipt.checks) {
     const observed = check.observed || {};
+    const kind = (check.settings && check.settings.kind) || observed.kind;
     let summary = observed.reason || JSON.stringify(observed);
-    if (observed.expected_mm !== undefined) {
+    if ((kind === 'keepout' || kind === 'material') && observed.box_mm !== undefined) {
+      summary = probeSummary(observed, observed);
+    } else if (observed.positions_mm !== undefined) {
+      summary = positionedSummary(observed, observed);
+    } else if (observed.expected_mm !== undefined) {
       summary = `Expected ${number(observed.expected_mm)} mm ± ${number(observed.tolerance_mm)} mm; measured ${number(observed.measured_mm)} mm.`;
     } else if (observed.expected_count !== undefined) {
       const diameters = [...new Set((observed.cylinders || []).map(c => c.diameter_mm))]
@@ -3757,11 +3805,28 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None, in
             f"Could not measure '{file_str}' for viewer review."
         )
 
+    spec = None
+    if spec_file is not None:
+        spec, err = _load_spec_json(spec_file)
+        if err:
+            return None, err
+
+    from agentcad.commands.check_spec import (
+        _declared_probe_boxes,
+        _needs_precise_cylinders,
+    )
+
     try:
         measurement = measure_tier0_payload(
             str(file_path),
             detection,
             with_features=False,
+            precise_cylinders=(
+                _needs_precise_cylinders(spec) if spec is not None else False
+            ),
+            probe_boxes=(
+                _declared_probe_boxes(spec) if spec is not None else None
+            ),
         )
     except Exception as exc:
         return None, f"Could not measure '{file_str}' for viewer review: {exc}"
@@ -3773,11 +3838,7 @@ def _build_review_payload(file_str, *, include_measure=False, spec_file=None, in
         review["validation"] = measurement["validation"]
         review["validation_markers"] = validation_markers(load_cad_shape(file_path), measurement["validation"])
 
-    if spec_file is not None:
-        spec, err = _load_spec_json(spec_file)
-        if err:
-            return None, err
-
+    if spec is not None:
         from agentcad.commands.check_spec import check_measurement_against_spec
 
         check = check_measurement_against_spec(measurement, spec)

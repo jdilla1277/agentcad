@@ -621,7 +621,11 @@ class Attempt:
         return self.reference()
 
     def _evaluate(self, candidate, policy, response):
-        from agentcad.change_checks import evaluate_checks, measure_geometry
+        from agentcad.change_checks import (
+            evaluate_checks,
+            measure_geometry,
+            probe_boxes_for_policy,
+        )
 
         request = self._read("request.json", "attempt_request")
         measurement, baselines, reason = None, {}, "Written geometry is not valid or available."
@@ -631,7 +635,9 @@ class Attempt:
         if verdict is True:
             try:
                 artifact = next(a for a in candidate["inputs"] if a["role"] == "geometry")
-                measurement = measure_geometry(self._verify(artifact))
+                measurement = measure_geometry(
+                    self._verify(artifact), probe_boxes=probe_boxes_for_policy(policy)
+                )
                 reason = None
             except Exception as exc:
                 reason = f"Geometry measurement unavailable: {exc}"
