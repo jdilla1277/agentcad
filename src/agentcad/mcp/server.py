@@ -97,7 +97,8 @@ async def cloud_project(project: str) -> dict:
 
 
 @mcp.tool()
-async def cloud_run(project: str, script: str, label: str, cwd: str | None = None, idempotency_key: str | None = None) -> dict:
+async def cloud_run(project: str, script: str, label: str, cwd: str | None = None, idempotency_key: str | None = None,
+                    export_glb: bool = False) -> dict:
     """Upload one explicit UTF-8 .py CAD script (at most 256 KiB) to a cloud project.
 
     Returns a job immediately. Call cloud_job with the returned project/job IDs.
@@ -105,8 +106,10 @@ async def cloud_run(project: str, script: str, label: str, cwd: str | None = Non
     resubmit a running job. Edit the local script and use a new key/label for a
     new version. Only this file is uploaded, not its folder or dependencies.
     cwd resolves the local file; no local AgentCAD project is required.
+    Set export_glb=True for a part-aware GLB generated during the build.
+    Inspect cloud_job.mesh_exports; download using the build job and kind='glb'.
     """
-    return await _cloud_tool("run", project=project, script=script, label=label, cwd=cwd, idempotency_key=idempotency_key)
+    return await _cloud_tool("run", project=project, script=script, label=label, cwd=cwd, idempotency_key=idempotency_key, export_glb=export_glb)
 
 
 @mcp.tool()

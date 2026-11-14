@@ -61,9 +61,10 @@ def get_project(project):
 @click.option("--label", required=True)
 @retry_option
 @cwd_option
-def run(project, script, label, idempotency_key, cwd):
+@click.option("--export", "mesh_format", type=click.Choice(["glb"]), help="Generate a part-aware GLB during this build.")
+def run(project, script, label, idempotency_key, cwd, mesh_format):
     """Upload one explicit Python CAD script; return a job immediately."""
-    _emit("run", project=project, script=script, label=label, idempotency_key=idempotency_key, cwd=cwd)
+    _emit("run", project=project, script=script, label=label, idempotency_key=idempotency_key, cwd=cwd, export_glb=mesh_format == "glb")
 
 
 @cloud.command("import")
