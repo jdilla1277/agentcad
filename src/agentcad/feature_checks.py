@@ -176,9 +176,11 @@ def validate_solid_occupancy(shape):
 def material_volumes(shape, boxes):
     """Measure material volume inside each probe box, deduplicated by box.
 
-    A failed probe produces an error row for that box only, so dimension and
-    cylinder evidence from the same measurement stays usable. Callers must
-    treat error rows as unavailable evidence, never as zero material.
+    Overlapping compound members are normalized to occupied space first, so
+    shared material is counted once. A failed probe produces an error row for
+    that box only, so dimension and cylinder evidence from the same measurement
+    stays usable. Callers must treat error rows as unavailable evidence, never
+    as zero material.
     """
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
     from OCP.BRepGProp import BRepGProp
@@ -199,6 +201,9 @@ def material_volumes(shape, boxes):
 
     try:
         validate_solid_occupancy(shape)
+        from agentcad.helpers import _canonical_occupied_shape
+
+        probe_shape, _ = _canonical_occupied_shape(shape, "material probe")
     except Exception as exc:  # OCCT raises non-Python exception types.
         occupancy_error = str(exc) or type(exc).__name__
 
@@ -226,7 +231,7 @@ def material_volumes(shape, boxes):
             tool = BRepPrimAPI_MakeBox(
                 gp_Pnt(xmin, ymin, zmin), gp_Pnt(xmax, ymax, zmax)
             ).Shape()
-            common = BRepAlgoAPI_Common(shape, tool)
+            common = BRepAlgoAPI_Common(probe_shape, tool)
             common.Build()
             if not common.IsDone():
                 raise ValueError("OCCT did not complete the Boolean intersection")

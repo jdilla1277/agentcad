@@ -512,7 +512,10 @@ def _validate_spec(data) -> list[str]:
                 errors.append(f"{prefix}.count must be a non-negative integer")
 
             axis = feature.get("axis")
-            if axis is not None and axis not in {"+x", "+y", "+z", "other"}:
+            if axis is not None and (
+                not isinstance(axis, str)
+                or axis not in {"+x", "+y", "+z", "other"}
+            ):
                 errors.append(f"{prefix}.axis must be one of +x, +y, +z, other")
 
             diameter_tolerance = feature.get(
@@ -532,7 +535,14 @@ def _validate_spec(data) -> list[str]:
                 errors.append(f"{prefix}.count_tolerance must be a non-negative integer")
         elif feature_type == "positioned_cylinders":
             axis = feature.get("axis")
-            if axis not in {"x", "y", "z", "+x", "+y", "+z"}:
+            if not isinstance(axis, str) or axis not in {
+                "x",
+                "y",
+                "z",
+                "+x",
+                "+y",
+                "+z",
+            }:
                 errors.append(f"{prefix}.axis must be one of x, y, z")
             if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
                 errors.append(f"{prefix}.diameter_mm must be a positive number")

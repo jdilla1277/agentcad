@@ -21,6 +21,15 @@ def _plate_with_two_holes_step(directory, name="two_holes.step"):
     return path
 
 
+def _overlapping_compound_step(directory, name="overlapping.step"):
+    first = cq.Workplane("XY").box(10, 10, 10).val()
+    second = cq.Workplane("XY").box(10, 10, 10).translate((5, 0, 0)).val()
+    compound = cq.Compound.makeCompound([first, second])
+    path = directory / name
+    exporters.export(compound, str(path))
+    return path
+
+
 def _write_spec(directory, payload, name="spec.json"):
     path = directory / name
     path.write_text(json.dumps(payload))
@@ -353,6 +362,83 @@ class TestCheckSpecCommand:
         assert by_name["solid_keepout"]["passed"] is False
         assert by_name["empty_material"]["passed"] is False
         assert by_name["solid_keepout"]["measured"]["volume_mm3"] == pytest.approx(1)
+
+    def test_check_spec_counts_overlapping_compound_material_once(
+        self, runner, isolated_dir
+    ):
+        step = _overlapping_compound_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "must_fill",
+                    "type": "material",
+                    "box_mm": [-10, -10, -10, 20, 10, 10],
+                    "min_volume_mm3": 1750,
+                },
+                {
+                    "name": "bounded_void",
+                    "type": "keepout",
+                    "box_mm": [-10, -10, -10, 20, 10, 10],
+                    "max_volume_mm3": 1750,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        by_name = {row["name"]: row for row in parsed["matched_features"]}
+        assert by_name["must_fill"]["passed"] is False
+        assert by_name["bounded_void"]["passed"] is True
+        assert by_name["must_fill"]["measured"]["volume_mm3"] == pytest.approx(1500)
+        assert by_name["bounded_void"]["measured"]["volume_mm3"] == pytest.approx(1500)
+
+    @pytest.mark.parametrize(
+        "feature",
+        [
+            {
+                "name": "p",
+                "type": "positioned_cylinders",
+                "axis": [],
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0]],
+            },
+            {
+                "name": "p",
+                "type": "positioned_cylinders",
+                "axis": {},
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0]],
+            },
+            {
+                "name": "c",
+                "type": "cylinder",
+                "axis": [],
+                "diameter_mm": 3,
+                "count": 1,
+            },
+            {
+                "name": "c",
+                "type": "cylinder",
+                "axis": {},
+                "diameter_mm": 3,
+                "count": 1,
+            },
+        ],
+    )
+    def test_check_spec_rejects_non_string_axes(
+        self, runner, isolated_dir, feature
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {"features": [feature]})
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("axis" in error for error in parsed["errors"])
 
     def test_check_spec_rejects_invalid_positioned_cylinder_and_probe_fields(self, runner, isolated_dir):
         step = _plate_with_two_holes_step(isolated_dir)

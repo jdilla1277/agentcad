@@ -172,6 +172,16 @@ def test_probe_rejects_mixed_solid_orientations_with_positive_total_volume():
     assert all("solid 2" in row["error"] for row in rows)
 
 
+def test_material_volume_counts_overlapping_solids_once():
+    overlapping = _compound(_box(), _box(5, 0, 0, 15, 10, 10))
+
+    rows = material_volumes(overlapping, [[-10, -10, -10, 20, 10, 10]])
+
+    assert len(rows) == 1
+    assert "error" not in rows[0]
+    assert rows[0]["volume_mm3"] == pytest.approx(1500)
+
+
 def test_thin_probe_is_an_error_row_and_other_boxes_still_measure():
     cube = _box()
     thin = [0, 0, 0, 1, 1, MIN_PROBE_EXTENT_MM / 10]
