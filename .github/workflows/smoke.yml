@@ -131,6 +131,7 @@ jobs:
             tests/test_delayed_acceptance.py \
             tests/test_change_history.py tests/test_change_recovery.py tests/test_working_viewer.py tests/test_experimental_changes.py \
             tests/test_build123d_primitive_aliases.py \
+            tests/test_geometry_query.py tests_b3d/test_geometry_search.py \
             tests/test_bbox_coordinates.py \
             tests_b3d/test_duplicate_capture.py \
             tests_b3d/test_step_assembly.py \

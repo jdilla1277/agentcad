@@ -274,6 +274,8 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        from agentcad.experimental_geometry_search import validate as validate_search
+        validate_search(ctx, kwargs)
         if name in {"run", "import", "inspect"}:
             from agentcad.experimental_inspect import validate
             validate(ctx, kwargs)
@@ -297,7 +299,7 @@ def project_options(function):
             "recover",
             "feedback",
         } or (name == "diff" and kwargs.get("visual")) or (
-            name == "inspect" and (kwargs.get("with_image") or kwargs.get("with_report"))
+            name == "inspect" and (kwargs.get("with_image") or kwargs.get("with_report") or kwargs.get("query") is not None)
         ) or (name == "check-spec" and kwargs.get("complete")) or (
             name in {"restore", "repair"} and not kwargs.get("request_status")
         )
