@@ -312,7 +312,7 @@ def _order(regions, plane, extent):
     return ordered
 
 
-def sketch_regions(*items, plane=None, min_area=None):
+def sketch_regions(*items, plane=None, min_area=None, naming=None):
     """Every enclosed region of a 2D sketch, numbered like the region map.
 
     Args:
@@ -326,6 +326,8 @@ def sketch_regions(*items, plane=None, min_area=None):
         min_area: drop regions smaller than this area. Default:
             1e-7 x (sketch bbox diagonal)^2, which only removes numerical
             slivers. Pass 0 to keep every region.
+        naming: region naming strategy (default:
+            ``agentcad.region_naming.DEFAULT_NAMING``). See region_naming.
 
     Returns:
         A ShapeList of Faces with normals along the plane's z_dir, ordered
@@ -344,6 +346,9 @@ def sketch_regions(*items, plane=None, min_area=None):
     shapes separately (algebra objects or Mode.PRIVATE); lines can still
     split a merged sketch.
     """
+    from agentcad.region_naming import resolve_naming
+
+    strategy = resolve_naming(naming)
     faces, edges = _explode(items, [], [])
     if not edges:
         raise SketchRegionError(
@@ -380,9 +385,11 @@ def sketch_regions(*items, plane=None, min_area=None):
             UserWarning,
             stacklevel=2,
         )
-    return make_region_list(
-        _order(kept, sketch_plane, _local_extent(edges, sketch_plane)), sketch_plane
+    ordered = _order(kept, sketch_plane, _local_extent(edges, sketch_plane))
+    context = strategy.bind(
+        faces=ordered, plane=sketch_plane, curves=[], provenance={}
     )
+    return make_region_list(ordered, sketch_plane, naming=context)
 
 
 def _local_extent(edges, plane):
@@ -416,9 +423,13 @@ def _region_list_class():
 
         plane = None
 
+        naming = None
+
         def __getitem__(self, key):
             if isinstance(key, slice):
-                return make_region_list(list(self).__getitem__(key), self.plane)
+                return make_region_list(
+                    list(self).__getitem__(key), self.plane, naming=self.naming
+                )
             return list(self).__getitem__(key)
 
         def at(self, *points):
@@ -464,11 +475,13 @@ def _region_list_class():
     return SketchRegions
 
 
-def make_region_list(faces, plane):
+def make_region_list(faces, plane, naming=None):
     """A SketchRegions list (ShapeList + plane/at/merged) of ``faces``."""
     result = _region_list_class()(faces)
     # show_regions reads the sketch plane from here to orient the map.
     result.plane = plane
+    # region naming context (region_naming); show_regions reads it for selectors.
+    result.naming = naming
     return result
 
 
@@ -629,7 +642,7 @@ def region_at(regions, *points, plane=None):
     picked = [faces[index] for _point, index in found]
     if len(picked) == 1:
         return picked[0]
-    return make_region_list(picked, plane)
+    return make_region_list(picked, plane, naming=getattr(regions, "naming", None))
 
 
 def merge_regions(*faces, plane=None, _names=None):
@@ -929,13 +942,22 @@ def coerce_region_faces(regions):
     return faces, plane
 
 
-def describe_regions(faces, plane):
-    """JSON-ready facts per region, in list order."""
+def describe_regions(faces, plane, naming=None):
+    """JSON-ready facts per region, in list order.
+
+    ``naming`` is the sketch's region naming context (the ``naming``
+    attribute of the sketch_regions list); it supplies ``selector`` and any
+    strategy-specific fields. Without one, selectors are ``regions.at``.
+    """
+    from agentcad.region_naming import NamingContext
+
+    if naming is None:
+        naming = NamingContext("points", faces, plane)
     items = []
     for index, face in enumerate(faces):
         center = face.center()
         local = plane.to_local_coords(center)
-        inside = interior_point(face, plane)
+        inside = naming.interior(face) if naming.plane == plane else interior_point(face, plane)
         inside_global = plane.from_local_coords(inside)
         items.append({
             "index": index,
@@ -949,7 +971,7 @@ def describe_regions(faces, plane):
             "holes": len(face.inner_wires()),
             "perimeter": _round(sum(edge.length for edge in face.edges())),
             "bounds": _bounds_json(local_bounds([face], plane)),
-            "selector": region_selector(inside),
+            **naming.fields(face, inside),
         })
     return items
 

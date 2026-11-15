@@ -1308,7 +1308,7 @@ def _region_map_summaries(region_maps):
 
     return {
         entry["name"]: _region_response_entry(
-            describe_regions(entry["faces"], entry["plane"]),
+            describe_regions(entry["faces"], entry["plane"], naming=entry.get("naming")),
             plane_info(entry["plane"]),
             png=None,
             json_path=None,
@@ -1338,7 +1338,8 @@ def _write_region_maps(region_maps, version_dir, dir_name, warnings, *, version,
         name = region_map["name"]
         faces, plane = region_map["faces"], region_map["plane"]
         window = region_map.get("window")
-        items = describe_regions(faces, plane)
+        naming = region_map.get("naming")
+        items = describe_regions(faces, plane, naming=naming)
         plane_data = plane_info(plane)
         png_rel = f"{dir_name}/regions/{name}.png"
         json_rel = f"{dir_name}/regions/{name}.json"
@@ -1374,6 +1375,7 @@ def _write_region_maps(region_maps, version_dir, dir_name, warnings, *, version,
             dimensions=map_dimensions(faces, plane), items=items,
             png=png_rel, png_sha256=png_sha256,
             window=_window_json(window) if window is not None else None, hint=hint,
+            naming=naming.map_info() if naming is not None else {"strategy": "points"},
         )
         atomic_write_json(regions_dir / f"{name}.json", listing)
         entries[name] = _region_response_entry(

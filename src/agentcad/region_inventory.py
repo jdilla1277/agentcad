@@ -46,7 +46,7 @@ def id_prefix(version, name):
 
 
 def build_listing(*, version, label, name, script, plane, dimensions, items,
-                  png, png_sha256, window=None, hint=None):
+                  png, png_sha256, window=None, hint=None, naming=None):
     """The saved inventory for one map. ``items`` gain their ``id`` here."""
     regions = [{"id": region_id(version, name, item["index"]), **item} for item in items]
     listing = {
@@ -59,6 +59,7 @@ def build_listing(*, version, label, name, script, plane, dimensions, items,
         "units": UNITS,
         "plane": plane,
         "dimensions": dimensions,
+        "naming": naming or {"strategy": "points"},
         "count": len(regions),
         "png": png,
         "png_sha256": png_sha256,
@@ -196,7 +197,7 @@ def inspect_payload(map_path, *, entity_id=None, image=False, limit=DEFAULT_LIMI
     map_info = {
         key: listing.get(key)
         for key in ("kind", "version", "label", "map", "script", "units", "plane",
-                    "dimensions", "count", "window")
+                    "dimensions", "naming", "count", "window")
         if listing.get(key) is not None
     }
     map_info["json"] = map_arg

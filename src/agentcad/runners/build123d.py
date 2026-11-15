@@ -313,6 +313,8 @@ def execute(
         region_maps.append({
             "name": name, "faces": faces, "plane": plane,
             "window": parse_window(window, faces, plane),
+            # region_naming context: selectors and named-curve facts.
+            "naming": getattr(regions, "naming", None),
         })
 
     import build123d as _b3d
