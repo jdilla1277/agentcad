@@ -881,7 +881,54 @@ def interior_point(face, plane):
     return fallback
 
 
-# ------------------------------------------------------ region facts
+# ------------------------------------------------------ show_regions input
+def coerce_region_faces(regions):
+    """Faces and sketch plane for ``show_regions``; index = list position."""
+    from build123d import Face, Shape
+
+    from agentcad.runners.build123d import _as_build123d, _is_topods_shape
+
+    if isinstance(regions, Face):
+        items = [regions]
+    elif isinstance(regions, Shape) or _is_topods_shape(regions):
+        raise TypeError(
+            f"show_regions() expects the list returned by sketch_regions(...), "
+            f"got a {type(regions).__name__}. Call regions = sketch_regions(...) "
+            "first, then show_regions(regions)."
+        )
+    else:
+        try:
+            items = list(regions)
+        except TypeError as exc:
+            raise TypeError(
+                "show_regions() expects the list returned by sketch_regions(...), "
+                f"got {type(regions).__name__}."
+            ) from exc
+    if not items:
+        raise ValueError(
+            "show_regions() received no regions; sketch_regions(...) returned "
+            "an empty list or the list was filtered to nothing."
+        )
+    faces = []
+    for position, item in enumerate(items):
+        if _is_topods_shape(item):
+            item = _as_build123d(item)
+        if not isinstance(item, Face):
+            raise TypeError(
+                f"show_regions() item {position} is a {type(item).__name__}, not a "
+                "Face. Pass the list from sketch_regions(...) (or a list of planar "
+                "faces)."
+            )
+        faces.append(item)
+    plane = getattr(regions, "plane", None)
+    try:
+        edges = [edge for face in faces for edge in face.edges()]
+        plane = detect_plane(faces, edges, plane)
+    except SketchRegionError as exc:
+        raise ValueError(str(exc).replace("sketch_regions()", "show_regions()")) from exc
+    return faces, plane
+
+
 def describe_regions(faces, plane):
     """JSON-ready facts per region, in list order."""
     items = []
@@ -904,6 +951,63 @@ def describe_regions(faces, plane):
     return items
 
 
+def local_bounds(faces, plane):
+    """(xmin, ymin, xmax, ymax) of ``faces`` in plane-local coordinates."""
+    import numpy as np
+
+    deflection = _faces_extent(faces) / 4000
+    points = [
+        point for face in faces for edge in face.edges()
+        for point in edge_points(edge, deflection)
+    ]
+    local = _local_xy(points, plane)
+    return (
+        float(local[:, 0].min()), float(local[:, 1].min()),
+        float(local[:, 0].max()), float(local[:, 1].max()),
+    )
+
+
+def parse_window(window, faces, plane):
+    """Validate show_regions(window=((xmin, ymin), (xmax, ymax))).
+
+    Returns (xmin, ymin, xmax, ymax) floats, or None for no window.
+    """
+    if window is None:
+        return None
+    example = "window=((-5, -5), (5, 5))"
+    try:
+        (x0, y0), (x1, y1) = window
+        x0, y0, x1, y1 = (float(v) for v in (x0, y0, x1, y1))
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"show_regions() window must be ((xmin, ymin), (xmax, ymax)) in "
+            f"plane-local units (the map's axis ticks), got {window!r}; e.g. "
+            f"{example}."
+        ) from None
+    if not (x0 < x1 and y0 < y1):
+        raise ValueError(
+            f"show_regions() window {window!r} is empty: it needs xmin < xmax and "
+            f"ymin < ymax, as ((xmin, ymin), (xmax, ymax)); e.g. {example}."
+        )
+    bx0, by0, bx1, by1 = local_bounds(faces, plane)
+    if x1 < bx0 or x0 > bx1 or y1 < by0 or y0 > by1:
+        raise ValueError(
+            f"show_regions() window {window!r} contains no region: the sketch "
+            f"spans x {_round(bx0, 3):g} to {_round(bx1, 3):g}, y {_round(by0, 3):g} "
+            f"to {_round(by1, 3):g} (plane-local)."
+        )
+    return (x0, y0, x1, y1)
+
+
+def plane_info(plane):
+    return {
+        "origin": [_round(value) for value in plane.origin],
+        "x_dir": [_round(value) for value in plane.x_dir],
+        "y_dir": [_round(value) for value in plane.y_dir],
+        "z_dir": [_round(value) for value in plane.z_dir],
+    }
+
+
 def _round(value, digits=4):
     rounded = round(float(value), digits)
     return 0.0 if rounded == 0 else rounded
@@ -916,5 +1020,8 @@ __all__ = [
     "region_at",
     "interior_point",
     "make_region_list",
+    "parse_window",
+    "coerce_region_faces",
     "describe_regions",
+    "plane_info",
 ]

@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -47,6 +48,7 @@ _PHASE_ARTIFACTS = {
     "geometry_manifest": "geometry_manifest",
     "export_mesh": "mesh_exports",
     "render_views": "renders",
+    "region_maps": "regions",
     "preview": "preview",
     "parts_preview": "parts_preview",
     "export_viewer_glb": "viewer_glb",
@@ -320,6 +322,10 @@ def _timeout_suggestion(phase, completed):
         "render_views": (
             "Requested view rendering timed out; rerun without --render while "
             "iterating on geometry."
+        ),
+        "region_maps": (
+            "Region map rendering timed out; show fewer regions per "
+            "show_regions() call or split the sketch into several maps."
         ),
         "preview": (
             "Preview rendering timed out; rerun with --no-preview if metrics and "
@@ -1193,6 +1199,185 @@ def _assign_part_identity(raw_parts):
 
 
 
+_REGION_ITEMS_INLINE = 50
+
+
+def _region_response_entry(items, plane, *, png, json_path, window=None, hint=None):
+    """One show_regions() map in the run response, with a capped item list."""
+    entry = {
+        "png": png,
+        "json": json_path,
+        "count": len(items),
+        "plane": plane,
+        "items": items[:_REGION_ITEMS_INLINE],
+    }
+    if window is not None:
+        entry["window"] = _window_json(window)
+    if hint:
+        entry["hint"] = hint
+    if len(items) > _REGION_ITEMS_INLINE:
+        entry["items_truncated"] = True
+        where = (
+            f"read {json_path} for all of them"
+            if json_path else "rerun without --dry-run to write the full list"
+        )
+        entry["note"] = (
+            f"Showing the first {_REGION_ITEMS_INLINE} of {len(items)} regions; {where}."
+        )
+    return entry
+
+
+def _window_json(window):
+    from agentcad.sketch_regions import _round
+
+    x0, y0, x1, y1 = window
+    return [[_round(x0), _round(y0)], [_round(x1), _round(y1)]]
+
+
+# A map is crowded when this many labels needed leader lines.
+_CROWDED_LEADERS = 6
+
+
+def _region_zoom_hint(name, items, placements, faces, plane, window):
+    """Suggest show_regions(window=...) when the map is hard to read.
+
+    Fires when some regions are tiny on the map, or many labels needed
+    leader lines (or one could not be placed clear of the drawing). The
+    suggested window frames the regions in question, in plane-local units.
+    """
+    from agentcad.sketch_regions import _faces_extent, local_bounds
+
+    tiny = [item["index"] for item, p in zip(items, placements) if p.get("tiny")]
+    leaders = [item["index"] for item, p in zip(items, placements) if p["label"] == "leader"]
+    blocked = [
+        item["index"] for item, p in zip(items, placements)
+        if p["label"] == "leader" and not p.get("clear", True)
+    ]
+    if tiny:
+        focus, why = tiny, (
+            f"Region{'s' if len(tiny) > 1 else ''} "
+            f"{_list_indexes(tiny)} {'are' if len(tiny) > 1 else 'is'} only a few "
+            "pixels on this map"
+        )
+    elif len(leaders) >= _CROWDED_LEADERS or blocked:
+        focus, why = (blocked or leaders), (
+            f"{len(leaders)} labels needed leader lines"
+        )
+    else:
+        return None
+    extent = _faces_extent(faces)
+    x0, y0, x1, y1 = local_bounds([faces[i] for i in focus], plane)
+    if window is None:
+        sketch = local_bounds(faces, plane)
+        whole = max(sketch[2] - sketch[0], sketch[3] - sketch[1])
+        if max(x1 - x0, y1 - y0) > 0.5 * whole:
+            # Spread over the sketch: frame the first one only.
+            x0, y0, x1, y1 = local_bounds([faces[focus[0]]], plane)
+    span = max(x1 - x0, y1 - y0, 1e-3 * extent)
+    pad = max(span * 0.75, 1e-3 * extent)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half = span / 2 + pad
+    corners = [_fmt_number(v) for v in (cx - half, cy - half, cx + half, cy + half)]
+    return (
+        f"{why}. Zoom in with a second map: show_regions(regions, "
+        f"name=\"{name}_zoom\", window=(({corners[0]}, {corners[1]}), "
+        f"({corners[2]}, {corners[3]}))); window corners are plane-local x, y "
+        "as on the axis ticks."
+    )
+
+
+def _list_indexes(indexes, limit=8):
+    shown = ", ".join(str(i) for i in indexes[:limit])
+    return shown + (f" (+{len(indexes) - limit} more)" if len(indexes) > limit else "")
+
+
+def _fmt_number(value):
+    magnitude = abs(value)
+    digits = 3 if magnitude >= 1 or magnitude == 0 else 3 - math.floor(math.log10(magnitude))
+    text = f"{round(value, max(0, digits)):g}"
+    return "0" if text in {"-0", "0.0", "-0.0"} else text
+
+
+def _region_map_summaries(region_maps):
+    """Region facts without rendering, for --dry-run."""
+    from agentcad.sketch_regions import describe_regions, plane_info
+
+    return {
+        entry["name"]: _region_response_entry(
+            describe_regions(entry["faces"], entry["plane"]),
+            plane_info(entry["plane"]),
+            png=None,
+            json_path=None,
+            window=entry.get("window"),
+        )
+        for entry in region_maps
+    }
+
+
+def _write_region_maps(region_maps, version_dir, dir_name, warnings):
+    """Write regions/<name>.png and .json per show_regions() call.
+
+    A map that fails to render never fails the run: its JSON listing is
+    still written, the failure becomes a warning, and the caller marks the
+    regions artifact failed. Returns (response entries by name, failures).
+    """
+    from agentcad.region_map import render_region_map
+    from agentcad.sketch_regions import describe_regions, plane_info
+    from agentcad.versioning import atomic_write_json
+
+    regions_dir = version_dir / "regions"
+    regions_dir.mkdir(exist_ok=True)
+    entries = {}
+    failures = []
+    for region_map in region_maps:
+        name = region_map["name"]
+        faces, plane = region_map["faces"], region_map["plane"]
+        window = region_map.get("window")
+        items = describe_regions(faces, plane)
+        plane_data = plane_info(plane)
+        png_rel = f"{dir_name}/regions/{name}.png"
+        json_rel = f"{dir_name}/regions/{name}.json"
+        hint = None
+        try:
+            placements = render_region_map(
+                faces, plane, regions_dir / f"{name}.png", window=window,
+                interiors=[item["interior"] for item in items],
+            )
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            failures.append(f"{name}: {message}")
+            warnings.append(
+                f"Could not render region map {name!r} ({message}); its region "
+                f"list is still in {json_rel}."
+            )
+            png_rel = None
+        else:
+            for item, placement in zip(items, placements):
+                item["label"] = placement["label"]
+                item["color"] = placement["color"]
+                item["tiny"] = placement["tiny"]
+            try:
+                hint = _region_zoom_hint(name, items, placements, faces, plane, window)
+            except Exception:  # advice only; never fail the map over it
+                hint = None
+        listing = {
+            "name": name,
+            "count": len(items),
+            "plane": plane_data,
+            "png": png_rel,
+            "regions": items,
+        }
+        if window is not None:
+            listing["window"] = _window_json(window)
+        if hint:
+            listing["hint"] = hint
+        atomic_write_json(regions_dir / f"{name}.json", listing)
+        entries[name] = _region_response_entry(
+            items, plane_data, png=png_rel, json_path=json_rel,
+            window=window, hint=hint,
+        )
+    return entries, failures
+
 
 @click.command()
 @click.argument("script", required=False)
@@ -2022,6 +2207,8 @@ def _run_impl(
             output_json["parts"] = parts_output
         if groups_output:
             output_json["groups"] = groups_output
+        if result.region_maps:
+            output_json["regions"] = _region_map_summaries(result.region_maps)
         if warnings:
             output_json["warnings"] = warnings
         _timings["total_ms"] = round((time.perf_counter() - _t_total_start) * 1000)
@@ -2127,6 +2314,8 @@ def _run_impl(
             "browser": _artifact_state(
                 open_view, "Browser launch disabled with --no-view."
             ),
+            # Present only when the script called show_regions().
+            **({"regions": {"status": "pending"}} if result.region_maps else {}),
         },
         "completed_phases": list(_phase_tracker.completed),
         "phase_timings": dict(_timings),
@@ -2274,6 +2463,21 @@ def _run_impl(
                 renders_meta[name] = f"{dir_name}/renders/{name}.png"
         lifecycle.meta["renders"] = renders_meta
         _finish_phase("render_views", _t, "render_views_ms")
+
+    # show_regions() maps: annotation output, never part of the STEP.
+    regions_meta = {}
+    if result.region_maps:
+        _heartbeat("rendering region maps…")
+        _t = _start_phase("region_maps")
+        regions_meta, region_failures = _write_region_maps(
+            result.region_maps, version_dir, dir_name, warnings
+        )
+        lifecycle.meta["regions"] = regions_meta
+        if region_failures:
+            lifecycle.set_artifact(
+                "regions", "failed", message="; ".join(region_failures)
+            )
+        _finish_phase("region_maps", _t, "region_maps_ms")
 
     # Visual feedback pipeline. Three tiers, decoupled by cost:
     #   1. Default visual review (unless the core-only fast path is selected):
@@ -2636,6 +2840,8 @@ def _run_impl(
         lifecycle.meta["viewer_glb"] = viewer_glb_meta
     if renders_meta:
         lifecycle.meta["renders"] = renders_meta
+    if regions_meta:
+        lifecycle.meta["regions"] = regions_meta
     lifecycle.meta["completed_phases"] = list(_phase_tracker.completed)
     lifecycle.meta["phase_timings"] = dict(_timings)
     lifecycle.finish_pending(message="Optional artifact was not needed.")
@@ -2700,6 +2906,8 @@ def _run_impl(
         output_json["viewer_opened"] = viewer_opened
     if renders_meta:
         output_json["renders"] = renders_meta
+    if regions_meta:
+        output_json["regions"] = regions_meta
     if hint:
         if project_viewer and project_viewer.get("url"):
             hint = f"Live project: {project_viewer['url']} — updates automatically. Version snapshot: {hint}"

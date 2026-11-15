@@ -59,6 +59,9 @@ class ExecutionResult:
     loaded_files: list[str] = field(default_factory=list)
     # Machine-readable classification for targeted execution failures.
     error_kind: str | None = None
+    # show_regions() calls, in order: {"name", "faces", "plane"}. Annotation
+    # output only — never part of the shape, STEP, metrics, or validation.
+    region_maps: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:

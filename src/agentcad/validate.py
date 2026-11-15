@@ -15,7 +15,7 @@ from agentcad.output_contract import (
 # or daemon routing begins. ``agentcad.api.__all__`` is covered against this
 # list in tests so the targeted guidance cannot silently drift.
 _AGENTCAD_API_NAMES = frozenset({
-    "show_object", "show_assembly", "show_compound",
+    "show_object", "show_assembly", "show_compound", "show_regions",
     "sketch_regions", "merge_regions", "load_step", "load_step_shape", "pick_face", "pick_edge",
     "fillet_edges", "chamfer_edges", "shell_faces", "split_by_plane",
     "cut_pocket", "boss", "loft_sections", "tapered_sweep", "naca_wire",

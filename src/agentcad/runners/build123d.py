@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import re
 import traceback
 import warnings as _warnings
 from typing import Any
@@ -56,6 +57,9 @@ def validate(user_source: str) -> list:
         with_preamble(user_source),
         output_calls=("show_object", "show_assembly", "show_compound"),
     ))
+
+
+_REGION_MAP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 _SIMPLE_LITERALS = (ast.Constant,)
@@ -286,6 +290,30 @@ def execute(
         )
         assembly_requested = True
 
+    region_maps: list[dict[str, Any]] = []
+
+    def show_regions(regions, *_args, name="regions", window=None, **_kwargs):
+        """Record a labeled region map (annotation only, never output geometry)."""
+        from agentcad.sketch_regions import coerce_region_faces, parse_window
+
+        if not isinstance(name, str) or not _REGION_MAP_NAME.match(name):
+            raise ValueError(
+                f"show_regions() name {name!r} is not usable as a file name; use "
+                "1-64 letters, digits, '_' or '-' (e.g. name=\"lid\"). It names "
+                "regions/<name>.png."
+            )
+        if any(entry["name"] == name for entry in region_maps):
+            raise ValueError(
+                f"show_regions() name {name!r} was already used in this script; "
+                "give each map a distinct name, e.g. show_regions(regions, "
+                "name=\"lid\")."
+            )
+        faces, plane = coerce_region_faces(regions)
+        region_maps.append({
+            "name": name, "faces": faces, "plane": plane,
+            "window": parse_window(window, faces, plane),
+        })
+
     import build123d as _b3d
 
     from agentcad import api as _api
@@ -336,6 +364,7 @@ def execute(
                 show_object,
                 show_assembly,
                 loaded_file_callback=loaded_files.append,
+                regions_callback=show_regions,
             ):
                 exec(code, script_globals)
             captured_warnings = list(ws)
@@ -418,6 +447,7 @@ def execute(
         output_type=output_type,
         parts=parts,
         loaded_files=loaded_files,
+        region_maps=region_maps,
     )
 
 

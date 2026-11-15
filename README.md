@@ -124,6 +124,7 @@ and edits:
   select features, and perform bounded or validated editing operations
 - **[CAD recipes](recipes/)** — reusable features and models to copy and adapt,
   starting with a PCB enclosure with board supports and connector openings
+- **`sketch_regions(...)` + `show_regions(...)`** — Fusion-style profile picking: overlapping 2D shapes and lines become numbered enclosed regions on a labeled PNG map; extrude the ones you pick with `extrude([regions[0], regions[2]], amount=5)`, or select by a point inside with `regions.at((x, y))` so parameter changes don't renumber your picks
 
 ### Validate
 

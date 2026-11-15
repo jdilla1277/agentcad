@@ -20,6 +20,7 @@ from build123d import (
 )
 
 from agentcad import api
+from agentcad.runners import build123d as runner
 from agentcad.sketch_regions import SketchRegionError, sketch_regions
 
 R = 10
@@ -189,16 +190,135 @@ def test_figure_eight_polyline_splits_at_its_crossing():
     assert len(regions) == 2
 
 
-def test_api_names_are_exported():
-    assert "sketch_regions" in api.__all__ and "merge_regions" in api.__all__
+def test_api_names_are_exported_and_show_regions_needs_a_run():
+    assert "sketch_regions" in api.__all__ and "show_regions" in api.__all__
     assert len(api.sketch_regions(Circle(R), Pos(8, 0) * Circle(R))) == 3
+    with pytest.raises(RuntimeError, match="agentcad run"):
+        api.show_regions([])
+
+
+# ---------- runner capture ----------
+
+MAP_SCRIPT = """\
+regions = sketch_regions(Circle(10), Pos(8, 0) * Circle(10))
+show_regions(regions)
+show_object(Box(1, 1, 1))
+"""
+
+
+def test_runner_without_any_output_keeps_original_validation_message():
+    source = "regions = sketch_regions(Circle(10))\n"
+    [error] = runner.validate(source)
+    assert error["check"] == "show_object_missing"
+    assert "show_regions" not in error["message"]
+
+
+def test_runner_rejects_duplicate_and_unsafe_map_names():
+    duplicate = MAP_SCRIPT + "show_regions(regions)\n"
+    result = runner.execute(duplicate)
+    assert result.status == "execution_error"
+    assert "already used" in result.exception and "name=" in result.exception
+    unsafe = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, name='../x')")
+    result = runner.execute(unsafe)
+    assert result.status == "execution_error"
+    assert "not usable as a file name" in result.exception
+
+
+def test_runner_show_regions_rejects_non_faces_with_hint():
+    result = runner.execute("show_regions([Circle(3).wire()])\n")
+    assert result.status == "execution_error"
+    assert "not a Face" in result.exception
+    result = runner.execute("show_regions(Pos(10, 0) * Rectangle(4, 4) + Circle(3))\n")
+    assert result.status == "execution_error"
+    assert "sketch_regions" in result.exception
+
+
+def test_runner_accepts_plain_face_lists_and_slices():
+    source = (
+        "regions = sketch_regions(Circle(10), Pos(8, 0) * Circle(10))\n"
+        "show_regions(regions[1:], name='lens_and_right')\n"
+        "show_regions([Rectangle(4, 4).face()], name='square')\n"
+        "show_object(Box(1, 1, 1))\n"
+    )
+    result = runner.execute(source)
+    assert result.success
+    assert [entry["name"] for entry in result.region_maps] == ["lens_and_right", "square"]
+    assert len(result.region_maps[0]["faces"]) == 2
+
+
+def test_runner_regions_are_not_part_of_the_captured_shape():
+    source = (
+        "regions = sketch_regions(Circle(10), Pos(8, 0) * Circle(10))\n"
+        "show_regions(regions)\n"
+        "show_object(extrude(regions[1], amount=2))\n"
+    )
+    result = runner.execute(source)
+    assert result.success
+    assert result.output_type == "single_part"
+    assert len(result.parts) == 1
+    assert len(result.region_maps) == 1
 
 
 def test_cadquery_runner_flags_the_build123d_only_helpers():
     from agentcad.runners import cadquery
 
-    errors = cadquery._check_b3d_only_helpers("sketch_regions(1)\n")
+    errors = cadquery._check_b3d_only_helpers("show_regions(sketch_regions(1))\n")
     assert errors and "sketch_regions" in errors[0]["message"]
+
+
+# ---------- region map rendering ----------
+
+def test_region_map_labels_every_region_and_uses_leader_for_tiny_one(tmp_path):
+    from PIL import Image
+
+    from agentcad.region_map import render_region_map
+
+    regions = sketch_regions(Rectangle(60, 40), Circle(12), Pos(11.7, 0) * Circle(0.6))
+    tiny = min(range(len(regions)), key=lambda i: regions[i].area)
+    out = tmp_path / "map.png"
+    placements = render_region_map(list(regions), regions.plane, out)
+    assert len(placements) == len(regions)
+    assert placements[tiny]["label"] == "leader"
+    assert all(p["label"] in {"inside", "leader"} for p in placements)
+    largest = max(range(len(regions)), key=lambda i: regions[i].area)
+    assert placements[largest]["label"] == "inside"
+    with Image.open(out) as image:
+        assert image.size[0] >= 900
+
+
+def test_region_map_labels_sit_on_the_interior_points(tmp_path):
+    from agentcad.region_map import render_region_map
+    from agentcad.sketch_regions import describe_regions
+
+    regions = sketch_regions(*CRESCENTS)
+    faces = list(regions)
+    interiors = [item["interior"] for item in describe_regions(faces, regions.plane)]
+    placements = render_region_map(faces, regions.plane, tmp_path / "m.png",
+                                   interiors=interiors)
+    outside = regions.index(max(faces, key=lambda face: face.area))
+    assert placements[outside]["label"] == "inside"
+    for placement in placements:
+        target = placement["target"]
+        assert target is not None
+        x, y, w, h = placement["box"]
+        if placement["label"] == "inside":
+            # Centered on the interior point, to the pixel.
+            assert abs(x + w / 2 - target[0]) <= 1 and abs(y + h / 2 - target[1]) <= 1
+        else:
+            assert placement["anchor"] == (round(target[0]), round(target[1]))
+    # The outer region's label is in the lower-left corner, where its
+    # interior point is, not wherever the region happens to have room.
+    corner = interiors[outside]
+    assert corner[0] < -18 and corner[1] < -8
+
+
+def test_region_map_colors_touching_regions_differently(tmp_path):
+    from agentcad.region_map import render_region_map
+
+    regions = sketch_regions(Circle(R), Pos(8, 0) * Circle(R))
+    placements = render_region_map(list(regions), regions.plane, tmp_path / "m.png")
+    assert placements[0]["color"] != placements[1]["color"]
+    assert placements[1]["color"] != placements[2]["color"]
 
 
 # ---------- picking by point, interior points, merging ----------
@@ -377,3 +497,62 @@ def test_merge_regions_api_works_on_plain_lists():
     assert merged.area == pytest.approx(sum(face.area for face in plain))
     assert len(extrude(merged, amount=1).solids()) == 1
     assert "merge_regions" in api.__all__
+
+
+def test_show_regions_window_is_validated_in_the_script():
+    bad_shape = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=(0, 0, 5, 5))")
+    result = runner.execute(bad_shape)
+    assert result.status == "execution_error"
+    assert "((xmin, ymin), (xmax, ymax))" in result.exception
+    empty = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=((5, 0), (0, 5)))")
+    assert "xmin < xmax" in runner.execute(empty).exception
+    away = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=((100, 100), (110, 110)))")
+    assert "contains no region" in runner.execute(away).exception
+    good = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=((-2, -2), (2, 2)))")
+    result = runner.execute(good)
+    assert result.success
+    assert result.region_maps[0]["window"] == (-2.0, -2.0, 2.0, 2.0)
+
+
+def test_region_map_window_draws_only_that_area_with_global_numbers(tmp_path):
+    from PIL import Image
+
+    from agentcad.region_map import render_region_map
+
+    regions = sketch_regions(Rectangle(60, 40), Circle(12), Pos(11.7, 0) * Circle(0.6),
+                             Pos(-20, 12) * Circle(4))
+    full = render_region_map(list(regions), regions.plane, tmp_path / "full.png")
+    assert all(entry["label"] != "outside_window" for entry in full)
+    window = (9, -3, 15, 3)
+    placements = render_region_map(list(regions), regions.plane, tmp_path / "win.png", window=window)
+    in_window = {regions.index(regions.at(p)) for p in [(10, 0), (13, 0), (11.5, 0), (12.1, 0)]}
+    for i, placement in enumerate(placements):
+        if i in in_window:
+            assert placement["label"] == "inside", (i, placement)
+        else:
+            assert placement["label"] == "outside_window", (i, placement)
+        assert placement["tiny"] is False
+    with Image.open(tmp_path / "win.png") as image:
+        assert image.size[0] >= 900
+
+
+def test_region_map_flags_tiny_regions_and_has_axis_band(tmp_path):
+    from PIL import Image
+
+    from agentcad.region_map import _nice_step, _tick_text, render_region_map
+
+    regions = sketch_regions(
+        Rectangle(60, 40), Pos(-20, 12) * Circle(0.3), Pos(-19.5, 12) * Circle(0.3)
+    )
+    lens = min(range(len(regions)), key=lambda i: regions[i].area)
+    placements = render_region_map(list(regions), regions.plane, tmp_path / "m.png")
+    assert placements[lens]["tiny"] is True
+    assert placements[lens]["label"] == "leader"
+    assert sum(p["tiny"] for p in placements) == 1
+    with Image.open(tmp_path / "m.png") as image:
+        # The ruler band below the map is not pure white (ticks + numbers).
+        band = image.convert("L").crop((0, image.size[1] - 20, image.size[0], image.size[1]))
+        assert band.getextrema()[0] < 128
+    assert _nice_step(60) == 10 and _nice_step(6) == 1 and _nice_step(2) == 0.25
+    assert _tick_text(-10.0, 10) == "-10" and _tick_text(0.25, 0.25) == "0.25"
+    assert _tick_text(-0.0, 1) == "0"
