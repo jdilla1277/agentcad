@@ -76,6 +76,27 @@ def show_assembly(shapes, *args, **kwargs):
 show_compound = show_assembly
 
 
+def sketch_regions(*items, plane=None, min_area=None):
+    """Every enclosed region of a 2D sketch as a numbered list of Faces.
+
+    ``regions[i]`` is the region labeled ``i`` on ``show_regions(regions)``.
+    See :func:`agentcad.sketch_regions.sketch_regions`.
+    """
+    from agentcad.sketch_regions import sketch_regions as _sketch_regions
+
+    return _sketch_regions(*items, plane=plane, min_area=min_area)
+
+
+def merge_regions(*faces, plane=None):
+    """Fuse chosen sketch regions into one Face (one solid when extruded or
+    revolved). Same as ``regions.merged(...)`` on the sketch_regions list.
+    See :func:`agentcad.sketch_regions.merge_regions`.
+    """
+    from agentcad.sketch_regions import merge_regions as _merge_regions
+
+    return _merge_regions(*faces, plane=plane)
+
+
 @contextmanager
 def _capture_output_with(
     object_callback: _OutputCallback,
@@ -191,6 +212,8 @@ __all__ = [
     "show_object",
     "show_assembly",
     "show_compound",
+    "sketch_regions",
+    "merge_regions",
     "load_step",
     "load_step_shape",
     "pick_face",
