@@ -30,6 +30,9 @@ jobs:
         # both miss. Nothing else in this workflow imports build123d.
         run: python -c "import build123d, cadquery; print(build123d.__version__)"
 
+      - name: Run project-local import regressions
+        run: pytest tests/test_project_imports.py tests/test_local_import_workflow.py -q
+
       - name: Collect tests
         run: pytest --collect-only -q
 
@@ -108,6 +111,9 @@ jobs:
           PY
           python -c "import build123d; print(build123d.__version__)"
 
+      - name: Run project-local import regressions
+        run: pytest tests/test_project_imports.py tests/test_local_import_workflow.py -q
+
       - name: Collect tests on the default profile
         # The repo conftest skips CadQuery-fixture modules here; collection
         # must still succeed for everything else.
@@ -171,6 +177,9 @@ jobs:
 
       - name: Install agentcad + test dependencies (default profile)
         run: pip install -e .[mcp,dev]
+
+      - name: Run project-local import regressions
+        run: pytest tests/test_project_imports.py tests/test_local_import_workflow.py -q
 
       - name: Collect tests
         run: pytest --collect-only -q
