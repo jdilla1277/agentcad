@@ -79,15 +79,19 @@ def show_assembly(shapes, *args, **kwargs):
 show_compound = show_assembly
 
 
-def sketch_regions(*items, plane=None, min_area=None):
+def sketch_regions(*items, plane=None, min_area=None, naming=None, **named):
     """Every enclosed region of a 2D sketch as a numbered list of Faces.
 
     ``regions[i]`` is the region labeled ``i`` on ``show_regions(regions)``.
+    Keyword curves are named (``rect=Rectangle(60, 30), hole=Circle(5)``) so
+    ``regions.where(inside=["hole"])`` can pick a region by description.
     See :func:`agentcad.sketch_regions.sketch_regions`.
     """
     from agentcad.sketch_regions import sketch_regions as _sketch_regions
 
-    return _sketch_regions(*items, plane=plane, min_area=min_area)
+    return _sketch_regions(
+        *items, plane=plane, min_area=min_area, naming=naming, **named
+    )
 
 
 def merge_regions(*faces, plane=None):

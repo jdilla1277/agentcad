@@ -192,7 +192,7 @@ def detect_plane(faces, edges, plane=None):
 
 
 # ----------------------------------------------------------- regions
-def _split_regions(edges, plane):
+def _split_regions(edges, plane, on_split=None):
     """Split one oversized face by every edge; keep pieces off the frame."""
     from build123d import Compound, Face, Plane, Vector
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
@@ -229,6 +229,8 @@ def _split_regions(edges, plane):
             "sketch_regions() could not split the sketch into regions. "
             "Simplify overlapping curves or remove near-duplicate edges."
         )
+    if on_split is not None:
+        on_split(splitter)
     regions = []
     for face in Compound(splitter.Shape()).faces():
         if any(
@@ -312,7 +314,7 @@ def _order(regions, plane, extent):
     return ordered
 
 
-def sketch_regions(*items, plane=None, min_area=None, naming=None):
+def sketch_regions(*items, plane=None, min_area=None, naming=None, **named):
     """Every enclosed region of a 2D sketch, numbered like the region map.
 
     Args:
@@ -326,8 +328,17 @@ def sketch_regions(*items, plane=None, min_area=None, naming=None):
         min_area: drop regions smaller than this area. Default:
             1e-7 x (sketch bbox diagonal)^2, which only removes numerical
             slivers. Pass 0 to keep every region.
-        naming: region naming strategy (default:
+        naming: region naming strategy, "curves" or "points" (default:
             ``agentcad.region_naming.DEFAULT_NAMING``). See region_naming.
+        **named: named curves, e.g. ``rect=Rectangle(60, 30), hole=Circle(5),
+            split=Line(...)``. A dict value names each member ``name.key``
+            (``holes={"left": ..., "right": ...}`` -> ``holes.left``); a list
+            names them by position, ``name[i]``, and warns because inserting
+            an item renames the rest.
+            Named curves split the sketch like positional ones; with
+            "curves" naming they also describe regions for
+            ``regions.where(inside=["hole"], above="split")``, which keeps
+            picking the same region after the sketch is edited.
 
     Returns:
         A ShapeList of Faces with normals along the plane's z_dir, ordered
@@ -335,8 +346,10 @@ def sketch_regions(*items, plane=None, min_area=None, naming=None):
         region labeled ``i`` by ``show_regions(regions)``. Extrude any
         subset: ``extrude([regions[0], regions[2]], amount=5)``.
         Index numbers shift when sketch parameters change, so parametric
-        scripts should select by position: ``regions.at((x, y))`` is the
-        region containing that plane-local point, and
+        scripts should select by description or position:
+        ``regions.where(...)`` names a region by the named curves around it,
+        ``regions.at((x, y))`` is the region containing that plane-local
+        point, and
         ``regions.merged(a, b)`` fuses chosen regions into one Face (one
         solid after extrude/revolve). Both survive slicing
         (``regions[1:]``); filter_by/sort_by/``+`` return plain lists.
@@ -346,10 +359,18 @@ def sketch_regions(*items, plane=None, min_area=None, naming=None):
     shapes separately (algebra objects or Mode.PRIVATE); lines can still
     split a merged sketch.
     """
-    from agentcad.region_naming import resolve_naming
+    from agentcad.region_naming import NamedCurve, resolve_naming
 
+    _check_reserved(plane=plane, min_area=min_area, naming=naming)
     strategy = resolve_naming(naming)
     faces, edges = _explode(items, [], [])
+    named_inputs = []
+    for name, value in named.items():
+        for label, member in _named_members(name, value):
+            member_faces, member_edges = _explode([member], [], [])
+            faces.extend(member_faces)
+            edges.extend(member_edges)
+            named_inputs.append((label, member_faces, member_edges))
     if not edges:
         raise SketchRegionError(
             "sketch_regions() got no geometry. Pass closed shapes such as "
@@ -358,7 +379,21 @@ def sketch_regions(*items, plane=None, min_area=None, naming=None):
         )
     sketch_plane = detect_plane(faces, edges, plane)
     extent = _extent(edges)
-    regions = [_orient(face, sketch_plane) for face in _split_regions(edges, sketch_plane)]
+    provenance = {}
+    on_split = None
+    if strategy.needs_provenance and named_inputs:
+        def on_split(splitter):
+            from build123d import Edge
+
+            for label, _faces, member_edges in named_inputs:
+                for edge in member_edges:
+                    pieces = list(splitter.Modified(edge.wrapped)) or [edge.wrapped]
+                    for piece in pieces:
+                        provenance.setdefault(Edge(piece), label)
+    regions = [
+        _orient(face, sketch_plane)
+        for face in _split_regions(edges, sketch_plane, on_split=on_split)
+    ]
 
     threshold = (
         DEFAULT_MIN_AREA_FRACTION * extent * extent
@@ -386,10 +421,76 @@ def sketch_regions(*items, plane=None, min_area=None, naming=None):
             stacklevel=2,
         )
     ordered = _order(kept, sketch_plane, _local_extent(edges, sketch_plane))
+    curves = (
+        [NamedCurve(label, f, e, sketch_plane) for label, f, e in named_inputs]
+        if strategy.needs_provenance else []
+    )
     context = strategy.bind(
-        faces=ordered, plane=sketch_plane, curves=[], provenance={}
+        faces=ordered, plane=sketch_plane, curves=curves, provenance=provenance
     )
     return make_region_list(ordered, sketch_plane, naming=context)
+
+
+_RESERVED = {
+    "plane": "the sketch plane (Plane or \"XY\"/\"XZ\"/\"YZ\")",
+    "min_area": "the sliver area threshold",
+    "naming": "the naming strategy (\"curves\" or \"points\")",
+}
+
+
+def _named_members(name, value):
+    """(label, shape) per named curve: a dict names members ``name.key``, a
+    list ``name[i]`` (positional, so it warns), anything else is ``name``."""
+    if isinstance(value, dict):
+        if not value:
+            raise SketchRegionError(f"sketch_regions() {name}= is an empty dict.")
+        members = []
+        for key, member in value.items():
+            if not isinstance(key, str) or not _MEMBER_KEY.match(key):
+                raise SketchRegionError(
+                    f"sketch_regions() {name}= dict keys name curves and must be "
+                    f"letters, digits or '_', got {key!r}. Example: "
+                    f"{name}={{\"left\": Circle(3), \"right\": Circle(3)}}."
+                )
+            members.append((f"{name}.{key}", member))
+        return members
+    if isinstance(value, (list, tuple)) and not _is_shape(value):
+        if not value:
+            raise SketchRegionError(f"sketch_regions() {name}= is an empty list.")
+        if len(value) > 1:
+            warnings.warn(
+                f"sketch_regions() {name}=[...] names its curves by position "
+                f"({name}[0], {name}[1], ...): adding, removing or reordering items "
+                f"changes which curve a selector such as inside=[\"{name}[1]\"] means, "
+                f"without an error. For names that survive edits pass a dict: "
+                f"{name}={{\"left\": ..., \"right\": ...}}.",
+                UserWarning,
+                stacklevel=3,
+            )
+        return [(f"{name}[{position}]", member) for position, member in enumerate(value)]
+    return [(name, value)]
+
+
+_MEMBER_KEY = __import__("re").compile(r"^[A-Za-z0-9_]+$")
+
+
+def _is_shape(value):
+    from build123d import Shape
+
+    return isinstance(value, Shape)
+
+
+def _check_reserved(**values):
+    """A curve passed as plane=/min_area=/naming= is a name clash, not a value."""
+    from build123d import BuildLine, BuildSketch, Shape
+
+    for name, value in values.items():
+        if isinstance(value, (Shape, BuildSketch, BuildLine)):
+            raise SketchRegionError(
+                f"sketch_regions() {name}= is reserved for {_RESERVED[name]}, so a "
+                f"curve can't be named {name!r}. Pick another name, e.g. "
+                f"{name}_curve=..."
+            )
 
 
 def _local_extent(edges, plane):
@@ -417,8 +518,9 @@ def _region_list_class():
     class SketchRegions(ShapeList):
         """Faces from sketch_regions(); index i = label i on the region map.
 
-        Extra over ShapeList: ``plane`` (the sketch plane), ``at(point)``
-        and ``merged(...)``. Slices keep all three.
+        Extra over ShapeList: ``plane`` (the sketch plane), ``at(point)``,
+        ``where(...)``/``where_all(...)`` and ``merged(...)``. Slices keep
+        them all.
         """
 
         plane = None
@@ -431,6 +533,37 @@ def _region_list_class():
                     list(self).__getitem__(key), self.plane, naming=self.naming
                 )
             return list(self).__getitem__(key)
+
+        def where(self, inside=None, outside=None, above=None, below=None,
+                  left=None, right=None, touching=None):
+            """The one region described by sides of named curves.
+
+            ``regions.where(inside=["c1", "c2"], above="split")`` is the region
+            inside both circles and above the line. Names are the keyword
+            names given to sketch_regions(rect=..., c1=..., split=...); a
+            group name (holes={...} or holes=[...]) matches any member for
+            inside/touching and every member for outside/above/below/left/right. Straight lines
+            split by the infinite line through them. Raises ValueError
+            listing the candidates when the description matches no region
+            or several. The map JSON's items[].selector is a ready-made call.
+            """
+            return self._naming().where(self, dict(
+                inside=inside, outside=outside, above=above, below=below,
+                left=left, right=right, touching=touching,
+            ))
+
+        def where_all(self, inside=None, outside=None, above=None, below=None,
+                      left=None, right=None, touching=None):
+            """Every region matching the description (at least one)."""
+            return self._naming().where(self, dict(
+                inside=inside, outside=outside, above=above, below=below,
+                left=left, right=right, touching=touching,
+            ), every=True)
+
+        def _naming(self):
+            from agentcad.region_naming import NamingContext
+
+            return self.naming or NamingContext("points", list(self), self.plane)
 
         def at(self, *points):
             """The region (Face) containing each point.
@@ -476,7 +609,7 @@ def _region_list_class():
 
 
 def make_region_list(faces, plane, naming=None):
-    """A SketchRegions list (ShapeList + plane/at/merged) of ``faces``."""
+    """A SketchRegions list (ShapeList + plane/at/where/merged) of ``faces``."""
     result = _region_list_class()(faces)
     # show_regions reads the sketch plane from here to orient the map.
     result.plane = plane

@@ -179,7 +179,8 @@ def check_image(listing, map_path):
 
 
 def _summary_record(record):
-    keys = ("id", "index", "area", "perimeter", "bounds", "interior", "holes", "selector")
+    keys = ("id", "index", "area", "perimeter", "bounds", "interior", "holes",
+            "signature", "selector")
     return {key: record[key] for key in keys if key in record}
 
 
@@ -203,18 +204,29 @@ def inspect_payload(map_path, *, entity_id=None, image=False, limit=DEFAULT_LIMI
     map_info["json"] = map_arg
     map_info["id_prefix"] = id_prefix(listing["version"], listing["map"])
     payload = {"command": "inspect", "status": "success", "region_map": map_info}
-    selector_note = (
-        f"Paste into the same script (regions = the sketch_regions(...) list "
-        f"from {listing.get('script') or 'the source'}) with the same sketch and "
-        "parameters. IDs and indexes are local to this saved map; after "
-        "changing the sketch, rerun and inspect the new map."
-    )
+    source = listing.get("script") or "the source"
+    if (listing.get("naming") or {}).get("curves"):
+        selector_note = (
+            f"Paste into the script (regions = the sketch_regions(...) list from "
+            f"{source}). regions.where(...) describes the region by the named "
+            "curves, so it keeps picking it after edits that keep the same "
+            "curves crossing, and raises when the description stops matching "
+            "exactly one region. IDs and indexes are local to this saved map."
+        )
+    else:
+        selector_note = (
+            f"Paste into the same script (regions = the sketch_regions(...) list "
+            f"from {source}) with the same sketch and parameters. IDs and "
+            "indexes are local to this saved map; after changing the sketch, "
+            "rerun and inspect the new map."
+        )
     if entity_id is not None:
         record = resolve(listing, entity_id)
         payload["region"] = record
         payload["selector"] = {
             "backend": "build123d",
             "call": record["selector"],
+            **({"point_call": record["point_selector"]} if record.get("point_selector") else {}),
             "index_call": f"regions[{record['index']}]",
             "note": selector_note,
         }
