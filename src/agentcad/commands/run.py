@@ -505,6 +505,10 @@ def _recover_committed_core(error, *, timeout_payload=None):
         if layout.configured:
             action.extend(["--build-dir", str(layout.build_root)])
         response["next_actions"] = [shlex.join(action)]
+    if response.get("sketch_only"):
+        # meta.json records the version as status "sketch"; the command
+        # itself still succeeded.
+        response["status"] = "success"
     return response
 
 
@@ -1379,6 +1383,185 @@ def _write_region_maps(region_maps, version_dir, dir_name, warnings):
     return entries, failures
 
 
+def _sketch_next_actions(script):
+    return [
+        f"agentcad run {shlex.quote(script)} --label LABEL — after adding "
+        "show_object(extrude([regions.at((x1, y1)), regions.at((x2, y2))], "
+        "amount=H)) with a point inside each region you picked "
+        "(items[].interior). regions[i] also works, but indexes shift when "
+        "the sketch changes",
+    ]
+
+
+def _refuse_retained_sketch(script, label):
+    """Refuse --stage/--checks/--defer-checks for a sketch-only script.
+
+    Staging and declared checks gate a STEP candidate for promotion. A
+    sketch-only run has no geometry, so a staged attempt could never be
+    promoted and would leave unpromoted work in the history. Refuse before
+    any version or map is written.
+    """
+    meta = click.get_current_context().meta
+    flags = [
+        flag for flag, key in (
+            ("--stage", "change_stage"),
+            ("--checks", "change_checks_file"),
+            ("--defer-checks", "change_defer_checks"),
+        )
+        if meta.get(key)
+    ]
+    if not flags:
+        return
+    rerun = ["agentcad", "run", script, "--label", label]
+    if meta.get("experimental_changes"):
+        rerun.append("--experimental-changes")
+    raise ProjectError(
+        "sketch_only_not_retainable",
+        f"This script called show_regions() but no show_object(), so it has no "
+        f"geometry for {' / '.join(flags)} to check or promote. No version or "
+        "region map was written.",
+        f"Rerun without {' / '.join(flags)} to write the region map; stage the "
+        "script once it calls show_object() on the extruded regions.",
+        next_actions=[shlex.join(rerun)],
+    )
+
+
+def _run_sketch_only(
+    result, *, script, script_path, label, runtime_name, runtime_source,
+    params, dry_run, tracker, timings, start_phase, finish_phase, heartbeat,
+    total_start,
+):
+    """A script that called only show_regions(): record maps, no STEP.
+
+    The version is registered with status "sketch" so history, recovery,
+    and numbering stay consistent, but current does not advance and no
+    viewer, preview, or diff work runs: those all need a STEP.
+    """
+    from agentcad.core_build import ArtifactLifecycle
+    from agentcad.versioning import commit_version, reserve_version
+
+    _refuse_retained_sketch(script, label)
+    warnings = list(result.warnings)
+    base = {
+        "command": "run",
+        "status": "success",
+        "sketch_only": True,
+        "runtime": runtime_name,
+        "output_type": "sketch",
+    }
+    if dry_run:
+        payload = {
+            **base,
+            "regions": _region_map_summaries(result.region_maps),
+            "message": (
+                "Dry run of a sketch-only script: region facts only. No map, "
+                "STEP, or version was written."
+            ),
+            "next_actions": [
+                f"agentcad run {shlex.quote(script)} --label LABEL — writes the "
+                "labeled region map PNG",
+            ],
+        }
+        if warnings:
+            payload["warnings"] = warnings
+        timings["total_ms"] = round((time.perf_counter() - total_start) * 1000)
+        payload["timings"] = timings
+        payload["completed_phases"] = list(tracker.completed)
+        payload["phase_timings"] = dict(timings)
+        _emit_run(payload)
+        return
+
+    reservation = reserve_version(get_project().build_root, label, suffix="_sketch")
+    tracker.reservation = reservation
+    version_dir = reservation.path
+    dir_name = reservation.dir_name
+    shutil.copy2(str(script_path), str(version_dir / "script.py"))
+
+    outputs = {"step": None, "script": f"{dir_name}/script.py"}
+    meta = {
+        "command": "run",
+        "status": "sketch",
+        "sketch_only": True,
+        "version": reservation.number,
+        "label": label,
+        "runtime": runtime_name,
+        "runtime_source": runtime_source,
+        "output_type": "sketch",
+        "created": datetime.now(timezone.utc).isoformat(),
+        "script": f"{dir_name}/script.py",
+        # No step key: nothing downstream should look for a STEP here.
+        "outputs": {"script": outputs["script"]},
+        "artifacts": {"regions": {"status": "pending"}},
+        "completed_phases": list(tracker.completed),
+        "phase_timings": dict(timings),
+    }
+    if params:
+        meta["params"] = params
+    if warnings:
+        meta["warnings"] = warnings
+    commit_version(reservation, meta, {
+        "version": reservation.number,
+        "label": label,
+        "status": "sketch",
+        "path": f"{dir_name}/",
+    }, advance_current=False)
+    lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
+    tracker.lifecycle = lifecycle
+
+    heartbeat("rendering region maps…")
+    started = start_phase("region_maps")
+    regions_meta, failures = _write_region_maps(
+        result.region_maps, version_dir, dir_name, warnings
+    )
+    lifecycle.meta["regions"] = regions_meta
+    if failures:
+        lifecycle.set_artifact("regions", "failed", message="; ".join(failures))
+    finish_phase("region_maps", started, "region_maps_ms")
+    if warnings:
+        lifecycle.meta["warnings"] = warnings
+    lifecycle.meta["completed_phases"] = list(tracker.completed)
+    lifecycle.meta["phase_timings"] = dict(timings)
+    lifecycle.persist()
+
+    pngs = [entry["png"] for entry in regions_meta.values() if entry["png"]]
+    payload = {
+        **base,
+        "version_recorded": True,
+        "current_advanced": False,
+        "artifacts": lifecycle.meta["artifacts"],
+        "version": reservation.number,
+        "label": label,
+        "path": f"{dir_name}/",
+        "outputs": outputs,
+        "regions": regions_meta,
+        "message": (
+            "Sketch-only run: the script called show_regions() but no "
+            "show_object(), so no STEP was written and current did not "
+            "advance. regions[i] is the region labeled i on the map."
+        ),
+        "next_actions": _sketch_next_actions(script),
+    }
+    if pngs:
+        payload["hint"] = (
+            "Read " + ", ".join(pngs) + " to see every region's number, then "
+            "extrude the ones you want. In a parametric script select them "
+            "with regions.at((x, y)) (a point inside, e.g. items[].interior): "
+            "index numbers shift when the sketch changes."
+        )
+        zoom = [entry["hint"] for entry in regions_meta.values() if entry.get("hint")]
+        if zoom:
+            payload["hint"] += " " + " ".join(zoom)
+    if params:
+        payload["params"] = params
+    if warnings:
+        payload["warnings"] = warnings
+    timings["total_ms"] = round((time.perf_counter() - total_start) * 1000)
+    payload["timings"] = timings
+    payload["completed_phases"] = list(tracker.completed)
+    payload["phase_timings"] = dict(timings)
+    _emit_run(payload)
+
+
 @click.command()
 @click.argument("script", required=False)
 @click.option("--idempotency-key", default=None, help="Python runs: WIP, requires --experimental-changes. Save one key; retry identical source/options without executing again. CAD-file dispatch uses ordinary import keys.")
@@ -1787,13 +1970,16 @@ def _run_impl(
         _emit_run(payload)
         sys.exit(1)
 
-    from agentcad.validate import validate_script
+    from agentcad.validate import validate_script, validate_script_allowing_regions
 
-    output_calls = (
-        ("show_object", "show_compound", "show_assembly")
-        if runtime_name == "build123d" else ("show_object",)
-    )
-    static_errors = validate_script(raw_source, output_calls, check_imports=False)
+    if runtime_name == "build123d":
+        # show_regions() alone is a valid sketch-only script.
+        static_errors = validate_script_allowing_regions(
+            raw_source, ("show_object", "show_compound", "show_assembly"),
+            check_imports=False,
+        )
+    else:
+        static_errors = validate_script(raw_source, ("show_object",), check_imports=False)
     if static_errors:
         _emit_run({
             "command": "run",
@@ -1911,6 +2097,26 @@ def _run_impl(
             runtime_source=runtime_source,
             guidance=guidance,
         )
+
+    if result.topo_shape is None and result.region_maps:
+        _finish_phase("script_exec", _t, "script_exec_ms")
+        _run_sketch_only(
+            result,
+            script=script,
+            script_path=script_path,
+            label=label,
+            runtime_name=runtime_name,
+            runtime_source=runtime_source,
+            params=parsed_params,
+            dry_run=dry_run,
+            tracker=_phase_tracker,
+            timings=_timings,
+            start_phase=_start_phase,
+            finish_phase=_finish_phase,
+            heartbeat=_heartbeat,
+            total_start=_t_total_start,
+        )
+        return
 
     # Success path
     shape = result.native_shape

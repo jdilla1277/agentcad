@@ -51,14 +51,15 @@ def validate(user_source: str) -> list:
     ``status: validation_error`` (no version consumed, no disk artifacts)
     on either runtime instead of falling through to ``execution_error``.
     """
-    from agentcad.validate import validate_script
+    from agentcad.validate import validate_script_allowing_regions
 
-    return list(validate_script(
-        with_preamble(user_source),
-        output_calls=("show_object", "show_assembly", "show_compound"),
+    # A script that only calls show_regions() is a sketch-only run.
+    return list(validate_script_allowing_regions(
+        with_preamble(user_source), OUTPUT_CALLS,
     ))
 
 
+OUTPUT_CALLS = ("show_object", "show_assembly", "show_compound")
 _REGION_MAP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
@@ -385,6 +386,25 @@ def execute(
             traceback=traceback.format_exc(),
         )
 
+    warnings: list[str] = [
+        str(w.message)
+        for w in captured_warnings
+        if issubclass(w.category, UserWarning)
+        and not issubclass(w.category, DeprecationWarning)
+    ]
+
+    if not captured and region_maps:
+        # Sketch-only run: region maps, no deliverable geometry.
+        return ExecutionResult(
+            status="success",
+            parameters=effective_params,
+            discovered_parameters=discovered,
+            warnings=warnings,
+            output_type="sketch",
+            loaded_files=loaded_files,
+            region_maps=region_maps,
+        )
+
     if not captured:
         from agentcad.output_contract import missing_output_message
         from build123d import BuildLine, BuildPart, BuildSketch
@@ -404,12 +424,6 @@ def execute(
             exception=missing_output_message(user_source, candidates),
         )
 
-    warnings: list[str] = [
-        str(w.message)
-        for w in captured_warnings
-        if issubclass(w.category, UserWarning)
-        and not issubclass(w.category, DeprecationWarning)
-    ]
     shapes = [item[0] for item in captured]
     if len(shapes) == 1:
         native_shape = shapes[0]

@@ -103,6 +103,23 @@ def validate_script(source, output_calls=None, *, check_imports=True):
     return errors
 
 
+def validate_script_allowing_regions(source, output_calls, *, check_imports=True):
+    """``validate_script`` where a show_regions() call also satisfies capture.
+
+    build123d scripts may call only show_regions() (a sketch-only run). A
+    script with neither an output call nor show_regions() gets exactly the
+    error ``validate_script`` reports for ``output_calls``.
+    """
+    errors = validate_script(source, output_calls, check_imports=check_imports)
+    if errors and errors[0]["check"] == "show_object_missing":
+        retry = validate_script(
+            source, tuple(output_calls) + ("show_regions",), check_imports=check_imports
+        )
+        if not retry or retry[0]["check"] != "show_object_missing":
+            return retry
+    return errors
+
+
 def _is_main_guard(node):
     if not isinstance(node, ast.If):
         return False

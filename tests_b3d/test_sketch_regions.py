@@ -199,11 +199,21 @@ def test_api_names_are_exported_and_show_regions_needs_a_run():
 
 # ---------- runner capture ----------
 
-MAP_SCRIPT = """\
+SKETCH_ONLY = """\
 regions = sketch_regions(Circle(10), Pos(8, 0) * Circle(10))
 show_regions(regions)
-show_object(Box(1, 1, 1))
 """
+
+
+def test_runner_sketch_only_script_succeeds_without_shape():
+    assert runner.validate(SKETCH_ONLY) == []
+    result = runner.execute(SKETCH_ONLY)
+    assert result.success
+    assert result.topo_shape is None and result.native_shape is None
+    assert result.output_type == "sketch"
+    [entry] = result.region_maps
+    assert entry["name"] == "regions"
+    assert len(entry["faces"]) == 3
 
 
 def test_runner_without_any_output_keeps_original_validation_message():
@@ -214,11 +224,11 @@ def test_runner_without_any_output_keeps_original_validation_message():
 
 
 def test_runner_rejects_duplicate_and_unsafe_map_names():
-    duplicate = MAP_SCRIPT + "show_regions(regions)\n"
+    duplicate = SKETCH_ONLY + "show_regions(regions)\n"
     result = runner.execute(duplicate)
     assert result.status == "execution_error"
     assert "already used" in result.exception and "name=" in result.exception
-    unsafe = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, name='../x')")
+    unsafe = SKETCH_ONLY.replace("show_regions(regions)", "show_regions(regions, name='../x')")
     result = runner.execute(unsafe)
     assert result.status == "execution_error"
     assert "not usable as a file name" in result.exception
@@ -238,7 +248,6 @@ def test_runner_accepts_plain_face_lists_and_slices():
         "regions = sketch_regions(Circle(10), Pos(8, 0) * Circle(10))\n"
         "show_regions(regions[1:], name='lens_and_right')\n"
         "show_regions([Rectangle(4, 4).face()], name='square')\n"
-        "show_object(Box(1, 1, 1))\n"
     )
     result = runner.execute(source)
     assert result.success
@@ -500,15 +509,15 @@ def test_merge_regions_api_works_on_plain_lists():
 
 
 def test_show_regions_window_is_validated_in_the_script():
-    bad_shape = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=(0, 0, 5, 5))")
+    bad_shape = SKETCH_ONLY.replace("show_regions(regions)", "show_regions(regions, window=(0, 0, 5, 5))")
     result = runner.execute(bad_shape)
     assert result.status == "execution_error"
     assert "((xmin, ymin), (xmax, ymax))" in result.exception
-    empty = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=((5, 0), (0, 5)))")
+    empty = SKETCH_ONLY.replace("show_regions(regions)", "show_regions(regions, window=((5, 0), (0, 5)))")
     assert "xmin < xmax" in runner.execute(empty).exception
-    away = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=((100, 100), (110, 110)))")
+    away = SKETCH_ONLY.replace("show_regions(regions)", "show_regions(regions, window=((100, 100), (110, 110)))")
     assert "contains no region" in runner.execute(away).exception
-    good = MAP_SCRIPT.replace("show_regions(regions)", "show_regions(regions, window=((-2, -2), (2, 2)))")
+    good = SKETCH_ONLY.replace("show_regions(regions)", "show_regions(regions, window=((-2, -2), (2, 2)))")
     result = runner.execute(good)
     assert result.success
     assert result.region_maps[0]["window"] == (-2.0, -2.0, 2.0, 2.0)

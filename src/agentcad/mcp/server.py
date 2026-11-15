@@ -542,6 +542,10 @@ def run(
     Use inspect with report=True or entity_id to inspect the result without re-importing.
     Reports/images are prepared on request; dry runs do not issue IDs.
 
+    show_regions(sketch_regions(...)) in the script adds labeled region map
+    PNGs under `regions`; a script with only show_regions() is a sketch-only
+    run (sketch_only: true, no STEP, current unchanged).
+
     Args:
         script: Path to the Python CAD script.
         cwd: Source project directory (or a subdirectory).
