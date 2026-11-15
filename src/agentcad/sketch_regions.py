@@ -947,8 +947,32 @@ def describe_regions(faces, plane):
                 _round(inside_global.X), _round(inside_global.Y), _round(inside_global.Z)
             ],
             "holes": len(face.inner_wires()),
+            "perimeter": _round(sum(edge.length for edge in face.edges())),
+            "bounds": _bounds_json(local_bounds([face], plane)),
+            "selector": region_selector(inside),
         })
     return items
+
+
+def region_selector(interior):
+    """Copyable build123d selection for the region containing ``interior``."""
+    x, y = (_round(value) for value in interior)
+    return f"regions.at(({x:g}, {y:g}))"
+
+
+def _bounds_json(bounds):
+    x0, y0, x1, y1 = bounds
+    return {"x": [_round(x0), _round(x1)], "y": [_round(y0), _round(y1)]}
+
+
+def map_dimensions(faces, plane):
+    """Plane-local extent of the whole sketch: bounds, width and height."""
+    x0, y0, x1, y1 = local_bounds(faces, plane)
+    return {
+        "bounds": _bounds_json((x0, y0, x1, y1)),
+        "width": _round(x1 - x0),
+        "height": _round(y1 - y0),
+    }
 
 
 def local_bounds(faces, plane):
@@ -1023,5 +1047,7 @@ __all__ = [
     "parse_window",
     "coerce_region_faces",
     "describe_regions",
+    "map_dimensions",
+    "region_selector",
     "plane_info",
 ]

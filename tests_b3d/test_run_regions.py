@@ -72,9 +72,12 @@ def test_sketch_only_run_writes_map_without_step_or_current(runner, project):
     assert [item["index"] for item in listing["regions"]] == list(range(7))
     first = entry["items"][0]
     assert set(first) == {
-        "index", "area", "center", "center_global", "interior", "interior_global",
-        "holes", "label", "color", "tiny",
+        "id", "index", "area", "perimeter", "bounds", "center", "center_global",
+        "interior", "interior_global", "holes", "selector", "label_placement", "color",
+        "tiny",
     }
+    assert first["id"] == "region_v1_regions_0"
+    assert data["next_actions"][0] == entry["inspect"]
     assert entry["plane"]["z_dir"] == [0.0, 0.0, 1.0]
 
     # No deliverable artifacts for a sketch.
@@ -153,9 +156,9 @@ def test_tiny_region_gets_leader_label_and_is_listed(runner, project):
     assert result.exit_code == 0, result.output
     entry = data["regions"]["tiny"]
     tiny = min(entry["items"], key=lambda item: item["area"])
-    assert tiny["label"] == "leader"
+    assert tiny["label_placement"] == "leader"
     largest = max(entry["items"], key=lambda item: item["area"])
-    assert largest["label"] == "inside"
+    assert largest["label_placement"] == "inside"
     listing = json.loads((project / entry["json"]).read_text())
     assert tiny["index"] in [item["index"] for item in listing["regions"]]
 
@@ -289,7 +292,7 @@ def test_tiny_regions_are_flagged_with_a_window_hint_that_works(runner, project)
     assert result.exit_code == 0, result.output
     entry = data["regions"]["specks"]
     tiny = [item for item in entry["items"] if item["tiny"]]
-    assert len(tiny) == 1 and tiny[0]["label"] == "leader"
+    assert len(tiny) == 1 and tiny[0]["label_placement"] == "leader"
     assert f"Region {tiny[0]['index']} is only a few pixels" in entry["hint"]
     assert "window=" in entry["hint"] and entry["hint"] in data["hint"]
     assert "regions.at(" in data["hint"]
@@ -304,9 +307,9 @@ def test_tiny_regions_are_flagged_with_a_window_hint_that_works(runner, project)
     assert zoom["window"][0][0] < -20 < zoom["window"][1][0]
     by_index = {item["index"]: item for item in zoom["items"]}
     assert by_index[tiny[0]["index"]]["tiny"] is False
-    assert by_index[tiny[0]["index"]]["label"] in {"inside", "leader"}
+    assert by_index[tiny[0]["index"]]["label_placement"] in {"inside", "leader"}
     # Every region reaches into this window (the plate surrounds the specks).
-    assert {item["label"] for item in zoom["items"]} <= {"inside", "leader"}
+    assert {item["label_placement"] for item in zoom["items"]} <= {"inside", "leader"}
     assert "hint" not in zoom
 
 
@@ -318,7 +321,7 @@ def test_window_map_marks_regions_outside_it(runner, project):
     assert result.exit_code == 0, result.output
     entry = data["regions"]["regions"]
     assert entry["window"] == [[-8.0, -8.0], [8.0, 8.0]]
-    labels = {item["index"]: item["label"] for item in entry["items"]}
+    labels = {item["index"]: item["label_placement"] for item in entry["items"]}
     assert labels[3] == "outside_window"  # the sliver right of the plate (x > 20)
     assert labels[1] == "inside" and labels[4] == "inside"  # the left circle halves
 

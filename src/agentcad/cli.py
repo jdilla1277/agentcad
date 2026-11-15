@@ -343,7 +343,8 @@ JSON RESPONSE CONTRACT
   Successful `run` results also include "runtime". Run-specific statuses:
     "success"          primary command work completed; inspect artifact statuses.
                        sketch_only=true: the script called only show_regions();
-                       region maps written, no STEP, current unchanged
+                       region maps written in vN_LABEL_sketch/ (uses a version
+                       number), no STEP, current unchanged
     "failed"           script execution failed; consumes a version and creates
                        v{N}_{label}_failed/ with the script and metadata
     "error"            CLI/input error; no accepted CAD output

@@ -1071,7 +1071,13 @@ class TestRunRouting:
         for key in ("status", "sketch_only", "artifact_created", "current_advanced",
                     "output_type", "artifacts"):
             assert daemon_json[key] == direct_json[key]
-        assert daemon_json["regions"]["regions"]["items"] == direct_json["regions"]["regions"]["items"]
+        # Same regions; IDs differ only by version (v1 via daemon, v2 direct).
+        def without_ids(data):
+            return [{k: v for k, v in item.items() if k != "id"}
+                    for item in data["regions"]["regions"]["items"]]
+        assert without_ids(daemon_json) == without_ids(direct_json)
+        assert daemon_json["regions"]["regions"]["items"][0]["id"] == "region_v1_regions_0"
+        assert direct_json["regions"]["regions"]["items"][0]["id"] == "region_v2_regions_0"
         assert (isolated_dir / daemon_json["regions"]["regions"]["png"]).is_file()
         manifest = json.loads((isolated_dir / "agentcad.json").read_text())
         assert [v["status"] for v in manifest["versions"]] == ["sketch", "sketch"]

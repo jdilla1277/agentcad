@@ -1318,15 +1318,16 @@ def _region_map_summaries(region_maps):
     }
 
 
-def _write_region_maps(region_maps, version_dir, dir_name, warnings):
+def _write_region_maps(region_maps, version_dir, dir_name, warnings, *, version, label):
     """Write regions/<name>.png and .json per show_regions() call.
 
     A map that fails to render never fails the run: its JSON listing is
     still written, the failure becomes a warning, and the caller marks the
     regions artifact failed. Returns (response entries by name, failures).
     """
+    from agentcad.region_inventory import build_listing
     from agentcad.region_map import render_region_map
-    from agentcad.sketch_regions import describe_regions, plane_info
+    from agentcad.sketch_regions import describe_regions, map_dimensions, plane_info
     from agentcad.versioning import atomic_write_json
 
     regions_dir = version_dir / "regions"
@@ -1357,38 +1358,53 @@ def _write_region_maps(region_maps, version_dir, dir_name, warnings):
             png_rel = None
         else:
             for item, placement in zip(items, placements):
-                item["label"] = placement["label"]
+                item["label_placement"] = placement["label"]
                 item["color"] = placement["color"]
                 item["tiny"] = placement["tiny"]
             try:
                 hint = _region_zoom_hint(name, items, placements, faces, plane, window)
             except Exception:  # advice only; never fail the map over it
                 hint = None
-        listing = {
-            "name": name,
-            "count": len(items),
-            "plane": plane_data,
-            "png": png_rel,
-            "regions": items,
-        }
-        if window is not None:
-            listing["window"] = _window_json(window)
-        if hint:
-            listing["hint"] = hint
+        png_sha256 = None
+        if png_rel is not None:
+            png_sha256 = hashlib.sha256((regions_dir / f"{name}.png").read_bytes()).hexdigest()
+        listing = build_listing(
+            version=version, label=label, name=name,
+            script=f"{dir_name}/script.py", plane=plane_data,
+            dimensions=map_dimensions(faces, plane), items=items,
+            png=png_rel, png_sha256=png_sha256,
+            window=_window_json(window) if window is not None else None, hint=hint,
+        )
         atomic_write_json(regions_dir / f"{name}.json", listing)
         entries[name] = _region_response_entry(
-            items, plane_data, png=png_rel, json_path=json_rel,
+            listing["regions"], plane_data, png=png_rel, json_path=json_rel,
             window=window, hint=hint,
+        )
+        entries[name]["inspect"] = _region_inspect_action(
+            regions_dir / f"{name}.json",
+            listing["regions"][0]["id"] if listing["regions"] else None,
         )
     return entries, failures
 
 
-def _sketch_next_actions(script):
-    return [
+def _region_inspect_action(map_path, region_id=None):
+    """`agentcad inspect` for a saved map, usable from the caller's directory."""
+    layout = get_project()
+    action = ["agentcad", "inspect", layout.response_path(map_path)]
+    if region_id:
+        action += ["--id", region_id, "--image"]
+    if layout.configured:
+        action += ["--build-dir", str(layout.build_root)]
+    return shlex.join(action)
+
+
+def _sketch_next_actions(script, regions_meta):
+    inspect = [entry["inspect"] for entry in regions_meta.values() if entry.get("inspect")]
+    return inspect[:1] + [
         f"agentcad run {shlex.quote(script)} --label LABEL — after adding "
         "show_object(extrude([regions.at((x1, y1)), regions.at((x2, y2))], "
-        "amount=H)) with a point inside each region you picked "
-        "(items[].interior). regions[i] also works, but indexes shift when "
+        "amount=H)) with the selector of each region you picked "
+        "(items[].selector). regions[i] also works, but indexes shift when "
         "the sketch changes",
     ]
 
@@ -1511,7 +1527,8 @@ def _run_sketch_only(
     heartbeat("rendering region maps…")
     started = start_phase("region_maps")
     regions_meta, failures = _write_region_maps(
-        result.region_maps, version_dir, dir_name, warnings
+        result.region_maps, version_dir, dir_name, warnings,
+        version=reservation.number, label=label,
     )
     lifecycle.meta["regions"] = regions_meta
     if failures:
@@ -1539,14 +1556,15 @@ def _run_sketch_only(
             "show_object(), so no STEP was written and current did not "
             "advance. regions[i] is the region labeled i on the map."
         ),
-        "next_actions": _sketch_next_actions(script),
+        "next_actions": _sketch_next_actions(script, regions_meta),
     }
     if pngs:
         payload["hint"] = (
             "Read " + ", ".join(pngs) + " to see every region's number, then "
-            "extrude the ones you want. In a parametric script select them "
-            "with regions.at((x, y)) (a point inside, e.g. items[].interior): "
-            "index numbers shift when the sketch changes."
+            "extrude the ones you want. Each item's selector, e.g. "
+            "regions.at((x, y)), picks it by a point inside; index numbers "
+            "shift when the sketch changes. inspect retrieves one region's "
+            "record and the map again without rerunning the script."
         )
         zoom = [entry["hint"] for entry in regions_meta.values() if entry.get("hint")]
         if zoom:
@@ -2676,7 +2694,8 @@ def _run_impl(
         _heartbeat("rendering region maps…")
         _t = _start_phase("region_maps")
         regions_meta, region_failures = _write_region_maps(
-            result.region_maps, version_dir, dir_name, warnings
+            result.region_maps, version_dir, dir_name, warnings,
+            version=version_num, label=label,
         )
         lifecycle.meta["regions"] = regions_meta
         if region_failures:
