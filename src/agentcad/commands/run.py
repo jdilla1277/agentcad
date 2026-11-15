@@ -1404,10 +1404,10 @@ def _sketch_next_actions(script, regions_meta):
     inspect = [entry["inspect"] for entry in regions_meta.values() if entry.get("inspect")]
     return inspect[:1] + [
         f"agentcad run {shlex.quote(script)} --label LABEL — after adding "
-        "show_object(extrude([regions.at((x1, y1)), regions.at((x2, y2))], "
-        "amount=H)) with the selector of each region you picked "
-        "(items[].selector). regions[i] also works, but indexes shift when "
-        "the sketch changes",
+        "show_object(extrude([<selector>, <selector>], amount=H)) with the "
+        "selector of each region you picked (items[].selector, e.g. "
+        "regions.where(...) or regions.at((x, y))). regions[i] also works, "
+        "but indexes shift when the sketch changes",
     ]
 
 
@@ -1563,10 +1563,12 @@ def _run_sketch_only(
     if pngs:
         payload["hint"] = (
             "Read " + ", ".join(pngs) + " to see every region's number, then "
-            "extrude the ones you want. Each item's selector, e.g. "
-            "regions.at((x, y)), picks it by a point inside; index numbers "
-            "shift when the sketch changes. inspect retrieves one region's "
-            "record and the map again without rerunning the script."
+            "extrude the ones you want. Paste each item's selector: "
+            "regions.where(...) describes the region by its named curves "
+            "and keeps picking it after edits; sketches without named curves "
+            "get regions.at((x, y)), a point inside. Index numbers shift when "
+            "the sketch changes. inspect retrieves one region's record and "
+            "the map again without rerunning the script."
         )
         zoom = [entry["hint"] for entry in regions_meta.values() if entry.get("hint")]
         if zoom:

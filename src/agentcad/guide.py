@@ -350,9 +350,11 @@ Discord notification after remote storage does not require resubmitting.
   or raw OCP `TopoDS_Shape`; no manual conversion or STEP writer is needed.
 - To pick sketch profiles by number, call `show_regions(sketch_regions(...))`
   first (a sketch-only run writes a labeled region map, no STEP), then
-  extrude the picked regions. In parametric scripts select them with
-  `regions.at((x, y))` (a point inside), since index numbers shift when the
-  sketch changes; see `agentcad docs patterns`.
+  extrude the picked regions. Index numbers shift when the sketch changes,
+  so name the curves (`sketch_regions(rect=..., hole=...)`) and paste each
+  region's `selector`, e.g. `regions.where(inside=["hole"])`; unnamed
+  sketches select by a point inside, `regions.at((x, y))`. See
+  `agentcad docs patterns`.
 - These are pre-injected by default (no import needed):
   build123d primitives like `Box`, `Cylinder`, `Sphere`, `Plane`, plus
   `show_object`, `load_step`, `pick_face`, `pick_edge`, `fillet_edges`,
