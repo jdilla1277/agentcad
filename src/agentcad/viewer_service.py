@@ -85,8 +85,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/health":
             if self.admin():
+                from agentcad.commands.feedback import _resolve_feedback_url
+
                 self.reply(200, {"protocol": live.PROTOCOL, "instance": self.server.instance,
-                                 "version": __version__, "cad_loaded": "OCP" in sys.modules})
+                                 "version": __version__, "cad_loaded": "OCP" in sys.modules,
+                                 "feedback_recipient": _resolve_feedback_url()})
             return
         match = re.fullmatch(r"/projects/([a-f0-9]{64})/(.*)", path)
         if not match:

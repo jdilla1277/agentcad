@@ -365,7 +365,11 @@ and `neon_row_id`. `status: "partial"` means remote storage was not confirmed;
 the local copy remains. A failed notification after storage does not require
 resubmission. `--file -` reads stdin. Explicit `--template` without `--output`
 exports Markdown on stdout. `AGENTCAD_FEEDBACK_URL` changes the recipient and
-requires a new human automatic-sharing choice.
+requires a new human automatic-sharing choice. A running viewer keeps its
+starting environment. If opening reports a recipient mismatch, run
+`agentcad viewer stop` then `agentcad viewer open` with the intended environment
+and the same `--build-dir`, if configured. Review the displayed destination and
+sharing choice after restarting.
 
 ## Script writing rules
 

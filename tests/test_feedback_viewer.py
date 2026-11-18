@@ -1,7 +1,9 @@
 """Exercise human sharing controls over HTTP and in the actual browser."""
 import json
 import os
+import asyncio
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -77,6 +79,120 @@ def test_viewer_diagnostics_honors_exact_edited_payload_and_authorization(feedba
     assert sent["submitted"] and calls == [payload]
     assert json.loads(Path(sent["upload_file"]).read_text()) == payload
     assert not sharing_policy(root, command._resolve_feedback_url())["enabled"]
+
+
+@pytest.fixture
+def feedback_receiver():
+    uploads = []
+
+    class Receiver(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            uploads.append((self.path, json.loads(self.rfile.read(int(self.headers["Content-Length"])))))
+            body = b'{"neon_row_id": 42, "discord": "ok"}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}", uploads
+        finally:
+            server.shutdown()
+            thread.join(timeout=3)
+
+
+def test_reused_subprocess_requires_restart_after_recipient_change(tmp_path, monkeypatch, runner, feedback_receiver):
+    # Real service process: changing the caller's environment must not appear
+    # to change the destination of a viewer that already captured an older one.
+    from agentcad.mcp.server import mcp
+
+    monkeypatch.setenv("AGENTCAD_VIEWER_HOME", str(tmp_path / "runtime"))
+    root = (tmp_path / "model").resolve()
+    root.mkdir()
+    snapshot = root / "v1_part"
+    snapshot.mkdir()
+    (snapshot / "viewer.html").write_text("<html>Model snapshot</html>")
+    (snapshot / "output.glb").write_bytes(b"glTF")
+    (snapshot / "meta.json").write_text(json.dumps({
+        "status": "success", "version": 1, "label": "part",
+        "artifacts": {"viewer": {"status": "success"}},
+    }))
+    receiver, uploads = feedback_receiver
+    endpoint_a = receiver + "/recipient-a"
+    endpoint_b = receiver + "/recipient-b"
+    monkeypatch.setenv("AGENTCAD_FEEDBACK_URL", endpoint_a)
+    monkeypatch.chdir(root)
+    try:
+        assert live.publish(root, snapshot, started_ns=1)
+        opened = live.open_project(root, lambda _: True)
+        token, url = live.project_token(root), opened["url"]
+        before = live.service_status()
+        assert before["feedback_recipient"] == endpoint_a
+        choice = {"enabled": True, "human_authorized": True, "recipient": endpoint_a}
+        assert request(url, token, "policy", choice)["enabled"]
+
+        monkeypatch.setenv("AGENTCAD_FEEDBACK_URL", endpoint_b)
+        with pytest.raises(live.ViewerUnavailable, match="agentcad viewer stop"):
+            live.ensure_service()
+        cli_open = runner.invoke(cli, ["viewer", "open"])
+        assert cli_open.exit_code == 1 and "recipient differs" in cli_open.stdout
+        # Neither mismatch detection nor an unshared CLI/MCP observation sends
+        # anything to either destination.
+        mcp_reply = asyncio.run(mcp.call_tool("feedback", {"message": "local MCP note", "cwd": str(root)}))
+        content = mcp_reply[0] if isinstance(mcp_reply, tuple) else mcp_reply
+        mcp_receipt = json.loads(next(item.text for item in content if item.type == "text"))
+        for result in (
+            json.loads(runner.invoke(cli, ["feedback", "local CLI note"]).stdout),
+            mcp_receipt,
+        ):
+            assert result["status"] == "success" and not result["submitted"]
+            assert result["sharing"]["recipient"] == endpoint_b
+            assert not result["sharing"]["enabled"]
+        assert live.service_status()["instance"] == before["instance"]
+        with pytest.raises(HTTPError) as error:
+            request(url, token, "policy", {**choice, "recipient": endpoint_b})
+        assert error.value.code == 400
+        assert uploads == []
+
+        # Execute the documented recovery through the public CLI. The bookmark
+        # survives, but a choice for A cannot authorize B.
+        stopped = runner.invoke(cli, ["viewer", "stop"])
+        assert stopped.exit_code == 0, stopped.stdout
+        reopened = runner.invoke(cli, ["viewer", "open"])
+        assert reopened.exit_code == 0, reopened.stdout
+        assert json.loads(reopened.stdout)["url"] == url
+        assert live.service_status()["instance"] != before["instance"]
+        policy = request(url, token, "policy")
+        assert policy["recipient"] == endpoint_b and not policy["enabled"]
+        # A stale tab cannot submit a diagnostic to the old recipient after
+        # restarting. Validation happens before any network request.
+        with pytest.raises(HTTPError) as error:
+            request(url, token, "diagnostics", {
+                "human_authorized": True, "recipient": endpoint_a,
+                "payload": {"summary": "must not upload"},
+            })
+        assert error.value.code == 400
+        assert not list(root.glob(".agentcad/feedback/upload-*.json"))
+        renewed = request(url, token, "policy", {**choice, "recipient": endpoint_b})
+        assert renewed["enabled"]
+        assert sharing_policy(root, endpoint_b)["enabled"]
+        assert not sharing_policy(root, endpoint_a)["enabled"]
+        # Exercise the real sender inside the subprocess, not a parent-process
+        # monkeypatch. The reviewed diagnostic must go only to the new recipient.
+        payload = {"summary": "reviewed diagnostic after restart"}
+        sent = request(url, token, "diagnostics", {
+            "human_authorized": True, "recipient": endpoint_b, "payload": payload,
+        })
+        assert sent["submitted"] and sent["recipient"] == endpoint_b
+        assert uploads == [("/recipient-b", payload)]
+    finally:
+        live.stop_service()
 
 
 @pytest.mark.browser

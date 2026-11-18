@@ -1,8 +1,8 @@
 """Local project viewer registration and process ownership (no CAD imports).
 
 The persisted port and secret belong to the user, independently of Python
-environments. Protocol mismatches require an explicit stop from the owning
-installation; we never signal a PID obtained from a stale file.
+environments. Protocol mismatches require an explicit authenticated stop;
+we never signal a PID obtained from a stale file.
 """
 from __future__ import annotations
 
@@ -157,7 +157,7 @@ def request(config, route, payload=None, timeout=0.5):
         return json.load(response)
 
 
-def service_status():
+def service_status(*, require_protocol=True):
     # The service replaces config.json while holding this lock. Windows can
     # deny a concurrent read during that replacement, so read under the same
     # lock instead of racing the child process at startup.
@@ -166,8 +166,8 @@ def service_status():
     if config and config.get("port"):
         try:
             state = request(config, "health")
-            if state.get("protocol") != PROTOCOL:
-                raise ViewerUnavailable("Viewer protocol mismatch. Stop it using the installation that started it, then retry.")
+            if require_protocol and state.get("protocol") != PROTOCOL:
+                raise ViewerUnavailable("Viewer protocol mismatch. Run 'agentcad viewer stop', then reopen the viewer with this installation.")
             return {"running": True, "port": config["port"], **state}
         except ViewerUnavailable:
             raise
@@ -178,7 +178,17 @@ def service_status():
 
 def ensure_service():
     with locked("startup"):
-        if service_status()["running"]:
+        state = service_status()
+        if state["running"]:
+            from agentcad.commands.feedback import _resolve_feedback_url
+
+            if state.get("feedback_recipient") != _resolve_feedback_url():
+                raise ViewerUnavailable(
+                    "Viewer feedback recipient differs from this invocation. "
+                    "Run 'agentcad viewer stop', then 'agentcad viewer open' "
+                    "with the intended AGENTCAD_FEEDBACK_URL (and the same --build-dir, if set). "
+                    "Review the destination and sharing choice in the reopened viewer."
+                )
             return configuration()
         configuration()
         env = os.environ.copy()
@@ -211,14 +221,16 @@ def ensure_service():
 
 def stop_service():
     with locked("startup"):
-        state = service_status()
+        # Health and stop use the stable authenticated control API, including
+        # protocol 3. Normal reuse still requires the current viewer protocol.
+        state = service_status(require_protocol=False)
         if not state["running"]:
             return {"status": "stopped", "running": False}
         config = configuration()
         request(config, "stop", {})
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:
-            if not service_status()["running"]:
+            if not service_status(require_protocol=False)["running"]:
                 return {"status": "stopped", "running": False}
             time.sleep(0.05)
         raise ViewerUnavailable("Viewer is still stopping; retry status shortly.")

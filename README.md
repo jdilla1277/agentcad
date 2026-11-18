@@ -219,8 +219,14 @@ identity. Viewer state lives in `~/.cache/agentcad/viewer` (override with
 the saved port and private URLs. If the port is occupied, AgentCAD reports the
 problem without silently changing the URL. Use `agentcad viewer status` and
 `agentcad viewer stop` for diagnostics; `agentcad viewer open` restarts it.
-An incompatible service protocol requires stopping the service with the
-installation that started it before reopening with the new installation.
+For incompatible viewer protocols, the new installation can authenticate and
+stop the old service with `agentcad viewer stop`, then start its replacement with
+`agentcad viewer open`. The saved port and project bookmarks are preserved.
+If a reused viewer has a different feedback recipient from the current
+`AGENTCAD_FEEDBACK_URL`, opening reports the mismatch and requests the same
+stop/open sequence. Run both commands with the intended environment and the same
+`--build-dir`, if configured. Review the recipient and sharing choice after the
+restart; approval for the previous recipient does not enable the new one.
 
 ## No boilerplate
 
