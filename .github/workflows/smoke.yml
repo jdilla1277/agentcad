@@ -61,6 +61,11 @@ jobs:
       - name: Run daemon state security guardrails
         run: pytest tests/test_daemon_state.py tests/test_daemon_platform.py -q
 
+      - name: Run daemon protocol and client guardrails
+        # Explicit selectors also exercise these CAD-free cases on the default
+        # profile, where the module's CadQuery integration cases are skipped.
+        run: pytest tests/test_daemon.py::TestProtocol tests/test_daemon.py::TestSendRequest -q
+
       - name: Run interface and recovery guardrails under Xvfb
         # Copied CLI recovery actions include real PNG rendering.
         run: |
@@ -155,6 +160,11 @@ jobs:
             tests_b3d/test_mcp_import.py \
             tests_b3d/test_import_retries.py \
             tests/test_cadquery_optional.py tests/test_written_mesh_validation.py tests/test_run_guidance.py tests_b3d/test_step_output_contract.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py tests_b3d/test_daemon_request_isolation.py -q
+
+      - name: Run daemon protocol and client guardrails
+        # Explicit selectors also exercise these CAD-free cases on the default
+        # profile, where the module's CadQuery integration cases are skipped.
+        run: pytest tests/test_daemon.py::TestProtocol tests/test_daemon.py::TestSendRequest -q
 
       - name: Run interface and recovery guardrails under Xvfb
         # Copied CLI recovery actions include real PNG rendering.
