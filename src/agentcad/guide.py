@@ -140,6 +140,9 @@ paths resolve from the project root, including from nested directories.
 `agentcad context` reports the resolved build root. Use returned artifact paths;
 `--label` names a version and deprecated `--output` is only a label alias.
 See `agentcad docs artifacts` for initialization, overrides, and recovery.
+If an uninitialized `--build-dir` was a mistake, follow the error's first
+`agentcad context` action, then retry without the override to use the existing
+project. Initialize a separate history only when that destination is intentional.
 
 Scripts should not export STEP themselves. Expose the intended geometry with
 `show_object(result)`; AgentCAD writes the canonical STEP file. Read its path

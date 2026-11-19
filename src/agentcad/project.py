@@ -23,12 +23,13 @@ except ModuleNotFoundError:  # Python 3.10
 class ProjectError(Exception):
     def __init__(
         self, reason: str, message: str, suggestion: str,
-        *, next_actions: list[str] | None = None,
+        *, next_actions: list[str] | None = None, recovery: dict | None = None,
     ):
         super().__init__(message)
         self.reason = reason
         self.suggestion = suggestion
         self.next_actions = next_actions
+        self.recovery = recovery
 
     def payload(self, command: str) -> dict:
         payload = {
@@ -40,6 +41,8 @@ class ProjectError(Exception):
         }
         if self.next_actions is not None:
             payload["next_actions"] = self.next_actions
+        if self.recovery is not None:
+            payload["recovery"] = self.recovery
         return payload
 
 
@@ -91,11 +94,42 @@ class ProjectLayout:
         return str(path)
 
     def missing_manifest(self) -> ProjectError:
+        initialize = shlex.join(["agentcad", "init", "--build-dir", str(self.build_root)])
+        # Only an explicit override can be a mistaken selection. Resolve what
+        # omitting it would actually select, honoring TOML and nested discovery.
+        # Never silently fall back, or recommend a corrupt/foreign history.
+        existing = None
+        if self.source == "command":
+            try:
+                candidate = resolve_project()
+                if (candidate.project_root == self.project_root
+                        and candidate.build_root != self.build_root
+                        and candidate.manifest_path.is_file()):
+                    candidate.read_manifest()
+                    existing = candidate
+            except (ProjectError, OSError, ValueError):
+                pass  # Keep initialization guidance when no valid history exists.
+        if existing is not None:
+            return ProjectError(
+                "build_root_not_initialized",
+                f"No AgentCAD manifest at {self.manifest_path}; existing histories were left unchanged.",
+                f"Omit --build-dir to use the initialized project at {existing.build_root}. "
+                "Run `agentcad context` to inspect it, then retry your original command without --build-dir. "
+                f"If the alternate build root was intentional, run `{initialize}` to initialize a fresh history.",
+                next_actions=["agentcad context", initialize],
+                recovery={
+                    "detected_project_root": str(existing.project_root),
+                    "requested_build_root": str(self.build_root),
+                    "existing_build_root": str(existing.build_root),
+                    "action": "use_existing_project",
+                    "command": "agentcad context",
+                },
+            )
         return ProjectError(
             "build_root_not_initialized",
             f"No AgentCAD manifest at {self.manifest_path}; existing histories were left unchanged.",
             f"Run `agentcad init --build-dir {shlex.quote(str(self.build_root))}` from {self.project_root} to initialize a fresh history.",
-            next_actions=[shlex.join(["agentcad", "init", "--build-dir", str(self.build_root)])],
+            next_actions=[initialize],
         )
 
     def read_manifest(self) -> dict:
