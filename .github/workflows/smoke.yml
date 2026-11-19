@@ -71,6 +71,7 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_part_rendering.py tests/test_diff_part_colors.py \
             tests/test_change_contract.py tests/test_change_checks.py tests/test_change_store.py tests/test_change_promotion.py tests/test_change_staging.py tests/test_run_retries.py tests/test_versioning.py tests/test_change_retention.py \
             tests/test_check_spec.py tests/test_view.py \
             tests/test_delayed_acceptance.py \
@@ -131,6 +132,7 @@ jobs:
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
             env LIBGL_ALWAYS_SOFTWARE=1 pytest \
+            tests/test_part_rendering.py tests/test_diff_part_colors.py \
             tests/test_change_contract.py tests/test_change_checks.py tests/test_change_store.py tests/test_change_promotion.py tests/test_change_staging.py tests/test_run_retries.py tests/test_versioning.py tests/test_change_retention.py \
             tests/test_feature_checks.py tests_b3d/test_feature_checks.py \
             tests/test_delayed_acceptance.py \
