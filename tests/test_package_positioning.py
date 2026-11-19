@@ -1,7 +1,11 @@
 """Guard the package-index copy that agents see before installation."""
 
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 
 PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
