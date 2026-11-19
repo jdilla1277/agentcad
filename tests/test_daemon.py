@@ -66,7 +66,7 @@ def _start_slow_request_server(name, delay_s=0.15):
     return sock_path, thread, submissions, errors
 
 
-def _start_progress_response_server(name, *, interval_s=0.02, count=4):
+def _start_progress_response_server(name, *, interval_s, count):
     """Send progress often enough to outlive one response-idle deadline."""
     from agentcad.daemon import _read_one_message, encode_message
 
@@ -305,13 +305,20 @@ class TestSendRequest:
         assert payload["retry_safe"] is False
 
     def test_progress_frames_extend_response_idle_deadline(self):
-        """A command can outlive 30s if progress keeps the socket active."""
+        """Progress keeps a command alive beyond one inactivity timeout."""
         from agentcad.daemon import send_request
 
+        interval_s, count, response_timeout_s = 0.05, 8, 0.2
+        # Leave 150 ms of scheduler margin per heartbeat instead of 10 ms,
+        # while keeping the complete response longer than one idle deadline.
+        assert interval_s < response_timeout_s < interval_s * count
         sock_path, thread, submissions, errors = (
-            _start_progress_response_server("progress-extends-deadline")
+            _start_progress_response_server(
+                "progress-extends-deadline", interval_s=interval_s, count=count,
+            )
         )
         progress = []
+        started = time.monotonic()
         response = send_request(
             {
                 "type": "run",
@@ -319,15 +326,17 @@ class TestSendRequest:
                 "argv": ["run", "slow.py", "--output", "slow"],
             },
             socket_path=sock_path,
-            response_timeout_s=0.03,
+            response_timeout_s=response_timeout_s,
             progress_callback=progress.append,
         )
+        elapsed = time.monotonic() - started
         thread.join(timeout=2)
 
         assert not thread.is_alive()
         assert errors == []
         assert len(submissions) == 1
-        assert len(progress) == 4
+        assert len(progress) == count
+        assert elapsed > response_timeout_s
         assert response["type"] == "result"
         assert response["exit_code"] == 0
         assert json.loads(response["output"])["status"] == "success"
