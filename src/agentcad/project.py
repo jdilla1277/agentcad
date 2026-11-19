@@ -105,7 +105,7 @@ class ProjectLayout:
                 if (candidate.project_root == self.project_root
                         and candidate.build_root != self.build_root
                         and candidate.manifest_path.is_file()):
-                    candidate.read_manifest()
+                    candidate.read_manifest(require_context=True)
                     existing = candidate
             except (ProjectError, OSError, ValueError):
                 pass  # Keep initialization guidance when no valid history exists.
@@ -132,7 +132,7 @@ class ProjectLayout:
             next_actions=[initialize],
         )
 
-    def read_manifest(self) -> dict:
+    def read_manifest(self, *, require_context: bool = False) -> dict:
         if not self.manifest_path.exists():
             raise self.missing_manifest()
         try:
@@ -159,6 +159,8 @@ class ProjectLayout:
                 ):
                     raise ValueError("version entries require a path")
                 self.version_dir(entry)
+            if require_context:
+                _validate_context_fields(data)
             return data
         except (OSError, ValueError) as exc:
             raise ProjectError(
@@ -187,6 +189,24 @@ class ProjectLayout:
                 f"Cannot write build directory {self.build_root}: {exc}",
                 "Choose a writable directory with --build-dir or fix its permissions.",
             ) from exc
+
+
+def _validate_context_fields(data: dict) -> None:
+    """Validate the project/history fields read directly by context.
+
+    Keep partial-manifest support for lower-level consumers, but use the same
+    checks for context itself and for a recommended context recovery action.
+    Older manifests may omit versions and optional source/runtime metadata.
+    """
+    if not isinstance(data.get("name"), str) or not data["name"].strip():
+        raise ValueError("context requires a non-empty project name")
+    for index, entry in enumerate(data.get("versions", [])):
+        number = entry.get("version")
+        if type(number) is not int or number < 1:
+            raise ValueError(f"versions[{index}].version must be a positive integer")
+        for field in ("label", "status", "path"):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                raise ValueError(f"versions[{index}].{field} must be a non-empty string")
 
 
 def resolve_project(

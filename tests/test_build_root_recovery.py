@@ -104,6 +104,75 @@ def test_no_usable_default_history_keeps_initialization_first(runner, isolated_d
     assert (root / "new history/agentcad.json").is_file()
 
 
+@pytest.mark.parametrize("manifest", [
+    {"versions": []},
+    {"name": None, "versions": []},
+    {"name": "", "versions": []},
+    {"name": "project", "versions": [{"path": "v1_first/"}]},
+    *[
+        {"name": "project", "versions": [{
+            key: value for key, value in {
+                "version": 1, "label": "first", "status": "success", "path": "v1_first/",
+            }.items() if key != missing
+        }]}
+        for missing in ("version", "label", "status", "path")
+    ],
+    *[
+        {"name": "project", "versions": [{
+            "version": 1, "label": "first", "status": "success", "path": "v1_first/",
+            **{field: value},
+        }]}
+        for field, value in (
+            ("version", True), ("version", "1"), ("version", 0),
+            ("label", []), ("status", None), ("path", ""),
+        )
+    ],
+])
+def test_partial_manifest_is_not_preferred_and_context_returns_json_error(runner, isolated_dir, manifest):
+    from agentcad.project import ProjectError, resolve_project
+
+    (isolated_dir / "agentcad.toml").write_text("")
+    (isolated_dir / "agentcad.json").write_text(json.dumps(manifest))
+    before = files(isolated_dir)
+    failed = runner.invoke(cli, ["context", "--build-dir", "mistaken"])
+    assert failed.exit_code == 1, failed.output
+    payload = json.loads(failed.stdout)
+    assert payload["reason"] == "build_root_not_initialized"
+    assert "recovery" not in payload
+    assert shlex.split(payload["next_actions"][0]) == [
+        "agentcad", "init", "--build-dir", str(isolated_dir / "mistaken"),
+    ]
+    # The same validator protects direct context calls, rather than only
+    # suppressing the bad recommendation and leaving the original crash.
+    with pytest.raises(ProjectError):
+        resolve_project().read_manifest(require_context=True)
+    direct = runner.invoke(cli, ["context"])
+    assert direct.exit_code == 1 and "Traceback" not in direct.stdout
+    assert json.loads(direct.stdout)["reason"] == "invalid_manifest"
+    assert files(isolated_dir) == before
+    assert not (isolated_dir / "mistaken").exists()
+
+
+@pytest.mark.parametrize("versions", [None, [], [
+    {"version": 1, "label": "first", "status": "success", "path": "v1_first/"},
+]])
+def test_legacy_context_fields_remain_sufficient(runner, isolated_dir, versions):
+    manifest = {"name": "legacy"}
+    if versions is not None:
+        manifest["versions"] = versions
+    (isolated_dir / "agentcad.json").write_text(json.dumps(manifest))
+    failed = runner.invoke(cli, ["context", "--build-dir", "mistaken"])
+    assert failed.exit_code == 1, failed.output
+    payload = json.loads(failed.stdout)
+    assert payload["recovery"]["action"] == "use_existing_project"
+    recovered = invoke(runner, shlex.split(payload["next_actions"][0])[1:])
+    assert recovered["project"] == "legacy"
+    assert recovered["version_count"] == len(versions or [])
+    if versions:
+        assert recovered["versions"][0]["source"] == "script"
+    assert not (isolated_dir / "mistaken").exists()
+
+
 def test_omitting_override_does_not_bypass_uninitialized_config(runner, isolated_dir):
     invoke(runner, ["init", "--no-agent-setup"])
     (isolated_dir / "agentcad.toml").write_text('build_dir = "new default"\n')
