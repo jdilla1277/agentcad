@@ -25,7 +25,7 @@ def load_manifest(command=None):
             error = _run_contract_payload(error)
         click.echo(json.dumps(error))
         sys.exit(1)
-    return layout.read_manifest()
+    return layout.read_manifest(require_context=command == "context")
 
 
 def save_manifest(manifest):
