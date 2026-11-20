@@ -328,11 +328,16 @@ COMMAND REFERENCE: PROJECT AND INTEGRATIONS
 
   agentcad feedback
   agentcad feedback --template --output feedback.md
-  agentcad feedback --file feedback.md [--max-entries N] [--local-only]
-  agentcad feedback "MESSAGE" [--max-entries N] [--local-only]
-    Get guided questions, fill in a Markdown report, then submit it with recent
-    session context. Quick notes still work. The full bundle is saved locally
-    before uploading; --local-only keeps it local. --file - reads stdin.
+  agentcad feedback --file feedback.md [--local-only | --send]
+  agentcad feedback "MESSAGE" [--local-only | --send]
+  agentcad feedback "MESSAGE" --diagnostics [--max-entries N]
+  agentcad feedback --send-diagnostics reviewed.json --send
+    Record quick notes or guided reports locally. The human can enable/revoke
+    brief observation + version sharing in the viewer's Feedback sharing panel.
+    --send is for a human-requested one-off upload; no diagnostics are attached.
+    --diagnostics previews the complete LOCAL payload for review and redaction.
+    --send-diagnostics requires explicit human authorization of that payload.
+    --local-only suppresses automatic sharing. --file - reads stdin.
     Explicit --template without --output exports Markdown rather than JSON.
 
   agentcad subscribe EMAIL
