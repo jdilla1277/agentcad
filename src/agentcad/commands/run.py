@@ -2353,6 +2353,7 @@ def _run_impl(
 
     prev = previous
     previous_parts = []
+    previous_render_parts = None
     part_changes = None
     prev_shape = None
     if comparison_recorder is not None:
@@ -2367,9 +2368,15 @@ def _run_impl(
             with comparison_recorder.observe("source_loading"):
                 previous_meta_path = get_project().version_dir(prev) / "meta.json"
                 try:
-                    previous_parts = json.loads(
-                        previous_meta_path.read_text()
-                    ).get("parts", [])
+                    previous_metadata = json.loads(previous_meta_path.read_text())
+                    previous_parts = (
+                        previous_metadata.get("parts", [])
+                        if isinstance(previous_metadata, dict) else []
+                    )
+                    if not isinstance(previous_parts, list) or not all(
+                        isinstance(p, dict) for p in previous_parts
+                    ):
+                        previous_parts = []
                 except (OSError, json.JSONDecodeError):
                     previous_parts = []
                 part_changes = _part_change_summary(
@@ -2377,6 +2384,18 @@ def _run_impl(
                 )
                 from agentcad.step_io import load_cad_shape
                 prev_shape = load_cad_shape(prev_step_path)
+                if any(p.get("color") is not None for p in previous_parts):
+                    from agentcad.part_rendering import saved_render_parts
+                    try:
+                        previous_render_parts = saved_render_parts(prev_shape, previous_parts)
+                    except Exception as exc:
+                        warnings.append(f"Could not restore previous part colors: {type(exc).__name__}: {exc}")
+                    if previous_render_parts is None:
+                        warnings.append(
+                            "Previous part colors were not restored: saved measurements did not "
+                            "unambiguously cover the reloaded STEP. The complete previous model "
+                            "is shown without per-part colors."
+                        )
         except Exception as exc:
             warnings.append(
                 "Could not load the prior comparison source: "
@@ -2396,12 +2415,14 @@ def _run_impl(
                         prev_shape,
                         topo_shape_for_metrics,
                         per_view_size=512,
+                        parts_a=previous_render_parts,
                         parts_b=glb_parts,
                     )
                     render_diff_side_by_side(
                         prev_shape, topo_shape_for_metrics,
                         prev["label"], label, side_path,
                         width=512, height=512,
+                        parts_a=previous_render_parts,
                         parts_b=glb_parts,
                         source_views=source_views,
                     )
@@ -2423,6 +2444,7 @@ def _run_impl(
                         prev_shape, topo_shape_for_metrics,
                         prev["label"], label, overlay_path,
                         width=1024, height=1024,
+                        parts_a=previous_render_parts,
                         parts_b=glb_parts,
                         source_views=source_views,
                     )
