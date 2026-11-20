@@ -394,7 +394,7 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 Keep credentials in a password manager, outside project files and agent prompts.
 
 For the local cloud CLI, install
-`pip install 'agentcad[cloud]==0.8.0'` (also included in `agentcad[mcp]`),
+`pip install 'agentcad[cloud]==0.8.1'` (also included in `agentcad[mcp]`),
 as shown in the guide above:
 
 ```bash
