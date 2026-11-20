@@ -76,6 +76,13 @@ def delivery_options(function):
         except ValueError as exc:
             raise ProjectError("invalid_delivery_budget", str(exc), "Use agentcad docs editing for inspection budget controls.") from exc
         ctx = click.get_current_context()
+        from agentcad.experimental_geometry_search import requested as search_requested
+        if ctx.command.name == "inspect" and search_requested(kwargs) and kwargs.get("artifact") is None:
+            ctx.meta["geometry_search_policy"] = policy
+            ctx.meta["geometry_search_full_response"] = full_response
+            if full_response and policy is not None:
+                raise click.UsageError("--full-response cannot be combined with caller delivery budgets.")
+            return function(*args, **kwargs)
         from agentcad.experimental_inspect import enabled
         eligible = ctx.command.name == "import" or ctx.command.name == "inspect" and kwargs.get("with_report")
         if full_response and policy is not None:

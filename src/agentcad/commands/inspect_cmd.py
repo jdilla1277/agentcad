@@ -19,6 +19,7 @@ from agentcad.commands._daemon_routing import (
 from agentcad.native_io import suppress_native_output
 from agentcad.inspection_delivery import delivery_options, forward_options, read_snapshot
 from agentcad.experimental_inspect import option as inspect_option, enabled as inspect_enabled
+from agentcad.experimental_geometry_search import option as search_option
 
 DEFAULT_ID_LIMIT = 100
 DEFAULT_VALIDATION_TIMEOUT_S = 90.0
@@ -190,6 +191,12 @@ def _clear_validation_timeout(previous_state) -> None:
 
 @click.command("inspect")
 @click.argument("file")
+@click.option("--query", default=None, help='WIP exact search JSON, e.g. {"kind":"face","where":{"surface_type":"plane"}}. Requires --experimental-geometry-search; see docs inspect.')
+@click.option("--search-snapshot", default=None, help="Retrieve the first page of a retained exact search; requires the geometry-search flag.")
+@click.option("--cursor", default=None, help="Continue a retained exact search using its returned cursor; no CAD work.")
+@click.option("--search-id", default=None, help="Retrieve one matching ID from --search-snapshot; never rerun filters.")
+@click.option("--page-size", type=click.IntRange(min=1, max=100), default=10, show_default=True, help="Maximum search records per page; text budgets may return fewer with a continuation.")
+@click.option("--search-images", type=click.IntRange(min=0, max=10), default=10, show_default=True, help="Maximum first-page search images. Use 0 for image-free exact filtering.")
 @click.option("--id", "entity_id", help="Retrieve one typed ID from an imported or run-generated baseline's saved geometry manifest.")
 @click.option("--image", "with_image", is_flag=True, help="Return a labeled 1024-square four-view sheet of a saved baseline or --id target.")
 @click.option("--isolate", is_flag=True, help="Show only the --id target; requires --image. Default images highlight it in context.")
@@ -259,10 +266,17 @@ def _clear_validation_timeout(previous_state) -> None:
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
 @inspect_option
+@search_option
 @project_options
 @delivery_options
 def inspect_cmd(
     file,
+    query,
+    search_snapshot,
+    cursor,
+    search_id,
+    page_size,
+    search_images,
     entity_id,
     with_image,
     isolate,
@@ -295,6 +309,36 @@ def inspect_cmd(
     Typed --id, --image, --report, --artifact and inspection job controls are
     available without opt-in. IDs and images refer to the same saved baseline.
     """
+    from agentcad.experimental_geometry_search import requested as search_requested
+    search_controls = dict(query=query, search_snapshot=search_snapshot, cursor=cursor,
+                           search_id=search_id, page_size=page_size, search_images=search_images)
+    if search_requested(search_controls):
+        if (entity_id or with_image or with_report or with_ids or with_summary or validate_only or isolate
+                or background or wait_timeout is not None or job_id or job_action or response_snapshot
+                or artifact is not None or artifact_offset or artifact_bytes != 3072 or artifact_sha256
+                or artifact_expires_at or max_images != 9 or no_limit or id_limit != DEFAULT_ID_LIMIT):
+            raise click.UsageError("Search cannot combine with ID/report/image/job/artifact/legacy controls; use --search-images or --no-images.")
+        if validation_timeout != DEFAULT_VALIDATION_TIMEOUT_S or validation_profile != "deliverable":
+            raise click.UsageError("Search uses a saved baseline, not validation controls; omit --validation-timeout/--validation-profile.")
+        from agentcad.geometry_search import search
+        ctx = click.get_current_context()
+        try:
+            payload = search(file, query=query, snapshot_id=search_snapshot, cursor=cursor, object_id=search_id,
+                             page_size=page_size, images=0 if no_images else search_images, text_budget=text_budget,
+                             policy=ctx.meta.get("geometry_search_policy"),
+                             full_response=ctx.meta.get("geometry_search_full_response", False))
+        except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+            from agentcad.geometry_search import _action
+            restart_query = getattr(exc, "query", None)
+            recovery = ({"restart": _action(Path(file).resolve(), query=restart_query), "restart_creates_new_evidence": True}
+                        if restart_query is not None else {"restart_requires_original_query": True})
+            _emit({"command": "inspect", "operation": "geometry_search", "status": "error", **recovery,
+                   "reason": getattr(exc, "reason", "geometry_search_unavailable"), "message": str(exc),
+                   "experimental_geometry_search": {"enabled": True, "status": "work_in_progress"},
+                   "suggestion": "Use the original baseline/build root. Rerun the original --query with the geometry-search flag for new evidence; retained pages are never regenerated."}, exit_code=1)
+            return
+        _emit(payload)
+        return
     if artifact is None and (artifact_offset or artifact_bytes != 3072 or artifact_sha256 is not None or artifact_expires_at is not None):
         raise click.UsageError("--artifact-offset, --artifact-bytes, --artifact-sha256 and --artifact-expires-at require --artifact.")
     if artifact is not None:

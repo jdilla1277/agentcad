@@ -449,3 +449,14 @@ Creating a template sends nothing. Reports include recent session context;
 review what you send, or add `--local-only` to keep it local. Partial reports,
 positive feedback, and ideas are welcome. See `agentcad docs feedback` for
 file/stdin input and upload receipts.
+
+## Experimental local geometry search
+
+Local CLI and MCP can opt in to exact filters over a saved version's parts,
+placements, faces and edges. Use `inspect --experimental-geometry-search
+--query '{"kind":"face","where":{"surface_type":"plane"}}'` or MCP
+`inspect(..., experimental_geometry_search=True, query={...})`.
+Search is WIP and requires opt-in on each call. Results include retained
+pagination and complete candidate-manifest retrieval; named-feature recognition
+and shape similarity remain unavailable. See [geometry search](docs/geometry-search.md)
+and `agentcad docs inspect` for the query contract and limits.
