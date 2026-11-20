@@ -34,7 +34,9 @@ class ExecutionResult:
       unknown param name). No version directory is created.
     * ``execution_error`` — the script raised or produced no results.
       ``run.py`` records a failed version directory.
-    * ``success`` — ``native_shape`` and ``topo_shape`` are populated.
+    * ``success`` — ``native_shape`` and ``topo_shape`` are populated, or,
+      for a sketch-only build123d script, both are None and
+      ``region_maps`` holds the show_regions() output.
     """
 
     status: Status
@@ -59,6 +61,10 @@ class ExecutionResult:
     loaded_files: list[str] = field(default_factory=list)
     # Machine-readable classification for targeted execution failures.
     error_kind: str | None = None
+    # show_regions() calls, in order: {"name", "faces", "plane"}. Annotation
+    # output only — never part of the shape, STEP, metrics, or validation.
+    # A success with region maps but no shape is a sketch-only run.
+    region_maps: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def success(self) -> bool:

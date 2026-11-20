@@ -418,6 +418,7 @@ def format_response(payload: dict, layout: ProjectLayout) -> dict:
         "preview",
         "png",
         "metadata",
+        "json",
         "glb",
         "stl",
         "obj",

@@ -296,6 +296,27 @@ def _invoke(args: list[str], cwd: str | None = None) -> dict:
     )
 
 
+def _with_region_map_image(result, *, cwd):
+    """Attach a saved region map PNG; its bytes must match png_sha256."""
+    image = result.get("image") or {}
+    if image.get("status") != "success":
+        return result
+    path = Path(image["png"])
+    if not path.is_absolute():
+        path = Path(result.get("project_root") or cwd or ".") / path
+    try:
+        png = path.read_bytes()
+        if hashlib.sha256(png).hexdigest() != image["png_sha256"]:
+            raise ValueError("The region map PNG changed before attachment; retry the inspect call.")
+    except (OSError, ValueError) as exc:
+        return {**result, "status": "error", "error_kind": "image_unavailable",
+                "image": {**image, "status": "failed", "message": str(exc)},
+                "suggestion": "Retry the inspect call; the region records and selectors above are still usable."}
+    attachment = ImageContent(type="image", mimeType="image/png", data=base64.b64encode(png).decode("ascii"))
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(result)), attachment],
+                          structuredContent=result)
+
+
 def _with_images(result, media, *, cwd, image_root=None, keep_core=False, full_response=False):
     """Attach only the images named by the response, checking bytes at delivery."""
     from agentcad.inspection_delivery import finalize_mcp
@@ -542,6 +563,12 @@ def run(
     Use inspect with report=True or entity_id to inspect the result without re-importing.
     Reports/images are prepared on request; dry runs do not issue IDs.
 
+    show_regions(sketch_regions(...)) in the script adds labeled region map
+    PNGs under `regions`; a script with only show_regions() is a sketch-only
+    run (sketch_only: true, no STEP, current unchanged). Read a saved map
+    later with inspect(file=<regions.<map>.json>, entity_id="region_vN_MAP_I",
+    image=True): no rerun, no new version.
+
     Args:
         script: Path to the Python CAD script.
         cwd: Source project directory (or a subdirectory).
@@ -770,8 +797,10 @@ def inspect(
         summary: Include compact face/edge clusters.
         limit: Optional maximum records per ID list and IDs per summary cluster.
         no_limit: Return complete ID lists. Can be very large.
-        entity_id: Retrieve one typed ID from an imported or run-generated baseline's geometry manifest.
-        image: Return a labeled four-view PNG attachment plus its JSON record.
+        entity_id: Retrieve one typed ID from an imported or run-generated baseline's geometry manifest,
+            or one region (region_vN_MAP_I) when file is a saved regions/<map>.json from show_regions().
+        image: Return a labeled four-view PNG attachment plus its JSON record; for a region map,
+            the saved full map PNG (image.scope = full_map).
         isolate: Show only the selected entity; requires image and entity_id.
         report: Return nested inspection plus a whole-response delivery audit,
             defaulting to 2000 estimated text tokens, and ranked image samples.
@@ -868,6 +897,8 @@ def inspect(
     append_options(args, dict(context_window=context_window, response_budget=response_budget,
                              response_text_budget=response_text_budget, image_budget=image_budget, vision_profile=vision_profile))
     result = _invoke(_build_args(args, build_dir), cwd=cwd)
+    if "region_map" in result:
+        return _with_region_map_image(result, cwd=cwd)
     report_payload = result.get("inspection", result)
     media = report_payload.get("media", []) if report else []
     if image and result.get("image", {}).get("status") == "success":
