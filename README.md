@@ -1,5 +1,7 @@
 # agentcad
 
+**[v0.8.1 is live](https://agentcad.dev/changelog/v0.8.1)!** Thanks to [Santiago Ariza (@santiariza15)](https://github.com/santiariza15) for the PCB enclosure recipe and position/material checks.
+
 **CAD tool for AI agents.** Give your coding agent the ability to design 3D models.
 
 Your agent writes build123d Python scripts by default. agentcad handles execution, STEP export, PNG rendering, mesh export (STL/GLB/OBJ), geometric metrics, validation, diffing, and browser preview. CadQuery remains available as an explicit compatibility mode. Each command's final response is structured JSON on stdout.

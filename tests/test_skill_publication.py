@@ -189,3 +189,53 @@ def test_unreleased_generator_edit_is_refused(publisher, release, tmp_path):
     (release["source"] / "scripts/generate_skill_md.py").write_text("raise AssertionError('must not execute')")
     with pytest.raises(ValueError, match="local changes"):
         publisher.prepare(release["source"], manifest, tmp_path / "out", release["client"])
+
+
+def test_pypi_metadata_waits_for_propagation(publisher, monkeypatch):
+    from urllib.error import HTTPError
+
+    url = publisher.PYPI + "/0.8.1/json"
+    responses = [HTTPError(url, 404, "Not found", {}, None)] * 3 + [b'{"info":{"version":"0.8.1"}}']
+    calls, sleeps = [], []
+    client = publisher.Client()
+
+    def read(requested):
+        calls.append(requested)
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(client, "bytes", read)
+    import time
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    assert client.json(url)["info"]["version"] == "0.8.1"
+    assert calls == [url] * 4
+    assert sleeps == [15, 30, 60]
+
+
+@pytest.mark.parametrize("url,code,attempts", [
+    ("https://pypi.org/pypi/agentcad/json", 404, 4),
+    ("https://pypi.org/pypi/agentcad/0.8.1/json", 403, 1),
+    ("https://api.github.com/repos/jdilla1277/agentcad/releases/tags/v0.8.1", 404, 1),
+    ("https://files.pythonhosted.org/release.whl", 404, 1),
+])
+def test_metadata_retry_is_bounded_and_does_not_hide_other_failures(publisher, monkeypatch, url, code, attempts):
+    from urllib.error import HTTPError
+    import time
+
+    calls, sleeps = [], []
+    error = HTTPError(url, code, "Not available", {}, None)
+    client = publisher.Client()
+
+    def read(requested):
+        calls.append(requested)
+        raise error
+
+    monkeypatch.setattr(client, "bytes", read)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    with pytest.raises(HTTPError) as caught:
+        client.json(url)
+    assert caught.value is error
+    assert calls == [url] * attempts
+    assert sleeps == ([15, 30, 60] if attempts == 4 else [])
