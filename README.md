@@ -219,8 +219,14 @@ identity. Viewer state lives in `~/.cache/agentcad/viewer` (override with
 the saved port and private URLs. If the port is occupied, AgentCAD reports the
 problem without silently changing the URL. Use `agentcad viewer status` and
 `agentcad viewer stop` for diagnostics; `agentcad viewer open` restarts it.
-An incompatible service protocol requires stopping the service with the
-installation that started it before reopening with the new installation.
+For incompatible viewer protocols, the new installation can authenticate and
+stop the old service with `agentcad viewer stop`, then start its replacement with
+`agentcad viewer open`. The saved port and project bookmarks are preserved.
+If a reused viewer has a different feedback recipient from the current
+`AGENTCAD_FEEDBACK_URL`, opening reports the mismatch and requests the same
+stop/open sequence. Run both commands with the intended environment and the same
+`--build-dir`, if configured. Review the recipient and sharing choice after the
+restart; approval for the previous recipient does not enable the new one.
 
 ## No boilerplate
 
@@ -394,7 +400,7 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 Keep credentials in a password manager, outside project files and agent prompts.
 
 For the local cloud CLI, install
-`pip install 'agentcad[cloud]==0.8.0'` (also included in `agentcad[mcp]`),
+`pip install 'agentcad[cloud]==0.8.1'` (also included in `agentcad[mcp]`),
 as shown in the guide above:
 
 ```bash
@@ -445,7 +451,17 @@ agentcad feedback --template --output feedback.md
 agentcad feedback --file feedback.md
 ```
 
-Creating a template sends nothing. Reports include recent session context;
-review what you send, or add `--local-only` to keep it local. Partial reports,
-positive feedback, and ideas are welcome. See `agentcad docs feedback` for
-file/stdin input and upload receipts.
+After upgrading, stop the old viewer with `agentcad viewer stop`, then reopen it
+to load the new sharing controls. Feedback stays local by default. The human can enable or revoke automatic
+sharing in the live viewer's **Feedback sharing** panel for that build root.
+Automatic uploads contain only brief observation text and the AgentCAD version;
+agents should omit private design details. Files and longer reports stay local.
+`--local-only` suppresses automatic sharing; `--send` shares a particular note or
+report once when requested by the human, without changing future sharing.
+
+Diagnostics require a separate review: `agentcad feedback "what happened" --diagnostics` shows the complete local payload. Review all fields, exclude or
+redact unwanted information, then explicitly authorize the edited JSON upload
+using `--send-diagnostics reviewed.json --send`, or use the viewer's diagnostic
+panel. No diagnostics are automatically attached to observations. Local MCP's
+`feedback` tool follows the same policy and accepts report text directly.
+See `agentcad docs feedback` for scope, file/stdin input and upload receipts.
