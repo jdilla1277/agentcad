@@ -102,6 +102,8 @@ def test_cloud_docs_are_discoverable_without_credentials():
     content = json.loads(result.stdout)["content"]
     assert "AGENTCAD_KEY_SECRET" in content and "idempotency" in content.lower()
     assert "cloud_job" in content and "--compare" not in content
+    assert "python -m agentcad.mcp" in content and "cloud_help" in content
+    assert "not a hosted remote MCP URL" not in content
 
 
 def test_mcp_rejects_unsupported_options_before_submitting(monkeypatch):

@@ -134,7 +134,9 @@ SECTIONS = {
         "  requirements can leave passed=null. Preserve comparison_3d's exact/\n"
         "  approximate method and unavailable/timeout states. Unavailable does\n"
         "  not mean unchanged; rendering does not establish validity.\n"
-        "  This is a local MCP adapter calling HTTPS, not a hosted remote MCP URL.\n"
+        "  Local MCP: python -m agentcad.mcp provides local and cloud tools.\n"
+        "  Hosted MCP: connect directly to the host-issued /mcp URL and call\n"
+        "  cloud_help; no local AgentCAD installation is required.\n"
         "  Full setup and build/edit walkthrough:\n"
         "    https://github.com/jdilla1277/agentcad/blob/main/docs/cloud-workflow.md\n"
     ),
