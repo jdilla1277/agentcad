@@ -130,7 +130,7 @@ def test_feedback_status_partial_on_remote_failure(runner, isolated_dir, monkeyp
         lambda bundle: {"err": "Server returned 500", "discord": None, "neon_row_id": None},
     )
 
-    result = runner.invoke(cli, ["feedback", "remote down"])
+    result = runner.invoke(cli, ["feedback", "remote down", "--send"])
     assert result.exit_code == 0
 
     output = json.loads(result.stdout)
@@ -140,45 +140,12 @@ def test_feedback_status_partial_on_remote_failure(runner, isolated_dir, monkeyp
 
 def test_feedback_status_success_on_remote_success(runner, isolated_dir):
     """When remote upload succeeds, top-level status remains 'success'."""
-    result = runner.invoke(cli, ["feedback", "all good"])
+    result = runner.invoke(cli, ["feedback", "all good", "--send"])
     assert result.exit_code == 0
 
     output = json.loads(result.stdout)
     assert output["status"] == "success"
     assert output["remote"] == "sent"
-
-
-def test_feedback_auto_retries_with_fewer_entries_on_413(runner, isolated_dir, monkeypatch):
-    """A 413 response triggers automatic retry with halved --max-entries."""
-    _write_log_entries(isolated_dir, 40)
-
-    calls = []
-
-    def fake_send(bundle):
-        n = len(bundle["session_log"])
-        calls.append(n)
-        if n > 5:
-            return {
-                "err": "HTTP Error 413: Request Entity Too Large",
-                "discord": None,
-                "neon_row_id": None,
-            }
-        return {"err": None, "discord": "ok", "neon_row_id": 123}
-
-    monkeypatch.setattr(feedback_mod, "_send_remote", fake_send)
-
-    result = runner.invoke(cli, ["feedback", "big bundle", "--max-entries", "40"])
-    assert result.exit_code == 0
-
-    output = json.loads(result.stdout)
-    # Should have retried, halving each time until <= 5 entries fits
-    assert len(calls) > 1
-    assert calls[0] == 40
-    assert calls[-1] <= 5
-    assert output["status"] == "success"
-    assert "retried" in output["remote"]
-    # Local bundle should reflect what actually got sent
-    assert len(output["bundle"]["session_log"]) == calls[-1]
 
 
 def test_feedback_no_retry_on_non_413_errors(runner, isolated_dir, monkeypatch):
@@ -188,42 +155,17 @@ def test_feedback_no_retry_on_non_413_errors(runner, isolated_dir, monkeypatch):
     calls = []
 
     def fake_send(bundle):
-        calls.append(len(bundle["session_log"]))
+        calls.append(bundle)
         return {"err": "Connection refused", "discord": None, "neon_row_id": None}
 
     monkeypatch.setattr(feedback_mod, "_send_remote", fake_send)
 
-    result = runner.invoke(cli, ["feedback", "network down", "--max-entries", "20"])
+    result = runner.invoke(cli, ["feedback", "network down", "--send", "--max-entries", "20"])
     assert result.exit_code == 0
 
     assert len(calls) == 1  # No retry
     output = json.loads(result.stdout)
     assert output["status"] == "partial"
-
-
-def test_feedback_413_retry_stops_at_one_entry(runner, isolated_dir, monkeypatch):
-    """If 413 persists, retry stops once max_entries reaches 1 (no infinite loop)."""
-    _write_log_entries(isolated_dir, 16)
-    calls = []
-
-    def always_413(bundle):
-        calls.append(len(bundle["session_log"]))
-        return {
-            "err": "HTTP Error 413: Request Entity Too Large",
-            "discord": None,
-            "neon_row_id": None,
-        }
-
-    monkeypatch.setattr(feedback_mod, "_send_remote", always_413)
-
-    result = runner.invoke(cli, ["feedback", "always too big", "--max-entries", "16"])
-    assert result.exit_code == 0
-
-    output = json.loads(result.stdout)
-    assert output["status"] == "partial"
-    # Halving sequence: 16, 8, 4, 2, 1 — then stop
-    assert calls[-1] == 1
-    assert len(calls) == 5
 
 
 def test_feedback_surfaces_discord_status_on_success(runner, isolated_dir, monkeypatch):
@@ -232,7 +174,7 @@ def test_feedback_surfaces_discord_status_on_success(runner, isolated_dir, monke
         return {"err": None, "discord": "ok", "neon_row_id": 42}
 
     monkeypatch.setattr(feedback_mod, "_send_remote", fake_send)
-    result = runner.invoke(cli, ["feedback", "hello"])
+    result = runner.invoke(cli, ["feedback", "hello", "--send"])
     assert result.exit_code == 0
 
     output = json.loads(result.stdout)
@@ -252,7 +194,7 @@ def test_feedback_surfaces_discord_failure_separately(runner, isolated_dir, monk
         }
 
     monkeypatch.setattr(feedback_mod, "_send_remote", fake_send)
-    result = runner.invoke(cli, ["feedback", "weird body"])
+    result = runner.invoke(cli, ["feedback", "weird body", "--send"])
     assert result.exit_code == 0
 
     output = json.loads(result.stdout)

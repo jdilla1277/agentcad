@@ -5,7 +5,13 @@ import copy
 import pytest
 
 from agentcad import change_contract as contract
-from agentcad.change_checks import compile_policy, evaluate_checks, measure_geometry
+from agentcad.change_checks import (
+    compile_policy,
+    evaluate_checks,
+    measure_geometry,
+    probe_boxes_for_policy,
+)
+from agentcad.feature_checks import check_positioned_cylinders
 
 
 def declaration(*checks, **extra):
@@ -80,6 +86,8 @@ def test_policy_inherits_and_requires_audited_changes_instead_of_dropping_requir
         dimension(expected_mm=float("nan")),
         dimension(axis="all"),
         dimension(kind="guessed"),
+        dimension(kind=[]),
+        dimension(kind={}),
         dimension(misspelled=True),
     ],
 )
@@ -230,3 +238,409 @@ def test_matching_is_one_to_one_and_not_greedy_by_cylinder_order():
     )[0]
     assert result["state"] == "pass"
     assert result["observed"]["max_displacement_mm"] == pytest.approx(0.5)
+
+def z_cylinder(diameter, x, y, face):
+    return {
+        "diameter_mm": diameter,
+        "direction": [0, 0, 1],
+        "center_mm": [x, y, 0],
+        "face_indices": [face],
+    }
+
+
+def test_positioned_cylinders_and_probes_compile_with_signed_coordinates():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[-5.5, 2], [3, 3]],
+                "position_tolerance_mm": 0.05,
+            },
+            {
+                "check_id": "under_board",
+                "kind": "keepout",
+                "box_mm": [-2, -2, -5, 2, 2, -1],
+            },
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": [-1, -1, -2, 1, 1, 0],
+                "min_volume_mm3": 0.5,
+            },
+        )
+    )
+    by_id = {spec["check_id"]: spec for spec in policy["checks"]}
+    assert by_id["mounts"]["settings"]["positions_mm"] == [[-5.5, 2.0], [3.0, 3.0]]
+    assert by_id["mounts"]["settings"]["tolerance_mm"] == 0.1
+    assert by_id["mounts"]["settings"]["position_tolerance_mm"] == 0.05
+    assert by_id["under_board"]["settings"]["max_volume_mm3"] == 0.0
+    assert by_id["boss"]["settings"]["box_mm"] == [-1.0, -1.0, -2.0, 1.0, 1.0, 0.0]
+    assert probe_boxes_for_policy(policy) == [
+        [-2.0, -2.0, -5.0, 2.0, 2.0, -1.0],
+        [-1.0, -1.0, -2.0, 1.0, 1.0, 0.0],
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {
+            "check_id": "mounts",
+            "kind": "positioned_cylinders",
+            "axis": "z",
+            "diameter_mm": 3,
+            "positions_mm": [[1, 2], [1, 2]],
+        },
+        {
+            "check_id": "mounts",
+            "kind": "positioned_cylinders",
+            "axis": "z",
+            "diameter_mm": 3,
+            "positions_mm": [[1, 2, 3]],
+        },
+        {
+            "check_id": "mounts",
+            "kind": "positioned_cylinders",
+            "axis": "z",
+            "diameter_mm": 3,
+            "positions_mm": [],
+        },
+        {
+            "check_id": "void",
+            "kind": "keepout",
+            "box_mm": [1, 1, 1, -1, 2, 2],
+        },
+        {
+            "check_id": "boss",
+            "kind": "material",
+            "box_mm": [0, 0, 0, 1, 1, 1],
+        },
+        {
+            "check_id": "boss",
+            "kind": "material",
+            "box_mm": [0, 0, 0, 1, 1, 1],
+            "min_volume_mm3": 0,
+        },
+    ],
+)
+def test_bad_position_and_probe_requirements_are_rejected(bad):
+    with pytest.raises(ValueError):
+        compile_policy(declaration(bad))
+
+
+def test_positioned_cylinders_share_the_200_position_limit():
+    positions = [[float(index), 0.0] for index in range(200)]
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": positions,
+            }
+        )
+    )
+    assert len(policy["checks"][0]["settings"]["positions_mm"]) == 200
+
+    with pytest.raises(ValueError, match="at most 200 positions"):
+        compile_policy(
+            declaration(
+                {
+                    "check_id": "mounts",
+                    "kind": "positioned_cylinders",
+                    "axis": "z",
+                    "diameter_mm": 3,
+                    "positions_mm": [*positions, [200.0, 0.0]],
+                }
+            )
+        )
+
+
+def test_positioned_cylinders_match_one_to_one_and_report_missing_and_extra():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0], [10, 0]],
+                "position_tolerance_mm": 0.1,
+            }
+        )
+    )
+    measured = {
+        "dimensions": {},
+        "cylinders": [z_cylinder(3, 0, 0, 1), z_cylinder(3, 11, 0, 2)],
+    }
+    result = evaluate_checks(candidate(policy), policy, measured)[0]
+    observed = result["observed"]
+    assert result["state"] == "fail"
+    assert observed["missing_positions_mm"] == [[10.0, 0.0]]
+    assert observed["extra_cylinders"][0]["position_mm"] == [11.0, 0.0]
+    assert observed["max_position_error_mm"] == pytest.approx(1.0)
+    assert observed["affected_face_indices"] == [1, 2]
+
+    measured["cylinders"][1]["center_mm"][0] = 10
+    result = evaluate_checks(candidate(policy), policy, measured)[0]
+    assert result["state"] == "pass"
+    assert result["observed"]["max_position_error_mm"] == 0
+
+
+def test_positioned_cylinder_summary_uses_assigned_error_and_keeps_nearest_diagnostic():
+    cylinders = [z_cylinder(3, 0.04, 0, 1), z_cylinder(3, -0.1, 0, 2)]
+
+    passed, observed = check_positioned_cylinders(
+        cylinders,
+        axis="z",
+        diameter_mm=3,
+        positions_mm=[[0, 0], [0.1, 0]],
+        position_tolerance_mm=0.2,
+    )
+
+    assert passed is True
+    assert observed["max_position_error_mm"] == pytest.approx(0.1)
+    assert observed["max_nearest_position_error_mm"] == pytest.approx(0.06)
+
+
+def test_positioned_cylinders_ignore_cylinders_outside_the_diameter_and_axis_selection():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "mounts",
+                "kind": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0]],
+                "position_tolerance_mm": 0.1,
+                "tolerance_mm": 0.05,
+            }
+        )
+    )
+    measured = {
+        "dimensions": {},
+        "cylinders": [
+            z_cylinder(3.2, 0, 0, 1),
+            {
+                "diameter_mm": 3,
+                "direction": [1, 0, 0],
+                "center_mm": [0, 0, 0],
+                "face_indices": [2],
+            },
+        ],
+    }
+    result = evaluate_checks(candidate(policy), policy, measured)[0]
+    assert result["state"] == "fail"
+    assert result["observed"]["measured_count"] == 0
+    assert result["observed"]["missing_positions_mm"] == [[0.0, 0.0]]
+
+
+@pytest.mark.parametrize(
+    ("volume", "states"),
+    [(0.0, ["pass", "fail"]), (1.0, ["fail", "pass"])],
+)
+def test_keepout_and_material_probes_compare_volume(volume, states):
+    box = [0, 0, 0, 1, 1, 1]
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": box,
+                "max_volume_mm3": 0,
+            },
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": box,
+                "min_volume_mm3": 0.5,
+            },
+        )
+    )
+    measured = {
+        "dimensions": {},
+        "cylinders": [],
+        "material_volumes": [{"box_mm": box, "volume_mm3": volume}],
+    }
+    results = evaluate_checks(candidate(policy), policy, measured)
+    assert [result["state"] for result in results] == states
+    assert results[0]["observed"]["volume_mm3"] == volume
+    assert results[0]["observed"]["max_volume_mm3"] == 0
+    assert results[1]["observed"]["min_volume_mm3"] == 0.5
+
+
+def test_missing_probe_evidence_is_unavailable_not_a_pass():
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": [0, 0, 0, 1, 1, 1],
+            }
+        )
+    )
+    result = evaluate_checks(
+        candidate(policy), policy, {"dimensions": {}, "cylinders": []}
+    )[0]
+    assert result["state"] == "unavailable"
+    assert "Material probe evidence" in result["observed"]["reason"]
+
+
+def test_written_geometry_reports_exact_probe_volumes(tmp_path):
+    from build123d import Box, export_step
+
+    part = Box(10, 10, 10)
+    path = tmp_path / "cube.step"
+    export_step(part, path)
+    measured = measure_geometry(
+        path, probe_boxes=[[0, 0, 0, 1, 1, 1], [0, 0, 0, 1, 1, 1]]
+    )
+    assert measured["cylinders"] == []
+    assert len(measured["material_volumes"]) == 1
+    assert measured["material_volumes"][0]["volume_mm3"] == pytest.approx(1.0)
+
+def test_probe_policy_flows_from_policy_to_measurement_to_result(tmp_path):
+    from build123d import Box, export_step
+
+    path = tmp_path / "cube.step"
+    export_step(Box(10, 10, 10), path)
+    box = [0, 0, 0, 1, 1, 1]
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": box,
+                "min_volume_mm3": 0.5,
+            },
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": box,
+                "max_volume_mm3": 0.5,
+            },
+        )
+    )
+    measured = measure_geometry(path, probe_boxes=probe_boxes_for_policy(policy))
+    results = evaluate_checks(candidate(policy), policy, measured)
+    assert [result["state"] for result in results] == ["pass", "fail"]
+    assert results[0]["observed"]["volume_mm3"] == pytest.approx(1.0)
+    assert results[1]["observed"]["volume_mm3"] == pytest.approx(1.0)
+
+
+def test_thin_advisory_probe_keeps_the_required_dimension_usable(tmp_path):
+    from build123d import Box, export_step
+
+    path = tmp_path / "cube.step"
+    export_step(Box(10, 10, 10), path)
+    policy = compile_policy(
+        declaration(
+            dimension(expected_mm=10),
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": [0, 0, 0, 1, 1, 1e-8],
+                "required": False,
+            },
+        )
+    )
+
+    measured = measure_geometry(path, probe_boxes=probe_boxes_for_policy(policy))
+    assert measured["material_volumes"][0]["error"]
+    results = evaluate_checks(candidate(policy), policy, measured)
+
+    assert results[0]["state"] == "pass"
+    assert results[0]["observed"]["measured_mm"] == pytest.approx(10)
+    assert results[1]["state"] == "unavailable"
+    assert "box" in results[1]["observed"]["reason"]
+    assert "minimum required by OCCT" in results[1]["observed"]["reason"]
+    receipt = contract.make_change_receipt(candidate(policy), policy, results)
+    assert receipt["validation_state"] == "valid"
+
+
+def test_reversed_brep_probe_evidence_is_unavailable_not_passing(tmp_path):
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.BRepTools import BRepTools
+    from OCP.gp import gp_Pnt
+
+    reversed_box = BRepPrimAPI_MakeBox(
+        gp_Pnt(0, 0, 0), gp_Pnt(10, 10, 10)
+    ).Shape().Reversed()
+    path = tmp_path / "reversed.brep"
+    assert BRepTools.Write_s(reversed_box, str(path))
+    box = [0, 0, 0, 1, 1, 1]
+    policy = compile_policy(
+        declaration(
+            {
+                "check_id": "void",
+                "kind": "keepout",
+                "box_mm": box,
+                "max_volume_mm3": 0,
+            },
+            {
+                "check_id": "boss",
+                "kind": "material",
+                "box_mm": box,
+                "min_volume_mm3": 0.5,
+            },
+        )
+    )
+
+    measured = measure_geometry(path, probe_boxes=probe_boxes_for_policy(policy))
+    results = evaluate_checks(candidate(policy), policy, measured)
+
+    assert [result["state"] for result in results] == ["unavailable", "unavailable"]
+    for result in results:
+        assert "positive finite signed volume" in result["observed"]["reason"]
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        {
+            "check_id": "no_pins",
+            "kind": "cylinders",
+            "axis": "z",
+            "diameter_mm": 4,
+            "count": 0,
+            "tolerance_mm": 0.1,
+        },
+        {
+            "check_id": "mounts",
+            "kind": "positioned_cylinders",
+            "axis": "z",
+            "diameter_mm": 4,
+            "positions_mm": [[0, 0]],
+            "position_tolerance_mm": 0.1,
+            "tolerance_mm": 0.1,
+        },
+    ],
+)
+def test_cylinder_inspection_failure_is_unavailable_not_a_pass(
+    tmp_path, monkeypatch, check
+):
+    from build123d import Box, export_step
+
+    path = tmp_path / "pins.step"
+    export_step(Box(10, 10, 10), path)
+    policy = compile_policy(declaration(check))
+
+    def fail(shape):
+        raise RuntimeError("injected surface inspection failure")
+
+    monkeypatch.setattr("agentcad.feature_checks.extract_cylinders", fail)
+    with pytest.raises(RuntimeError, match="injected surface inspection failure"):
+        measure_geometry(path)
+
+    result = evaluate_checks(
+        candidate(policy),
+        policy,
+        None,
+        reason="injected surface inspection failure",
+    )[0]
+    assert result["state"] == "unavailable"
+    assert "injected surface inspection failure" in result["observed"]["reason"]

@@ -1,6 +1,7 @@
 import json
 
 import cadquery as cq
+import pytest
 from cadquery import exporters
 
 from agentcad.cli import cli
@@ -17,6 +18,15 @@ def _plate_with_two_holes_step(directory, name="two_holes.step"):
     part = plate.cut(cutters)
     path = directory / name
     exporters.export(part, str(path))
+    return path
+
+
+def _overlapping_compound_step(directory, name="overlapping.step"):
+    first = cq.Workplane("XY").box(10, 10, 10).val()
+    second = cq.Workplane("XY").box(10, 10, 10).translate((5, 0, 0)).val()
+    compound = cq.Compound.makeCompound([first, second])
+    path = directory / name
+    exporters.export(compound, str(path))
     return path
 
 
@@ -156,6 +166,47 @@ class TestCheckSpecCommand:
         assert any("name" in error for error in parsed["errors"])
         assert any("type" in error for error in parsed["errors"])
 
+    @pytest.mark.parametrize("coordinate", [float("nan"), float("inf"), 10**1000])
+    def test_check_spec_rejects_non_finite_positioned_cylinder_positions(
+        self, runner, isolated_dir, coordinate
+    ):
+        spec = _write_spec(isolated_dir, {
+            "features": [{
+                "name": "mounts",
+                "type": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[coordinate, 0]],
+            }]
+        })
+
+        result = runner.invoke(cli, ["check-spec", "missing.step", str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("positions_mm[0]" in error for error in parsed["errors"])
+
+    def test_check_spec_rejects_oversized_positioned_cylinder_spec(
+        self, runner, isolated_dir
+    ):
+        spec = _write_spec(isolated_dir, {
+            "features": [{
+                "name": "many_mounts",
+                "type": "positioned_cylinders",
+                "axis": "z",
+                "diameter_mm": 3,
+                "positions_mm": [[float(index), 0.0] for index in range(1000)],
+            }]
+        })
+
+        result = runner.invoke(cli, ["check-spec", "missing.step", str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("at most 200 positions" in error for error in parsed["errors"])
+
     def test_check_spec_missing_spec_error(self, runner, isolated_dir):
         step = _plate_with_two_holes_step(isolated_dir)
 
@@ -198,3 +249,311 @@ class TestCheckSpecCommand:
         assert parsed["command"] == "check-spec"
         assert parsed["status"] == "unsupported_format"
         assert "STEP/STP/BREP" in parsed["message"]
+
+    def test_check_spec_passes_positioned_cylinders(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "mounts",
+                    "type": "positioned_cylinders",
+                    "axis": "z",
+                    "diameter_mm": 6,
+                    "positions_mm": [[-10, 0], [10, 0]],
+                    "position_tolerance_mm": 0.05,
+                }
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is True
+        feature = parsed["matched_features"][0]
+        assert feature["type"] == "positioned_cylinders"
+        assert feature["passed"] is True
+        assert feature["max_position_error_mm"] == 0
+        assert feature["measured"]["measured_count"] == 2
+
+    def test_check_spec_reports_positioned_cylinder_error_and_count(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "mounts",
+                    "type": "positioned_cylinders",
+                    "axis": "z",
+                    "diameter_mm": 6,
+                    "positions_mm": [[-9, 0], [10, 0]],
+                    "position_tolerance_mm": 0.05,
+                }
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is False
+        feature = parsed["matched_features"][0]
+        assert feature["passed"] is False
+        assert feature["count_error"] == 0
+        assert feature["measured"]["missing_positions_mm"] == [[-9.0, 0.0]]
+        assert feature["measured"]["extra_cylinders"][0]["position_mm"] == [-10.0, 0.0]
+        assert feature["max_position_error_mm"] == 1.0
+
+    def test_check_spec_material_and_keepout_probes(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "hole_void",
+                    "type": "keepout",
+                    "box_mm": [-11, -1, 0.5, -9, 1, 2],
+                    "max_volume_mm3": 0,
+                },
+                {
+                    "name": "plate_material",
+                    "type": "material",
+                    "box_mm": [0, 0, 0.5, 1, 1, 1.5],
+                    "min_volume_mm3": 0.5,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is True
+        by_name = {row["name"]: row for row in parsed["matched_features"]}
+        assert by_name["hole_void"]["measured"]["volume_mm3"] == 0
+        assert by_name["plate_material"]["measured"]["volume_mm3"] == pytest.approx(1)
+        assert by_name["plate_material"]["volume_margin_mm3"] == pytest.approx(0.5)
+
+    def test_check_spec_reports_failed_material_and_keepout_probes(
+        self, runner, isolated_dir
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "solid_keepout",
+                    "type": "keepout",
+                    "box_mm": [0, 0, 0.5, 1, 1, 1.5],
+                    "max_volume_mm3": 0,
+                },
+                {
+                    "name": "empty_material",
+                    "type": "material",
+                    "box_mm": [-11, -1, 0.5, -9, 1, 2],
+                    "min_volume_mm3": 0.5,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["passed"] is False
+        by_name = {row["name"]: row for row in parsed["matched_features"]}
+        assert by_name["solid_keepout"]["passed"] is False
+        assert by_name["empty_material"]["passed"] is False
+        assert by_name["solid_keepout"]["measured"]["volume_mm3"] == pytest.approx(1)
+
+    def test_check_spec_counts_overlapping_compound_material_once(
+        self, runner, isolated_dir
+    ):
+        step = _overlapping_compound_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "must_fill",
+                    "type": "material",
+                    "box_mm": [-10, -10, -10, 20, 10, 10],
+                    "min_volume_mm3": 1750,
+                },
+                {
+                    "name": "bounded_void",
+                    "type": "keepout",
+                    "box_mm": [-10, -10, -10, 20, 10, 10],
+                    "max_volume_mm3": 1750,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        by_name = {row["name"]: row for row in parsed["matched_features"]}
+        assert by_name["must_fill"]["passed"] is False
+        assert by_name["bounded_void"]["passed"] is True
+        assert by_name["must_fill"]["measured"]["volume_mm3"] == pytest.approx(1500)
+        assert by_name["bounded_void"]["measured"]["volume_mm3"] == pytest.approx(1500)
+
+    @pytest.mark.parametrize(
+        "feature",
+        [
+            {
+                "name": "p",
+                "type": "positioned_cylinders",
+                "axis": [],
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0]],
+            },
+            {
+                "name": "p",
+                "type": "positioned_cylinders",
+                "axis": {},
+                "diameter_mm": 3,
+                "positions_mm": [[0, 0]],
+            },
+            {
+                "name": "c",
+                "type": "cylinder",
+                "axis": [],
+                "diameter_mm": 3,
+                "count": 1,
+            },
+            {
+                "name": "c",
+                "type": "cylinder",
+                "axis": {},
+                "diameter_mm": 3,
+                "count": 1,
+            },
+        ],
+    )
+    def test_check_spec_rejects_non_string_axes(
+        self, runner, isolated_dir, feature
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {"features": [feature]})
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("axis" in error for error in parsed["errors"])
+
+    def test_check_spec_rejects_invalid_positioned_cylinder_and_probe_fields(self, runner, isolated_dir):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "mounts",
+                    "type": "positioned_cylinders",
+                    "axis": "z",
+                    "diameter_mm": 6,
+                    "positions_mm": [[0, 0], [0, 0]],
+                },
+                {
+                    "name": "void",
+                    "type": "keepout",
+                    "box_mm": [1, 1, 1, 0, 2, 2],
+                },
+                {
+                    "name": "boss",
+                    "type": "material",
+                    "box_mm": [0, 0, 0, 1, 1, 1],
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        errors = " ".join(parsed["errors"])
+        assert "positions_mm" in errors
+        assert "box_mm" in errors
+        assert "min_volume_mm3" in errors
+
+    @pytest.mark.parametrize("bad_type", [[], {}])
+    def test_check_spec_rejects_non_string_feature_types(
+        self, runner, isolated_dir, bad_type
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(
+            isolated_dir,
+            {"features": [{"name": "bad", "type": bad_type}]},
+        )
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 1
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "invalid_spec"
+        assert any("type" in error for error in parsed["errors"])
+
+    def test_check_spec_identifies_a_thin_probe_without_malformed_file(
+        self, runner, isolated_dir
+    ):
+        step = _plate_with_two_holes_step(isolated_dir)
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "thin_void",
+                    "type": "keepout",
+                    "box_mm": [0, 0, 0, 1, 1, 1e-8],
+                    "max_volume_mm3": 0,
+                }
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(step), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["passed"] is False
+        missing = {row["name"]: row for row in parsed["missing_features"]}
+        assert "thin_void" in missing
+        assert "minimum required by OCCT" in missing["thin_void"]["reason"]
+        assert "[0.0, 0.0, 0.0, 1.0, 1.0, 1e-08]" in missing["thin_void"]["reason"]
+
+    def test_check_spec_reports_reversed_brep_probes_as_unavailable(
+        self, runner, isolated_dir
+    ):
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+        from OCP.BRepTools import BRepTools
+        from OCP.gp import gp_Pnt
+
+        reversed_box = BRepPrimAPI_MakeBox(
+            gp_Pnt(0, 0, 0), gp_Pnt(10, 10, 10)
+        ).Shape().Reversed()
+        brep = isolated_dir / "reversed.brep"
+        assert BRepTools.Write_s(reversed_box, str(brep))
+        spec = _write_spec(isolated_dir, {
+            "features": [
+                {
+                    "name": "inside_keepout",
+                    "type": "keepout",
+                    "box_mm": [1, 1, 1, 2, 2, 2],
+                    "max_volume_mm3": 0,
+                },
+                {
+                    "name": "outside_material",
+                    "type": "material",
+                    "box_mm": [20, 20, 20, 21, 21, 21],
+                    "min_volume_mm3": 0.5,
+                },
+            ]
+        })
+
+        result = runner.invoke(cli, ["check-spec", str(brep), str(spec)])
+
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["status"] == "success"
+        assert parsed["passed"] is False
+        missing = {row["name"]: row for row in parsed["missing_features"]}
+        assert set(missing) == {"inside_keepout", "outside_material"}
+        for row in missing.values():
+            assert "positive finite signed volume" in row["reason"]
+            assert "box" in row["reason"]

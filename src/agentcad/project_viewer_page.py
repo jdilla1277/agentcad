@@ -19,14 +19,108 @@ body.experimental #frames { top:108px }
  max-height:calc(100vh - 108px); overflow:auto; background:#fff; border:1px solid #bbb; padding:16px }
 #evidence-panel pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px }
 #evidence-panel p { margin:6px 0 16px; font-size:13px }
+#feedback-panel { position:fixed; inset:55px 12px auto auto; z-index:10; width:min(520px,calc(100vw - 24px)); max-height:calc(100vh - 70px); overflow:auto; padding:20px; background:white; border:1px solid #aaa; box-shadow:0 4px 24px #0003 }
+#feedback-panel label { display:block; margin:12px 0 }
+#feedback-payload { width:100%; height:220px; font:12px monospace; white-space:pre; overflow:auto }
+#feedback-panel p { overflow-wrap:anywhere }
 </style></head><body>
-<header><strong>AgentCAD · Live</strong><span id="status" role="status">Connecting…</span>
+<header><button id="feedback-toggle">Feedback sharing: loading…</button><strong>AgentCAD · Live</strong><span id="status" role="status">Connecting…</span>
 <button id="pin" hidden>Pin this revision</button><button id="follow" hidden>Follow working</button>
 <a id="accepted" hidden>Review accepted</a><button id="evidence-toggle" hidden>Checks and diagnostics</button>
 <a id="snapshot" target="_blank" rel="noopener" hidden>Version snapshot ↗</a></header>
 <main id="frames"></main>
+<aside id="feedback-panel" aria-label="Feedback sharing" hidden>
+<button id="feedback-close">Close</button><h2>Feedback sharing</h2>
+<p>Help improve AgentCAD by sharing brief tool feedback automatically.</p>
+<p id="feedback-recipient"></p><p id="feedback-scope"></p>
+<p>Off by default. When enabled, future brief agent observations (up to 2,000 characters) and the AgentCAD version go to the AgentCAD team at the recipient above. No command history, results, project files, paths or runtime details are attached. Observation text itself is shared: agents should omit private design details. Files and longer reports require a separate one-off sharing request. The receiving service also records your IP address. Enabling does not upload saved observations.</p>
+<label><input id="feedback-enabled" type="checkbox" disabled> Share brief tool feedback automatically for this build root</label>
+<button id="feedback-save" disabled>Save sharing choice</button>
+<p>This choice persists across restarts for this build root and recipient only. Uncheck and save to revoke it. A request already in flight may finish.</p>
+<h3>Share diagnostics separately</h3>
+<p>Prepare a local payload with <code>agentcad feedback "observation" --diagnostics</code>. Open its JSON file here. Review the complete payload below; remove fields or redact values before sending. Only this edited JSON object will be uploaded to the recipient above.</p>
+<input id="feedback-file" type="file" accept="application/json,.json" aria-label="Open local diagnostic JSON">
+<textarea id="feedback-payload" aria-label="Complete diagnostic payload; edit to redact" spellcheck="false"></textarea>
+<label><input id="feedback-authorize" type="checkbox"> I reviewed the complete edited payload and authorize this diagnostic upload to the recipient above.</label>
+<button id="feedback-send" disabled>Send reviewed diagnostics once</button>
+<p id="feedback-result" role="status"></p>
+</aside>
 <aside id="evidence-panel" hidden><h2>Checks and diagnostics</h2><div id="evidence-content"></div></aside>
 <script>
+const feedbackPanel = document.querySelector('#feedback-panel');
+const feedbackToggle = document.querySelector('#feedback-toggle');
+const feedbackEnabled = document.querySelector('#feedback-enabled');
+const feedbackSave = document.querySelector('#feedback-save');
+const feedbackPayload = document.querySelector('#feedback-payload');
+const feedbackAuthorize = document.querySelector('#feedback-authorize');
+const feedbackSend = document.querySelector('#feedback-send');
+const feedbackResult = document.querySelector('#feedback-result');
+let feedbackPolicy = null, feedbackFileSequence = 0;
+const feedbackToken = location.pathname.split('/')[2];
+async function feedbackRequest(route, payload) {
+  const response = await fetch('feedback/' + route, {
+    method:payload ? 'POST' : 'GET', cache:'no-store',
+    headers:{'Content-Type':'application/json', 'X-AgentCAD-Feedback-Token':feedbackToken},
+    ...(payload ? {body:JSON.stringify({...payload, human_authorized:true, recipient:feedbackPolicy.recipient})} : {})
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Feedback unavailable');
+  return data;
+}
+async function loadFeedbackPolicy() {
+  feedbackSave.disabled = true; feedbackEnabled.disabled = true;
+  try {
+    feedbackPolicy = await feedbackRequest('policy');
+    feedbackEnabled.checked = feedbackPolicy.enabled;
+    feedbackToggle.textContent = 'Feedback sharing: ' + (feedbackPolicy.enabled ? 'on' : 'off');
+    document.querySelector('#feedback-recipient').textContent = 'Recipient: AgentCAD team — ' + feedbackPolicy.recipient;
+    document.querySelector('#feedback-scope').textContent = 'Build root: ' + feedbackPolicy.scope;
+    feedbackSave.disabled = false; feedbackEnabled.disabled = false;
+    feedbackSend.disabled = !feedbackAuthorize.checked;
+  } catch (error) {
+    feedbackPolicy = null; feedbackSend.disabled = true;
+    feedbackToggle.textContent = 'Feedback sharing: unavailable';
+    feedbackResult.textContent = error.message;
+  }
+}
+feedbackToggle.onclick = () => { feedbackPanel.hidden = !feedbackPanel.hidden; if (!feedbackPanel.hidden) loadFeedbackPolicy(); };
+document.querySelector('#feedback-close').onclick = () => { feedbackPanel.hidden = true; };
+feedbackSave.onclick = async () => {
+  feedbackSave.disabled = true;
+  try {
+    await feedbackRequest('policy', {enabled:feedbackEnabled.checked});
+    await loadFeedbackPolicy();
+    feedbackResult.textContent = 'Sharing choice saved.';
+  } catch (error) { feedbackResult.textContent = error.message; feedbackSave.disabled = false; }
+};
+function resetDiagnosticAuthorization() { feedbackAuthorize.checked = false; feedbackSend.disabled = true; }
+feedbackPayload.oninput = resetDiagnosticAuthorization;
+document.querySelector('#feedback-file').onchange = async event => {
+  resetDiagnosticAuthorization();
+  const file = event.target.files[0], sequence = ++feedbackFileSequence;
+  if (!file) return;
+  try {
+    if (file.size > 2_000_000) throw new Error('Choose diagnostic JSON smaller than 2 MB.');
+    const text = await file.text();
+    if (sequence !== feedbackFileSequence) return;
+    feedbackPayload.value = text;
+    resetDiagnosticAuthorization();
+  } catch (error) { feedbackResult.textContent = error.message; }
+};
+feedbackAuthorize.onchange = () => { feedbackSend.disabled = !feedbackPolicy || !feedbackAuthorize.checked; };
+feedbackSend.onclick = async () => {
+  feedbackSend.disabled = true;
+  try {
+    const payload = JSON.parse(feedbackPayload.value);
+    if (!payload || Array.isArray(payload) || typeof payload !== 'object' || !Object.keys(payload).length) throw new Error('Enter a nonempty JSON object.');
+    const result = await feedbackRequest('diagnostics', {payload});
+    feedbackResult.textContent = result.remote === 'sent'
+      ? 'Diagnostics stored remotely. Notification: ' + (result.discord || 'unknown') + '.'
+      : 'Upload not confirmed; local copy saved. ' + result.remote;
+    resetDiagnosticAuthorization();
+  } catch (error) { feedbackResult.textContent = error.message; resetDiagnosticAuthorization(); }
+};
+loadFeedbackPolicy();
 const status = document.querySelector('#status');
 const frames = document.querySelector('#frames');
 const snapshot = document.querySelector('#snapshot');
