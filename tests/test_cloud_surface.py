@@ -18,7 +18,7 @@ from agentcad.mcp import server
 PROJECT = "prj_" + "a" * 24
 JOB = "job_" + "b" * 24
 SECRET = "test-secret-" + "d" * 32
-CLOUD_TOOLS = {"cloud_create_project", "cloud_projects", "cloud_project", "cloud_run", "cloud_import",
+CLOUD_TOOLS = {"cloud_activity", "cloud_create_project", "cloud_projects", "cloud_project", "cloud_run", "cloud_import",
                "cloud_measure", "cloud_inspect", "cloud_check_spec", "cloud_render", "cloud_diff", "cloud_export", "cloud_job", "cloud_download"}
 
 
