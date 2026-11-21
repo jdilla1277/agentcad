@@ -270,6 +270,65 @@ def test_local_mcp_images_and_replay_never_regenerate(box, runner, isolated_dir,
     assert len(stale_data["media"]) == 1
 
 
+@pytest.mark.parametrize("image_change", ["evicted", "corrupt", "expired"])
+def test_bounded_pages_keep_membership_and_cursors_when_images_disappear(
+    box, runner, isolated_dir, monkeypatch, image_change,
+):
+    from agentcad.inspection_delivery import estimate, RESERVE
+    from agentcad.mcp.server import inspect as mcp_inspect
+
+    # Exercise actual default media and the 2,000-token projection. Full-response
+    # replay cannot expose changes to boundaries caused by media diagnostics.
+    result = runner.invoke(cli, ["inspect", str(box), FLAG, "--query", '{"kind":"edge"}', "--no-daemon"])
+    assert result.exit_code == 0, result.stdout
+    first = json.loads(result.stdout)
+    assert first["page"]["has_more"] and first["page"]["returned"] > 0
+    snapshot = first["search_snapshot"]["id"]
+    saved = json.loads((isolated_dir / ".agentcad/geometry_search" / (snapshot + ".json")).read_bytes())
+    assert saved["media"]
+
+    def pages(start):
+        collected, page = [], start
+        while True:
+            assert estimate({**page, "_exit_code": 0}) + RESERVE <= 2000
+            collected.append(page)
+            if not page["page"]["next"]:
+                return collected
+            action = page["page"]["next"]
+            response = runner.invoke(cli, [*shlex.split(action["cli"])[1:], "--no-daemon"])
+            assert response.exit_code == 0, response.stdout
+            page = json.loads(response.stdout)
+
+    before = pages(first)
+    if image_change == "expired":
+        import time
+        monkeypatch.setattr("agentcad.inspection_cache._now", lambda: time.time() + 40 * 86400)
+    else:
+        for item in saved["media"]:
+            path = Path(item["png"])
+            if image_change == "evicted":
+                path.unlink()
+            else:
+                path.write_bytes(b"corrupt historical image")
+    monkeypatch.setattr("agentcad.geometry_images.geometry_image", lambda *a, **k: pytest.fail("Regenerated a retained image"))
+    replay = invoke(runner, box, None, "--search-snapshot", snapshot)
+    after = pages(replay)
+    assert len(after) == len(before)
+    for original, repeated in zip(before, after):
+        assert repeated["results"] == original["results"]
+        assert repeated["page"] == original["page"]
+        assert repeated["delivery"]["budget_satisfied"] is True
+    ids = [r["id"] for page in after for r in page["results"]]
+    assert len(ids) == len(set(ids)) == first["match_count"] == 12
+    assert replay["image_failures"] and replay["media"] == []
+    assert replay["delivery"]["image_omission_reason"] == "retained_image_unavailable"
+    mcp = mcp_inspect(file=str(box), cwd=str(isolated_dir),
+                      experimental_geometry_search=True, search_snapshot=snapshot)
+    mcp_data = json.loads(mcp.content[0].text)
+    assert mcp_data.pop("_exit_code") == 0
+    assert mcp_data == replay
+
+
 def test_mcp_image_free_text_uses_the_budgeted_serialization(box, isolated_dir):
     import math
     from agentcad.mcp.server import inspect as mcp_inspect

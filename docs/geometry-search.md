@@ -173,6 +173,9 @@ image token cost is reported as unknown. `--full-response` explicitly removes
 the text projection (page size and image caps still apply) and cannot combine
 with caller delivery budgets. A budget too small for one result plus required
 evidence returns an explicit error, never a falsely complete page.
+Page sizing reserves space for image-unavailability notices. Losing an image
+can change the delivered media and its status, but cannot change the result
+IDs or continuation cursor of a retained page.
 
 The initial page prepares up to ten highlighted 1024×1024 four-view images.
 Use `--search-images 0..10` / `search_images`, or `--no-images` (MCP:

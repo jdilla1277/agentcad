@@ -98,6 +98,13 @@ def _prepare_media(step, results, count, index):
     return media, failures
 
 
+def _unavailable_image(object_id):
+    # Keep this slot bounded and identical in the budget plan and live response.
+    # Exception text can include long cache paths and must not resize a page.
+    return {"id": object_id, "status": "unavailable",
+            "message": "Saved image bytes are unavailable; request a new image for fresh evidence."}
+
+
 def _retained_media(data, ids):
     from agentcad.inspection_cache import cache_lease
     media, failures = [], []
@@ -111,8 +118,8 @@ def _retained_media(data, ids):
                 if hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
                     raise ValueError("Image hash changed.")
             media.append(deepcopy(item))
-        except (OSError, ValueError) as exc:
-            failures.append({"id": item["id"], "status": "unavailable", "message": str(exc)})
+        except (OSError, ValueError):
+            failures.append(_unavailable_image(item["id"]))
     failures.extend(f for f in data.get("media_failures", []) if f["id"] in ids)
     return media, failures
 
@@ -199,9 +206,14 @@ def search(step, *, query=None, snapshot_id=None, cursor=None, object_id=None,
     count = min(page_size, len(results) - offset)
     policy, combined, text_limit = _limits(settings)
     profile = policy.get("vision_profile")
-    media, image_failures = _retained_media(data, {r["id"] for r in results[offset:offset + count]})
+    candidate_ids = {r["id"] for r in results[offset:offset + count]}
+    # Plan from immutable snapshot evidence, reserving an unavailable-image slot
+    # for every prepared target, even when its media is omitted for text budget.
+    # Live cache failures must never change the result slice or cursor.
+    media = [deepcopy(m) for m in data.get("media", []) if m["id"] in candidate_ids]
+    image_failures = [f for f in data.get("media_failures", []) if f["id"] in candidate_ids]
+    image_failures += [_unavailable_image(m["id"]) for m in media]
     requested_media = len(media)
-    unavailable_media = {f["id"] for f in image_failures}
     artifact_action = _action(step, artifact=snapshot_id)
     payload = {"command": "inspect", "status": "success", "operation": "geometry_search",
         MARKER: {"enabled": True, "status": "work_in_progress"},
@@ -243,18 +255,36 @@ def search(step, *, query=None, snapshot_id=None, cursor=None, object_id=None,
             payload["page"]["next"] = _action(step, cursor=_cursor(snapshot_id, next_offset))
         audit = payload["delivery"]
         audit["estimated_image_tokens"] = len(payload["media"]) * profile["tokens_per_image"] if profile else None if payload["media"] else 0
-        audit["images_returned"] = len(payload["media"])
-        audit["images_omitted"] = requested_media - len(payload["media"])
-        audit["image_omission_reason"] = ("retained_image_unavailable" if unavailable_media else
-            "text_or_combined_budget" if requested_media > len(payload["media"]) else
-            "caller_disabled" if settings["images"] == 0 else
-            "vision_profile_required" if profile is None and (combined is not None or policy.get("image_budget") is not None) else
-            "image_budget_zero" if policy.get("image_budget") == 0 else None)
+        # Reserve the widest allowed count and reason fields too. Delivery below
+        # replaces these conservative values without changing page membership.
+        audit["images_returned"] = 10
+        audit["images_omitted"] = 10
+        audit["image_omission_reason"] = "retained_image_unavailable"
         for _ in range(4):
             audit["estimated_text_tokens"] = estimate({**format_response(payload, layout), "_exit_code": 0})
         text = audit["estimated_text_tokens"] + RESERVE
         image_tokens = audit["estimated_image_tokens"] or 0
         if settings["full_response"] or text <= text_limit and (combined is None or text + image_tokens <= combined):
+            planned_ids = {m["id"] for m in payload["media"]}
+            available, failures = _retained_media(data, ids)
+            payload["media"] = [m for m in available if m["id"] in planned_ids]
+            payload["image_failures"] = [{**f, "message": f["message"][:160]} for f in failures]
+            audit["images_returned"] = len(payload["media"])
+            audit["images_omitted"] = requested_media - len(payload["media"])
+            audit["image_omission_reason"] = ("retained_image_unavailable" if failures else
+                "text_or_combined_budget" if requested_media > len(payload["media"]) else
+                "caller_disabled" if settings["images"] == 0 else
+                "vision_profile_required" if profile is None and (combined is not None or policy.get("image_budget") is not None) else
+                "image_budget_zero" if policy.get("image_budget") == 0 else None)
+            audit["estimated_image_tokens"] = len(payload["media"]) * profile["tokens_per_image"] if profile else None if payload["media"] else 0
+            for _ in range(4):
+                audit["estimated_text_tokens"] = estimate({**format_response(payload, layout), "_exit_code": 0})
+            # An unrelated metadata/configuration change may make the saved
+            # evidence undeliverable. Fail explicitly rather than resize it.
+            final_text = audit["estimated_text_tokens"] + RESERVE
+            if not settings["full_response"] and (final_text > text_limit or
+                    combined is not None and final_text + (audit["estimated_image_tokens"] or 0) > combined):
+                raise SearchBudgetError("Saved search page no longer fits its delivery budget; start a new query with a larger budget.")
             return payload
         if media:
             media.pop()
