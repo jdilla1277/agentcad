@@ -297,7 +297,7 @@ def measure_tier0_payload(
     probe_boxes: list | None = None,
     precise_cylinders: bool = False,
 ) -> dict:
-    from agentcad.core_build import validated_metrics
+    from agentcad.core_build import file_delivery_readiness, validated_metrics
     from agentcad.step_io import load_cad_shape
     from agentcad import topo_ids
 
@@ -329,6 +329,7 @@ def measure_tier0_payload(
         "size_bytes": detection.get("size_bytes"),
         "metrics": metrics,
         "validation": validation,
+        "delivery_readiness": file_delivery_readiness(validation, file_path),
         "cylindrical_features": cylindrical_features,
         "next_actions": next_actions,
         "more_at": "agentcad docs measure",

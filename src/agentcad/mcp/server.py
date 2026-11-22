@@ -738,6 +738,9 @@ def measure(
 ) -> dict:
     """Measure dimensions and feature sizes in a STEP/BREP file.
 
+    Returns fresh full-policy delivery_readiness bound to the file hash, using
+    the same geometry gates as run and the trusted cloud measurement worker.
+
     Args:
         file: Path to the STEP/STP/BREP file.
         cwd: Source project directory (or a subdirectory).

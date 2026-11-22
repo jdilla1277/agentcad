@@ -1993,12 +1993,8 @@ def _run_impl(
         )
 
     from agentcad.change_retention import assess_change
-    from agentcad.core_build import delivery_readiness, readiness_message
-    step_digest = hashlib.sha256()
-    with staged_step.open("rb") as checked_step:
-        for chunk in iter(lambda: checked_step.read(1024 * 1024), b""):
-            step_digest.update(chunk)
-    readiness = delivery_readiness(validation, artifact_sha256=step_digest.hexdigest())
+    from agentcad.core_build import file_delivery_readiness, readiness_message
+    readiness = file_delivery_readiness(validation, staged_step)
     # Seal the non-rendered model metadata with the checked geometry. Explicit
     # promotion must preserve named handles and overrides without rerunning CAD.
     checked_model = {

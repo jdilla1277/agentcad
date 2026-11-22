@@ -186,6 +186,8 @@ def test_real_imported_manifold_run_keeps_readiness_through_mcp(runner, isolated
     assert payload["delivery_readiness"] == json.loads(step.with_name("meta.json").read_text())["delivery_readiness"]
     assert payload["delivery_readiness"]["ready"] is True
     assert payload["delivery_readiness"]["artifact_sha256"] == hashlib.sha256(step.read_bytes()).hexdigest()
+    measured = _invoke(["measure", str(step), "--no-daemon"], cwd=str(isolated_dir))
+    assert measured["delivery_readiness"] == payload["delivery_readiness"]
 
 
 def test_mcp_run_cannot_hide_reduced_validation(runner, isolated_dir):
@@ -198,6 +200,11 @@ def test_mcp_run_cannot_hide_reduced_validation(runner, isolated_dir):
     assert payload["status"] == "success", payload
     assert payload["delivery_readiness"]["ready"] is False
     assert "not ready for delivery" in payload["message"]
+    # Revalidating the saved closed solid under full policy can establish a
+    # fresh ready verdict; it never relabels the original reduced receipt.
+    measured = _invoke(["measure", payload["outputs"]["step"], "--no-daemon"], cwd=str(isolated_dir))
+    assert measured["delivery_readiness"]["ready"] is True
+    assert measured["delivery_readiness"]["artifact_sha256"] == payload["delivery_readiness"]["artifact_sha256"]
 
 
 # ---------------------------------------------------------------------------

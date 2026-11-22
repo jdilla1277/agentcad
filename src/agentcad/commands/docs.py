@@ -895,6 +895,8 @@ SECTIONS = {
         "    named in blocking_reasons. Timeouts/errors also block readiness.\n"
         "    artifact_sha256 binds saved readiness to outputs.step; changed\n"
         "    bytes require new validation. No override waives skipped checks.\n"
+        "    measure returns the same hash-bound readiness from a fresh full\n"
+        "    geometry check, including for files downloaded from cloud builds.\n"
         "    Readiness covers geometry, not task intent or edit preservation;\n"
         "    check requirements and compare source geometry separately.\n"
         "\n"

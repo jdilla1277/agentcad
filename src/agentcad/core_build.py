@@ -54,6 +54,17 @@ def readiness_message(readiness: dict) -> str:
     )
 
 
+def file_delivery_readiness(report: dict, path) -> dict:
+    """Bind the shared geometry verdict to the exact checked file bytes."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as checked_file:
+        for chunk in iter(lambda: checked_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return delivery_readiness(report, artifact_sha256=digest.hexdigest())
+
+
 class ArtifactLifecycle:
     """Persist post-processing state without changing core build success."""
 
