@@ -170,29 +170,73 @@ def repair_guidance(report):
     return repairs
 
 
+def _connection_bounds(shape):
+    """Conservative bounds for pruning, never evidence of physical contact."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    try:
+        bounds = Bnd_Box()
+        # Add_s includes shape tolerances and mesh deflection when it uses
+        # triangulation. A loose box only costs extra exact comparisons.
+        BRepBndLib.Add_s(shape, bounds)
+        bounds.Enlarge(1e-7)
+        if bounds.IsVoid() or bounds.IsWhole():
+            return None
+        return bounds
+    except Exception:
+        return None
+
+
+def _connection_lower_bound(left, right):
+    if left is None or right is None:
+        return 0.0
+    try:
+        return left.Distance(right)
+    except Exception:
+        return 0.0
+
+
 def part_connections(raw_parts, public_parts, *, tolerance_mm=0.01):
     """Nearest physical distance, with a small explicit contact tolerance.
 
     Only named/explicitly identified parts are diagnosed. No connection is
-    inferred from names, groups, or a bounding-box overlap.
+    inferred from names, groups, or a bounding-box overlap. Conservative box
+    distances order and prune exact checks; equal exact distances retain the
+    first neighbor in input order, as in the exhaustive implementation.
     """
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 
     warnings = []
     distances = {}
+    bounds = [_connection_bounds(p["topo_shape"]) for p in raw_parts]
     for i, (raw, public) in enumerate(zip(raw_parts, public_parts)):
         if not raw.get("name") and raw.get("explicit_id") is None:
             continue
         floating = raw.get("validation_options", {}).get("floating", False)
         nearest = None
         unavailable = False
-        for j, other in enumerate(raw_parts):
-            if i == j:
-                continue
+        candidates = sorted(
+            (_connection_lower_bound(bounds[i], bounds[j]), j)
+            for j in range(len(raw_parts)) if i != j
+        )
+        for lower_bound, j in candidates:
+            if nearest is not None and (
+                lower_bound > nearest[0]
+                or (lower_bound == nearest[0] and j >= nearest[1])
+            ):
+                # Remaining candidates cannot be closer or win an exact tie.
+                # In particular, zero is a proven minimum; box overlap alone
+                # never establishes it.
+                break
             key = tuple(sorted((i, j)))
             if key not in distances:
                 try:
-                    tool = BRepExtrema_DistShapeShape(raw["topo_shape"], other["topo_shape"])
+                    # Keep argument orientation stable even when pruning means
+                    # the higher-index part discovers this pair first.
+                    tool = BRepExtrema_DistShapeShape(
+                        raw_parts[key[0]]["topo_shape"], raw_parts[key[1]]["topo_shape"]
+                    )
                     distances[key] = tool.Value() if tool.IsDone() else None
                 except Exception:
                     distances[key] = None
@@ -200,13 +244,14 @@ def part_connections(raw_parts, public_parts, *, tolerance_mm=0.01):
             if distance is None:
                 unavailable = True
                 continue
-            if nearest is None or distance < nearest[0]:
-                nearest = (distance, public_parts[j]["id"])
+            if nearest is None or (distance, j) < nearest:
+                nearest = (distance, j)
         if nearest is None or unavailable:
             public["connection"] = {"status": "unavailable" if unavailable else "not_applicable",
                                     "floating": floating, "tolerance_mm": tolerance_mm}
             continue
-        distance, neighbor = nearest
+        distance, neighbor_index = nearest
+        neighbor = public_parts[neighbor_index]["id"]
         disconnected = distance > tolerance_mm
         public["connection"] = {
             "status": "floating" if floating else "disconnected" if disconnected else "touching",
