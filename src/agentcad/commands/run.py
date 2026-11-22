@@ -1819,7 +1819,10 @@ def _run_impl(
             entry["validation_options"] = p["validation_options"]
         parts_output.append(entry)
     from agentcad.validation_guidance import part_connections, structure_checks, with_structure_checks
+    _heartbeat("checking part contacts…")
+    _t_contacts = time.perf_counter()
     warnings.extend(part_connections(raw_parts, parts_output))
+    _mark("contact_checks_ms", _t_contacts)
     _finish_phase("metrics", _t, "metrics_ms")
     groups_output = list(groups_by_id.values())
 
