@@ -359,7 +359,10 @@ JSON RESPONSE CONTRACT
 
   Run/import metrics include bounding_box, dimensions, volume, surface_area,
   center_of_mass, face_count, edge_count, is_valid, and reliable. is_valid is
-  the deliverable verdict (kernel check, closed shells, manifold mesh); false
+  the selected profile's verdict: by default the kernel check, closed shells,
+  and manifold mesh. Kernel mode skips closure/mesh; true there does not
+  establish delivery readiness. Run delivery_readiness.ready requires every
+  deliverable geometry gate, with skipped/incomplete gates named; false
   takes the invalid_geometry path with validation.first_failure named, null
   means a layer could not finish. --dry-run is explicitly metrics only. Check
   metrics before rendering; visual appearance alone does not prove dimensional

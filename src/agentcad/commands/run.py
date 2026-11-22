@@ -66,6 +66,13 @@ _PHASE_ARTIFACTS = {
 
 def _run_contract_payload(payload: dict) -> dict:
     """Apply the stable label/artifact contract to one run response."""
+    from agentcad.core_build import delivery_readiness, readiness_message
+
+    if isinstance(payload.get("validation"), dict):
+        payload.setdefault("delivery_readiness", delivery_readiness(payload["validation"]))
+    readiness = payload.get("delivery_readiness")
+    if readiness and not readiness["ready"] and payload.get("status") == "success":
+        payload["message"] = readiness_message(readiness)
     ctx = click.get_current_context(silent=True)
     contract = ctx.meta if ctx is not None else {}
     for key in ("runtime", "runtime_source"):
@@ -1262,7 +1269,8 @@ def _assign_part_identity(raw_parts):
     help=(
         "Which validation gates success. 'deliverable' requires the kernel check, "
         "closed shells, and a manifold mesh; 'kernel' restores the kernel-only "
-        "check for intentional surfaces or sheet bodies."
+        "check for intentional surfaces or sheet bodies, saved as intermediate "
+        "artifacts with delivery_readiness.ready=false."
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
@@ -1985,6 +1993,12 @@ def _run_impl(
         )
 
     from agentcad.change_retention import assess_change
+    from agentcad.core_build import delivery_readiness, readiness_message
+    step_digest = hashlib.sha256()
+    with staged_step.open("rb") as checked_step:
+        for chunk in iter(lambda: checked_step.read(1024 * 1024), b""):
+            step_digest.update(chunk)
+    readiness = delivery_readiness(validation, artifact_sha256=step_digest.hexdigest())
     # Seal the non-rendered model metadata with the checked geometry. Explicit
     # promotion must preserve named handles and overrides without rerunning CAD.
     checked_model = {
@@ -1993,6 +2007,7 @@ def _run_impl(
         "metrics": metrics,
         "validation": validation,
         "validation_profile": validation_profile,
+        "delivery_readiness": readiness,
     }
     if parts_output:
         checked_model["parts"] = parts_output
@@ -2093,6 +2108,7 @@ def _run_impl(
         "metrics": metrics,
         "validation": validation,
         "validation_profile": validation_profile,
+        "delivery_readiness": readiness,
         "artifacts": {
             "geometry_manifest": {"status": "pending"},
             "mesh_exports": _artifact_state(
@@ -2133,6 +2149,8 @@ def _run_impl(
     }
     if parts_output:
         meta["parts"] = parts_output
+    if not readiness["ready"]:
+        meta["message"] = readiness_message(readiness)
     if groups_output:
         meta["groups"] = groups_output
     if parsed_params:
@@ -2700,6 +2718,7 @@ def _run_impl(
     output_json["metrics"] = metrics
     output_json["validation"] = validation
     output_json["validation_profile"] = validation_profile
+    output_json["delivery_readiness"] = lifecycle.meta["delivery_readiness"]
     if mesh_validation:
         output_json["mesh_validation"] = mesh_validation
     if parts_output:

@@ -585,6 +585,9 @@ def run(
     Saved STEP versions issue typed geometry IDs by default.
     Use inspect with report=True or entity_id to inspect the result without re-importing.
     Reports/images are prepared on request; dry runs do not issue IDs.
+    Check delivery_readiness before handing off the STEP: command success can
+    include incomplete geometry validation. ready requires every deliverable
+    gate to pass; it does not establish task intent or edit preservation.
 
     Args:
         script: Path to the Python CAD script.

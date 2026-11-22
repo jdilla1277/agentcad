@@ -163,7 +163,8 @@ def test_missing_option_value_is_json_on_stdout(runner, isolated_dir):
     payload = json.loads(result.stdout)
     _assert_usage_error(payload, kind="missing_parameter", command="run")
     assert payload["invalid_option"] == "--label"
-    assert payload["usage"] == "Usage: agentcad run [OPTIONS] SCRIPT"
+    # SCRIPT is optional for key-only --status lookups.
+    assert payload["usage"] == "Usage: agentcad run [OPTIONS] [SCRIPT]"
 
 
 def test_missing_label_is_json_on_stdout(runner, isolated_dir):

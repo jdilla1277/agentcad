@@ -8,6 +8,7 @@ kernel`` restores the kernel-only check for intentional surfaces.
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -91,6 +92,18 @@ def test_run_kernel_profile_restores_the_old_behavior_and_records_it(runner, iso
     meta = json.loads((isolated_dir / "v1_surface" / "meta.json").read_text())
     assert meta["validation_profile"] == "kernel"
     assert meta["validation"]["is_valid"] is True
+    readiness = payload["delivery_readiness"]
+    assert readiness == meta["delivery_readiness"]
+    assert readiness["ready"] is False
+    assert readiness["profile"] == "kernel"
+    assert readiness["blocking_reasons"] == [
+        "shell_closure_not_checked", "mesh_manifold_not_checked",
+    ]
+    assert readiness["artifact_sha256"] == hashlib.sha256(
+        (isolated_dir / payload["outputs"]["step"]).read_bytes()
+    ).hexdigest()
+    assert "not ready for delivery" in payload["message"]
+    assert "not ready for delivery" in meta["message"]
 
 
 def test_run_success_carries_the_layer_report_and_reliable_volume(runner, isolated_dir):
@@ -108,6 +121,9 @@ def test_run_success_carries_the_layer_report_and_reliable_volume(runner, isolat
     meta = json.loads((isolated_dir / "v1_bracket" / "meta.json").read_text())
     assert meta["validation"]["first_failure"] is None
     assert meta["validation_profile"] == "deliverable"
+    assert payload["delivery_readiness"] == meta["delivery_readiness"]
+    assert payload["delivery_readiness"]["ready"] is True
+    assert payload["delivery_readiness"]["blocking_reasons"] == []
 
 
 def test_run_dry_run_reports_the_verdict_without_a_version(runner, isolated_dir):
@@ -137,6 +153,51 @@ def test_run_mesh_timeout_is_undetermined_not_invalid(runner, isolated_dir, monk
     assert payload["validation"]["undetermined_layer"] == "mesh_manifold"
     assert any("could not finish" in w for w in payload["warnings"])
     assert (isolated_dir / "v1_slow" / "output.step").is_file()
+    assert payload["delivery_readiness"]["ready"] is False
+    assert "mesh_manifold_timeout" in payload["delivery_readiness"]["blocking_reasons"]
+
+
+def test_nonmanifold_run_is_intermediate_even_when_kernel_accepts_it(runner, isolated_dir):
+    _init(runner)
+    shutil.copy(FIXTURES / "nonmanifold_edge_prism.step", isolated_dir / "input.step")
+    _script(isolated_dir, 'show_object(load_step("input.step"))\n')
+
+    result, full = _run(runner, "script.py", "--label", "full", *QUIET)
+    assert result.exit_code == 1, result.output
+    assert full["validation"]["first_failure"] == "mesh_manifold"
+    result, reduced = _run(runner, "script.py", "--label", "kernel",
+                           "--validation-profile", "kernel", *QUIET)
+    assert result.exit_code == 0, result.output
+    assert reduced["delivery_readiness"]["ready"] is False
+    meta = json.loads((isolated_dir / reduced["outputs"]["step"]).with_name("meta.json").read_text())
+    assert meta["delivery_readiness"] == reduced["delivery_readiness"]
+
+
+def test_real_imported_manifold_run_keeps_readiness_through_mcp(runner, isolated_dir):
+    from agentcad.mcp.server import _invoke
+
+    _init(runner)
+    source = Path(__file__).parent / "fixtures" / "real_world" / "pump_manifold.step"
+    shutil.copy(source, isolated_dir / "input.step")
+    _script(isolated_dir, 'show_object(load_step("input.step"))\n')
+    payload = _invoke(["run", "script.py", "--label", "manifold", *QUIET], cwd=str(isolated_dir))
+    assert payload["status"] == "success", payload
+    step = isolated_dir / payload["outputs"]["step"]
+    assert payload["delivery_readiness"] == json.loads(step.with_name("meta.json").read_text())["delivery_readiness"]
+    assert payload["delivery_readiness"]["ready"] is True
+    assert payload["delivery_readiness"]["artifact_sha256"] == hashlib.sha256(step.read_bytes()).hexdigest()
+
+
+def test_mcp_run_cannot_hide_reduced_validation(runner, isolated_dir):
+    from agentcad.mcp.server import _invoke
+
+    _init(runner)
+    _script(isolated_dir, BRACKET)
+    payload = _invoke(["run", "script.py", "--label", "intermediate",
+                       "--validation-profile", "kernel", *QUIET], cwd=str(isolated_dir))
+    assert payload["status"] == "success", payload
+    assert payload["delivery_readiness"]["ready"] is False
+    assert "not ready for delivery" in payload["message"]
 
 
 # ---------------------------------------------------------------------------

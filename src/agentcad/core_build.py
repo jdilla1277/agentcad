@@ -15,6 +15,45 @@ from agentcad.versioning import atomic_write_json
 INVALID_GEOMETRY = "invalid_geometry"
 
 
+def delivery_readiness(report: dict, *, artifact_sha256: str | None = None) -> dict:
+    """Delivery geometry requires all gates, even under a reduced profile.
+
+    This does not certify task intent or edit preservation. The report retains
+    checked-layer evidence; the hash binds a saved verdict to the written STEP.
+    """
+    from agentcad.validation import LAYERS
+
+    layers = report.get("layers", {})
+    required = [layer.name for layer in LAYERS if layer.gates]
+    if layers.get("structure", {}).get("gates") or report.get("first_failure") == "structure":
+        required.append("structure")
+    reasons = []
+    for name in required:
+        status = layers.get(name, {}).get("status", "skipped")
+        if status != "pass":
+            suffix = {"skipped": "not_checked", "fail": "failed"}.get(status, status)
+            reasons.append(f"{name}_{suffix}")
+    if not reasons and report.get("is_valid") is not True:
+        reasons.append("validation_not_passed")
+    result = {
+        "ready": not reasons,
+        "profile": report.get("profile"),
+        "blocking_reasons": reasons,
+    }
+    if artifact_sha256 is not None:
+        result["artifact_sha256"] = artifact_sha256
+    return result
+
+
+def readiness_message(readiness: dict) -> str:
+    return (
+        "Intermediate artifact; not ready for delivery. Blocking geometry checks: "
+        + ", ".join(readiness["blocking_reasons"])
+        + ". Complete deliverable validation before delivery. "
+        "Intentional surfaces may remain intermediate; command success does not waive these checks."
+    )
+
+
 class ArtifactLifecycle:
     """Persist post-processing state without changing core build success."""
 
