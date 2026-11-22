@@ -46,23 +46,43 @@ def delivery_readiness(report: dict, *, artifact_sha256: str | None = None) -> d
 
 
 def readiness_message(readiness: dict) -> str:
+    if readiness["ready"]:
+        return (
+            "The STEP passed every required geometry check. Verify task requirements "
+            "and review the model before delivery; geometry readiness is not task acceptance."
+        )
+    labels = []
+    for reason in readiness["blocking_reasons"]:
+        label = reason.replace("_", " ")
+        for suffix in ("not_checked", "failed", "timeout", "error", "blocked"):
+            if reason.endswith("_" + suffix):
+                label = reason[:-len(suffix)-1].replace("_", " ") + " (" + suffix.replace("_", " ") + ")"
+                break
+        labels.append(label)
     return (
         "Intermediate artifact; not ready for delivery. Blocking geometry checks: "
-        + ", ".join(readiness["blocking_reasons"])
+        + ", ".join(labels)
         + ". Complete deliverable validation before delivery. "
         "Intentional surfaces may remain intermediate; command success does not waive these checks."
     )
 
 
-def file_delivery_readiness(report: dict, path) -> dict:
-    """Bind the shared geometry verdict to the exact checked file bytes."""
+def file_sha256(path) -> str:
     import hashlib
 
     digest = hashlib.sha256()
     with Path(path).open("rb") as checked_file:
         for chunk in iter(lambda: checked_file.read(1024 * 1024), b""):
             digest.update(chunk)
-    return delivery_readiness(report, artifact_sha256=digest.hexdigest())
+    return digest.hexdigest()
+
+
+def file_delivery_readiness(report: dict, path) -> dict:
+    """Bind a report to stable checked bytes (run staging or measure snapshot).
+
+    The caller must not validate one file version and hash a mutable replacement.
+    """
+    return delivery_readiness(report, artifact_sha256=file_sha256(path))
 
 
 class ArtifactLifecycle:

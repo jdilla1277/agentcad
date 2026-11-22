@@ -12,6 +12,8 @@ import hashlib
 import shutil
 from pathlib import Path
 
+import pytest
+
 from agentcad.cli import cli
 from agentcad import validation
 
@@ -287,3 +289,47 @@ def test_inspect_honors_the_kernel_profile(runner, isolated_dir):
     assert payload["is_valid"] is True
     assert payload["validation"]["profile"] == "kernel"
     assert payload["validation"]["layers"]["shell_closure"]["status"] == "skipped"
+
+
+@pytest.mark.parametrize("replace_during", ["validation", "features"])
+def test_measure_cannot_bind_a_pass_to_replacement_bytes(runner, isolated_dir, monkeypatch, replace_during):
+    import agentcad.core_build as core
+    import importlib
+    measure_command = importlib.import_module("agentcad.commands.measure")
+
+    source = isolated_dir / "changing.step"
+    closed = (FIXTURES / "closed_box.step").read_bytes()
+    opened = (FIXTURES / "open_shell.step").read_bytes()
+    source.write_bytes(closed)
+
+    def replace_source():
+        replacement = isolated_dir / "replacement.step"
+        replacement.write_bytes(opened)
+        replacement.replace(source)
+
+    original = core.validated_metrics if replace_during == "validation" else measure_command._filter_cylindrical_features
+
+    def replace_after_real_work(*args, **kwargs):
+        result = original(*args, **kwargs)
+        replace_source()
+        return result
+
+    with monkeypatch.context() as patch:
+        if replace_during == "validation":
+            patch.setattr(core, "validated_metrics", replace_after_real_work)
+        else:
+            patch.setattr(measure_command, "_filter_cylindrical_features", replace_after_real_work)
+        result = runner.invoke(cli, ["measure", str(source), "--no-daemon"])
+    assert result.exit_code == 0, result.output
+    measured = json.loads(result.stdout)
+    receipt = measured["delivery_readiness"]
+    assert receipt["ready"] is False
+    assert "source_changed_during_measurement" in receipt["blocking_reasons"]
+    assert receipt["artifact_sha256"] == hashlib.sha256(closed).hexdigest()
+    assert "changed" in measured["message"]
+    assert any("measure" in action and "changing.step" in action for action in measured["next_actions"])
+    # A fresh measurement judges the replacement, rather than recycling a pass.
+    again = json.loads(runner.invoke(cli, ["measure", str(source), "--no-daemon"]).stdout)
+    assert again["delivery_readiness"]["ready"] is False
+    assert "shell_closure_failed" in again["delivery_readiness"]["blocking_reasons"]
+    assert again["delivery_readiness"]["artifact_sha256"] == hashlib.sha256(opened).hexdigest()

@@ -71,7 +71,7 @@ def _run_contract_payload(payload: dict) -> dict:
     if isinstance(payload.get("validation"), dict):
         payload.setdefault("delivery_readiness", delivery_readiness(payload["validation"]))
     readiness = payload.get("delivery_readiness")
-    if readiness and not readiness["ready"] and payload.get("status") == "success":
+    if readiness and payload.get("status") == "success":
         payload["message"] = readiness_message(readiness)
     ctx = click.get_current_context(silent=True)
     contract = ctx.meta if ctx is not None else {}
@@ -90,6 +90,16 @@ def _run_contract_payload(payload: dict) -> dict:
         payload["outputs"] = outputs
     outputs.setdefault("step", None)
     payload["artifact_created"] = outputs["step"] is not None
+    if readiness and payload.get("status") == "success" and outputs["step"]:
+        actions = payload.setdefault("next_actions", [])
+        if readiness["ready"]:
+            action = "agentcad docs check-spec — verify task requirements before delivery"
+        else:
+            layout = get_project()
+            step = shlex.quote(layout.response_path(layout.artifact_path(outputs["step"])))
+            action = f"agentcad measure {step} --no-daemon — inspect full geometry validation before delivery; keep intentional surfaces intermediate"
+        if action not in actions:
+            actions.append(action)
 
     if (
         not payload["artifact_created"]
