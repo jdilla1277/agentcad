@@ -662,6 +662,8 @@ class PromotionStore:
             from agentcad import __version__
 
             core = attempt._read("core.json", "attempt_core")["response"]
+            from agentcad.intent_validation import project_intent
+            project_intent(core, attempt.directory / "geometry/output.step")
             meta = {
                 "command": "promote",
                 "status": "success",
@@ -687,12 +689,14 @@ class PromotionStore:
             }
             # Use only model metadata sealed before staging returned; optional
             # viewer/render artifacts and mutable working source are not inputs.
-            for field in ("parts", "groups", "params", "delivery_readiness"):
+            for field in ("parts", "groups", "params", "delivery_readiness", "geometry_readiness", "intent_validation"):
                 if field in core:
                     meta[field] = copy.deepcopy(core[field])
             if meta.get("delivery_readiness", {}).get("ready") is False:
                 from agentcad.core_build import readiness_message
-                meta["message"] = readiness_message(meta["delivery_readiness"])
+                from agentcad.intent_validation import intent_message
+                intent = meta.get("intent_validation")
+                meta["message"] = intent_message(intent) if intent and intent["status"] != "pass" else readiness_message(meta["delivery_readiness"])
             entry = {
                 "version": reservation.number,
                 "label": reservation.label,

@@ -50,8 +50,9 @@ def check_spec(file, spec_file, no_daemon, complete=False):
         {"name":"usb","type":"keepout","box_mm":[10,-2,0,18,0,5]}
       ]}
 
-    A failed spec still means the command ran successfully: status remains
-    "success" and the comparison result is in passed/matched_features.
+    Failed checks persist against the artifact and specification hashes and
+    block delivery. status describes command execution; passed is the verdict.
+    Geometry validity stays separate from intent_validation.
     With a retained revision ID, omit SPEC_FILE to read its pinned receipt;
     --complete performs deferred checks and settles saved automatic intent.
     Staged candidates still require explicit promotion. Reads are read-only.
@@ -80,6 +81,13 @@ def check_spec(file, spec_file, no_daemon, complete=False):
                 str(store.root / a["path"])
                 for a in (saved["candidate"] or {}).get("inputs", []) if a["role"] == "geometry"
             ), None)
+            readiness_fields = {}
+            if geometry:
+                from agentcad.intent_validation import project_intent
+                core = json.loads((Path(geometry).parent.parent / "core.json").read_text())["response"]
+                project_intent(core, geometry)
+                readiness_fields = {key: core[key] for key in
+                                    ("geometry_readiness", "intent_validation", "delivery_readiness", "message") if key in core}
             warnings = []
             if complete:
                 try:
@@ -106,6 +114,7 @@ def check_spec(file, spec_file, no_daemon, complete=False):
                 actions = [f"agentcad context{root_option} — inspect the working and accepted revisions before a new attempt"]
             _emit({
                 "command": "check-spec", "status": "success", **checked,
+                **readiness_fields,
                 "validation_state": receipt["validation_state"] if receipt else "pending",
                 "passed": receipt["promotion_ready"] if receipt else False,
                 "current_advanced": checked.get("current_advanced", False), "geometry": geometry,
@@ -131,9 +140,10 @@ def check_spec(file, spec_file, no_daemon, complete=False):
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     spec_path = Path(spec_file)
-    spec = _load_spec(spec_path)
-    if spec is None:
+    loaded = _load_spec(spec_path)
+    if loaded is None:
         return
+    spec, spec_bytes = loaded
 
     file_path = Path(file)
     detection = file_detect.detect_file_type(file_path)
@@ -188,6 +198,15 @@ def check_spec(file, spec_file, no_daemon, complete=False):
         }, exit_code=1)
         return
 
+    import hashlib
+    from agentcad.core_build import file_sha256
+    from agentcad.intent_validation import make_check, save_check, project_intent
+    spec_sha = hashlib.sha256(spec_bytes).hexdigest()
+    # Publish the declaration first. An interrupted/failed checker cannot leave
+    # the artifact looking as if the required check had passed.
+    pending = make_check(file_sha256(file_path), spec_sha, spec, {}, spec_file=spec_path, status="pending")
+    save_check(file_path, pending)
+
     try:
         measurement = measure_tier0_payload(
             str(file_path.resolve()),
@@ -211,7 +230,17 @@ def check_spec(file, spec_file, no_daemon, complete=False):
         }, exit_code=1)
         return
 
-    result = check_measurement_against_spec(measurement, spec)
+    # Intent expectations must not overwrite the structural geometry verdict.
+    from copy import deepcopy
+    result = check_measurement_against_spec(deepcopy(measurement), spec)
+    unsupported = _unchecked_requirements(spec)
+    if unsupported:
+        result["supported_passed"] = result["passed"]
+        result["passed"] = False if result["passed"] is False else None
+        result["unsupported_requirements"] = unsupported
+    geometry = measurement.get("geometry_readiness") or measurement["delivery_readiness"]
+    checked = make_check(geometry["artifact_sha256"], spec_sha, spec, result, spec_file=spec_path)
+    checks = save_check(file_path, checked, geometry)
     result.update({
         "command": "check-spec",
         "status": "success",
@@ -224,9 +253,13 @@ def check_spec(file, spec_file, no_daemon, complete=False):
             measurement["metrics"], measurement.get("validation")
         ),
         "metrics": measurement["metrics"],
+        "validation": measurement["validation"],
+        "is_valid": measurement["validation"]["is_valid"],
+        "delivery_readiness": geometry,
         "next_actions": _next_actions(result["passed"], file_path, spec_path),
         "more_at": "agentcad docs check-spec",
     })
+    project_intent(result, file_path, checks=checks)
     _emit(result)
     maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
 
@@ -391,7 +424,7 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
     }
 
 
-def _load_spec(path: Path) -> dict | None:
+def _load_spec(path: Path) -> tuple[dict, bytes] | None:
     if not path.exists():
         _emit({
             "command": "check-spec",
@@ -411,7 +444,8 @@ def _load_spec(path: Path) -> dict | None:
         return None
 
     try:
-        data = json.loads(path.read_text())
+        raw = path.read_bytes()
+        data = json.loads(raw)
     except json.JSONDecodeError as exc:
         _emit({
             "command": "check-spec",
@@ -439,7 +473,23 @@ def _load_spec(path: Path) -> dict | None:
             ),
         }, exit_code=1)
         return None
-    return data
+    return data, raw
+
+
+def _unchecked_requirements(spec):
+    top = {"spec_id", "features", "expect_solids", "expect_shells", "diameter_tolerance_mm",
+           "count_tolerance", "position_tolerance_mm", "keepout_max_volume_mm3"}
+    kinds = {
+        "cylinder": {"name", "type", "diameter_mm", "count", "axis", "diameter_tolerance_mm", "count_tolerance"},
+        "positioned_cylinders": {"name", "type", "axis", "diameter_mm", "positions_mm", "diameter_tolerance_mm", "position_tolerance_mm"},
+        "keepout": {"name", "type", "box_mm", "max_volume_mm3"},
+        "material": {"name", "type", "box_mm", "min_volume_mm3"},
+    }
+    result = [{"path": key, "reason": "Unsupported requirement was not checked"} for key in spec if key not in top]
+    for index, feature in enumerate(spec.get("features", [])):
+        result.extend({"path": f"features[{index}].{key}", "reason": "Unsupported constraint was not checked"}
+                      for key in feature if key not in kinds.get(feature.get("type"), set()))
+    return result
 
 
 def _declared_probe_boxes(spec: dict) -> list:
@@ -462,6 +512,10 @@ def _validate_spec(data) -> list[str]:
     if not isinstance(data, dict):
         return ["spec must be a JSON object"]
 
+    if "spec_id" in data:
+        import re
+        if not isinstance(data["spec_id"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", data["spec_id"]):
+            errors.append("spec_id must be 1-128 letters, digits, '.', '_', ':' or '-', starting with a letter or digit")
     for key in ("expect_solids", "expect_shells"):
         if key in data and (type(data[key]) is not int or data[key] < 0):
             errors.append(f"{key} must be a non-negative integer")

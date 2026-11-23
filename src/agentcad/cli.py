@@ -362,7 +362,8 @@ JSON RESPONSE CONTRACT
   the selected profile's verdict: by default the kernel check, closed shells,
   and manifold mesh. Kernel mode skips closure/mesh; true there does not
   establish delivery readiness. Run delivery_readiness.ready requires every
-  deliverable geometry gate, with skipped/incomplete gates named.
+  deliverable geometry gate, with skipped/incomplete gates named. Declared
+  failed, pending or stale specs also block delivery; recheck the same spec.
   metrics.is_valid=false takes the invalid_geometry path with
   validation.first_failure named; null means a layer could not finish.
   --dry-run is explicitly metrics only. Check

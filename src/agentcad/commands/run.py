@@ -72,7 +72,11 @@ def _run_contract_payload(payload: dict) -> dict:
         payload.setdefault("delivery_readiness", delivery_readiness(payload["validation"]))
     readiness = payload.get("delivery_readiness")
     if readiness and payload.get("status") == "success":
-        payload["message"] = readiness_message(readiness)
+        if payload.get("intent_validation") and payload["intent_validation"]["status"] != "pass":
+            from agentcad.intent_validation import intent_message
+            payload["message"] = intent_message(payload["intent_validation"])
+        else:
+            payload["message"] = readiness_message(readiness)
     ctx = click.get_current_context(silent=True)
     contract = ctx.meta if ctx is not None else {}
     for key in ("runtime", "runtime_source"):
@@ -94,6 +98,8 @@ def _run_contract_payload(payload: dict) -> dict:
         actions = payload.setdefault("next_actions", [])
         if readiness["ready"]:
             action = "agentcad docs check-spec — verify task requirements before delivery"
+        elif payload.get("intent_validation", {}).get("status") not in {None, "pass", "unchecked"}:
+            action = "agentcad docs check-spec — repair unmet requirements and recheck the same specification before delivery"
         else:
             layout = get_project()
             step = shlex.quote(layout.response_path(layout.artifact_path(outputs["step"])))
@@ -2728,6 +2734,9 @@ def _run_impl(
     output_json["validation"] = validation
     output_json["validation_profile"] = validation_profile
     output_json["delivery_readiness"] = lifecycle.meta["delivery_readiness"]
+    for field in ("geometry_readiness", "intent_validation"):
+        if field in lifecycle.meta:
+            output_json[field] = lifecycle.meta[field]
     if mesh_validation:
         output_json["mesh_validation"] = mesh_validation
     if parts_output:
