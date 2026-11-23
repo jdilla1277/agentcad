@@ -130,7 +130,7 @@ def _read_local_checks(step):
                 try:
                     mirrored = json.loads(meta.read_text())["intent_validation"]["checks"]
                     if mirrored and all(isinstance(c, dict) and c.get("identity") for c in mirrored):
-                        return [{**c, "status": "unavailable"} for c in mirrored]
+                        return [{**c, "status": "unavailable", "declaration_id": None} for c in mirrored]
                 except (OSError, ValueError, KeyError, TypeError, AttributeError):
                     pass
             return [{"status": "unavailable", "identity": "unavailable"}]
@@ -200,12 +200,19 @@ def project_intent(payload, step, *, checks=None):
     return payload
 
 
-def save_check(step, check, geometry=None):
+def save_check(step, check, geometry=None, *, declaration=False):
     from agentcad.versioning import _file_lock, atomic_write_json
     step = Path(step).resolve()
     root, meta_path, record, _ = _location(step)
     with _file_lock(root / ".agentcad/intent-write.lock"):
-        checks = [c for c in _read_checks(step) if c.get("identity") != check["identity"]]
+        checks = _read_checks(step)
+        previous = next((c for c in checks if c.get("identity") == check["identity"]), None)
+        if not declaration and (previous is None or not check.get("declaration_id")
+                                or previous.get("declaration_id") != check["declaration_id"]):
+            # Only the current declaration may settle this policy. A late
+            # passing checker cannot erase newer failed or pending requirements.
+            return checks
+        checks = [c for c in checks if c.get("identity") != check["identity"]]
         checks.append(check)
         atomic_write_json(record, {"schema_version": 1, "checks": checks})
         if meta_path and meta_path.is_file():

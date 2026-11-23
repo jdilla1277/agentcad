@@ -205,7 +205,9 @@ def check_spec(file, spec_file, no_daemon, complete=False):
     # Publish the declaration first. An interrupted/failed checker cannot leave
     # the artifact looking as if the required check had passed.
     pending = make_check(file_sha256(file_path), spec_sha, spec, {}, spec_file=spec_path, status="pending")
-    save_check(file_path, pending)
+    import uuid
+    pending["declaration_id"] = uuid.uuid4().hex
+    save_check(file_path, pending, declaration=True)
 
     try:
         measurement = measure_tier0_payload(
@@ -240,6 +242,7 @@ def check_spec(file, spec_file, no_daemon, complete=False):
         result["unsupported_requirements"] = unsupported
     geometry = measurement.get("geometry_readiness") or measurement["delivery_readiness"]
     checked = make_check(geometry["artifact_sha256"], spec_sha, spec, result, spec_file=spec_path)
+    checked["declaration_id"] = pending["declaration_id"]
     checks = save_check(file_path, checked, geometry)
     result.update({
         "command": "check-spec",
@@ -260,6 +263,24 @@ def check_spec(file, spec_file, no_daemon, complete=False):
         "more_at": "agentcad docs check-spec",
     })
     project_intent(result, file_path, checks=checks)
+    current = next((c for c in checks if c.get("identity") == checked["identity"]), None)
+    if current is None or current.get("declaration_id") != checked["declaration_id"]:
+        from agentcad.intent_validation import intent_message
+        result["superseded"] = True
+        result["message"] = ("This check was superseded by a newer declaration of the same policy. "
+                             if current and current.get("declaration_id") else
+                             "Saved declaration ownership is unavailable; this check cannot settle the policy. ") + intent_message(result["intent_validation"])
+    if not result["delivery_readiness"]["ready"]:
+        blockers = [c for c in result["intent_validation"]["checks"] if c.get("status") != "pass"]
+        if blockers:
+            target = next((c["spec_file"] for c in blockers if c.get("spec_file")), None)
+            result["next_actions"] = [
+                "resolve the current declared specification blockers before delivery",
+                (f"agentcad check-spec {shlex.quote(str(file_path))} {shlex.quote(target)} --no-daemon — recheck the current specification after repair"
+                 if target else "agentcad docs check-spec — restore the saved evidence and recheck affected specifications"),
+            ]
+        else:
+            result["next_actions"] = [f"agentcad measure {shlex.quote(str(file_path))} --no-daemon — inspect the geometry delivery blockers"]
     _emit(result)
     maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
 

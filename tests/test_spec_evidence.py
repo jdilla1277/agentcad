@@ -236,3 +236,62 @@ def test_saved_run_retry_exposes_current_spec_blocker(runner, isolated_dir):
     assert replay['intent_validation']['status'] == 'fail'
     assert replay['original_delivery_readiness']['ready'] is True
     assert len(json.loads((isolated_dir / 'agentcad.json').read_text())['versions']) == 1
+
+
+@pytest.mark.parametrize('newer_status', ['fail', 'pending'])
+def test_older_check_cannot_replace_newer_named_policy(runner, isolated_dir, model, monkeypatch, newer_status):
+    from click.testing import CliRunner
+    import importlib
+    command = importlib.import_module('agentcad.commands.check_spec')
+    first = isolated_dir / 'older.json'
+    first.write_text(json.dumps({'spec_id': 'structure', 'expect_solids': 1}))
+    second = isolated_dir / 'newer.json'
+    newer_spec = {'spec_id': 'structure', 'expect_solids': 2 if newer_status == 'fail' else 1}
+    if newer_status == 'pending':
+        newer_spec['material'] = 'steel'
+    second.write_text(json.dumps(newer_spec))
+    original = command.measure_tier0_payload
+    paused = False
+    def finish_newer_before_older(*args, **kwargs):
+        nonlocal paused
+        measured = original(*args, **kwargs)
+        if not paused:
+            paused = True
+            newer = invoke(CliRunner(), ['check-spec', str(model), str(second), '--no-daemon'])
+            assert newer['intent_validation']['status'] == newer_status
+        return measured
+    monkeypatch.setattr(command, 'measure_tier0_payload', finish_newer_before_older)
+    older = invoke(runner, ['check-spec', str(model), str(first), '--no-daemon'])
+    assert older['passed'] is True  # Its own comparison remains historical.
+    assert older['superseded'] is True
+    assert 'superseded' in older['message']
+    assert any(str(second) in action for action in older['next_actions'])
+    assert not any('completed model' in action for action in older['next_actions'])
+    for result in (older, invoke(runner, ['measure', str(model), '--no-daemon']),
+                   json.loads(model.with_name('meta.json').read_text())):
+        assert result['geometry_readiness']['ready'] is True
+        assert result['intent_validation']['status'] == newer_status
+        assert result['delivery_readiness']['ready'] is False
+        receipt = result['intent_validation']['checks'][0]
+        assert receipt['spec'] == newer_spec
+        assert receipt['spec_file'] == str(second.resolve())
+
+
+def test_recovered_mirror_cannot_authorize_an_inflight_checker(runner, isolated_dir, model, monkeypatch):
+    import importlib
+    from agentcad.intent_validation import _location
+    command = importlib.import_module('agentcad.commands.check_spec')
+    policy = spec(isolated_dir, 17)
+    original = command.measure_tier0_payload
+    def corrupt_after_measurement(*args, **kwargs):
+        measured = original(*args, **kwargs)
+        _location(model)[2].write_text('{broken')
+        return measured
+    with monkeypatch.context() as patch:
+        patch.setattr(command, 'measure_tier0_payload', corrupt_after_measurement)
+        interrupted = invoke(runner, ['check-spec', str(model), str(policy), '--no-daemon'])
+    assert interrupted['passed'] is True
+    assert interrupted['intent_validation']['status'] == 'unavailable'
+    assert interrupted['delivery_readiness']['ready'] is False
+    fresh = invoke(runner, ['check-spec', str(model), str(policy), '--no-daemon'])
+    assert fresh['delivery_readiness']['ready'] is True
