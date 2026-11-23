@@ -70,7 +70,7 @@ jobs:
         # Copied CLI recovery actions include real PNG rendering.
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
-            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
+            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_delivery_readiness.py tests/test_validation_contract.py tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
 
       - name: Run Linux render guardrails under Xvfb
         run: |
@@ -198,7 +198,7 @@ jobs:
         # Copied CLI recovery actions include real PNG rendering.
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
-            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
+            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_delivery_readiness.py tests/test_validation_contract.py tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
 
       - name: Run the PCB enclosure recipe tests
         run: python -m pytest recipes/pcb_enclosure -q

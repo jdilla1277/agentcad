@@ -687,9 +687,12 @@ class PromotionStore:
             }
             # Use only model metadata sealed before staging returned; optional
             # viewer/render artifacts and mutable working source are not inputs.
-            for field in ("parts", "groups", "params"):
+            for field in ("parts", "groups", "params", "delivery_readiness"):
                 if field in core:
                     meta[field] = copy.deepcopy(core[field])
+            if meta.get("delivery_readiness", {}).get("ready") is False:
+                from agentcad.core_build import readiness_message
+                meta["message"] = readiness_message(meta["delivery_readiness"])
             entry = {
                 "version": reservation.number,
                 "label": reservation.label,

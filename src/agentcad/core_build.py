@@ -15,6 +15,76 @@ from agentcad.versioning import atomic_write_json
 INVALID_GEOMETRY = "invalid_geometry"
 
 
+def delivery_readiness(report: dict, *, artifact_sha256: str | None = None) -> dict:
+    """Delivery geometry requires all gates, even under a reduced profile.
+
+    This does not certify task intent or edit preservation. The report retains
+    checked-layer evidence; the hash binds a saved verdict to the written STEP.
+    """
+    from agentcad.validation import LAYERS
+
+    layers = report.get("layers", {})
+    required = [layer.name for layer in LAYERS if layer.gates]
+    if layers.get("structure", {}).get("gates") or report.get("first_failure") == "structure":
+        required.append("structure")
+    reasons = []
+    for name in required:
+        status = layers.get(name, {}).get("status", "skipped")
+        if status != "pass":
+            suffix = {"skipped": "not_checked", "fail": "failed"}.get(status, status)
+            reasons.append(f"{name}_{suffix}")
+    if not reasons and report.get("is_valid") is not True:
+        reasons.append("validation_not_passed")
+    result = {
+        "ready": not reasons,
+        "profile": report.get("profile"),
+        "blocking_reasons": reasons,
+    }
+    if artifact_sha256 is not None:
+        result["artifact_sha256"] = artifact_sha256
+    return result
+
+
+def readiness_message(readiness: dict) -> str:
+    if readiness["ready"]:
+        return (
+            "The STEP passed every required geometry check. Verify task requirements "
+            "and review the model before delivery; geometry readiness is not task acceptance."
+        )
+    labels = []
+    for reason in readiness["blocking_reasons"]:
+        label = reason.replace("_", " ")
+        for suffix in ("not_checked", "failed", "timeout", "error", "blocked"):
+            if reason.endswith("_" + suffix):
+                label = reason[:-len(suffix)-1].replace("_", " ") + " (" + suffix.replace("_", " ") + ")"
+                break
+        labels.append(label)
+    return (
+        "Intermediate artifact; not ready for delivery. Blocking geometry checks: "
+        + ", ".join(labels)
+        + ". Complete deliverable validation before delivery. "
+        "Intentional surfaces may remain intermediate; command success does not waive these checks."
+    )
+
+
+def file_sha256(path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as checked_file:
+        for chunk in iter(lambda: checked_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_delivery_readiness(report: dict, path) -> dict:
+    """Bind a report to stable checked bytes (run staging or measure snapshot).
+
+    The caller must not validate one file version and hash a mutable replacement.
+    """
+    return delivery_readiness(report, artifact_sha256=file_sha256(path))
+
+
 class ArtifactLifecycle:
     """Persist post-processing state without changing core build success."""
 
