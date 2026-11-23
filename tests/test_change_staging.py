@@ -83,6 +83,8 @@ def test_stage_and_promote_saved_bytes_without_executing_mutated_source(
     script.write_text("raise RuntimeError('must never execute during promotion')\n")
     accepted = promote(runner, revision, "accept-longer")
     assert accepted["status"] == "success"
+    promoted_meta = json.loads(Path(accepted["outputs"]["step"]).with_name("meta.json").read_text())
+    assert promoted_meta["delivery_readiness"] == staged["delivery_readiness"]
     assert accepted["promotion"]["outcome"] == "promoted"
     assert accepted["promotion"]["promotion_mode"] == "staged"
     assert accepted["current_advanced"] is True

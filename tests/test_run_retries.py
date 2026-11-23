@@ -125,6 +125,7 @@ def test_status_reads_original_result_after_newer_work_and_source_removal(
     original = status(runner)
     assert original["version"] == 1
     assert original["promotion"] == first["promotion"]
+    assert original["delivery_readiness"] == first["delivery_readiness"]
     assert original["current_advanced"] is False
     assert original["idempotency"]["status_only"] is True
     assert original["outputs"]["step"] != newer["outputs"]["step"]
@@ -201,6 +202,7 @@ def test_registered_mcp_run_and_status_support_retry_keys(runner, isolated_dir):
     (isolated_dir / "part.py").unlink()
     lookup = call("run_status", {"cwd": str(isolated_dir), "idempotency_key": "mcp:1"})
     assert lookup["change"] == first["change"]
+    assert lookup["delivery_readiness"] == first["delivery_readiness"]
     assert lookup["current_advanced"] is False
 
 

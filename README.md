@@ -302,6 +302,13 @@ Run responses identify the selection in `runtime_source` (`command`, `project`,
 or `detection`, which includes the default fallback). Run
 `agentcad docs runtimes` for the complete dispatch contract.
 
+Before delivering a run's STEP, check `delivery_readiness.ready` in its response
+or saved `meta.json`. A successful kernel-profile run saves an intermediate
+artifact with `ready: false` and names the unchecked gates in `blocking_reasons`.
+Saved readiness includes the STEP's SHA-256; changed bytes require new validation.
+Readiness covers deliverable geometry checks; verify task requirements and edit
+preservation separately.
+
 ## MCP integration
 
 For native tool integration with Claude Code, Cursor, or Windsurf:
