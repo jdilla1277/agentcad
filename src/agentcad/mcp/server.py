@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from click.testing import CliRunner
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, ImageContent, TextContent
+from mcp.types import ToolAnnotations, CallToolResult, ImageContent, TextContent
 
 from agentcad.cli import cli
 from agentcad.cloud import CloudError, cloud_call
@@ -88,6 +88,12 @@ async def cloud_create_project(name: str, runtime: Literal["build123d", "cadquer
 async def cloud_projects() -> dict:
     """List cloud projects owned by the configured API account."""
     return await _cloud_tool("projects")
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True))
+async def cloud_activity(limit: int = 25, cursor: str | None = None) -> dict:
+    """Read account-owned cloud job activity, newest first. Use next_cursor for another page, limit 1–100."""
+    return await _cloud_tool("activity", limit=limit, cursor=cursor)
 
 
 @mcp.tool()
