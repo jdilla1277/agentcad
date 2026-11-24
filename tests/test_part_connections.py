@@ -45,24 +45,21 @@ def exhaustive(shapes):
     return result
 
 
-@pytest.mark.parametrize("shapes", [
-    [box(0), box(100), box(2), box(102), box(300)],
-    [box(0), box(1), box(2), box(2.05), box(200)],
-    [box(-4), box(0), box(4), box(0, 4), box(0, -4)],
-    [box(0), box(2.0099), box(4.02), box(6.0201)],
-    [box(0), box(0), box(0), box(50)],
+@pytest.mark.parametrize("shapes,statuses", [
+    ([box(0), box(100), box(2), box(102), box(300)], ["touching"]*4 + ["floating"]),
+    ([box(0), box(1), box(2), box(2.05), box(200)], ["overlapping"]*4 + ["floating"]),
+    ([box(-4), box(0), box(4), box(0, 4), box(0, -4)], ["disconnected"]*4 + ["floating"]),
+    ([box(0), box(2.0099), box(4.02), box(6.0201)], ["near"]*3 + ["floating"]),
+    ([box(0), box(0), box(0), box(50)], ["overlapping"]*3 + ["floating"]),
 ])
-def test_matches_exhaustive_nearest_results(shapes):
+def test_matches_exhaustive_nearest_results(shapes,statuses):
     _, public, _ = diagnose(shapes, floating=(len(shapes) - 1,))
     for i, (part, expected) in enumerate(zip(public, exhaustive(shapes))):
         connection = part["connection"]
         distance, neighbor = expected
         assert connection["nearest_part_id"] == neighbor
-        assert connection["distance_mm"] == round(distance, 6)
-        assert connection["status"] == (
-            "floating" if i == len(shapes) - 1 else
-            "disconnected" if distance > 0.01 else "touching"
-        )
+        assert connection["distance_mm"] == round(distance, 9)
+        assert connection["status"] == statuses[i]
 
 
 def test_overlapping_bounds_do_not_establish_contact():
@@ -90,12 +87,12 @@ def test_separated_repeated_parts_prune_exact_distance_calls(monkeypatch):
     _, public, _ = diagnose(shapes)
     for part, (distance, neighbor) in zip(public, expected):
         assert part["connection"]["nearest_part_id"] == neighbor
-        assert part["connection"]["distance_mm"] == round(distance, 6)
+        assert part["connection"]["distance_mm"] == round(distance, 9)
     # The old implementation does 435 exact comparisons for these 30 parts.
     assert len(calls) <= 2 * len(shapes)
 
 
-def test_touching_ties_keep_first_neighbor_in_input_order(monkeypatch):
+def test_zero_distance_ties_keep_first_neighbor_in_input_order(monkeypatch):
     import OCP.BRepExtrema
 
     calls = []
@@ -133,7 +130,7 @@ def test_missing_bounds_fall_back_to_exact_checks(monkeypatch):
     _, public, _ = diagnose(shapes)
     for part, (distance, neighbor) in zip(public, exhaustive(shapes)):
         assert part["connection"]["nearest_part_id"] == neighbor
-        assert part["connection"]["distance_mm"] == round(distance, 6)
+        assert part["connection"]["distance_mm"] == round(distance, 9)
 
 
 def test_rotated_parts_keep_exact_nearest_results():
@@ -147,7 +144,7 @@ def test_rotated_parts_keep_exact_nearest_results():
     _, public, _ = diagnose(shapes)
     for part, (distance, neighbor) in zip(public, exhaustive(shapes)):
         assert part["connection"]["nearest_part_id"] == neighbor
-        assert part["connection"]["distance_mm"] == round(distance, 6)
+        assert part["connection"]["distance_mm"] == round(distance, 9)
 
 
 def test_unnamed_parts_are_neighbors_but_not_diagnosed():
