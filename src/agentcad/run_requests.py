@@ -193,6 +193,13 @@ class RunRequest:
         payload["more_at"] = "agentcad docs run-retries"
         payload.setdefault("outputs", {}).setdefault("step", None)
         payload["artifact_created"] = payload["outputs"]["step"] is not None
+        if payload["outputs"]["step"]:
+            from agentcad.intent_validation import project_intent
+            original_readiness = deepcopy(payload.get("delivery_readiness"))
+            project_intent(payload, self.layout.artifact_path(payload["outputs"]["step"]))
+            if payload.get("intent_validation"):
+                payload["original_delivery_readiness"] = original_readiness
+                payload.setdefault("notes", []).append("Delivery readiness includes current specification evidence; the saved execution result is unchanged.")
         payload["viewer_opened"] = False
         if payload.get("project_viewer"):
             payload["project_viewer"]["opened"] = False

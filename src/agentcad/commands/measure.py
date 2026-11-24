@@ -442,6 +442,8 @@ def measure_tier0_payload(
         ]
     else:
         payload["message"] = readiness_message(readiness)
+    from agentcad.intent_validation import project_intent
+    project_intent(payload, file_path)
     return payload
 
 

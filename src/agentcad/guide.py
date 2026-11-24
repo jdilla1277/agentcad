@@ -166,6 +166,8 @@ identifies the tracked deliverable.
    selected profile's verdict: by default the kernel check, every shell closed,
    and a manifold mesh. For a run's final STEP, require
    `delivery_readiness.ready: true`; kernel success alone is insufficient.
+   Failed, incomplete or stale declared specs also block delivery. Repair and
+   recheck the same spec; `measure` cannot clear a specification failure.
    `false` names the failing
    layer in `validation.first_failure`, `null` means a check timed out
    (`validation.timed_out_layer`; raise `AGENTCAD_VALIDATION_TIMEOUT_S`).

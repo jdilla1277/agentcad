@@ -93,7 +93,8 @@ class ArtifactLifecycle:
         self.meta = meta
 
     def persist(self) -> None:
-        atomic_write_json(self.meta_path, self.meta)
+        from agentcad.intent_validation import persist_metadata
+        persist_metadata(self.meta_path, self.meta)
 
     def set_artifact(
         self,

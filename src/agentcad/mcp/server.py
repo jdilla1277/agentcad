@@ -746,6 +746,8 @@ def measure(
 
     Returns fresh full-policy delivery_readiness bound to the file hash, using
     the same geometry gates as run and the trusted cloud measurement worker.
+    Known failed, pending or stale specification checks still block delivery;
+    geometry_readiness remains separate. Recheck the same spec to clear it.
 
     Args:
         file: Path to the STEP/STP/BREP file.
@@ -937,6 +939,9 @@ def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, 
                complete: bool = False, experimental_changes: bool = False) -> dict:
     """Check a file/spec or inspect a retained revision's pinned check receipt.
 
+    File checks persist hash-bound intent_validation and delivery_readiness.
+    Failed, pending or stale checks block delivery until the same policy passes.
+    Geometry validity stays separate. Optional spec_id names independent policies.
     File checks return passed, matched_features, and missing_features. Revision
     reads return the saved receipt, validation_state, and check lifecycle.
 
