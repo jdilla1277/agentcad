@@ -1019,7 +1019,7 @@ def _status_unlocked(socket_path, pid_path, *, preserve=False):
             ),
         }
 
-    result = {"running": True, "pid": pid}
+    result = {"running": True, "pid": pid, "identity_verified": instance_id is not None}
     if "cadquery_available" in resp:
         result["cadquery_available"] = bool(resp["cadquery_available"])
     version = resp.get("version")
@@ -1290,7 +1290,7 @@ def _start_owned(socket_path, pid_path, lease_fd, timeout_s):
     while time.monotonic() < deadline:
         status = _status_unlocked(socket_path, pid_path, preserve=True)
         if (status.get("running") and status.get("pid") == proc.pid
-                and status.get("responsive") is not False and status.get("identity_verified") is not False):
+                and status.get("responsive") is not False and status.get("identity_verified") is True):
             socket_ready = True
             break
         if proc.poll() is not None:

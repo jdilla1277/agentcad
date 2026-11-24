@@ -179,26 +179,41 @@ print(json.dumps(result))
             except ProcessLookupError: pass
 
 
-def test_start_requires_matching_ping_identity(endpoint,monkeypatch):
+@pytest.mark.parametrize('identity',['different','missing'])
+def test_start_requires_matching_ping_identity(endpoint,monkeypatch,identity):
     root,sock,pid=endpoint
     fake='''
 import os,socket,sys,time
 from agentcad.daemon import _write_pid_metadata,_read_one_message,encode_message
-sock,pid=sys.argv[1:]
-_write_pid_metadata(pid,pid=os.getpid(),instance_id='owner')
+sock,pid,identity=sys.argv[1:]
+if identity == 'missing':
+    with open(pid,'w') as f: f.write(str(os.getpid()))
+    os.chmod(pid,0o600)
+else:
+    _write_pid_metadata(pid,pid=os.getpid(),instance_id='owner')
 s=socket.socket(socket.AF_UNIX);s.bind(sock);os.chmod(sock,0o600);s.listen(8)
 while True:
     c,_=s.accept();_read_one_message(c)
-    c.sendall(encode_message({'type':'pong','instance_id':'different'}));c.close()
+    response={'type':'pong'}
+    if identity != 'missing': response['instance_id']=identity
+    c.sendall(encode_message(response));c.close()
 '''
     actual=subprocess.Popen
+    workers=[]
     def launch(argv,**kwargs):
-        return actual([sys.executable,'-c',fake,sock,pid],**kwargs)
+        worker=actual([sys.executable,'-c',fake,sock,pid,identity],**kwargs)
+        workers.append(worker)
+        return worker
     monkeypatch.setattr(subprocess,'Popen',launch)
-    result=daemon.start_daemon(socket_path=sock,pid_path=pid,timeout_s=0.8)
-    assert result['started'] is False,result
-    assert 'identity' in result['message']
-    assert not Path(sock).exists() and not Path(pid).exists()
+    try:
+        result=daemon.start_daemon(socket_path=sock,pid_path=pid,timeout_s=0.8)
+        assert result['started'] is False,result
+        assert 'identity' in result['message']
+        assert not Path(sock).exists() and not Path(pid).exists()
+    finally:
+        for worker in workers:
+            if worker.poll() is None: worker.kill()
+            worker.wait(timeout=5)
 
 
 @pytest.mark.parametrize('kind',['symlink','hardlink','public','directory'])
