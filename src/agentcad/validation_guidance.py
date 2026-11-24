@@ -210,6 +210,11 @@ def part_connections(raw_parts, public_parts, *, tolerance_mm=0.01):
     warnings = []
     distances = {}
     bounds = [_connection_bounds(p["topo_shape"]) for p in raw_parts]
+    from agentcad.part_overlap import bounded_overlaps
+    diagnosed = {i for i, p in enumerate(raw_parts) if p.get("name") or p.get("explicit_id") is not None}
+    pairs = [(i, j) for i in range(len(raw_parts)) for j in range(i + 1, len(raw_parts))
+             if (i in diagnosed or j in diagnosed) and _connection_lower_bound(bounds[i], bounds[j]) == 0]
+    overlaps = bounded_overlaps([p["topo_shape"] for p in raw_parts], pairs)
     for i, (raw, public) in enumerate(zip(raw_parts, public_parts)):
         if not raw.get("name") and raw.get("explicit_id") is None:
             continue
@@ -246,19 +251,46 @@ def part_connections(raw_parts, public_parts, *, tolerance_mm=0.01):
                 continue
             if nearest is None or (distance, j) < nearest:
                 nearest = (distance, j)
+        disconnected = False
         if nearest is None or unavailable:
             public["connection"] = {"status": "unavailable" if unavailable else "not_applicable",
                                     "floating": floating, "tolerance_mm": tolerance_mm}
-            continue
-        distance, neighbor_index = nearest
-        neighbor = public_parts[neighbor_index]["id"]
-        disconnected = distance > tolerance_mm
-        public["connection"] = {
-            "status": "floating" if floating else "disconnected" if disconnected else "touching",
-            "floating": floating, "nearest_part_id": neighbor,
-            "distance_mm": round(distance, 6), "tolerance_mm": tolerance_mm,
+        else:
+            distance, neighbor_index = nearest
+            neighbor = public_parts[neighbor_index]["id"]
+            disconnected = distance > tolerance_mm
+            public["connection"] = {
+                "status": "floating" if floating else "disconnected" if disconnected else "touching",
+                "floating": floating, "nearest_part_id": neighbor,
+                "distance_mm": round(distance, 9), "tolerance_mm": tolerance_mm,
+            }
+        relevant = [(pair, overlaps[pair]) for pair in pairs if i in pair]
+        complete = all(row["status"] == "complete" for _, row in relevant)
+        found = [{"part_id": public_parts[pair[1] if pair[0] == i else pair[0]]["id"],
+                  "volume_mm3": round(row["volume_mm3"], 9),
+                  "volume_tolerance_mm3": row["volume_tolerance_mm3"]}
+                 for pair, row in relevant if row["status"] == "complete"
+                 and row["volume_mm3"] > row["volume_tolerance_mm3"]]
+        public["connection"]["overlap_check"] = {
+            "status": "complete" if complete else "partial" if any(row["status"] == "complete" for _, row in relevant) else "unavailable",
+            "candidate_pairs": len(relevant), "checked_pairs": sum(row["status"] == "complete" for _, row in relevant),
+            "overlaps": found,
+            "unavailable": [{"part_id": public_parts[pair[1] if pair[0] == i else pair[0]]["id"],
+                             "reason": row.get("reason", "unavailable")}
+                            for pair, row in relevant if row["status"] != "complete"][:10],
+            "unavailable_pairs": sum(row["status"] != "complete" for _, row in relevant),
         }
-        if disconnected and not floating:
+        if found:
+            public["connection"]["status"] = "overlapping"
+            warnings.append(f"Part {public['id']!r} overlaps material in " + ", ".join(repr(row["part_id"]) for row in found) +
+                            ". Review whether this interference is intended; contact distance alone cannot certify assembly fit.")
+        elif not complete:
+            public["connection"]["status"] = "unavailable"
+        elif nearest is not None and not unavailable and not disconnected and not floating and distance > 1e-7:
+            public["connection"]["status"] = "near"
+        if not complete:
+            warnings.append(f"Part {public['id']!r} has incomplete overlap checks; do not infer an interference-free assembly.")
+        if disconnected and not floating and not found and complete:
             warnings.append(f"Part {public['id']!r} touches no other part: nearest part "
                             f"{neighbor!r} is {distance:.4g} mm away. If intentional, "
                             "set options={'floating': True} on its show_object call.")
