@@ -230,5 +230,12 @@ def test_default_unaccepted_import(runner, isolated_dir, stage):
     assert recovered.exit_code == result.exit_code and full['historical_response']
     assert Path(full['change']['geometry']).is_file()
     if not stage:
+        assert data['geometry_readiness']['ready'] is True
+        assert data['delivery_readiness']['ready'] is False
+        assert data['intent_validation']['status'] == 'fail'
+        assert data['intent_validation']['checks_total'] == 1
+        assert data['intent_validation']['details_at'] == data['response_snapshot']['retrieve']
+        assert full['intent_validation']['status'] == 'fail'
+        assert full['intent_validation']['checks'][0]['evidence']['checks']
         checks = full['change']['validation_checks']['checks']
         assert next(row for row in checks if row['check_id'] == 'length')['state'] == 'fail'

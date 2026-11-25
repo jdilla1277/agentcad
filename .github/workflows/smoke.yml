@@ -33,8 +33,8 @@ jobs:
       - name: Collect tests
         run: pytest --collect-only -q
 
-      - name: Run occupied-volume metric regressions
-        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
+      - name: Run geometry metric, contact and timing regressions
+        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py tests/test_part_connections.py tests/test_part_overlaps.py tests/test_part_contact_workflow.py tests/test_run_timings.py -q
 
       - name: Run cloud adapter and local MCP contracts
         run: pytest tests/test_account.py tests/test_cloud.py tests/test_cloud_surface.py tests/test_cloud_exports.py tests/test_mcp_server.py tests/test_inspection_delivery.py tests/test_default_inspection_policy.py tests/test_inspection_snapshots.py tests/test_inspection_cache.py tests/test_inspection_artifacts.py tests/test_experimental_inspect.py -q
@@ -59,7 +59,7 @@ jobs:
             python scripts/check_inspect_release_gate.py
 
       - name: Run daemon state security guardrails
-        run: pytest tests/test_daemon_state.py tests/test_daemon_platform.py -q
+        run: pytest tests/test_daemon_state.py tests/test_daemon_platform.py tests/test_daemon_election.py -q
 
       - name: Run daemon protocol and client guardrails
         # Explicit selectors also exercise these CAD-free cases on the default
@@ -70,7 +70,7 @@ jobs:
         # Copied CLI recovery actions include real PNG rendering.
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
-            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
+            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_delivery_readiness.py tests/test_spec_evidence.py tests/test_validation_contract.py tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py tests/test_project_viewer.py -q
 
       - name: Run Linux render guardrails under Xvfb
         run: |
@@ -149,8 +149,8 @@ jobs:
         # must still succeed for everything else.
         run: pytest --collect-only -q
 
-      - name: Run occupied-volume metric regressions
-        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
+      - name: Run geometry metric, contact and timing regressions
+        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py tests/test_part_connections.py tests/test_part_overlaps.py tests/test_part_contact_workflow.py tests/test_run_timings.py -q
 
       - name: Install Linux render smoke dependencies
         # The contract test and tests_b3d/test_render_cmd.py render PNGs,
@@ -190,6 +190,9 @@ jobs:
             tests_b3d/test_import_retries.py \
             tests/test_cadquery_optional.py tests/test_written_mesh_validation.py tests/test_run_guidance.py tests_b3d/test_step_output_contract.py tests_b3d/test_runner.py tests_b3d/test_export_cmd.py tests_b3d/test_render_cmd.py tests_b3d/test_inspect.py tests_b3d/test_diff.py tests_b3d/test_view.py tests_b3d/test_daemon_request_isolation.py -q
 
+      - name: Run default-profile daemon election and state guardrails
+        run: pytest tests/test_daemon_state.py tests/test_daemon_election.py tests/test_daemon_platform.py -q
+
       - name: Run daemon protocol and client guardrails
         # Explicit selectors also exercise these CAD-free cases on the default
         # profile, where the module's CadQuery integration cases are skipped.
@@ -199,7 +202,7 @@ jobs:
         # Copied CLI recovery actions include real PNG rendering.
         run: |
           xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
-            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
+            env LIBGL_ALWAYS_SOFTWARE=1 pytest tests/test_delivery_readiness.py tests/test_spec_evidence.py tests/test_validation_contract.py tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py tests/test_text_encoding.py tests/test_help_consistency.py tests/test_package_positioning.py tests/test_docs.py tests/test_help.py tests/test_public_surface.py -q
 
       - name: Run the PCB enclosure recipe tests
         run: python -m pytest recipes/pcb_enclosure -q
@@ -222,8 +225,8 @@ jobs:
       - name: Collect tests
         run: pytest --collect-only -q
 
-      - name: Run occupied-volume metric regressions
-        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py -q
+      - name: Run geometry metric, contact and timing regressions
+        run: pytest tests/test_metrics.py tests/test_compound_metrics_workflow.py tests/test_part_connections.py tests/test_part_overlaps.py tests/test_part_contact_workflow.py tests/test_run_timings.py -q
 
       - name: Run Windows-relevant guardrails
         run: pytest tests/test_feedback.py tests/test_feedback_reports.py tests/test_feedback_sharing.py tests/test_feedback_viewer.py tests/test_build_root_recovery.py tests/test_cli_input_recovery.py tests/test_session_logging_integration.py -q

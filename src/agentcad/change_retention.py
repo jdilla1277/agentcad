@@ -84,6 +84,9 @@ def assess_change(payload, geometry):
     prepare_change(payload, geometry=geometry)
     reference = attempt.reference(original_checks=True)
     checked = reference["validation_checks"]
+    if request.get("check_policy"):
+        from agentcad.intent_validation import project_intent
+        project_intent(payload, reference["geometry"])
     if checked["promotion_ready"] and not staged:
         return None
     state = checked["validation_state"]

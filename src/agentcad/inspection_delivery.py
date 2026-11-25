@@ -254,6 +254,15 @@ def _keep(data, keys):
 
 def _summarize(payload):
     """Keep decisions and their evidence references ahead of optional detail."""
+    intent = payload.get("intent_validation")
+    if isinstance(intent, dict) and isinstance(intent.get("checks"), list):
+        checks = intent["checks"]
+        payload["intent_validation"] = {
+            **_keep(intent, {"status", "artifact_sha256"}), "checks_total": len(checks),
+            "counts": {status: sum(c.get("status") == status for c in checks)
+                       for status in sorted({c.get("status") for c in checks})},
+            "details_at": payload.get("response_snapshot", {}).get("retrieve"),
+        }
     if "validation" in payload:
         payload["validation"] = _keep(payload["validation"], {"profile", "is_valid", "first_failure", "undetermined_layer"})
     if "metrics" in payload:

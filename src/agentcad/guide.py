@@ -163,8 +163,12 @@ identifies the tracked deliverable.
    agentcad run script.py --label test --dry-run
    ```
    Check `volume`, `dimensions`, `is_valid` in the response. `is_valid` is the
-   deliverable verdict: the kernel check, every shell closed, and a manifold
-   mesh. Do not hand a part off until it is `true`; `false` names the failing
+   selected profile's verdict: by default the kernel check, every shell closed,
+   and a manifold mesh. For a run's final STEP, require
+   `delivery_readiness.ready: true`; kernel success alone is insufficient.
+   Failed, incomplete or stale declared specs also block delivery. Repair and
+   recheck the same spec; `measure` cannot clear a specification failure.
+   `false` names the failing
    layer in `validation.first_failure`, `null` means a check timed out
    (`validation.timed_out_layer`; raise `AGENTCAD_VALIDATION_TIMEOUT_S`).
 
@@ -264,6 +268,11 @@ enough.
    agentcad inspect v1_label/output.step
    ```
    Intentional surfaces or sheet bodies: pass `--validation-profile kernel`.
+   Such runs save intermediate artifacts: `delivery_readiness.ready` is false,
+   even when `status` is success. Read `blocking_reasons` before delivery.
+   Saved readiness is bound to the STEP's `artifact_sha256` in `meta.json`;
+   changed bytes require new validation. Readiness requires every deliverable
+   geometry gate to pass; it does not establish task intent or preservation.
    Use `agentcad view FILE --validation` or `agentcad render FILE --view iso
    --highlight validation` to see the reported defects on an existing STEP.
    Read `validation.guidance` for the finding, unknowns, and next checks.

@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from click.testing import CliRunner
 from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult, ImageContent, TextContent
+from mcp.types import ToolAnnotations, CallToolResult, ImageContent, TextContent
 
 from agentcad.cli import cli
 from agentcad.cloud import CloudError, cloud_call
@@ -92,6 +92,12 @@ async def cloud_create_project(name: str, runtime: Literal["build123d", "cadquer
 async def cloud_projects() -> dict:
     """List cloud projects owned by the configured API account."""
     return await _cloud_tool("projects")
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True))
+async def cloud_activity(limit: int = 25, cursor: str | None = None) -> dict:
+    """Read account-owned cloud job activity, newest first. Use next_cursor for another page, limit 1–100."""
+    return await _cloud_tool("activity", limit=limit, cursor=cursor)
 
 
 @mcp.tool()
@@ -604,6 +610,9 @@ def run(
     Saved STEP versions issue typed geometry IDs by default.
     Use inspect with report=True or entity_id to inspect the result without re-importing.
     Reports/images are prepared on request; dry runs do not issue IDs.
+    Check delivery_readiness before handing off the STEP: command success can
+    include incomplete geometry validation. ready requires every deliverable
+    gate to pass; it does not establish task intent or edit preservation.
 
     Args:
         script: Path to the Python CAD script.
@@ -753,6 +762,11 @@ def measure(
     build_dir: str | None = None,
 ) -> dict:
     """Measure dimensions and feature sizes in a STEP/BREP file.
+
+    Returns fresh full-policy delivery_readiness bound to the file hash, using
+    the same geometry gates as run and the trusted cloud measurement worker.
+    Known failed, pending or stale specification checks still block delivery;
+    geometry_readiness remains separate. Recheck the same spec to clear it.
 
     Args:
         file: Path to the STEP/STP/BREP file.
@@ -974,6 +988,9 @@ def check_spec(file: str, spec_file: str | None = None, cwd: str | None = None, 
                complete: bool = False, experimental_changes: bool = False) -> dict:
     """Check a file/spec or inspect a retained revision's pinned check receipt.
 
+    File checks persist hash-bound intent_validation and delivery_readiness.
+    Failed, pending or stale checks block delivery until the same policy passes.
+    Geometry validity stays separate. Optional spec_id names independent policies.
     File checks return passed, matched_features, and missing_features. Revision
     reads return the saved receipt, validation_state, and check lifecycle.
 

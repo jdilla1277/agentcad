@@ -19,9 +19,11 @@ SCRIPT_LIMIT = SPEC_LIMIT = 256 * 1024
 IMPORT_LIMIT = 20 * 1024 * 1024
 STEP_LIMIT = 150 * 1024 * 1024
 MESH_LIMIT = 32 * 1024 * 1024
+ACTIVITY_CURSOR = re.compile(r"^[0-9]{20}_job_[0-9a-f]{24}\.json$")
+PERSONAL_KEY = re.compile(r"^acad_sk_[0-9a-f]{24}\.[A-Za-z0-9_-]{43}$")
 MESH_FORMATS = {"stl", "obj", "glb"}
 OPERATIONS = {"create_project", "projects", "project", "run", "import_step", "measure", "inspect",
-              "check_spec", "render", "diff", "export", "job", "download"}
+              "check_spec", "render", "diff", "export", "job", "download", "activity"}
 
 
 class CloudError(Exception):
@@ -94,8 +96,8 @@ class CloudClient:
             raise CloudError("invalid_config", "AGENTCAD_API_URL must be an HTTPS origin without credentials, a path, query, or fragment. HTTP is allowed only for loopback development.")
         if credential is not None:
             from agentcad.account import CREDENTIAL
-            if not isinstance(credential, str) or not CREDENTIAL.fullmatch(credential):
-                raise CloudError("invalid_config", "Reconnect with agentcad account connect.")
+            if not isinstance(credential, str) or not (CREDENTIAL.fullmatch(credential) or PERSONAL_KEY.fullmatch(credential)):
+                raise CloudError("invalid_config", "Use an API key from account settings or reconnect with agentcad account connect.")
         elif not isinstance(key_id, str) or not re.fullmatch(r"key_[0-9a-f]{24}", key_id) or not isinstance(secret, str) or not 20 <= len(secret) <= 128:
             raise CloudError("invalid_config", "Set the issued AGENTCAD_KEY_ID and AGENTCAD_KEY_SECRET in the process environment.")
         try:
@@ -112,6 +114,11 @@ class CloudClient:
     @classmethod
     def from_env(cls):
         values = [os.environ.get(name) for name in ("AGENTCAD_API_URL", "AGENTCAD_KEY_ID", "AGENTCAD_KEY_SECRET")]
+        personal_key = os.environ.get("AGENTCAD_API_KEY")
+        if personal_key is not None:
+            if not values[0] or any(values[1:]):
+                raise CloudError("invalid_config", "Set AGENTCAD_API_URL and AGENTCAD_API_KEY together; unset pilot KEY_ID and KEY_SECRET when using a personal key.")
+            return cls(values[0], None, None, credential=personal_key)
         if not any(values[1:]):
             from agentcad.account import AccountState, AccountError
             try:
@@ -125,6 +132,18 @@ class CloudClient:
         if not all(values):
             raise CloudError("missing_config", "Run agentcad account connect, approve in the browser, then agentcad account status. Existing pilot credentials can still use AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET.")
         return cls(*values)
+
+    def activity(self, limit=25, cursor=None):
+        if type(limit) is not int or not 1 <= limit <= 100 or (cursor is not None and (not isinstance(cursor, str) or not ACTIVITY_CURSOR.fullmatch(cursor))):
+            raise CloudError("invalid_activity_query", "Use a limit from 1 to 100 and the returned activity cursor.")
+        data = self._request("GET", "/v1/activity", params={"limit": limit, **({"cursor": cursor} if cursor else {})})
+        next_cursor = data.get("next_cursor")
+        if not isinstance(data.get("items"), list) or len(data["items"]) > limit or (next_cursor is not None and (not isinstance(next_cursor, str) or not ACTIVITY_CURSOR.fullmatch(next_cursor))):
+            raise CloudError("invalid_response", "The activity response is invalid. Retry the same request.")
+        if next_cursor:
+            data["next_actions"] = [f"agentcad cloud activity --limit {limit} --cursor {next_cursor}"]
+        data["more_at"] = "agentcad docs cloud"
+        return data
 
     def __enter__(self):
         return self
