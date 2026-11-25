@@ -112,6 +112,8 @@ async def cloud_run(project: str, script: str, label: str, cwd: str | None = Non
     resubmit a running job. Edit the local script and use a new key/label for a
     new version. Only this file is uploaded, not its folder or dependencies.
     cwd resolves the local file; no local AgentCAD project is required.
+    Labels allow 1 to 64 ASCII letters/digits/spaces/_/-, start with a letter,
+    and cannot end with a space. Preserve the exact label for retries.
     Set export_glb=True for a part-aware GLB generated during the build.
     Inspect cloud_job.mesh_exports; download using the build job and kind='glb'.
     """
