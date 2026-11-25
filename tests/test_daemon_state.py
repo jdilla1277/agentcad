@@ -273,3 +273,24 @@ def test_private_default_lifecycle_and_overrides(short_dir, monkeypatch):
     monkeypatch.setenv("AGENTCAD_PID_PATH", str(short_dir / "custom.pid"))
     assert daemon._default_socket_path() == str(short_dir / "custom.sock")
     assert daemon._default_pid_path() == str(short_dir / "custom.pid")
+
+
+@pytest.mark.parametrize('replace',[False,True])
+def test_pid_read_tolerates_normal_unlink_or_republication(short_dir,monkeypatch,replace):
+    pid=short_dir/'daemon.pid'
+    daemon._write_pid_metadata(pid,pid=123,instance_id='old')
+    replacement=short_dir/'replacement.pid'
+    daemon._write_pid_metadata(replacement,pid=456,instance_id='new')
+    inode=pid.stat().st_ino
+    actual=os.fstat
+    def change_before_fstat(fd):
+        info=actual(fd)
+        if info.st_ino==inode and pid.exists():
+            if replace: os.replace(replacement,pid)
+            else: pid.unlink()
+        return actual(fd)
+    with monkeypatch.context() as patch:
+        patch.setattr(os,'fstat',change_before_fstat)
+        assert daemon._read_pid_metadata(pid) is None
+    if replace:
+        assert daemon._read_pid_metadata(pid)['instance_id']=='new'
