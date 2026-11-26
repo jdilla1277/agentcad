@@ -59,7 +59,7 @@ def get_project(project):
 @cloud.command("run")
 @project_arg
 @click.argument("script")
-@click.option("--label", required=True)
+@click.option("--label", required=True, help="Version label; quote names with spaces. See agentcad docs cloud for character limits.")
 @retry_option
 @cwd_option
 @click.option("--export", "mesh_format", type=click.Choice(["glb"]), help="Generate a part-aware GLB during this build.")

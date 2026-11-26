@@ -241,8 +241,8 @@ class CloudClient:
 
     def run(self, project, script, label, *, cwd=None, idempotency_key=None, export_glb=False):
         route = self._project_route(project)
-        if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", label):
-            raise CloudError("invalid_label", "Supply a short label starting with a letter and containing letters, digits, _ or -.")
+        if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z](?:[A-Za-z0-9 _-]{0,62}[A-Za-z0-9_-])?", label):
+            raise CloudError("invalid_label", "Use 1 to 64 ASCII letters, digits, spaces, _ or -; start with a letter and do not end with a space.")
         if type(export_glb) is not bool:
             raise CloudError("invalid_export", "export_glb must be a boolean.")
         name, data = _input(script, SCRIPT_LIMIT, cwd, (".py",))
