@@ -7,6 +7,43 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 
+def test_windows_contender_retries_without_writing_a_locked_empty_file(tmp_path, monkeypatch):
+    """Windows denies writes to a region owned by another lock handle."""
+    import os
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from agentcad import versioning
+
+    path = tmp_path / "write.lock"
+    path.touch()
+    attempts = []
+    real_open = type(path).open
+
+    def protected_open(selected, *args, **kwargs):
+        handle = real_open(selected, *args, **kwargs)
+        proxy = MagicMock(wraps=handle)
+        proxy.__enter__.return_value = proxy
+        proxy.__exit__.side_effect = handle.__exit__
+        proxy.write.side_effect = PermissionError("another handle owns byte zero")
+        proxy.flush.side_effect = PermissionError("another handle owns byte zero")
+        return proxy
+
+    def locking(fd, mode, length):
+        assert os.lseek(fd, 0, os.SEEK_CUR) == 0 and length == 1
+        attempts.append(mode)
+        if len(attempts) == 1:
+            raise BlockingIOError("another handle owns byte zero")
+
+    monkeypatch.setattr(type(path), "open", protected_open)
+    monkeypatch.setattr(versioning, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(
+        locking=locking, LK_NBLCK=1, LK_UNLCK=0,
+    ))
+    with versioning._file_lock(path):
+        assert path.stat().st_size == 0
+    assert attempts == [1, 1, 0]
+
+
 def test_version_lock_is_released_when_its_process_is_killed(tmp_path):
     from agentcad.versioning import _version_lock
 
