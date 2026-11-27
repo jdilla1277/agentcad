@@ -1,5 +1,35 @@
 # Use AgentCAD cloud projects with an agent
 
+## Service-owned first-use guides (next client release)
+
+The public website and HTTP reader share a guide registry at
+https://agentcad.dev/docs/cloud. A matching CLI release can discover and read the
+same content directly, without a key, account profile, local project or browser:
+
+```bash
+agentcad cloud docs
+agentcad cloud docs first-cloud-build
+agentcad cloud docs first-cloud-build --format markdown
+```
+
+JSON remains the default; page responses include Markdown in `content`. Every
+read fetches the service, so content changes do not require reinstalling the
+package. This command requires the paired package release; `agentcad docs cloud`
+is still the offline reference. If your installed `agentcad cloud --help` does
+not list `docs`, use the website or the HTTP reader:
+
+```bash
+curl --fail --silent --show-error \
+  'https://agentcad.dev/api/docs/cloud/first-cloud-build?format=markdown'
+```
+
+`AGENTCAD_DOCS_URL` selects an HTTPS website origin for testing a preview docs
+service (HTTP is supported only on loopback). It is independent of
+`AGENTCAD_API_URL`. This reader never sends your API key or installation
+credential. Public docs access grants no cloud compute permission.
+Errors remain structured JSON with a nonzero exit, including when Markdown was
+requested; outages do not fall back to a bundled guide that might be stale.
+
 ## Account activity and self-service keys (next client release)
 
 On an enabled host, create a personal API key on the website's account page.
