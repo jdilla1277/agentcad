@@ -304,6 +304,13 @@ Run responses identify the selection in `runtime_source` (`command`, `project`,
 or `detection`, which includes the default fallback). Run
 `agentcad docs runtimes` for the complete dispatch contract.
 
+Before delivering a run's STEP, check `delivery_readiness.ready` in its response
+or saved `meta.json`. A successful kernel-profile run saves an intermediate
+artifact with `ready: false` and names the unchecked gates in `blocking_reasons`.
+Saved readiness includes the STEP's SHA-256; changed bytes require new validation.
+Readiness covers deliverable geometry checks; verify task requirements and edit
+preservation separately.
+
 ## MCP integration
 
 For native tool integration with Claude Code, Cursor, or Windsurf:
@@ -402,7 +409,7 @@ job, and download tools support that workflow. Set `AGENTCAD_API_URL`,
 Keep credentials in a password manager, outside project files and agent prompts.
 
 For the local cloud CLI, install
-`pip install 'agentcad[cloud]==0.8.1'` (also included in `agentcad[mcp]`),
+`pip install 'agentcad[cloud]==0.8.2'` (also included in `agentcad[mcp]`),
 as shown in the guide above:
 
 ```bash

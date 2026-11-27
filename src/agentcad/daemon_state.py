@@ -152,7 +152,15 @@ def read_metadata(path):
     except OSError as exc:
         _refuse(path, str(exc))
     with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-        _check_info(path, os.fstat(handle.fileno()), "pid")
+        info = os.fstat(handle.fileno())
+        try:
+            current = os.lstat(path)
+        except FileNotFoundError:
+            return None  # Normal daemon teardown after open().
+        if info.st_nlink == 0 or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+            return None  # Atomic republication: this descriptor is historical.
+        _check_info(path, info, "pid")
+        _check_info(path, current, "pid")
         try:
             return handle.read(4096).strip()
         except UnicodeError:
@@ -168,3 +176,69 @@ def unlink_state(path):
             pass
         except OSError as exc:
             _refuse(path, str(exc))
+
+
+def acquire_lease(socket_path):
+    """Try a lifetime election lock; close only (never unlock/unlink) on release.
+
+    The open file description passes from starter to server across fork/exec.
+    Closing a starter's copy must not release the server's ownership.
+    """
+    import fcntl
+
+    path = str(socket_path) + '.lock'
+    _check_runtime_parent(path, create=True)
+    check_entry(path, 'pid')
+    descriptor = None
+    try:
+        try:
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.fchmod(descriptor, 0o600)
+        except FileExistsError:
+            descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if descriptor < 3:
+            duplicate = fcntl.fcntl(descriptor, fcntl.F_DUPFD, 3)
+            os.set_inheritable(duplicate, False)
+            os.close(descriptor)
+            descriptor = duplicate
+        info = os.fstat(descriptor)
+        _check_info(path, info, 'pid')
+        leaf = os.lstat(path)
+        if (info.st_dev, info.st_ino) != (leaf.st_dev, leaf.st_ino):
+            _refuse(path, 'lock path changed while opening')
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        result, descriptor = descriptor, None
+        return result
+    except OSError as exc:
+        if isinstance(exc, DaemonStateError):
+            raise
+        _refuse(path, str(exc))
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def adopt_lease(socket_path, descriptor):
+    """Validate an inherited election descriptor before using daemon state."""
+    import fcntl
+
+    path = str(socket_path) + '.lock'
+    check_entry(path, 'pid')
+    info = os.fstat(descriptor)
+    _check_info(path, info, 'pid')
+    leaf = os.lstat(path)
+    if (info.st_dev, info.st_ino) != (leaf.st_dev, leaf.st_ino):
+        _refuse(path, 'inherited lock does not match the endpoint')
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        _refuse(path, 'inherited descriptor does not own the endpoint')
+    return descriptor
+
+
+def close_lease(descriptor):
+    if descriptor is not None:
+        os.close(descriptor)

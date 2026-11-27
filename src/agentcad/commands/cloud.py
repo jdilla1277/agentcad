@@ -22,10 +22,11 @@ cwd_option = click.option("--cwd", type=click.Path(file_okay=False), help="Resol
 
 @click.group()
 def cloud():
-    """Use hosted CAD projects with a connected CLI or issued pilot credentials.
+    """Use hosted CAD projects with a connected CLI or an API key.
 
     Run agentcad account connect and approve in your browser, or set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the
-    process environment. See agentcad docs cloud. No local project is needed.
+    process environment. Personal keys use AGENTCAD_API_URL and AGENTCAD_API_KEY instead.
+    See agentcad docs cloud. No local project is needed.
     """
 
 
@@ -58,7 +59,7 @@ def get_project(project):
 @cloud.command("run")
 @project_arg
 @click.argument("script")
-@click.option("--label", required=True)
+@click.option("--label", required=True, help="Version label; quote names with spaces. See agentcad docs cloud for character limits.")
 @retry_option
 @cwd_option
 @click.option("--export", "mesh_format", type=click.Choice(["glb"]), help="Generate a part-aware GLB during this build.")
@@ -167,3 +168,11 @@ def download(project, destination, job, kind, version, path, overwrite, cwd):
     """
     _emit("download", project=project, destination=destination, job=job, kind=kind,
           version=version, path=path, overwrite=overwrite, cwd=cwd)
+
+
+@cloud.command("activity")
+@click.option("--limit", type=click.IntRange(1, 100), default=25, show_default=True)
+@click.option("--cursor", default=None, help="Continue with the next_cursor from the previous response.")
+def activity(limit, cursor):
+    """Read recent cloud jobs for this account, newest first."""
+    _emit("activity", limit=limit, cursor=cursor)

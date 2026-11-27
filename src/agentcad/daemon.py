@@ -182,10 +182,12 @@ def decode_message(data):
 # ---------- Server ----------
 
 class DaemonServer:
-    def __init__(self, socket_path=None, pid_path=None):
+    def __init__(self, socket_path=None, pid_path=None, *, lease_fd=None):
         self._socket_path = socket_path or _default_socket_path()
         self._pid_path = pid_path or _default_pid_path()
         self._running = False
+        self._lease_fd = lease_fd
+        self._bound_socket_identity = None
         self._instance_id = secrets.token_hex(16)
         # Snapshot agentcad's version at startup so ``ping``/``status`` can
         # report it for diagnostics. Nothing is gated on it.
@@ -310,7 +312,35 @@ class DaemonServer:
                 os.chdir(original_cwd)
 
     def serve(self):
-        """Run the accept-and-fork loop until ``shutdown`` arrives."""
+        """Own the endpoint through startup, service and final cleanup."""
+        daemon_state.check_paths(self._socket_path, self._pid_path, create=True)
+        inherited = self._lease_fd is not None
+        if inherited:
+            daemon_state.adopt_lease(self._socket_path, self._lease_fd)
+        else:
+            self._lease_fd = daemon_state.acquire_lease(self._socket_path)
+        if self._lease_fd is None:
+            return False
+        try:
+            # Also respect a responsive older daemon that predates the lock.
+            if not inherited and _status_unlocked(self._socket_path, self._pid_path).get("running"):
+                return False
+            return self._serve_owned()
+        finally:
+            try:
+                metadata = _read_pid_metadata(self._pid_path)
+                if metadata and metadata.get("instance_id") == self._instance_id:
+                    if os.path.exists(self._socket_path) and self._bound_socket_identity is not None:
+                        info = os.lstat(self._socket_path)
+                        if (info.st_dev, info.st_ino) == self._bound_socket_identity:
+                            _unlink_quiet(self._socket_path)
+                    _unlink_quiet(self._pid_path)
+            finally:
+                daemon_state.close_lease(self._lease_fd)
+                self._lease_fd = None
+
+    def _serve_owned(self):
+        """Run the accept-and-fork loop while holding the lifetime lease."""
         # SIGCHLD ignore makes the kernel auto-reap exited children — no
         # zombies, no explicit waitpid plumbing. Verified clean on macOS and
         # Linux by spike 02.
@@ -325,12 +355,9 @@ class DaemonServer:
         daemon_state.check_paths(self._socket_path, self._pid_path, create=True)
         _unlink_quiet(self._socket_path)
 
-        # Write the PID file BEFORE binding the socket. ``start_daemon``'s
-        # readiness check watches for the socket to appear; if we bound it
-        # first there's a window where the socket exists but the PID file
-        # hasn't been written yet, and a follow-up ``daemon status`` reads
-        # an empty PID and reports running=false even though the process is
-        # healthy.
+        # Publish identity before exposing the endpoint. The lifetime lease
+        # protects this PID-before-bind window; readiness still requires a
+        # matching ping, not merely the pathname appearing.
         _write_pid_metadata(
             self._pid_path,
             pid=os.getpid(),
@@ -339,6 +366,8 @@ class DaemonServer:
 
         server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server_sock.bind(self._socket_path)
+        info = os.lstat(self._socket_path)
+        self._bound_socket_identity = (info.st_dev, info.st_ino)
         os.chmod(self._socket_path, 0o600)
         # Backlog 16 absorbs short bursts. Per-request work happens in forked
         # children, so the parent itself rarely blocks.
@@ -377,8 +406,6 @@ class DaemonServer:
                     _safe_close(conn)
         finally:
             server_sock.close()
-            _unlink_quiet(self._socket_path)
-            _unlink_quiet(self._pid_path)
 
     def _fork_and_run(self, request, conn, listen_sock):
         """Fork a child to handle one ``run`` request; parent returns immediately."""
@@ -405,6 +432,8 @@ class DaemonServer:
             # CHILD: close listening socket, run the command, exit.
             try:
                 listen_sock.close()
+                daemon_state.close_lease(self._lease_fd)
+                self._lease_fd = None
                 _run_in_child(self, request, conn)
             finally:
                 try:
@@ -893,22 +922,47 @@ def daemon_status(socket_path=None, pid_path=None):
         pid_path = _default_pid_path()
 
     daemon_state.check_paths(socket_path, pid_path)
+    if not any(os.path.lexists(path) for path in (socket_path, pid_path, str(socket_path) + ".lock")):
+        return {"running": False}
+    lease = daemon_state.acquire_lease(socket_path)
+    try:
+        return _status_unlocked(socket_path, pid_path, preserve=lease is None)
+    finally:
+        daemon_state.close_lease(lease)
+
+
+def _status_unlocked(socket_path, pid_path, *, preserve=False):
+    def cleanup(path):
+        if not preserve:
+            _unlink_quiet(path)
+
+    starting = {"running": False, "starting": True, "state_preserved": True,
+                "message": "Daemon startup or shutdown owns the endpoint; poll status again."}
     pid_metadata = _read_pid_metadata(pid_path)
     if pid_metadata is None:
-        return {"running": False}
+        if not preserve and os.path.exists(socket_path):
+            _, peer_pid, connected = _send_request_with_peer(
+                {"type": "ping"}, socket_path=socket_path,
+                response_timeout_s=_STATUS_PING_TIMEOUT_S,
+            )
+            if connected:
+                return {"running": True, "responsive": False, "identity_verified": False,
+                        "state_preserved": True, "pid": peer_pid,
+                        "message": "Live endpoint has no usable PID identity; state preserved. Inspect before restarting."}
+        return starting if preserve else {"running": False}
     pid = pid_metadata["pid"]
 
     if not _pid_alive(pid):
         # Stale PID — process died. Clean up files.
-        _unlink_quiet(pid_path)
-        _unlink_quiet(socket_path)
-        return {"running": False}
+        cleanup(pid_path)
+        cleanup(socket_path)
+        return starting if preserve else {"running": False}
 
     if not os.path.exists(socket_path):
         # PID alive but socket never bound (daemon died before bind,
         # or fork failed mid-startup). Clean up pid file so spawn can retry.
-        _unlink_quiet(pid_path)
-        return {"running": False}
+        cleanup(pid_path)
+        return starting if preserve else {"running": False}
 
     # Probe the listener. A connection failure means there is no listener and
     # the paths are stale. If the listener accepted our request but did not
@@ -946,9 +1000,9 @@ def daemon_status(socket_path=None, pid_path=None):
             ),
         }
     if not resp or resp.get("type") != "pong":
-        _unlink_quiet(pid_path)
-        _unlink_quiet(socket_path)
-        return {"running": False}
+        cleanup(pid_path)
+        cleanup(socket_path)
+        return starting if preserve else {"running": False}
 
     instance_id = pid_metadata.get("instance_id")
     if instance_id is not None and resp.get("instance_id") != instance_id:
@@ -965,7 +1019,7 @@ def daemon_status(socket_path=None, pid_path=None):
             ),
         }
 
-    result = {"running": True, "pid": pid}
+    result = {"running": True, "pid": pid, "identity_verified": instance_id is not None}
     if "cadquery_available" in resp:
         result["cadquery_available"] = bool(resp["cadquery_available"])
     version = resp.get("version")
@@ -987,6 +1041,22 @@ def daemon_status(socket_path=None, pid_path=None):
     return result
 
 
+def _cleanup_unowned(socket_path, pid_path, expected_metadata, *, remove_socket=True):
+    """Clean stale state only under a lease and only for the observed owner."""
+    lease = daemon_state.acquire_lease(socket_path)
+    if lease is None:
+        return False
+    try:
+        if _read_pid_metadata(pid_path) != expected_metadata:
+            return False
+        if remove_socket:
+            _unlink_quiet(socket_path)
+        _unlink_quiet(pid_path)
+        return True
+    finally:
+        daemon_state.close_lease(lease)
+
+
 def _force_kill(pid, pid_path, socket_path, sigterm_grace_s=2.0):
     """Send SIGTERM, then SIGKILL if needed; clean up socket + PID files.
 
@@ -994,6 +1064,9 @@ def _force_kill(pid, pid_path, socket_path, sigterm_grace_s=2.0):
     ``"sigterm"`` or ``"sigkill"``. Used as the fallback when graceful
     shutdown is unavailable (no socket, no ack, daemon ignored shutdown).
     """
+    expected_metadata = _read_pid_metadata(pid_path)
+    if expected_metadata is not None and expected_metadata["pid"] != pid:
+        return None  # Another owner replaced this state before escalation.
     method = None
     if _pid_alive(pid):
         try:
@@ -1018,8 +1091,8 @@ def _force_kill(pid, pid_path, socket_path, sigterm_grace_s=2.0):
                     break
                 time.sleep(0.05)
 
-    _unlink_quiet(socket_path)
-    _unlink_quiet(pid_path)
+    if expected_metadata is not None:
+        _cleanup_unowned(socket_path, pid_path, expected_metadata)
     return method
 
 
@@ -1041,9 +1114,13 @@ def stop_daemon(socket_path=None, pid_path=None):
         pid_path = _default_pid_path()
 
     daemon_state.check_paths(socket_path, pid_path)
+    if not any(os.path.lexists(path) for path in (socket_path, pid_path, str(socket_path) + ".lock")):
+        return {"stopped": False, "message": "Daemon not running"}
     pid_metadata = _read_pid_metadata(pid_path)
     if pid_metadata is None:
-        _unlink_quiet(pid_path)
+        if not _cleanup_unowned(socket_path, pid_path, None, remove_socket=False):
+            return {"stopped": False, "starting": True, "state_preserved": True,
+                    "message": "Daemon startup/shutdown owns the endpoint; poll status before retrying stop."}
         if not os.path.exists(socket_path):
             return {"stopped": False, "message": "Daemon not running"}
         return {
@@ -1060,15 +1137,12 @@ def stop_daemon(socket_path=None, pid_path=None):
     pid = pid_metadata["pid"]
     if not _pid_alive(pid):
         # The recorded process is gone, so both paths are stale.
-        _unlink_quiet(socket_path)
-        _unlink_quiet(pid_path)
+        if not _cleanup_unowned(socket_path, pid_path, pid_metadata):
+            return {"stopped": False, "state_preserved": True, "message": "Daemon ownership changed; poll status again."}
         return {"stopped": False, "message": "Daemon not running"}
 
-    # Try graceful shutdown first. Wait for both the socket AND PID file to
-    # be unlinked: ``serve()``'s finally block removes the socket first and
-    # the PID file second, so a check that only watches the socket can
-    # return prematurely while the PID file is still on disk — that races
-    # with a follow-up ``start_daemon`` call.
+    # Wait for this owner's metadata to disappear or be replaced. A new
+    # election may complete after shutdown; never wait on or erase its files.
     peer_pid = None
     connected = False
     if os.path.exists(socket_path):
@@ -1110,7 +1184,7 @@ def stop_daemon(socket_path=None, pid_path=None):
             }
         if resp is not None and resp.get("type") == "ack":
             for _ in range(50):
-                if not os.path.exists(socket_path) and not os.path.exists(pid_path):
+                if _read_pid_metadata(pid_path) != pid_metadata or (not os.path.exists(socket_path) and not os.path.exists(pid_path)):
                     return {"stopped": True, "method": "graceful"}
                 time.sleep(0.1)
             # Ack but files lingered — fall through to force.
@@ -1118,8 +1192,9 @@ def stop_daemon(socket_path=None, pid_path=None):
     if not connected:
         # There is no listening endpoint that can authenticate the PID. The
         # paths are stale, but the live process may be completely unrelated.
-        _unlink_quiet(socket_path)
-        _unlink_quiet(pid_path)
+        if not _cleanup_unowned(socket_path, pid_path, pid_metadata):
+            return {"stopped": False, "state_preserved": True, "pid": pid,
+                    "message": "Daemon startup/shutdown owns the endpoint; state was preserved and no process signaled."}
         return {
             "stopped": False,
             "identity_verified": False,
@@ -1143,6 +1218,8 @@ def stop_daemon(socket_path=None, pid_path=None):
             ),
         }
 
+    if _read_pid_metadata(pid_path) != pid_metadata:
+        return {"stopped": False, "state_preserved": True, "message": "Daemon ownership changed before escalation; poll status again."}
     method = _force_kill(pid, pid_path, socket_path)
     if _pid_alive(pid):
         return {
@@ -1164,33 +1241,32 @@ _DEFAULT_START_TIMEOUT_S = 90.0
 
 @daemon_state.guarded("started")
 def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEOUT_S):
-    """Start the daemon as a subprocess. Returns dict with started, pid.
-
-    If a daemon is already running, refuses with "already running". Pip-upgrade
-    recovery is via ``agentcad daemon restart``, not via auto-replace inside
-    start.
-
-    Readiness is determined by the socket file appearing on disk, never by
-    "the subprocess hasn't exited yet." On a cold install OCP can take 30+s
-    to import; the previous code would time out, see the process still alive,
-    and optimistically report ``started:true`` even though the daemon hadn't
-    bound the socket or written its PID file.
-    """
-    if socket_path is None:
-        socket_path = _default_socket_path()
-    if pid_path is None:
-        pid_path = _default_pid_path()
-
+    """Elect one worker, then verify its ping/PID/startup identity before success."""
+    socket_path = os.path.abspath(socket_path or _default_socket_path())
+    pid_path = os.path.abspath(pid_path or _default_pid_path())
     daemon_state.check_paths(socket_path, pid_path, create=True)
-    status = daemon_status(socket_path=socket_path, pid_path=pid_path)
+    deadline = time.monotonic() + timeout_s
+    while True:
+        lease = daemon_state.acquire_lease(socket_path)
+        if lease is not None:
+            try:
+                return _start_owned(socket_path, pid_path, lease, max(0, deadline-time.monotonic()))
+            finally:
+                daemon_state.close_lease(lease)
+        status = _status_unlocked(socket_path, pid_path, preserve=True)
+        if status.get("running"):
+            return {**status, "started": False, "message": "Daemon already running"}
+        if time.monotonic() >= deadline:
+            return {**status, "started": False, "message": "Another daemon startup is still loading; poll daemon status before retrying."}
+        time.sleep(0.05)
+
+
+def _start_owned(socket_path, pid_path, lease_fd, timeout_s):
+    status = _status_unlocked(socket_path, pid_path)
     if status.get("error_kind"):
         return {**status, "started": False}
     if status.get("running"):
-        return {
-            "started": False,
-            "message": "Daemon already running",
-            "pid": status["pid"],
-        }
+        return {**status, "started": False, "message": "Daemon already running"}
 
     # Defensive cleanup — daemon_status should have done this, but a previous
     # crash could have left files behind.
@@ -1199,16 +1275,22 @@ def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEO
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "agentcad.daemon",
-         "--socket", socket_path, "--pid", pid_path],
+         "--socket", socket_path, "--pid", pid_path, "--lease-fd", str(lease_fd)],
         start_new_session=True,
+        pass_fds=(lease_fd,),
+        cwd="/",
+        env={**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+             + os.pathsep + os.environ.get("PYTHONPATH", "")},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
 
     socket_ready = False
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if os.path.exists(socket_path):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        status = _status_unlocked(socket_path, pid_path, preserve=True)
+        if (status.get("running") and status.get("pid") == proc.pid
+                and status.get("responsive") is not False and status.get("identity_verified") is True):
             socket_ready = True
             break
         if proc.poll() is not None:
@@ -1216,6 +1298,7 @@ def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEO
         time.sleep(0.1)
 
     if socket_ready:
+        proc.stderr.close()
         return {"started": True, "pid": proc.pid}
 
     # Either the subprocess crashed or the timeout expired with no socket.
@@ -1232,9 +1315,13 @@ def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEO
 
     stderr = ""
     try:
-        stderr = proc.stderr.read().decode("utf-8", errors="replace").strip()
+        os.set_blocking(proc.stderr.fileno(), False)
+        stderr = (proc.stderr.read(16384) or b"").decode("utf-8", errors="replace").strip()
     except Exception:
         pass
+    finally:
+        if proc.stderr is not None:
+            proc.stderr.close()
 
     if crashed:
         msg = "Daemon failed to start"
@@ -1243,7 +1330,7 @@ def start_daemon(socket_path=None, pid_path=None, timeout_s=_DEFAULT_START_TIMEO
             msg = f"Daemon failed to start: {last_line}"
     else:
         msg = (
-            f"Daemon did not bind its socket within {timeout_s:.0f}s — "
+            f"Daemon did not confirm a matching startup identity within {timeout_s:.0f}s — "
             "OCP/CadQuery cold import may be unusually slow on this machine. "
             "Try `agentcad daemon start` again (the import should be cached "
             "now), or increase the timeout."
@@ -1297,8 +1384,8 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
 
     Uses the standard daemon-detach pattern: double-fork + ``setsid`` +
     close-and-redirect stdio. The grandchild (the daemon) is reparented to
-    init, has no controlling terminal, and inherits no parent file
-    descriptors that could keep pipes open or leak fds.
+    init, has no controlling terminal, and retains only the election
+    descriptor rather than project file descriptors or caller pipes.
 
     Returns a dict with at least ``spawned: bool`` for diagnostics. The
     parent never blocks waiting for the daemon to finish binding — the
@@ -1318,13 +1405,20 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     pid_path = os.path.abspath(pid_path)
 
     daemon_state.check_paths(socket_path, pid_path, create=True)
-    status = daemon_status(socket_path=socket_path, pid_path=pid_path)
-    if status.get("error_kind"):
-        return {**status, "spawned": False, "reason": "unsafe_daemon_state"}
-    if status.get("running"):
-        return {"spawned": False, "reason": "already_running",
-                "pid": status["pid"]}
+    lease = daemon_state.acquire_lease(socket_path)
+    if lease is None:
+        status = _status_unlocked(socket_path, pid_path, preserve=True)
+        return {**status, "spawned": False, "reason": "already_running" if status.get("running") else "startup_in_progress"}
+    try:
+        status = _status_unlocked(socket_path, pid_path)
+        if status.get("running"):
+            return {"spawned": False, "reason": "already_running", "pid": status["pid"]}
+        return _spawn_owned(socket_path, pid_path, lease)
+    finally:
+        daemon_state.close_lease(lease)
 
+
+def _spawn_owned(socket_path, pid_path, lease_fd):
     try:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -1358,8 +1452,8 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     if second_pid != 0:
         os._exit(0)
 
-    # Grandchild: this is the daemon. Close every inherited fd and redirect
-    # stdio to /dev/null so we don't keep parent-side pipes alive.
+    # Grandchild: retain only the election descriptor and redirect stdio,
+    # so project-side pipes cannot keep the caller alive.
     #
     # macOS's ``sysconf("SC_OPEN_MAX")`` returns 2^63-1 ("unlimited"), so
     # iterating it directly would spin forever. Use the actual soft
@@ -1370,7 +1464,8 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     except (ValueError, OSError):
         soft_limit = 1024
     max_fd = min(int(soft_limit), 65536)
-    os.closerange(3, max_fd)
+    os.closerange(3, lease_fd)
+    os.closerange(lease_fd + 1, max_fd)
 
     devnull = os.open(os.devnull, os.O_RDWR)
     os.dup2(devnull, 0)
@@ -1399,7 +1494,7 @@ def spawn_daemon_via_fork(socket_path=None, pid_path=None):
     _leave_start_directory()
 
     try:
-        server = DaemonServer(socket_path=socket_path, pid_path=pid_path)
+        server = DaemonServer(socket_path=socket_path, pid_path=pid_path, lease_fd=lease_fd)
         server.serve()
     except BaseException:
         pass
@@ -1455,6 +1550,7 @@ def _main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", default=None)
     parser.add_argument("--pid", default=None)
+    parser.add_argument("--lease-fd", type=int, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     # Pin the daemon's own files before leaving the starting directory, so a
     # relative --socket/--pid or AGENTCAD_SOCKET_PATH/AGENTCAD_PID_PATH keeps
@@ -1464,27 +1560,37 @@ def _main():
     # Validate while relative environment settings still refer to the caller's
     # directory, including when invoked directly rather than via start_daemon.
     daemon_state.check_paths(socket_path, pid_path, create=True)
-    _leave_start_directory()
-
-    # Eager imports — warm up all expensive modules in the parent so each
-    # forked child inherits OCP in memory via copy-on-write. build123d is
-    # the default runtime; CadQuery is an optional extra, so its warm-up is
-    # best-effort and a missing extra must never keep the daemon from
-    # starting.
-    from agentcad import helpers, metrics, render, export, validation  # noqa: F401
-    import build123d  # noqa: F401
+    lease_fd = (daemon_state.adopt_lease(socket_path, args.lease_fd) if args.lease_fd is not None
+                else daemon_state.acquire_lease(socket_path))
+    if lease_fd is None:
+        return
     try:
-        import cadquery  # noqa: F401
-        from cadquery import cqgi, exporters  # noqa: F401
-    except ImportError:
-        pass
-    _warm_step_reader()
+        _leave_start_directory()
 
-    server = DaemonServer(
-        socket_path=socket_path,
-        pid_path=pid_path,
-    )
-    server.serve()
+        # Eager imports — warm up all expensive modules in the parent so each
+        # forked child inherits OCP in memory via copy-on-write. build123d is
+        # the default runtime; CadQuery is an optional extra, so its warm-up is
+        # best-effort and a missing extra must never keep the daemon from
+        # starting.
+        from agentcad import helpers, metrics, render, export, validation  # noqa: F401
+        import build123d  # noqa: F401
+        try:
+            import cadquery  # noqa: F401
+            from cadquery import cqgi, exporters  # noqa: F401
+        except ImportError:
+            pass
+        _warm_step_reader()
+
+        server = DaemonServer(
+            socket_path=socket_path,
+            pid_path=pid_path,
+            lease_fd=lease_fd,
+        )
+        lease_fd = None  # serve now owns and closes the descriptor.
+        server.serve()
+
+    finally:
+        daemon_state.close_lease(lease_fd)
 
 
 if __name__ == "__main__":

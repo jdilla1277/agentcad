@@ -40,6 +40,15 @@ def test_dry_run_reports_the_same_split(runner, isolated_dir):
             "delivered_validation_ms"} <= set(timings)
 
 
+def test_contact_check_time_is_visible_within_metrics(runner, isolated_dir):
+    result = _run(runner, isolated_dir,
+                  'show_object(Box(10,20,5), id="base")\n'
+                  'show_object(Pos(20,0,0)*Box(2,2,2), id="spacer")', "contacts")
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert 0 <= data["timings"]["contact_checks_ms"] <= data["timings"]["metrics_ms"]
+
+
 def test_heartbeats_carry_elapsed_seconds(runner, isolated_dir):
     result = _run(runner, isolated_dir, "show_object(Box(10, 20, 5))", "beat")
     assert result.exit_code == 0, result.output

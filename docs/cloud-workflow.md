@@ -1,5 +1,38 @@
 # Use AgentCAD cloud projects with an agent
 
+## Account activity and self-service keys (next client release)
+
+On an enabled host, create a personal API key on the website's account page.
+Set `AGENTCAD_API_URL` to that host's HTTPS API origin and `AGENTCAD_API_KEY`
+to the key in your process environment. Unset `AGENTCAD_KEY_ID` and
+`AGENTCAD_KEY_SECRET` when choosing this method. Keep the key out of source,
+command arguments and chat messages. A browser-approved CLI installation also
+works; an explicitly configured personal key takes precedence over saved login.
+
+With a matching client and activity-enabled service:
+
+```sh
+agentcad cloud activity --limit 25
+agentcad cloud activity --limit 25 --cursor NEXT_CURSOR
+```
+
+The result contains `items` and `next_cursor`. Each item identifies an owned
+cloud job, operation, current status, project, creation/update timestamps and
+recorded client/key attribution. Jobs appear newest first. A repeated
+idempotent submission is one job, not another activity entry. Empty activity
+is a successful `items: []` response. Refresh to see changed job states.
+This feed contains job history, not a bill or a record of local CAD activity.
+
+The hosted MCP `cloud_activity(limit=25, cursor=None)` reads the same history.
+Configure `Authorization: Bearer <API key>` or a host-approved CLI installation
+credential in your MCP client's secure environment/header settings; do not paste
+credentials into a conversation. Hosts verify each request, including discovery,
+and revocation blocks subsequent requests. Old pilot headers remain supported.
+The usual local MCP server also exposes `cloud_activity`, using the same cloud
+configuration as the CLI. These additions require the next matching client
+release or the supplied Preview checkout; older clients do not have this command.
+
+
 Your agent writes a CAD script on your machine. AgentCAD uploads that file,
 builds it on the host's computers, and saves a version in a cloud project.
 Your agent can then measure it, check requirements, inspect it, download a
@@ -65,7 +98,7 @@ Python 3.12:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'agentcad[mcp]==0.8.1'
+.venv/bin/python -m pip install 'agentcad[mcp]==0.8.2'
 .venv/bin/agentcad cloud --help
 ```
 
