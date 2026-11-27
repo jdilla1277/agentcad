@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 import zipfile
@@ -39,7 +41,18 @@ class Client:
         return data
 
     def json(self, url):
-        return json.loads(self.bytes(url))
+        # PyPI can briefly return 404 after a successful immutable upload.
+        # Only wait for metadata propagation; all provenance checks still run.
+        for delay in (15, 30, 60, None):
+            try:
+                return json.loads(self.bytes(url))
+            except HTTPError as exc:
+                metadata = url.startswith(f"{PYPI}/") and url.endswith("/json")
+                if exc.code != 404 or not metadata or delay is None:
+                    raise
+                exc.close()
+                print(f"PyPI metadata unavailable; retrying in {delay}s: {url}", file=sys.stderr)
+                time.sleep(delay)
 
 
 def _commit_for_tag(tag, client):
