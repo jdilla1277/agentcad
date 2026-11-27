@@ -9,10 +9,11 @@ same content directly, without a key, account profile, local project or browser:
 ```bash
 agentcad cloud docs
 agentcad cloud docs first-cloud-build
-agentcad cloud docs first-cloud-build --format markdown
+agentcad cloud docs first-cloud-build --format json
 ```
 
-JSON remains the default; page responses include Markdown in `content`. Every
+Markdown is the default for live guide lists and pages. Use `--format json` for
+structured responses, with page Markdown in `content`. Every
 read fetches the service, so content changes do not require reinstalling the
 package. This command requires the paired package release; `agentcad docs cloud`
 is still the offline reference. If your installed `agentcad cloud --help` does

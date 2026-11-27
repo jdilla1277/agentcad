@@ -181,10 +181,11 @@ def activity(limit, cursor):
 
 @cloud.command("docs")
 @click.argument("page", required=False)
-@click.option("--format", "output_format", type=click.Choice(["json", "markdown"]), default="json", show_default=True)
+@click.option("--format", "output_format", type=click.Choice(["markdown", "json"]), default="markdown", show_default=True)
 def docs(page, output_format):
     """List live cloud guides or read PAGE. No account or API key is needed.
 
+    Markdown is the default. Use --format json for structured output.
     Reads the same service-owned content as agentcad.dev/docs/cloud.
     AGENTCAD_DOCS_URL selects an HTTPS website origin for preview testing.
     Local CAD reference documentation remains available with agentcad docs.

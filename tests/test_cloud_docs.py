@@ -23,8 +23,15 @@ def test_discovery_and_page_reads_need_no_account_or_project(tmp_path,monkeypatc
  install(monkeypatch,handler)
  result=CliRunner().invoke(cli,['cloud','docs'])
  assert result.exit_code==0,result.output
+ assert result.stdout.startswith('# Cloud guides\n\n')
+ assert 'first-cloud-build: Your first cloud build (Preview)' in result.stdout
+ result=CliRunner().invoke(cli,['cloud','docs','--format','json'])
+ assert result.exit_code==0,result.output
  assert json.loads(result.stdout)['pages']==INDEX['pages']
  result=CliRunner().invoke(cli,['cloud','docs','first-cloud-build'])
+ assert result.exit_code==0,result.output
+ assert result.stdout==PAGE['content']
+ result=CliRunner().invoke(cli,['cloud','docs','first-cloud-build','--format','json'])
  assert result.exit_code==0,result.output
  assert json.loads(result.stdout)['content']==PAGE['content']
  result=CliRunner().invoke(cli,['cloud','docs','first-cloud-build','--format','markdown'])
@@ -40,7 +47,7 @@ def test_reads_fetch_updated_service_content_without_client_changes(monkeypatch)
  install(monkeypatch,handler)
  for revision in (1,2):
   result=CliRunner().invoke(cli,['cloud','docs','first-cloud-build'])
-  assert json.loads(result.stdout)['content']==f'# Revision {revision}\n'
+  assert result.stdout==f'# Revision {revision}\n'
  assert len(calls)==2
 
 @pytest.mark.parametrize('response,reason',[(httpx.Response(404), 'guide_not_found'),(httpx.Response(503,text='private backend details'),'docs_unavailable'),(httpx.Response(302,headers={'location':'https://other.test'}),'docs_unavailable'),(httpx.Response(200,text='<html>login</html>'),'invalid_docs_response'),(httpx.Response(200,json={'schema_version':99,'pages':[]}),'invalid_docs_response')])
