@@ -472,3 +472,14 @@ using `--send-diagnostics reviewed.json --send`, or use the viewer's diagnostic
 panel. No diagnostics are automatically attached to observations. Local MCP's
 `feedback` tool follows the same policy and accepts report text directly.
 See `agentcad docs feedback` for scope, file/stdin input and upload receipts.
+
+## Experimental local geometry search
+
+Local CLI and MCP can opt in to exact filters over a saved version's parts,
+placements, faces and edges. Use `inspect --experimental-geometry-search
+--query '{"kind":"face","where":{"surface_type":"plane"}}'` or MCP
+`inspect(..., experimental_geometry_search=True, query={...})`.
+Search is WIP and requires opt-in on each call. Results include retained
+pagination and complete candidate-manifest retrieval; named-feature recognition
+and shape similarity remain unavailable. See [geometry search](docs/geometry-search.md)
+and `agentcad docs inspect` for the query contract and limits.
