@@ -35,7 +35,8 @@ pytest
 
 ## Product Contract
 
-- Commands return structured JSON.
+- Commands return structured JSON, except live `agentcad cloud docs` reads:
+  those default to Markdown, with `--format json` available. Errors remain JSON.
 - `agentcad run` creates versioned output directories and records metadata.
 - `agentcad docs` and `agentcad --help` are part of the agent-facing API.
 - Keep error messages concise and actionable for coding agents.

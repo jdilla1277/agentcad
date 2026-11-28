@@ -33,6 +33,11 @@ SECTIONS = {
         "  See https://github.com/jdilla1277/agentcad/blob/main/docs/accounts.md\n"
     ),
     "cloud": (
+        "Live cloud first-use guides (requires a matching client release):\n"
+        "  agentcad cloud docs lists service-owned guides without credentials.\n"
+        "  agentcad cloud docs first-cloud-build reads a Markdown guide.\n"
+        "  Use --format json for structured output. Same content: https://agentcad.dev/docs/cloud.\n"
+        "  Local docs stay offline.\n"
         "  Connect with agentcad account connect, approve in the browser, then account status.\n"
         "  Saved installations can use the cloud commands below. See docs account.\n"
         "  With a self-service key, set AGENTCAD_API_URL and AGENTCAD_API_KEY.\n"

@@ -27,6 +27,7 @@ def cloud():
     Run agentcad account connect and approve in your browser, or set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the
     process environment. Personal keys use AGENTCAD_API_URL and AGENTCAD_API_KEY instead.
     See agentcad docs cloud. No local project is needed.
+    Use agentcad cloud docs for live first-use guides, without credentials.
     """
 
 
@@ -176,3 +177,30 @@ def download(project, destination, job, kind, version, path, overwrite, cwd):
 def activity(limit, cursor):
     """Read recent cloud jobs for this account, newest first."""
     _emit("activity", limit=limit, cursor=cursor)
+
+
+@cloud.command("docs")
+@click.argument("page", required=False)
+@click.option("--format", "output_format", type=click.Choice(["markdown", "json"]), default="markdown", show_default=True)
+def docs(page, output_format):
+    """List live cloud guides or read PAGE. No account or API key is needed.
+
+    Markdown is the default. Use --format json for structured output.
+    Reads the same service-owned content as agentcad.dev/docs/cloud.
+    AGENTCAD_DOCS_URL selects an HTTPS website origin for preview testing.
+    Local CAD reference documentation remains available with agentcad docs.
+    """
+    from agentcad.cloud_docs import read_docs
+    result = read_docs(page)
+    if result["status"] == "error":
+        click.echo(json.dumps(result))
+        raise SystemExit(1)
+    if output_format == "markdown":
+        content = result.get("content")
+        if content is None:
+            content = "# Cloud guides\n\n" + "\n".join(
+                f"- {item['id']}: {item['title']} ({item['availability']})\n  {item['url']}"
+                for item in result["pages"])
+        click.echo(content, nl=not content.endswith("\n"))
+    else:
+        click.echo(json.dumps(result))
