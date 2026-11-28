@@ -71,10 +71,9 @@ def _file_lock(path: Path):
         if os.name == "nt":
             import msvcrt
 
-            if path.stat().st_size == 0:
-                handle.write(b"\0")
-                handle.flush()
-
+            # Windows permits locking beyond EOF. Do not initialize byte zero:
+            # another caller may lock it after a stale empty-file check, making
+            # that initialization write fail outside the acquisition retry loop.
             def acquire():
                 handle.seek(0)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -218,6 +217,9 @@ def commit_version(
             raise PromotionRefused(result)
         return promotions._manifest()
     with _version_lock(project_dir):
+        if advance_current:
+            from agentcad.experimental_changes import guard_history
+            guard_history(project_dir)
         manifest = json.loads(manifest_path.read_text())
         _merge_version_entry(
             manifest, reservation, manifest_entry, advance_current=advance_current

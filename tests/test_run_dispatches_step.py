@@ -6,6 +6,7 @@ widget.step` and gets a confusing parse error. Now that just works —
 suffix dispatch routes to import.
 """
 import json
+import shlex
 from pathlib import Path
 
 import cadquery as cq
@@ -99,12 +100,18 @@ class TestRunDispatchesStep:
         text = (parsed.get("message", "") + parsed.get("suggestion", "")).lower()
         assert "import" in text and "--init" in text
 
-    def test_run_step_response_includes_scaffold(self, runner, isolated_dir):
+    def test_run_step_response_links_to_complete_scaffold_handoff(self, runner, isolated_dir):
         """Dispatched run benefits from 2a's scaffold writing — agent
         invokes `agentcad run widget.step` and gets a v1 + edit.py."""
         runner.invoke(cli, ["init"])
         step = _bracket_step(isolated_dir)
         result = runner.invoke(cli, ["run", str(step), "--output", "rev_a"])
         parsed = json.loads(result.stdout)
-        assert parsed.get("scaffold") == "edit.py"
+        # Bounded default delivery may omit optional metadata. Its copied
+        # recovery action must expose the complete original edit handoff.
+        recovery = runner.invoke(cli, [*shlex.split(parsed["response_snapshot"]["retrieve"])[1:], "--no-daemon"])
+        assert recovery.exit_code == 0, recovery.stdout
+        complete = json.loads(recovery.stdout)
+        assert Path(complete["scaffold"]) == isolated_dir / "edit.py"
+        assert "edit.py" in complete["next_actions"][0]
         assert (isolated_dir / "edit.py").exists()

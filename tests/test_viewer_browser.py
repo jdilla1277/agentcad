@@ -80,12 +80,12 @@ def test_retained_revision_viewer_shows_required_check_states(runner, isolated_d
         {"check_id": "length", "kind": "dimension", "axis": "x", "expected_mm": 80},
         {"check_id": "vendor", "kind": "external", "validator": "vendor"},
     ]}))
-    built = runner.invoke(cli, ["run", "bracket.py", "--label", "wrong", "--checks", "checks.json",
+    built = runner.invoke(cli, ["run", "--experimental-changes", "bracket.py", "--label", "wrong", "--checks", "checks.json",
                                "--no-preview", "--no-diff", "--no-view", "--no-daemon"]
                           + (["--defer-checks"] if deferred else []))
     assert built.exit_code == 1, built.output
     revision = json.loads(built.stdout)["change"]["revision_id"]
-    viewed = runner.invoke(cli, ["view", revision])
+    viewed = runner.invoke(cli, ["view", revision, "--experimental-changes"])
     assert viewed.exit_code == 0, viewed.output
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)

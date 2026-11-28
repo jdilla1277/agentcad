@@ -41,7 +41,7 @@ def solid_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
     return entries
 
 
-def face_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
+def face_entries(topo_shape, *, limit: int | None = None, legacy_normals: bool = False) -> list[dict]:
     """One dict per face in `topo_shape`. IDs are 1-indexed."""
     from OCP.TopAbs import TopAbs_FACE
     from OCP.TopoDS import TopoDS
@@ -56,7 +56,7 @@ def face_entries(topo_shape, *, limit: int | None = None) -> list[dict]:
             "id": i,
             "area": _round(area),
             "centroid": _xyz(centroid),
-            "normal": _face_normal(face),
+            "normal": _face_normal(face, apply_placement=not legacy_normals),
             "bbox": _bbox(face),
         })
     return entries
@@ -418,7 +418,7 @@ def _face_area_and_centroid(face):
     return props.Mass(), props.CentreOfMass()
 
 
-def _face_normal(face):
+def _face_normal(face, *, apply_placement=True):
     """Surface normal at the face's UV midpoint, accounting for orientation.
     Returns a {x, y, z} dict, or None if the surface has no defined normal
     at that parameter (rare — happens for degenerate or singular surfaces)."""
@@ -436,6 +436,10 @@ def _face_normal(face):
         if not slprops.IsNormalDefined():
             return None
         n = slprops.Normal()
+        # The underlying surface is definition-local; the adaptor carries the
+        # placed face's complete transform, including nested assembly rotations.
+        if apply_placement:
+            n.Transform(adaptor.Trsf())
         # Account for face orientation
         if face.Orientation() == TopAbs_REVERSED:
             n.Reverse()

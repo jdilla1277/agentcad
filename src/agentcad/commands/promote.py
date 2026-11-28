@@ -33,7 +33,9 @@ from agentcad.project import ProjectError, get_project, project_options
 )
 @project_options
 def promote(revision, idempotency_key, status_only, target_id):
-    """Accept an exact retained REVISION without executing its source again.
+    """WIP: accept a retained REVISION; requires --experimental-changes.
+
+    Accept exact saved bytes without executing the source again.
 
     A stage remains selected but unaccepted even when its checks pass. Use a
     caller-known key to accept it explicitly; retrying that key resumes pending

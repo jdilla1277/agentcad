@@ -1,5 +1,6 @@
 """A saved edit remains inspectable/selectable without another import."""
 
+from tests.inspection_helpers import experimental_args
 import base64
 import hashlib
 import json
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 
 from agentcad.cli import cli
 from agentcad.geometry_manifest import load_geometry, read_manifest
@@ -19,7 +20,7 @@ FAST = ["--no-preview", "--no-diff", "--no-view", "--no-daemon"]
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, full_response_args(args))
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
@@ -194,6 +195,7 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         assert "typed-ID inventory timed out" in saved["suggestion"]
         assert "inspect --ids" in saved["suggestion"]
         action = shlex.split(saved["next_actions"][0])
+        assert "--experimental-inspect" not in action
         assert action[:2] == ["agentcad", "inspect"]
         assert action[2] == saved["outputs"]["step"]
         assert "--ids" in action
@@ -205,7 +207,7 @@ def test_inventory_failure_preserves_committed_step(runner, isolated_dir, monkey
         assert legacy["faces"] and all("object_id" not in face for face in legacy["faces"])
         assert Path(saved["outputs"]["step"]).read_bytes() == step_bytes
         assert (build / "agentcad.json").read_bytes() == history
-    failed_lookup = runner.invoke(cli, full_response_args(["inspect", saved["outputs"]["step"], "--id", "face_v1_1"]))
+    failed_lookup = runner.invoke(cli, experimental_args(full_response_args(["inspect", saved["outputs"]["step"], "--id", "face_v1_1"])))
     assert failed_lookup.exit_code == 1
     assert not Path(saved["outputs"]["step"]).with_name("geometry_manifest.json").exists()
 
@@ -237,10 +239,10 @@ def test_dry_invalid_and_failed_runs_do_not_issue_ids(runner, isolated_dir, monk
     dry = _save(runner, isolated_dir, "show_object(Box(10,20,5))", extra=["--dry-run"])
     assert dry["artifact_created"] is False
     (isolated_dir / "edit.py").write_text("show_object(Box(10,20,5))\nraise RuntimeError('execution failed')", encoding="utf-8")
-    assert runner.invoke(cli, full_response_args(["run", "edit.py", "--label", "failed", *FAST])).exit_code == 1
+    assert runner.invoke(cli, experimental_args(full_response_args(["run", "edit.py", "--label", "failed", *FAST]))).exit_code == 1
     fixture = Path(__file__).parents[1] / "tests/fixtures/validation/open_shell.step"
     (isolated_dir / "edit.py").write_text(f"show_object(load_step_shape({str(fixture)!r}))", encoding="utf-8")
-    invalid = runner.invoke(cli, full_response_args(["run", "edit.py", "--label", "invalid", *FAST]))
+    invalid = runner.invoke(cli, experimental_args(full_response_args(["run", "edit.py", "--label", "invalid", *FAST])))
     assert invalid.exit_code == 1
     assert json.loads(invalid.stdout)["status"] == "invalid_geometry"
     assert not list(isolated_dir.rglob("geometry_manifest.json"))

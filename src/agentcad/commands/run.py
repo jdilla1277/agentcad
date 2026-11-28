@@ -15,6 +15,7 @@ from pathlib import Path
 
 import click
 from agentcad.project import ProjectError, get_project, project_options, validate_version_label
+from agentcad.experimental_inspect import option as inspect_option, enabled as inspect_enabled, forward as forward_inspect, ordinary_semantic
 
 from agentcad.commands._daemon_routing import (
     maybe_route_through_daemon,
@@ -65,6 +66,17 @@ _PHASE_ARTIFACTS = {
 
 def _run_contract_payload(payload: dict) -> dict:
     """Apply the stable label/artifact contract to one run response."""
+    from agentcad.core_build import delivery_readiness, readiness_message
+
+    if isinstance(payload.get("validation"), dict):
+        payload.setdefault("delivery_readiness", delivery_readiness(payload["validation"]))
+    readiness = payload.get("delivery_readiness")
+    if readiness and payload.get("status") == "success":
+        if payload.get("intent_validation") and payload["intent_validation"]["status"] != "pass":
+            from agentcad.intent_validation import intent_message
+            payload["message"] = intent_message(payload["intent_validation"])
+        else:
+            payload["message"] = readiness_message(readiness)
     ctx = click.get_current_context(silent=True)
     contract = ctx.meta if ctx is not None else {}
     for key in ("runtime", "runtime_source"):
@@ -82,6 +94,18 @@ def _run_contract_payload(payload: dict) -> dict:
         payload["outputs"] = outputs
     outputs.setdefault("step", None)
     payload["artifact_created"] = outputs["step"] is not None
+    if readiness and payload.get("status") == "success" and outputs["step"]:
+        actions = payload.setdefault("next_actions", [])
+        if readiness["ready"]:
+            action = "agentcad docs check-spec — verify task requirements before delivery"
+        elif payload.get("intent_validation", {}).get("status") not in {None, "pass", "unchecked"}:
+            action = "agentcad docs check-spec — repair unmet requirements and recheck the same specification before delivery"
+        else:
+            layout = get_project()
+            step = shlex.quote(layout.response_path(layout.artifact_path(outputs["step"])))
+            action = f"agentcad measure {step} --no-daemon — inspect full geometry validation before delivery; keep intentional surfaces intermediate"
+        if action not in actions:
+            actions.append(action)
 
     if (
         not payload["artifact_created"]
@@ -1195,8 +1219,8 @@ def _assign_part_identity(raw_parts):
 
 @click.command()
 @click.argument("script", required=False)
-@click.option("--idempotency-key", default=None, help="Save one key per intended run; retry identical source/options to recover its result without executing again.")
-@click.option("--status", "request_status", is_flag=True, default=False, help="Read the saved run by --idempotency-key without reading or executing SCRIPT. No --label needed.")
+@click.option("--idempotency-key", default=None, help="Python runs: WIP, requires --experimental-changes. Save one key; retry identical source/options without executing again. CAD-file dispatch uses ordinary import keys.")
+@click.option("--status", "request_status", is_flag=True, default=False, help="WIP, requires --experimental-changes: read the saved run by key without SCRIPT or --label.")
 @click.option(
     "--label",
     default=None,
@@ -1261,10 +1285,12 @@ def _assign_part_identity(raw_parts):
     help=(
         "Which validation gates success. 'deliverable' requires the kernel check, "
         "closed shells, and a manifold mesh; 'kernel' restores the kernel-only "
-        "check for intentional surfaces or sheet bodies."
+        "check for intentional surfaces or sheet bodies, saved as intermediate "
+        "artifacts with delivery_readiness.ready=false."
     ),
 )
 @click.option("--no-daemon", is_flag=True, default=False, help="Skip daemon routing for this run, even if a daemon is running. Useful for debugging.")
+@inspect_option
 @click.pass_context
 @project_options
 @change_options
@@ -1295,7 +1321,7 @@ def run(
         if not idempotency_key:
             raise ProjectError("run_key_required", "Run status requires --idempotency-key.",
                                "Read a saved run with agentcad run --idempotency-key KEY --status.")
-        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon"}
+        allowed = {"request_status", "idempotency_key", "build_dir", "no_daemon", "experimental_inspect", "experimental_changes"}
         if any(name not in allowed and ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE for name in ctx.params):
             raise ProjectError("run_status_options", "Status accepts only a key and optional build directory.",
                                "Omit SCRIPT and build options when reading a saved run.")
@@ -1373,6 +1399,7 @@ def run(
         from agentcad.commands.import_cmd import import_cmd
         ctx.invoke(
             import_cmd,
+            experimental_inspect=inspect_enabled(),
             file=script,
             label=output,
             init_flag=False,
@@ -1382,6 +1409,7 @@ def run(
             checks_file=ctx.meta.get("change_checks_file"),
             defer_checks=ctx.meta.get("change_defer_checks", False),
             stage=ctx.meta.get("change_stage", False),
+            experimental_changes=ctx.meta.get("experimental_changes", False),
             idempotency_key=idempotency_key,
         )
         return
@@ -1396,6 +1424,7 @@ def run(
     if idempotency_key is not None:
         from agentcad.run_requests import RunRequest
         semantic = {
+            **ordinary_semantic(),
             "label": output, "render": render, "export": export,
             "preview": preview, "auto_diff": auto_diff, "open_view": open_view,
             "params": params, "runtime": runtime,
@@ -1516,6 +1545,7 @@ def _run_impl(
         argv.extend(["--validation-profile", validation_profile])
     from agentcad.change_retention import forward_check_options
     forward_check_options(argv)
+    forward_inspect(argv)
     # Check syntax/capture locally before contacting a daemon or importing CAD.
     _t = _start_phase("validation")
 
@@ -1813,7 +1843,10 @@ def _run_impl(
             entry["validation_options"] = p["validation_options"]
         parts_output.append(entry)
     from agentcad.validation_guidance import part_connections, structure_checks, with_structure_checks
+    _heartbeat("checking part contacts…")
+    _t_contacts = time.perf_counter()
     warnings.extend(part_connections(raw_parts, parts_output))
+    _mark("contact_checks_ms", _t_contacts)
     _finish_phase("metrics", _t, "metrics_ms")
     groups_output = list(groups_by_id.values())
 
@@ -1979,6 +2012,8 @@ def _run_impl(
         )
 
     from agentcad.change_retention import assess_change
+    from agentcad.core_build import file_delivery_readiness, readiness_message
+    readiness = file_delivery_readiness(validation, staged_step)
     # Seal the non-rendered model metadata with the checked geometry. Explicit
     # promotion must preserve named handles and overrides without rerunning CAD.
     checked_model = {
@@ -1987,6 +2022,7 @@ def _run_impl(
         "metrics": metrics,
         "validation": validation,
         "validation_profile": validation_profile,
+        "delivery_readiness": readiness,
     }
     if parts_output:
         checked_model["parts"] = parts_output
@@ -2087,6 +2123,7 @@ def _run_impl(
         "metrics": metrics,
         "validation": validation,
         "validation_profile": validation_profile,
+        "delivery_readiness": readiness,
         "artifacts": {
             "geometry_manifest": {"status": "pending"},
             "mesh_exports": _artifact_state(
@@ -2127,6 +2164,8 @@ def _run_impl(
     }
     if parts_output:
         meta["parts"] = parts_output
+    if not readiness["ready"]:
+        meta["message"] = readiness_message(readiness)
     if groups_output:
         meta["groups"] = groups_output
     if parsed_params:
@@ -2136,6 +2175,8 @@ def _run_impl(
     if comparison_enabled:
         meta["comparison_phases"] = ComparisonPhaseRecorder().entries
 
+    if not inspect_enabled():
+        meta["artifacts"].pop("geometry_manifest", None)
     prepare_change(meta, geometry=version_dir / "output.step")
     from agentcad.change_promotion import PromotionRefused
     try:
@@ -2152,33 +2193,34 @@ def _run_impl(
     lifecycle = ArtifactLifecycle(version_dir / "meta.json", meta)
     _phase_tracker.lifecycle = lifecycle
 
-    # Issue IDs only from the delivered STEP, never the script's in-memory
-    # traversal. Inventory is post-core work: failure cannot undo a valid run.
-    _heartbeat("indexing saved geometry IDs…")
-    _t = _start_phase("geometry_manifest")
-    from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
+    if inspect_enabled():
+        # Issue IDs only from the delivered STEP, never the script's in-memory
+        # traversal. Inventory is post-core work: failure cannot undo a valid run.
+        _heartbeat("indexing saved geometry IDs…")
+        _t = _start_phase("geometry_manifest")
+        from agentcad.geometry_manifest import create_manifest, summary as geometry_summary
 
-    try:
-        geometry_data = create_manifest(version_dir / "output.step", version_num, source={
-            "kind": "script", "filename": script_path.name,
-            "sha256": hashlib.sha256((version_dir / "script.py").read_bytes()).hexdigest(),
-            "runtime": runtime_name, "assembly_metadata": "derived_normalized_geometry",
-        })
-        lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
-        lifecycle.meta["geometry_manifest"] = geometry_summary(
-            Path(get_project().response_path(version_dir / "output.step")), geometry_data,
-        )
-        lifecycle.set_artifact("geometry_manifest", "success")
-    except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        lifecycle.set_artifact("geometry_manifest", "failed", message=message)
-        warnings.append(
-            "Typed-ID inventory unavailable; the saved STEP/script remain usable. "
-            "Use inspect --ids or import the saved STEP as a new baseline. " + message
-        )
-        lifecycle.meta["warnings"] = warnings
-        lifecycle.persist()
-    _finish_phase("geometry_manifest", _t)
+        try:
+            geometry_data = create_manifest(version_dir / "output.step", version_num, source={
+                "kind": "script", "filename": script_path.name,
+                "sha256": hashlib.sha256((version_dir / "script.py").read_bytes()).hexdigest(),
+                "runtime": runtime_name, "assembly_metadata": "derived_normalized_geometry",
+            })
+            lifecycle.meta["outputs"]["geometry_manifest"] = f"{dir_name}/geometry_manifest.json"
+            lifecycle.meta["geometry_manifest"] = geometry_summary(
+                Path(get_project().response_path(version_dir / "output.step")), geometry_data,
+            )
+            lifecycle.set_artifact("geometry_manifest", "success")
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            lifecycle.set_artifact("geometry_manifest", "failed", message=message)
+            warnings.append(
+                "Typed-ID inventory unavailable; the saved STEP/script remain usable. "
+                "Use inspect --ids or import the saved STEP as a new baseline. " + message
+            )
+            lifecycle.meta["warnings"] = warnings
+            lifecycle.persist()
+        _finish_phase("geometry_manifest", _t)
 
     comparison_recorder = None
     if comparison_enabled:
@@ -2344,6 +2386,7 @@ def _run_impl(
 
     prev = previous
     previous_parts = []
+    previous_render_parts = None
     part_changes = None
     prev_shape = None
     if comparison_recorder is not None:
@@ -2358,9 +2401,15 @@ def _run_impl(
             with comparison_recorder.observe("source_loading"):
                 previous_meta_path = get_project().version_dir(prev) / "meta.json"
                 try:
-                    previous_parts = json.loads(
-                        previous_meta_path.read_text()
-                    ).get("parts", [])
+                    previous_metadata = json.loads(previous_meta_path.read_text())
+                    previous_parts = (
+                        previous_metadata.get("parts", [])
+                        if isinstance(previous_metadata, dict) else []
+                    )
+                    if not isinstance(previous_parts, list) or not all(
+                        isinstance(p, dict) for p in previous_parts
+                    ):
+                        previous_parts = []
                 except (OSError, json.JSONDecodeError):
                     previous_parts = []
                 part_changes = _part_change_summary(
@@ -2368,6 +2417,18 @@ def _run_impl(
                 )
                 from agentcad.step_io import load_cad_shape
                 prev_shape = load_cad_shape(prev_step_path)
+                if any(p.get("color") is not None for p in previous_parts):
+                    from agentcad.part_rendering import saved_render_parts
+                    try:
+                        previous_render_parts = saved_render_parts(prev_shape, previous_parts)
+                    except Exception as exc:
+                        warnings.append(f"Could not restore previous part colors: {type(exc).__name__}: {exc}")
+                    if previous_render_parts is None:
+                        warnings.append(
+                            "Previous part colors were not restored: saved measurements did not "
+                            "unambiguously cover the reloaded STEP. The complete previous model "
+                            "is shown without per-part colors."
+                        )
         except Exception as exc:
             warnings.append(
                 "Could not load the prior comparison source: "
@@ -2387,12 +2448,14 @@ def _run_impl(
                         prev_shape,
                         topo_shape_for_metrics,
                         per_view_size=512,
+                        parts_a=previous_render_parts,
                         parts_b=glb_parts,
                     )
                     render_diff_side_by_side(
                         prev_shape, topo_shape_for_metrics,
                         prev["label"], label, side_path,
                         width=512, height=512,
+                        parts_a=previous_render_parts,
                         parts_b=glb_parts,
                         source_views=source_views,
                     )
@@ -2414,6 +2477,7 @@ def _run_impl(
                         prev_shape, topo_shape_for_metrics,
                         prev["label"], label, overlay_path,
                         width=1024, height=1024,
+                        parts_a=previous_render_parts,
                         parts_b=glb_parts,
                         source_views=source_views,
                     )
@@ -2669,6 +2733,10 @@ def _run_impl(
     output_json["metrics"] = metrics
     output_json["validation"] = validation
     output_json["validation_profile"] = validation_profile
+    output_json["delivery_readiness"] = lifecycle.meta["delivery_readiness"]
+    for field in ("geometry_readiness", "intent_validation"):
+        if field in lifecycle.meta:
+            output_json[field] = lifecycle.meta[field]
     if mesh_validation:
         output_json["mesh_validation"] = mesh_validation
     if parts_output:

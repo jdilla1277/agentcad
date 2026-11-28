@@ -1,0 +1,4 @@
+build/
+.agentcad/
+__pycache__/
+.pytest_cache/

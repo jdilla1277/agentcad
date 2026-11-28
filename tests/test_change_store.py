@@ -405,5 +405,7 @@ def test_interrupted_check_completion_is_resumable_and_concurrent_retries_agree(
         results = list(
             pool.map(lambda _: ChangeStore(tmp_path).complete_checks(attempt.revision_id), range(3))
         )
-    assert all(r == results[0] for r in results)
+    assert all(r["receipt"] == results[0]["receipt"] for r in results)
+    assert all(r["promotion"] == results[0]["promotion"] for r in results)
+    assert sum(r["current_advanced"] for r in results) == 1
     assert results[0]["receipt"]["validation_state"] == "valid"

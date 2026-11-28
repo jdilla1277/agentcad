@@ -7,6 +7,7 @@ from click.testing import CliRunner
 import pytest
 
 from agentcad.inspection_delivery import delivery_options, forward_options
+from agentcad.experimental_inspect import option
 
 
 def command(name):
@@ -14,6 +15,7 @@ def command(name):
     @click.argument('file')
     @click.option('--report', 'with_report', is_flag=True)
     @click.option('--response-snapshot')
+    @option
     @delivery_options
     def wrapped(file, with_report, response_snapshot):
         ctx = click.get_current_context()

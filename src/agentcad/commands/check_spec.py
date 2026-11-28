@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
+import shlex
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -15,13 +18,19 @@ from agentcad.commands._daemon_routing import (
     maybe_spawn_daemon_for_next_run,
 )
 from agentcad.commands.measure import measure_tier0_payload, validity_from_metrics
+from agentcad.feature_checks import (
+    check_positioned_cylinders,
+    check_probe,
+    normalize_box,
+    validate_positions,
+)
 
 
 @click.command("check-spec")
 @click.argument("file")
 @click.argument("spec_file", required=False)
 @click.option("--complete", "complete", is_flag=True, default=False,
-              help="Complete pending declared checks on a retained revision; does not accept it.")
+              help="WIP, requires --experimental-changes: complete deferred checks and settle still-current automatic acceptance; stages stay unaccepted.")
 @click.option(
     "--no-daemon",
     is_flag=True,
@@ -34,12 +43,19 @@ def check_spec(file, spec_file, no_daemon, complete=False):
 
     SPEC_FILE example:
 
-      {"features":[{"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4}]}
+      {"features":[
+        {"name":"bolt_holes","type":"cylinder","diameter_mm":6,"count":4},
+        {"name":"mounts","type":"positioned_cylinders","axis":"z","diameter_mm":3,
+         "positions_mm":[[3,3],[25.17,3]]},
+        {"name":"usb","type":"keepout","box_mm":[10,-2,0,18,0,5]}
+      ]}
 
-    A failed spec still means the command ran successfully: status remains
-    "success" and the comparison result is in passed/matched_features.
+    Failed checks persist against the artifact and specification hashes and
+    block delivery. status describes command execution; passed is the verdict.
+    Geometry validity stays separate from intent_validation.
     With a retained revision ID, omit SPEC_FILE to read its pinned receipt;
-    --complete performs deferred checks without accepting the model.
+    --complete performs deferred checks and settles saved automatic intent.
+    Staged candidates still require explicit promotion. Reads are read-only.
     """
     if file.startswith("r_") and not Path(file).exists():
         from agentcad.change_store import ChangeStore
@@ -52,27 +68,66 @@ def check_spec(file, spec_file, no_daemon, complete=False):
             }, exit_code=1)
             return
         store = ChangeStore(get_project().build_root)
+        started_ns = time.time_ns()
         try:
-            checked = store.complete_checks(file) if complete else store.read_checks(file)
+            from agentcad.change_promotion import PromotionStore
+            # Read the operation first: a committed acceptance then necessarily
+            # has completed evidence. Pending operation + newer evidence is safe.
+            automatic = PromotionStore(store.root).automatic_fields(file) if not complete else {}
+            checked = store.complete_checks(file) if complete else {**store.read_checks(file), **automatic}
             receipt = checked["receipt"]
             saved = store.read(file)
             geometry = next((
                 str(store.root / a["path"])
                 for a in (saved["candidate"] or {}).get("inputs", []) if a["role"] == "geometry"
             ), None)
+            readiness_fields = {}
+            if geometry:
+                from agentcad.intent_validation import project_intent
+                core = json.loads((Path(geometry).parent.parent / "core.json").read_text())["response"]
+                project_intent(core, geometry)
+                readiness_fields = {key: core[key] for key in
+                                    ("geometry_readiness", "intent_validation", "delivery_readiness", "message") if key in core}
+            warnings = []
+            if complete:
+                try:
+                    from agentcad.working_viewer import prepare
+                    prepare(store.root, file)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    warnings.append(f"Checks saved, but candidate view could not update: {exc}")
+            if checked.get("current_advanced"):
+                accepted = checked["accepted_version_after"]
+                try:
+                    from agentcad.project_viewer import record_failure
+                    record_failure(store.root, f"v{accepted['version']} · {accepted['label']}",
+                                   "accepted_without_viewer", started_ns=started_ns)
+                except (OSError, TimeoutError) as exc:
+                    warnings.append(f"Accepted, but live viewer status could not update: {exc}")
+            root_option = " --build-dir " + shlex.quote(str(store.root)) if get_project().configured else ""
+            notes = ["Check results and the promotion decision are separate: passing checks accept only a still-active normal-run intent. Staged or superseded work stays unaccepted. Reads never change current."]
+            actions = []
+            if checked.get("current_advanced"):
+                step = shlex.quote(get_project().response_path(store.root / checked["outputs"]["step"]))
+                actions = [f"agentcad view {step}{root_option} — inspect the accepted model"]
+            elif checked.get("promotion", {}).get("outcome") == "not_promoted":
+                notes.append("The final promotion receipt preserves evidence at refusal time, which may differ from the latest check receipt. Repeating --complete cannot reopen that decision; reconcile the selected revisions before a new attempt.")
+                actions = [f"agentcad context{root_option} — inspect the working and accepted revisions before a new attempt"]
             _emit({
                 "command": "check-spec", "status": "success", **checked,
+                **readiness_fields,
                 "validation_state": receipt["validation_state"] if receipt else "pending",
                 "passed": receipt["promotion_ready"] if receipt else False,
-                "current_advanced": False, "geometry": geometry,
-                "notes": ["Checks report evidence for this retained revision; completing them does not change current."],
+                "current_advanced": checked.get("current_advanced", False), "geometry": geometry,
+                "notes": notes,
+                **({"warnings": warnings} if warnings else {}),
+                **({"next_actions": actions} if actions else {}),
                 "more_at": "agentcad docs check-spec",
             })
         except Exception as exc:
             _emit({
                 "command": "check-spec", "status": "error", "message": str(exc),
                 "revision_id": file,
-                "suggestion": "Use a returned revision ID and its selected build directory. Interrupted checks can retry --complete.",
+                "suggestion": "Use a returned revision ID and its selected build directory. Retry --complete to recover checks or an interrupted automatic acceptance; it never executes CAD again.",
             }, exit_code=1)
         return
     if complete or spec_file is None:
@@ -85,9 +140,10 @@ def check_spec(file, spec_file, no_daemon, complete=False):
     maybe_route_through_daemon(argv, no_daemon=no_daemon)
 
     spec_path = Path(spec_file)
-    spec = _load_spec(spec_path)
-    if spec is None:
+    loaded = _load_spec(spec_path)
+    if loaded is None:
         return
+    spec, spec_bytes = loaded
 
     file_path = Path(file)
     detection = file_detect.detect_file_type(file_path)
@@ -142,11 +198,24 @@ def check_spec(file, spec_file, no_daemon, complete=False):
         }, exit_code=1)
         return
 
+    import hashlib
+    from agentcad.core_build import file_sha256
+    from agentcad.intent_validation import make_check, save_check, project_intent
+    spec_sha = hashlib.sha256(spec_bytes).hexdigest()
+    # Publish the declaration first. An interrupted/failed checker cannot leave
+    # the artifact looking as if the required check had passed.
+    pending = make_check(file_sha256(file_path), spec_sha, spec, {}, spec_file=spec_path, status="pending")
+    import uuid
+    pending["declaration_id"] = uuid.uuid4().hex
+    save_check(file_path, pending, declaration=True)
+
     try:
         measurement = measure_tier0_payload(
             str(file_path.resolve()),
             detection,
             with_features=False,
+            precise_cylinders=_needs_precise_cylinders(spec),
+            probe_boxes=_declared_probe_boxes(spec),
         )
     except Exception as exc:
         _emit({
@@ -163,7 +232,18 @@ def check_spec(file, spec_file, no_daemon, complete=False):
         }, exit_code=1)
         return
 
-    result = check_measurement_against_spec(measurement, spec)
+    # Intent expectations must not overwrite the structural geometry verdict.
+    from copy import deepcopy
+    result = check_measurement_against_spec(deepcopy(measurement), spec)
+    unsupported = _unchecked_requirements(spec)
+    if unsupported:
+        result["supported_passed"] = result["passed"]
+        result["passed"] = False if result["passed"] is False else None
+        result["unsupported_requirements"] = unsupported
+    geometry = measurement.get("geometry_readiness") or measurement["delivery_readiness"]
+    checked = make_check(geometry["artifact_sha256"], spec_sha, spec, result, spec_file=spec_path)
+    checked["declaration_id"] = pending["declaration_id"]
+    checks = save_check(file_path, checked, geometry)
     result.update({
         "command": "check-spec",
         "status": "success",
@@ -176,9 +256,31 @@ def check_spec(file, spec_file, no_daemon, complete=False):
             measurement["metrics"], measurement.get("validation")
         ),
         "metrics": measurement["metrics"],
+        "validation": measurement["validation"],
+        "is_valid": measurement["validation"]["is_valid"],
+        "delivery_readiness": geometry,
         "next_actions": _next_actions(result["passed"], file_path, spec_path),
         "more_at": "agentcad docs check-spec",
     })
+    project_intent(result, file_path, checks=checks)
+    current = next((c for c in checks if c.get("identity") == checked["identity"]), None)
+    if current is None or current.get("declaration_id") != checked["declaration_id"]:
+        from agentcad.intent_validation import intent_message
+        result["superseded"] = True
+        result["message"] = ("This check was superseded by a newer declaration of the same policy. "
+                             if current and current.get("declaration_id") else
+                             "Saved declaration ownership is unavailable; this check cannot settle the policy. ") + intent_message(result["intent_validation"])
+    if not result["delivery_readiness"]["ready"]:
+        blockers = [c for c in result["intent_validation"]["checks"] if c.get("status") != "pass"]
+        if blockers:
+            target = next((c["spec_file"] for c in blockers if c.get("spec_file")), None)
+            result["next_actions"] = [
+                "resolve the current declared specification blockers before delivery",
+                (f"agentcad check-spec {shlex.quote(str(file_path))} {shlex.quote(target)} --no-daemon — recheck the current specification after repair"
+                 if target else "agentcad docs check-spec — restore the saved evidence and recheck affected specifications"),
+            ]
+        else:
+            result["next_actions"] = [f"agentcad measure {shlex.quote(str(file_path))} --no-daemon — inspect the geometry delivery blockers"]
     _emit(result)
     maybe_spawn_daemon_for_next_run(no_daemon=no_daemon)
 
@@ -198,37 +300,138 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
     total_abs_count_error = 0
 
     for feature in spec.get("features", []):
-        target = _target_from_feature(feature, spec)
-        match = _find_cylinder_bucket(measured_cylinders, target)
-        if match is None:
-            missing = {
+        feature_type = feature.get("type")
+        if feature_type == "cylinder":
+            target = _target_from_feature(feature, spec)
+            match = _find_cylinder_bucket(measured_cylinders, target)
+            if match is None:
+                missing = {
+                    "name": target["name"],
+                    "type": "cylinder",
+                    "target": target,
+                    "measured": None,
+                    "reason": "no_matching_cylinder_bucket",
+                }
+                missing_features.append(missing)
+                total_abs_count_error += target["count"]
+                continue
+
+            count_error = int(match["count"]) - target["count"]
+            diameter_error = _round_float(float(match["diameter_mm"]) - target["diameter_mm"])
+            passed = abs(count_error) <= target["count_tolerance"]
+            matched_features.append({
                 "name": target["name"],
                 "type": "cylinder",
                 "target": target,
-                "measured": None,
-                "reason": "no_matching_cylinder_bucket",
-            }
-            missing_features.append(missing)
-            total_abs_count_error += target["count"]
-            continue
+                "measured": {
+                    "diameter_mm": match["diameter_mm"],
+                    "count": match["count"],
+                    "axis": match["axis"],
+                },
+                "diameter_error_mm": diameter_error,
+                "count_error": count_error,
+                "passed": passed,
+            })
+            total_abs_count_error += abs(count_error)
+        elif feature_type == "positioned_cylinders":
+            target = _positioned_cylinders_target_from_feature(feature, spec)
+            cylinders = measurement.get("precise_cylinders")
+            if cylinders is None:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": "positioned_cylinders",
+                    "target": target,
+                    "measured": None,
+                    "reason": "precise_cylinder_evidence_missing",
+                })
+                total_abs_count_error += len(target["positions_mm"])
+                continue
 
-        count_error = int(match["count"]) - target["count"]
-        diameter_error = _round_float(float(match["diameter_mm"]) - target["diameter_mm"])
-        passed = abs(count_error) <= target["count_tolerance"]
-        matched_features.append({
-            "name": target["name"],
-            "type": "cylinder",
-            "target": target,
-            "measured": {
-                "diameter_mm": match["diameter_mm"],
-                "count": match["count"],
-                "axis": match["axis"],
-            },
-            "diameter_error_mm": diameter_error,
-            "count_error": count_error,
-            "passed": passed,
-        })
-        total_abs_count_error += abs(count_error)
+            try:
+                passed, observed = check_positioned_cylinders(
+                    cylinders,
+                    axis=target["axis"],
+                    diameter_mm=target["diameter_mm"],
+                    diameter_tolerance_mm=target["diameter_tolerance_mm"],
+                    positions_mm=target["positions_mm"],
+                    position_tolerance_mm=target["position_tolerance_mm"],
+                )
+            except ValueError as exc:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": "positioned_cylinders",
+                    "target": target,
+                    "measured": None,
+                    "reason": str(exc),
+                })
+                total_abs_count_error += len(target["positions_mm"])
+                continue
+
+            count_error = observed["measured_count"] - observed["expected_count"]
+            total_abs_count_error += abs(count_error)
+            matched_features.append({
+                "name": target["name"],
+                "type": "positioned_cylinders",
+                "target": target,
+                "measured": observed,
+                "count_error": count_error,
+                "max_position_error_mm": observed["max_position_error_mm"],
+                "passed": passed,
+            })
+        elif feature_type in ("keepout", "material"):
+            target = _probe_target_from_feature(feature, spec)
+            rows = measurement.get("material_volumes")
+            if rows is None:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": feature_type,
+                    "target": target,
+                    "measured": None,
+                    "reason": "material_probe_evidence_missing",
+                })
+                continue
+
+            threshold = (
+                target["max_volume_mm3"]
+                if feature_type == "keepout"
+                else target["min_volume_mm3"]
+            )
+            try:
+                passed, observed = check_probe(
+                    rows,
+                    kind=feature_type,
+                    box_mm=target["box_mm"],
+                    threshold_mm3=threshold,
+                )
+            except ValueError as exc:
+                missing_features.append({
+                    "name": target["name"],
+                    "type": feature_type,
+                    "target": target,
+                    "measured": None,
+                    "reason": str(exc),
+                })
+                continue
+            matched_features.append({
+                "name": target["name"],
+                "type": feature_type,
+                "target": target,
+                "measured": observed,
+                "volume_margin_mm3": _round_float(
+                    threshold - observed["volume_mm3"]
+                    if feature_type == "keepout"
+                    else observed["volume_mm3"] - threshold
+                ),
+                "passed": passed,
+            })
+        else:
+            missing_features.append({
+                "name": feature.get("name"),
+                "type": feature_type,
+                "target": None,
+                "measured": None,
+                "reason": "unsupported_feature_type",
+            })
 
     passed = (not missing_features and all(f["passed"] for f in matched_features)
               and all(c["passed"] is True for c in checks))
@@ -242,7 +445,7 @@ def check_measurement_against_spec(measurement: dict, spec: dict) -> dict:
     }
 
 
-def _load_spec(path: Path) -> dict | None:
+def _load_spec(path: Path) -> tuple[dict, bytes] | None:
     if not path.exists():
         _emit({
             "command": "check-spec",
@@ -262,7 +465,8 @@ def _load_spec(path: Path) -> dict | None:
         return None
 
     try:
-        data = json.loads(path.read_text())
+        raw = path.read_bytes()
+        data = json.loads(raw)
     except json.JSONDecodeError as exc:
         _emit({
             "command": "check-spec",
@@ -282,11 +486,46 @@ def _load_spec(path: Path) -> dict | None:
             "suggestion": (
                 "Use features like "
                 "{\"name\":\"bolt_holes\",\"type\":\"cylinder\","
-                "\"diameter_mm\":12,\"count\":6}."
+                "\"diameter_mm\":12,\"count\":6}, "
+                "{\"name\":\"mounts\",\"type\":\"positioned_cylinders\",\"axis\":\"z\","
+                "\"diameter_mm\":3,\"positions_mm\":[[3,3],[25.17,3]]}, or "
+                "{\"name\":\"usb_keepout\",\"type\":\"keepout\","
+                "\"box_mm\":[10.275,-2.3,0,17.895,-0.3,4.65]}."
             ),
         }, exit_code=1)
         return None
-    return data
+    return data, raw
+
+
+def _unchecked_requirements(spec):
+    top = {"spec_id", "features", "expect_solids", "expect_shells", "diameter_tolerance_mm",
+           "count_tolerance", "position_tolerance_mm", "keepout_max_volume_mm3"}
+    kinds = {
+        "cylinder": {"name", "type", "diameter_mm", "count", "axis", "diameter_tolerance_mm", "count_tolerance"},
+        "positioned_cylinders": {"name", "type", "axis", "diameter_mm", "positions_mm", "diameter_tolerance_mm", "position_tolerance_mm"},
+        "keepout": {"name", "type", "box_mm", "max_volume_mm3"},
+        "material": {"name", "type", "box_mm", "min_volume_mm3"},
+    }
+    result = [{"path": key, "reason": "Unsupported requirement was not checked"} for key in spec if key not in top]
+    for index, feature in enumerate(spec.get("features", [])):
+        result.extend({"path": f"features[{index}].{key}", "reason": "Unsupported constraint was not checked"}
+                      for key in feature if key not in kinds.get(feature.get("type"), set()))
+    return result
+
+
+def _declared_probe_boxes(spec: dict) -> list:
+    return [
+        feature["box_mm"]
+        for feature in spec.get("features", [])
+        if feature.get("type") in ("keepout", "material")
+    ]
+
+
+def _needs_precise_cylinders(spec: dict) -> bool:
+    return any(
+        feature.get("type") == "positioned_cylinders"
+        for feature in spec.get("features", [])
+    )
 
 
 def _validate_spec(data) -> list[str]:
@@ -294,9 +533,20 @@ def _validate_spec(data) -> list[str]:
     if not isinstance(data, dict):
         return ["spec must be a JSON object"]
 
+    if "spec_id" in data:
+        import re
+        if not isinstance(data["spec_id"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", data["spec_id"]):
+            errors.append("spec_id must be 1-128 letters, digits, '.', '_', ':' or '-', starting with a letter or digit")
     for key in ("expect_solids", "expect_shells"):
         if key in data and (type(data[key]) is not int or data[key] < 0):
             errors.append(f"{key} must be a non-negative integer")
+    for key in (
+        "diameter_tolerance_mm",
+        "position_tolerance_mm",
+        "keepout_max_volume_mm3",
+    ):
+        if key in data and (not _is_number(data[key]) or data[key] < 0):
+            errors.append(f"{key} must be a non-negative number")
     has_structure = any(key in data for key in ("expect_solids", "expect_shells"))
     features = data.get("features", [] if has_structure else None)
     if not isinstance(features, list):
@@ -316,34 +566,107 @@ def _validate_spec(data) -> list[str]:
         if not isinstance(feature.get("name"), str) or not feature["name"].strip():
             errors.append(f"{prefix}.name must be a non-empty string")
 
-        if feature.get("type") != "cylinder":
-            errors.append(f"{prefix}.type must be 'cylinder'")
-
-        if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
-            errors.append(f"{prefix}.diameter_mm must be a positive number")
-
-        if not _is_int(feature.get("count")) or feature["count"] < 0:
-            errors.append(f"{prefix}.count must be a non-negative integer")
-
-        axis = feature.get("axis")
-        if axis is not None and axis not in {"+x", "+y", "+z", "other"}:
-            errors.append(f"{prefix}.axis must be one of +x, +y, +z, other")
-
-        diameter_tolerance = feature.get(
-            "diameter_tolerance_mm",
-            data.get("diameter_tolerance_mm", 0.1),
-        )
-        if not _is_number(diameter_tolerance) or diameter_tolerance < 0:
+        feature_type = feature.get("type")
+        if not isinstance(feature_type, str) or feature_type not in {
+            "cylinder",
+            "positioned_cylinders",
+            "keepout",
+            "material",
+        }:
             errors.append(
-                f"{prefix}.diameter_tolerance_mm must be a non-negative number"
+                f"{prefix}.type must be one of cylinder, positioned_cylinders, "
+                "keepout, material"
             )
+            continue
 
-        count_tolerance = feature.get(
-            "count_tolerance",
-            data.get("count_tolerance", 0),
-        )
-        if not _is_int(count_tolerance) or count_tolerance < 0:
-            errors.append(f"{prefix}.count_tolerance must be a non-negative integer")
+        if feature_type == "cylinder":
+            if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
+                errors.append(f"{prefix}.diameter_mm must be a positive number")
+
+            if not _is_int(feature.get("count")) or feature["count"] < 0:
+                errors.append(f"{prefix}.count must be a non-negative integer")
+
+            axis = feature.get("axis")
+            if axis is not None and (
+                not isinstance(axis, str)
+                or axis not in {"+x", "+y", "+z", "other"}
+            ):
+                errors.append(f"{prefix}.axis must be one of +x, +y, +z, other")
+
+            diameter_tolerance = feature.get(
+                "diameter_tolerance_mm",
+                data.get("diameter_tolerance_mm", 0.1),
+            )
+            if not _is_number(diameter_tolerance) or diameter_tolerance < 0:
+                errors.append(
+                    f"{prefix}.diameter_tolerance_mm must be a non-negative number"
+                )
+
+            count_tolerance = feature.get(
+                "count_tolerance",
+                data.get("count_tolerance", 0),
+            )
+            if not _is_int(count_tolerance) or count_tolerance < 0:
+                errors.append(f"{prefix}.count_tolerance must be a non-negative integer")
+        elif feature_type == "positioned_cylinders":
+            axis = feature.get("axis")
+            if not isinstance(axis, str) or axis not in {
+                "x",
+                "y",
+                "z",
+                "+x",
+                "+y",
+                "+z",
+            }:
+                errors.append(f"{prefix}.axis must be one of x, y, z")
+            if not _is_number(feature.get("diameter_mm")) or feature["diameter_mm"] <= 0:
+                errors.append(f"{prefix}.diameter_mm must be a positive number")
+
+            try:
+                validate_positions(
+                    feature.get("positions_mm"),
+                    f"{prefix}.positions_mm",
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
+
+            diameter_tolerance = feature.get(
+                "diameter_tolerance_mm",
+                data.get("diameter_tolerance_mm", 0.1),
+            )
+            if not _is_number(diameter_tolerance) or diameter_tolerance < 0:
+                errors.append(
+                    f"{prefix}.diameter_tolerance_mm must be a non-negative number"
+                )
+
+            position_tolerance = feature.get(
+                "position_tolerance_mm",
+                data.get("position_tolerance_mm", 0.1),
+            )
+            if not _is_number(position_tolerance) or position_tolerance < 0:
+                errors.append(
+                    f"{prefix}.position_tolerance_mm must be a non-negative number"
+                )
+        else:
+            try:
+                normalize_box(feature.get("box_mm"))
+            except ValueError as exc:
+                errors.append(f"{prefix}.box_mm is invalid: {exc}")
+            if feature_type == "keepout":
+                maximum = feature.get(
+                    "max_volume_mm3",
+                    data.get("keepout_max_volume_mm3", 0.0),
+                )
+                if not _is_number(maximum) or maximum < 0:
+                    errors.append(
+                        f"{prefix}.max_volume_mm3 must be a non-negative number"
+                    )
+            else:
+                minimum = feature.get("min_volume_mm3")
+                if not _is_number(minimum) or minimum <= 0:
+                    errors.append(
+                        f"{prefix}.min_volume_mm3 must be a positive number"
+                    )
 
     return errors
 
@@ -361,6 +684,42 @@ def _target_from_feature(feature: dict, spec: dict) -> dict:
             feature.get("count_tolerance", spec.get("count_tolerance", 0))
         ),
     }
+
+
+def _positioned_cylinders_target_from_feature(feature: dict, spec: dict) -> dict:
+    return {
+        "name": feature["name"],
+        "axis": feature["axis"],
+        "diameter_mm": float(feature["diameter_mm"]),
+        "positions_mm": validate_positions(
+            feature["positions_mm"], "positions_mm"
+        ),
+        "diameter_tolerance_mm": float(
+            feature.get("diameter_tolerance_mm", spec.get("diameter_tolerance_mm", 0.1))
+        ),
+        "position_tolerance_mm": float(
+            feature.get(
+                "position_tolerance_mm", spec.get("position_tolerance_mm", 0.1)
+            )
+        ),
+    }
+
+
+def _probe_target_from_feature(feature: dict, spec: dict) -> dict:
+    target = {
+        "name": feature["name"],
+        "kind": feature["type"],
+        "box_mm": list(normalize_box(feature["box_mm"])),
+    }
+    if feature["type"] == "keepout":
+        target["max_volume_mm3"] = float(
+            feature.get(
+                "max_volume_mm3", spec.get("keepout_max_volume_mm3", 0.0)
+            )
+        )
+    else:
+        target["min_volume_mm3"] = float(feature["min_volume_mm3"])
+    return target
 
 
 def _find_cylinder_bucket(measured_cylinders: list[dict], target: dict) -> dict | None:
@@ -429,7 +788,12 @@ def _round_float(value: float) -> float:
 
 
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _is_int(value) -> bool:

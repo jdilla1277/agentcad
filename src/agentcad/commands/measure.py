@@ -2,6 +2,9 @@
 
 import json
 import sys
+import shutil
+import shlex
+import tempfile
 from pathlib import Path
 
 import click
@@ -294,13 +297,21 @@ def measure_tier0_payload(
     diameter_tolerance: float = 0.5,
     axis: str | None = None,
     feature_limit: int | None = DEFAULT_FEATURE_LIMIT,
+    probe_boxes: list | None = None,
+    precise_cylinders: bool = False,
 ) -> dict:
-    from agentcad.core_build import validated_metrics
+    from agentcad.core_build import file_delivery_readiness, file_sha256, readiness_message, validated_metrics
     from agentcad.step_io import load_cad_shape
     from agentcad import topo_ids
 
-    topo_shape = load_cad_shape(file_path, format_hint=detection.get("format"))
-    metrics, validation = validated_metrics(topo_shape)
+    # Validate and hash one private snapshot, never reopen mutable source bytes
+    # to bind a verdict about an already-loaded shape.
+    with tempfile.TemporaryDirectory(prefix="agentcad-measure-") as scratch:
+        snapshot = Path(scratch) / ("source" + Path(file_path).suffix)
+        shutil.copyfile(file_path, snapshot)
+        topo_shape = load_cad_shape(snapshot, format_hint=detection.get("format"))
+        metrics, validation = validated_metrics(topo_shape)
+        readiness = file_delivery_readiness(validation, snapshot)
     solid_count = topo_ids.topology_counts(topo_shape)["solids"]
     cylindrical_features = _filter_cylindrical_features(
         _cylindrical_features(topo_shape),
@@ -327,10 +338,19 @@ def measure_tier0_payload(
         "size_bytes": detection.get("size_bytes"),
         "metrics": metrics,
         "validation": validation,
+        "delivery_readiness": readiness,
         "cylindrical_features": cylindrical_features,
         "next_actions": next_actions,
         "more_at": "agentcad docs measure",
     }
+    if precise_cylinders:
+        from agentcad.feature_checks import extract_cylinders
+
+        payload["precise_cylinders"] = extract_cylinders(topo_shape)
+    if probe_boxes:
+        from agentcad.feature_checks import material_volumes
+
+        payload["material_volumes"] = material_volumes(topo_shape, probe_boxes)
 
     # Flag high-risk edit inputs (invalid/large topology) so the agent gets
     # workflow guidance before committing to fragile load_step() + boolean
@@ -405,6 +425,25 @@ def measure_tier0_payload(
             ),
         }
 
+    try:
+        source_unchanged = file_sha256(file_path) == readiness["artifact_sha256"]
+    except OSError:
+        source_unchanged = False
+    if not source_unchanged:
+        readiness["ready"] = False
+        readiness["blocking_reasons"].append("source_changed_during_measurement")
+        payload["message"] = (
+            "The source file changed during measurement; not ready for delivery. "
+            "These measurements and the receipt hash describe the earlier snapshot. "
+            "Rerun measure on the current file before using it."
+        )
+        payload["next_actions"] = [
+            f"agentcad measure {shlex.quote(str(file_path))} --no-daemon — measure the current file again",
+        ]
+    else:
+        payload["message"] = readiness_message(readiness)
+    from agentcad.intent_validation import project_intent
+    project_intent(payload, file_path)
     return payload
 
 

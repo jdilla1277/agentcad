@@ -1,6 +1,7 @@
 """Agent-visible failure evidence, intent checks, and repair workflows."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -235,12 +236,17 @@ def test_cadquery_compound_capture_reaches_structure_gate(runner, isolated_dir):
 def test_structure_only_spec(runner, isolated_dir, expected, passed):
     spec = isolated_dir / "spec.json"
     spec.write_text(json.dumps({"expect_solids": expected, "expect_shells": 1}))
-    result = runner.invoke(cli, ["check-spec", str(fixture("closed_box")), str(spec), "--no-daemon"])
+    step = isolated_dir / "closed_box.step"
+    shutil.copyfile(fixture("closed_box"), step)
+    result = runner.invoke(cli, ["check-spec", str(step), str(spec), "--no-daemon"])
     assert result.exit_code == 0, result.output
     data = json.loads(result.stdout)
     assert data["passed"] is passed
-    assert data["validation"]["is_valid"] is passed
-    assert data["validity"]["is_valid"] is passed
+    assert data["validation"]["is_valid"] is True
+    assert data["validity"]["is_valid"] is True
+    assert data["geometry_readiness"]["ready"] is True
+    assert data["intent_validation"]["status"] == ("pass" if passed else "fail")
+    assert data["delivery_readiness"]["ready"] is passed
     assert data["structure_checks"][0]["actual"] == 1
 
 

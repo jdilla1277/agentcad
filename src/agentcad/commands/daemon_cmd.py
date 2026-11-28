@@ -98,7 +98,7 @@ def status():
         socket_path=_socket_path(),
         pid_path=_pid_path(),
     )
-    output = {"command": "daemon", "status": "success", **result}
+    output = {"command": "daemon", "status": "error" if result.get("error_kind") else "success", **result}
     click.echo(json.dumps(output))
 
 

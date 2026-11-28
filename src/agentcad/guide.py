@@ -64,6 +64,11 @@ stage whose assumptions were wrong, then build and validate again.
 
 Understand the available evidence before writing geometry.
 
+Typed geometry IDs, reports, highlighted images, inspection jobs and artifact
+retrieval are available by default through the CLI and local MCP. Imports
+include a compact report and sampled four-view images. Follow the returned
+IDs to retrieve specific surfaces and edges before editing the saved baseline.
+
 - For generation, inspect every supplied drawing, image, and requirement. Note
   units, views, orientation, repeated features, and which dimensions are
   explicit versus inferred.
@@ -135,6 +140,9 @@ paths resolve from the project root, including from nested directories.
 `agentcad context` reports the resolved build root. Use returned artifact paths;
 `--label` names a version and deprecated `--output` is only a label alias.
 See `agentcad docs artifacts` for initialization, overrides, and recovery.
+If an uninitialized `--build-dir` was a mistake, follow the error's first
+`agentcad context` action, then retry without the override to use the existing
+project. Initialize a separate history only when that destination is intentional.
 
 Scripts should not export STEP themselves. Expose the intended geometry with
 `show_object(result)`; AgentCAD writes the canonical STEP file. Read its path
@@ -155,8 +163,12 @@ identifies the tracked deliverable.
    agentcad run script.py --label test --dry-run
    ```
    Check `volume`, `dimensions`, `is_valid` in the response. `is_valid` is the
-   deliverable verdict: the kernel check, every shell closed, and a manifold
-   mesh. Do not hand a part off until it is `true`; `false` names the failing
+   selected profile's verdict: by default the kernel check, every shell closed,
+   and a manifold mesh. For a run's final STEP, require
+   `delivery_readiness.ready: true`; kernel success alone is insufficient.
+   Failed, incomplete or stale declared specs also block delivery. Repair and
+   recheck the same spec; `measure` cannot clear a specification failure.
+   `false` names the failing
    layer in `validation.first_failure`, `null` means a check timed out
    (`validation.timed_out_layer`; raise `AGENTCAD_VALIDATION_TIMEOUT_S`).
 
@@ -256,6 +268,11 @@ enough.
    agentcad inspect v1_label/output.step
    ```
    Intentional surfaces or sheet bodies: pass `--validation-profile kernel`.
+   Such runs save intermediate artifacts: `delivery_readiness.ready` is false,
+   even when `status` is success. Read `blocking_reasons` before delivery.
+   Saved readiness is bound to the STEP's `artifact_sha256` in `meta.json`;
+   changed bytes require new validation. Readiness requires every deliverable
+   geometry gate to pass; it does not establish task intent or preservation.
    Use `agentcad view FILE --validation` or `agentcad render FILE --view iso
    --highlight validation` to see the reported defects on an existing STEP.
    Read `validation.guidance` for the finding, unknowns, and next checks.
@@ -312,6 +329,59 @@ Before handoff, confirm:
 
 Export success only means a file was written. The STEP verdict does not certify
 STL, GLB, or OBJ bytes.
+
+## Record feedback
+
+Keep recording friction, useful workarounds, and positive observations while
+modeling. Recording locally needs no permission and should not interrupt work:
+
+```bash
+agentcad feedback "A brief observation without private design details"
+agentcad feedback --template --output feedback.md
+# Fill in the report, then record it locally:
+agentcad feedback --file feedback.md
+```
+
+External sharing is off by default. The human can enable or revoke **Share brief
+tool feedback automatically** in the live viewer's **Feedback sharing** panel.
+This choice persists only for the displayed build root and recipient. Agents
+must not enable sharing, click its controls, or edit its policy file on the
+human's behalf. Enabling sends no saved backlog. Once enabled, future brief
+MESSAGE observations (up to 2,000 characters) and the AgentCAD version go to the
+AgentCAD team without repeated prompts. Command history, results, paths, project
+files and runtime details are never automatically attached. The receiving
+service also records the request IP address. Keep private design
+context out of observation text. Files and longer messages stay local unless
+explicitly shared. `--local-only` keeps any observation local even when enabled.
+
+Only when the human requests a particular submission, add `--send` to share that
+observation/report once. This does not enable future sharing. Local MCP's
+`feedback` tool follows the same policy: `message` or `report` records text,
+`local_only=True` suppresses sharing, and `send=True` is for a human-requested
+one-off upload. No input returns guided questions and a template without sending.
+
+Detailed diagnostics are separate. `agentcad feedback "observation" --diagnostics`
+prepares a LOCAL preview showing the complete payload, including command
+arguments/results, friction signals and runtime information. Have the human
+review every field and exclude/redact unwanted information in the JSON file.
+Upload only after explicit authorization of the complete edited payload, using
+`agentcad feedback --send-diagnostics reviewed.json --send`, or open/edit that
+JSON in the viewer's diagnostic panel and use **Send reviewed diagnostics once**.
+The exact edited JSON object uploads with no hidden additions or payload-changing
+retries. MCP supports the same preview with `diagnostics=True` and authorized
+submission with `reviewed_payload={...}, send=True`.
+
+The local bundle is saved before delivery. Receipts include `bundle_file`,
+`upload_file` (the exact upload when attempted), `remote`, `submitted`, `discord`,
+and `neon_row_id`. `status: "partial"` means remote storage was not confirmed;
+the local copy remains. A failed notification after storage does not require
+resubmission. `--file -` reads stdin. Explicit `--template` without `--output`
+exports Markdown on stdout. `AGENTCAD_FEEDBACK_URL` changes the recipient and
+requires a new human automatic-sharing choice. A running viewer keeps its
+starting environment. If opening reports a recipient mismatch, run
+`agentcad viewer stop` then `agentcad viewer open` with the intended environment
+and the same `--build-dir`, if configured. Review the displayed destination and
+sharing choice after restarting.
 
 ## Script writing rules
 

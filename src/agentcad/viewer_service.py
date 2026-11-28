@@ -16,6 +16,7 @@ from agentcad import project_viewer as live
 from agentcad.project_viewer_page import PAGE
 from agentcad.versioning import atomic_write_json
 from agentcad import reviews
+from agentcad.project import ProjectError
 
 
 class Server(ThreadingHTTPServer):
@@ -84,8 +85,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/health":
             if self.admin():
+                from agentcad.commands.feedback import _resolve_feedback_url
+
                 self.reply(200, {"protocol": live.PROTOCOL, "instance": self.server.instance,
-                                 "version": __version__, "cad_loaded": "OCP" in sys.modules})
+                                 "version": __version__, "cad_loaded": "OCP" in sys.modules,
+                                 "feedback_recipient": _resolve_feedback_url()})
             return
         match = re.fullmatch(r"/projects/([a-f0-9]{64})/(.*)", path)
         if not match:
@@ -94,6 +98,9 @@ class Handler(BaseHTTPRequestHandler):
         token, route = match.groups()
         try:
             record = live.read_json(live.project_record(token))
+            if record and (Path(record["root"]).resolve() != Path(record["root"]) or not Path(record["root"]).is_dir()):
+                self.reply(403, {"error": "Project path changed"})
+                return
             if record is None:
                 self.reply(404, {"error": "Unknown project"})
             elif route == "":
@@ -102,6 +109,12 @@ class Handler(BaseHTTPRequestHandler):
                 root = self.review_root(token, record)
                 if root is not None:
                     self.reply(200, {"comments": reviews.list_comments(root)})
+            elif route == "feedback/policy":
+                root = self.feedback_root(token, record)
+                if root is not None:
+                    from agentcad.feedback_policy import sharing_policy
+                    from agentcad.commands.feedback import _resolve_feedback_url
+                    self.reply(200, sharing_policy(root, _resolve_feedback_url()))
             elif route == "state":
                 client = parse_qs(urlsplit(self.path).query).get("client", [""])[0]
                 if re.fullmatch(r"[a-zA-Z0-9-]{1,64}", client):
@@ -112,7 +125,21 @@ class Handler(BaseHTTPRequestHandler):
                         self.server.clients[token] = {key: seen for key, seen in clients.items() if now - seen < 90}
                         self.server.claims.pop(token, None)
                         self.server.persist_clients()
-                self.reply(200, {"latest": record.get("latest"), "attempt": record.get("attempt")})
+                result = {"latest": record.get("latest"), "attempt": record.get("attempt")}
+                revision = parse_qs(urlsplit(self.path).query).get("revision", [None])[0]
+                if record.get("experimental_changes") or (revision and record.get("working_snapshots")):
+                    from agentcad.working_viewer import state
+                    if revision is not None and not re.fullmatch(r"r_[a-f0-9]{32}", revision):
+                        self.reply(400, {"error": "Use an exact retained revision ID for a pin"})
+                        return
+                    result.update(state(record["root"], record, revision))
+                self.reply(200, result)
+            elif record.get("working_snapshots") and re.fullmatch(r"evidence/r_[a-f0-9]{32}\.json", route):
+                from agentcad.working_viewer import evidence
+                self.reply(200, evidence(record["root"], route[9:-5]))
+            elif route in record.get("revision_artifacts", {}):
+                from agentcad.working_viewer import artifact
+                self.reply(200, artifact(record["root"], record["revision_artifacts"][route]), "text/html; charset=utf-8")
             else:
                 artifact = re.fullmatch(r"artifacts/(\d+)/viewer.html", route)
                 source = record.get("versions", {}).get(artifact[1]) if artifact else None
@@ -127,11 +154,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(403, {"error": "Viewer path changed"})
                     return
                 self.reply(200, file.read_bytes(), "text/html; charset=utf-8")
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError, ProjectError):
             self.reply(503, {"error": "Viewer artifact unavailable; retry after rebuilding"})
 
     def do_POST(self):
         if not self.allowed():
+            return
+        feedback = re.fullmatch(r"/projects/([a-f0-9]{64})/feedback/(policy|diagnostics)", urlsplit(self.path).path)
+        if feedback:
+            self.feedback_post(*feedback.groups())
             return
         review = re.fullmatch(r"/projects/([a-f0-9]{64})/review/(.*)", urlsplit(self.path).path)
         if review:
@@ -163,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"[a-f0-9]{64}", token):
                 raise ValueError()
             record = live.read_json(live.project_record(token), {})
-            if not record.get("latest"):
+            if not record.get("latest") and not record.get("experimental_changes"):
                 self.reply(404, {"error": "Unknown project"})
                 return
             with self.server.guard:
@@ -173,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                               or now - self.server.claims.get(token, float('-inf')) < 5)
                     if not reused:
                         self.server.claims[token] = now
-                    self.reply(200, {"reused": reused, "version": record["latest"]["version"]})
+                    self.reply(200, {"reused": reused, "version": (record.get("latest") or {}).get("version")})
                 elif route == "/release":
                     self.server.claims.pop(token, None)
                     self.reply(200, {"status": "released"})
@@ -181,6 +212,51 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(404, {"error": "Unknown operation"})
         except (ValueError, TypeError, AttributeError):
             self.reply(400, {"error": "Invalid request"})
+
+    def feedback_root(self, token, record):
+        if not secrets.compare_digest(self.headers.get("X-AgentCAD-Feedback-Token", ""), token):
+            self.reply(403, {"error": "Invalid feedback capability"})
+            return None
+        if not record:
+            self.reply(404, {"error": "Unknown project"})
+            return None
+        root = Path(record["root"])
+        for path in (root, root / ".agentcad", root / ".agentcad/feedback-sharing.json", root / ".agentcad/feedback"):
+            if path.resolve() != path:
+                self.reply(403, {"error": "Feedback path changed"})
+                return None
+        if not root.is_dir():
+            self.reply(403, {"error": "Project path changed"})
+            return None
+        return root
+
+    def feedback_post(self, token, route):
+        try:
+            root = self.feedback_root(token, live.read_json(live.project_record(token)))
+            if root is None:
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 2_000_000:
+                raise ValueError("Feedback request is too large or empty")
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict) or body.get("human_authorized") is not True:
+                raise ValueError("Explicit human authorization is required")
+            from agentcad.commands.feedback import _resolve_feedback_url, _send_remote, deliver_payload
+            # A choice is valid only for the recipient displayed to the human.
+            if body.get("recipient") != _resolve_feedback_url():
+                raise ValueError("Recipient changed; review the sharing panel again")
+            if route == "policy":
+                from agentcad.feedback_policy import set_sharing_policy
+                self.reply(200, set_sharing_policy(root, _resolve_feedback_url(), body.get("enabled")))
+            else:
+                payload = body.get("payload")
+                if not isinstance(payload, dict) or not payload:
+                    raise ValueError("Reviewed diagnostic payload must be a nonempty JSON object")
+                self.reply(200, deliver_payload(root, payload, _send_remote))
+        except (ValueError, TypeError) as exc:
+            self.reply(400, {"error": str(exc)})
+        except OSError:
+            self.reply(503, {"error": "Feedback unavailable; retry shortly"})
 
     def review_root(self, token, record):
         # A project capability grants access only to that project's reviews.

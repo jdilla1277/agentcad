@@ -5,6 +5,8 @@ from pathlib import Path
 import cadquery as cq
 from cadquery import exporters
 
+from tests.inspection_helpers import core_import_args
+
 from agentcad.cli import cli
 
 
@@ -23,7 +25,7 @@ class TestImportScaffold:
         for the just-imported version."""
         runner.invoke(cli, ["init"])
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step)])
+        result = runner.invoke(cli, core_import_args(["import", str(step)]))
 
         scaffold = isolated_dir / "edit.py"
         assert scaffold.exists(), "edit.py scaffold not written"
@@ -46,10 +48,10 @@ class TestImportScaffold:
         # Has show_object so the script produces a v2 immediately
         assert "show_object" in content
 
-    def test_import_response_includes_scaffold_path(self, runner, isolated_dir):
+    def test_import_full_response_includes_scaffold_path(self, runner, isolated_dir):
         runner.invoke(cli, ["init"])
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step)])
+        result = runner.invoke(cli, core_import_args(["import", str(step)]))
         parsed = json.loads(result.stdout)
         assert parsed.get("scaffold") == "edit.py"
 
@@ -59,7 +61,7 @@ class TestImportScaffold:
         existing = isolated_dir / "edit.py"
         existing.write_text("# my work in progress, do not overwrite\n")
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, core_import_args(["import", str(step)]))
         assert existing.read_text() == "# my work in progress, do not overwrite\n"
 
     def test_import_response_omits_scaffold_when_already_existed(
@@ -69,7 +71,7 @@ class TestImportScaffold:
         runner.invoke(cli, ["init"])
         (isolated_dir / "edit.py").write_text("# existing\n")
         step = _bracket_step(isolated_dir)
-        result = runner.invoke(cli, ["import", str(step)])
+        result = runner.invoke(cli, core_import_args(["import", str(step)]))
         parsed = json.loads(result.stdout)
         assert "scaffold" not in parsed
 
@@ -79,7 +81,7 @@ class TestImportScaffold:
         baseline before they start modifying."""
         runner.invoke(cli, ["init"])
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, core_import_args(["import", str(step)]))
         # Run the scaffold as-is.
         result = runner.invoke(
             cli, ["run", "edit.py", "--output", "scaffold_baseline"]
@@ -104,7 +106,7 @@ class TestImportScaffoldRuntimeAware:
     def test_cq_project_gets_cadquery_scaffold(self, runner, isolated_dir):
         runner.invoke(cli, ["init", "--name", "p", "--runtime", "cadquery"])
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, core_import_args(["import", str(step)]))
         scaffold = (isolated_dir / "edit.py").read_text()
 
         # Must NOT use the b3d-only helpers — they fail under cq.
@@ -125,7 +127,7 @@ class TestImportScaffoldRuntimeAware:
     def test_b3d_project_gets_build123d_scaffold(self, runner, isolated_dir):
         runner.invoke(cli, ["init", "--name", "p", "--runtime", "build123d"])
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, core_import_args(["import", str(step)]))
         scaffold = (isolated_dir / "edit.py").read_text()
         assert "from build123d" in scaffold
         assert "geometry = load_geometry(" in scaffold
@@ -135,7 +137,7 @@ class TestImportScaffoldRuntimeAware:
         the same contract as test_scaffold_runs_successfully_unedited."""
         runner.invoke(cli, ["init", "--name", "p", "--runtime", "cadquery"])
         step = _bracket_step(isolated_dir)
-        runner.invoke(cli, ["import", str(step)])
+        runner.invoke(cli, core_import_args(["import", str(step)]))
         result = runner.invoke(
             cli, ["run", "edit.py", "--output", "scaffold_baseline"]
         )

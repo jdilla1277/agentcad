@@ -1,5 +1,69 @@
 # Use AgentCAD cloud projects with an agent
 
+## Service-owned first-use guides (next client release)
+
+The public website and HTTP reader share a guide registry at
+https://agentcad.dev/docs/cloud. A matching CLI release can discover and read the
+same content directly, without a key, account profile, local project or browser:
+
+```bash
+agentcad cloud docs
+agentcad cloud docs first-cloud-build
+agentcad cloud docs first-cloud-build --format json
+```
+
+Markdown is the default for live guide lists and pages. Use `--format json` for
+structured responses, with page Markdown in `content`. Every
+read fetches the service, so content changes do not require reinstalling the
+package. This command requires the paired package release; `agentcad docs cloud`
+is still the offline reference. If your installed `agentcad cloud --help` does
+not list `docs`, use the website or the HTTP reader:
+
+```bash
+curl --fail --silent --show-error \
+  'https://agentcad.dev/api/docs/cloud/first-cloud-build?format=markdown'
+```
+
+`AGENTCAD_DOCS_URL` selects an HTTPS website origin for testing a preview docs
+service (HTTP is supported only on loopback). It is independent of
+`AGENTCAD_API_URL`. This reader never sends your API key or installation
+credential. Public docs access grants no cloud compute permission.
+Errors remain structured JSON with a nonzero exit, including when Markdown was
+requested; outages do not fall back to a bundled guide that might be stale.
+
+## Account activity and self-service keys (next client release)
+
+On an enabled host, create a personal API key on the website's account page.
+Set `AGENTCAD_API_URL` to that host's HTTPS API origin and `AGENTCAD_API_KEY`
+to the key in your process environment. Unset `AGENTCAD_KEY_ID` and
+`AGENTCAD_KEY_SECRET` when choosing this method. Keep the key out of source,
+command arguments and chat messages. A browser-approved CLI installation also
+works; an explicitly configured personal key takes precedence over saved login.
+
+With a matching client and activity-enabled service:
+
+```sh
+agentcad cloud activity --limit 25
+agentcad cloud activity --limit 25 --cursor NEXT_CURSOR
+```
+
+The result contains `items` and `next_cursor`. Each item identifies an owned
+cloud job, operation, current status, project, creation/update timestamps and
+recorded client/key attribution. Jobs appear newest first. A repeated
+idempotent submission is one job, not another activity entry. Empty activity
+is a successful `items: []` response. Refresh to see changed job states.
+This feed contains job history, not a bill or a record of local CAD activity.
+
+The hosted MCP `cloud_activity(limit=25, cursor=None)` reads the same history.
+Configure `Authorization: Bearer <API key>` or a host-approved CLI installation
+credential in your MCP client's secure environment/header settings; do not paste
+credentials into a conversation. Hosts verify each request, including discovery,
+and revocation blocks subsequent requests. Old pilot headers remain supported.
+The usual local MCP server also exposes `cloud_activity`, using the same cloud
+configuration as the CLI. These additions require the next matching client
+release or the supplied Preview checkout; older clients do not have this command.
+
+
 Your agent writes a CAD script on your machine. AgentCAD uploads that file,
 builds it on the host's computers, and saves a version in a cloud project.
 Your agent can then measure it, check requirements, inspect it, download a
@@ -61,15 +125,16 @@ way to use the same cloud projects and results.
 
 ## 1. Install AgentCAD and supply your credentials
 
-Cloud access requires an API address, key ID, and secret issued by your host.
-There is no signup or login screen.
+This setup uses an API address, key ID, and secret issued by your host.
+Hosts that enable browser-assisted installation approval can instead use
+[`agentcad account connect`](accounts.md). Local CAD commands need no account.
 
 Install the local cloud adapter with Python 3.10–3.12; this example uses
 Python 3.12:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'agentcad[mcp]==0.7.2'
+.venv/bin/python -m pip install 'agentcad[mcp]==0.8.2'
 .venv/bin/agentcad cloud --help
 ```
 
@@ -187,11 +252,92 @@ For a ready-made multi-solid script and matching spec, use
 holes and a separate spacer. Increasing both hole diameters from 10 to 12 mm
 removes 552.9203 mm³ while leaving the spacer in place.
 
+### Export a saved model
+
+Cloud exports require a client and host that both support this operation.
+Until the client extension is released, install from a source revision that
+includes it; installing an older published client does not add the command.
+An older host can reject the export route. Check your host's supported tools.
+
+```sh
+agentcad cloud export PROJECT VERSION --format stl,obj,glb --idempotency-key meshes-v1
+agentcad cloud job PROJECT EXPORT_JOB --wait
+agentcad cloud download PROJECT model.stl --job EXPORT_JOB --kind stl
+agentcad cloud download PROJECT model.obj --job EXPORT_JOB --kind obj
+agentcad cloud download PROJECT model.glb --job EXPORT_JOB --kind glb
+agentcad cloud download PROJECT export-report.json --job EXPORT_JOB --kind report
+```
+
+Use the returned export job ID. Local and hosted MCP expose
+`cloud_export(project, version, formats=["stl", "obj", "glb"], idempotency_key=...)`.
+The local adapter saves files with `cloud_download`; hosted MCP retrieves them
+with `cloud_artifact(job=EXPORT_JOB, kind="stl"|"obj"|"glb", include_content=True)`.
+Hosted inline content is limited to 8 MiB; larger files retain an authenticated
+API download reference. Returned URLs remain private.
+
+Exports read the selected saved STEP without running its script or creating
+another model version. Choose each format once. Format order does not change
+retry identity; changing the formats or version with the same key conflicts.
+A failed export retains no partial download links. To retry a terminal failed
+export, use a new key against the same saved version. An export has a
+180-second CAD budget, a seven-minute overall deadline, 32 MiB per-file limit,
+and 64 MiB combined limit. It accepts no component or resource overrides.
+
+After completion, read `result.mesh_validation` separately for each format.
+`is_valid: false` means a written-mesh check failed; `null` means unknown.
+Files remain retrievable in either case. Neither job completion nor source
+`geometry_valid` establishes mesh validity, printability, or approval.
+
+`result.files` records file sizes, SHA-256, `length_unit`, `meters_per_unit`,
+and `up_axis`. The current engine preserves numeric millimeters in every
+format, including GLB. STL/OBJ are Z-up; GLB is Y-up. A GLB consumer assuming
+meters must scale by 0.001. Named-part/group/source-color metadata is not
+preserved by whole-model export. Use the source STEP and source reports for
+CAD evidence; meshes approximate the surfaces at the engine's tessellation.
+
+Cloud requests identify the adapter mode and package version for operational
+usage records. Local CAD commands remain offline and do not send these records.
+
+### Request a GLB during the build
+
+To keep authored part IDs and colors, request GLB while the script is building:
+
+```sh
+agentcad cloud run PROJECT model.py --label first --export glb --idempotency-key build-with-glb
+agentcad cloud job PROJECT BUILD_JOB --wait
+agentcad cloud download PROJECT model.glb --job BUILD_JOB --kind glb
+```
+
+CLI/local MCP `cloud_run` and hosted MCP `cloud_run` accept `export_glb=True`.
+The API accepts multipart `export_glb=true`. This needs matching client and
+host builds; an older host that does not acknowledge the option is reported
+with the accepted job ID, so poll that job rather than submitting another build.
+
+The submitted job echoes `export_glb: true`. After completion, check
+`mesh_exports.glb.status == "success"` and its independent `validation.is_valid`
+verdict before downloading. The storage worker validates the actual GLB bytes;
+sandbox-authored validation is not trusted. A missing, oversized or invalid GLB
+has status `failed` and no download link, while a successful STEP build remains
+saved with a warning. Retrying must keep the same GLB option and retry key;
+changing the option conflicts with that key.
+
+No GLB is generated by default. The build-time writer preserves part IDs as
+node names and authored part colors (including effective group colors), but
+not full group hierarchy or a separate display-name field. The file is Y-up
+with numeric millimeters; meter-based consumers apply a 0.001 scale. The usual
+32 MiB file and 8 MiB hosted-inline limits apply. For hosted retrieval, use
+`cloud_artifact(project=..., job=BUILD_JOB, kind="glb", include_content=True)`.
+Saved-version `cloud_export` remains a separate STEP-to-mesh operation and does
+not recover part metadata from an earlier geometry-only model.
+
 ## 5. Handle waiting and retries
 
 - A submission response acknowledges a job. It does not mean geometry passed.
 - A polling call waits at most 60 seconds. If the job is still running, poll
   again; do not submit another build to make it finish.
+- A transport timeout on the final GET at the wait deadline can return the
+  last authorized pending snapshot. Poll that same job again. Explicit HTTP
+  errors, including revoked credentials, are still returned as errors.
 - Keep the submission's `idempotency_key`. If the response is lost, retry with
   that same key and identical input. Use a new key when changing the script,
   label, or other submitted values. The client does not retry submissions for you.

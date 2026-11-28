@@ -92,7 +92,23 @@ def context():
         "agent_setup": agent_setup,
         **reviews,
     }
-    if (get_project().build_root / ".agentcad/changes/working.json").exists():
+    from agentcad.intent_validation import _read_checks, project_intent
+    from agentcad.core_build import file_sha256
+    for version in versions:
+        step = get_project().version_dir(version) / "output.step"
+        if step.is_file() and _read_checks(step):
+            meta = json.loads(step.with_name("meta.json").read_text())
+            geometry = meta.get("geometry_readiness") or meta.get("delivery_readiness", {})
+            geometry = dict(geometry)
+            actual = file_sha256(step)
+            if actual != geometry.get("artifact_sha256"):
+                geometry.update(ready=False,
+                                blocking_reasons=["geometry_evidence_stale"])
+            row = {"version": version["version"], "label": version["label"], "delivery_readiness": geometry}
+            project_intent(row, step)
+            response.setdefault("artifact_readiness", []).append(row)
+    from agentcad.experimental_changes import enabled
+    if enabled() and (get_project().build_root / ".agentcad/changes/working.json").exists():
         from agentcad.change_store import ChangeStore
         try:
             changes = ChangeStore(get_project().build_root)

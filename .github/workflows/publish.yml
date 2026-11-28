@@ -22,7 +22,29 @@ jobs:
           pip install build
           python -m build
 
+      - name: Install Linux inspection render dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri
+
+      - name: Verify installed default Inspect contract
+        run: |
+          pip install dist/*.whl
+          xvfb-run -a -s "-screen 0 1280x1024x24 +extension GLX" \
+            env LIBGL_ALWAYS_SOFTWARE=1 python scripts/check_inspect_release_gate.py
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
+
+  sync-skill:
+    needs: publish
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/sync-skill.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
+    secrets:
+      SKILL_SYNC_SSH_KEY: ${{ secrets.SKILL_SYNC_SSH_KEY }}

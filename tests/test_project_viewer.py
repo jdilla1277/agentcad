@@ -265,9 +265,59 @@ def test_incompatible_protocol_requires_explicit_action(service, monkeypatch):
     config = live.configuration()
     config["port"] = 12345
     live.atomic_write_json(live.runtime_dir() / "config.json", config)
+
     with monkeypatch.context() as patch:
         patch.setattr(live, "request", lambda *args, **kwargs: {"protocol": 999})
         with pytest.raises(live.ViewerUnavailable, match="protocol mismatch"):
             live.ensure_service()
     config["port"] = 0
     live.atomic_write_json(live.runtime_dir() / "config.json", config)
+
+
+def test_new_cli_stops_running_protocol_three_viewer_and_reopens(service, tmp_path, monkeypatch, runner):
+    from agentcad.cli import cli
+
+    root = tmp_path / "model"
+    live.publish(root, version(root, 1), started_ns=1)
+    monkeypatch.chdir(root)
+    # Run the stable health/stop control API in a separate process advertising
+    # the pre-upgrade protocol. The client remains on the new protocol.
+    child = subprocess.Popen(
+        [sys.executable, "-c", "from agentcad import project_viewer as live; "
+         "live.PROTOCOL = 3; from agentcad.viewer_service import main; main()"],
+        env=os.environ.copy(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 8
+        while not live.service_status(require_protocol=False)["running"] and time.monotonic() < deadline:
+            assert child.poll() is None
+            time.sleep(.05)
+        config = live.configuration()
+        state = live.service_status(require_protocol=False)
+        assert state["running"] and state["protocol"] == 3
+        with pytest.raises(live.ViewerUnavailable, match="agentcad viewer stop"):
+            live.ensure_service()
+
+        # A stale/wrong secret does not authorize stopping the listener.
+        wrong_config = {**config, "secret": "wrong-secret"}
+        live.atomic_write_json(live.runtime_dir() / "config.json", wrong_config)
+        try:
+            assert live.stop_service() == {"status": "stopped", "running": False}
+            assert live.request(config, "health")["instance"] == state["instance"]
+        finally:
+            live.atomic_write_json(live.runtime_dir() / "config.json", config)
+
+        stopped = runner.invoke(cli, ["viewer", "stop"])
+        assert stopped.exit_code == 0, stopped.output
+        assert json.loads(stopped.stdout)["running"] is False
+        child.wait(timeout=5)
+        reopened = runner.invoke(cli, ["viewer", "open"])
+        assert reopened.exit_code == 0, reopened.output
+        assert json.loads(reopened.stdout)["url"] == (
+            f"http://127.0.0.1:{config['port']}/projects/{live.project_token(root)}/"
+        )
+        assert live.service_status()["protocol"] == live.PROTOCOL
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)

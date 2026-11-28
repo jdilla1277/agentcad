@@ -12,7 +12,7 @@ from pathlib import Path
 import cadquery as cq
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import core_import_args as full_response_args
 from cadquery import exporters
 
 from agentcad import __version__
@@ -698,7 +698,7 @@ def test_import_routes_no_diff_flag_through_daemon(
 
     assert result.exit_code == 0, result.output
     assert requests[0]["argv"] == [
-        "import", "any.step", "--label", "fast", "--no-view", "--no-diff", "--full-response",
+        "import", "any.step", "--label", "fast", "--no-view", "--no-diff", "--no-inspection-image", "--full-response",
     ]
 
 

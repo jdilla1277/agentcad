@@ -8,8 +8,11 @@ kernel`` restores the kernel-only check for intentional surfaces.
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 from pathlib import Path
+
+import pytest
 
 from agentcad.cli import cli
 from agentcad import validation
@@ -86,9 +89,23 @@ def test_run_kernel_profile_restores_the_old_behavior_and_records_it(runner, iso
     assert payload["validation"]["profile"] == "kernel"
     assert payload["validation"]["layers"]["shell_closure"]["status"] == "skipped"
     assert payload["validation"]["layers"]["mesh_manifold"]["status"] == "skipped"
+    assert any("no closed solid" in warning for warning in payload["warnings"])
+    assert not any("Occupied-volume measurement failed" in warning for warning in payload["warnings"])
     meta = json.loads((isolated_dir / "v1_surface" / "meta.json").read_text())
     assert meta["validation_profile"] == "kernel"
     assert meta["validation"]["is_valid"] is True
+    readiness = payload["delivery_readiness"]
+    assert readiness == meta["delivery_readiness"]
+    assert readiness["ready"] is False
+    assert readiness["profile"] == "kernel"
+    assert readiness["blocking_reasons"] == [
+        "shell_closure_not_checked", "mesh_manifold_not_checked",
+    ]
+    assert readiness["artifact_sha256"] == hashlib.sha256(
+        (isolated_dir / payload["outputs"]["step"]).read_bytes()
+    ).hexdigest()
+    assert "not ready for delivery" in payload["message"]
+    assert "not ready for delivery" in meta["message"]
 
 
 def test_run_success_carries_the_layer_report_and_reliable_volume(runner, isolated_dir):
@@ -106,6 +123,9 @@ def test_run_success_carries_the_layer_report_and_reliable_volume(runner, isolat
     meta = json.loads((isolated_dir / "v1_bracket" / "meta.json").read_text())
     assert meta["validation"]["first_failure"] is None
     assert meta["validation_profile"] == "deliverable"
+    assert payload["delivery_readiness"] == meta["delivery_readiness"]
+    assert payload["delivery_readiness"]["ready"] is True
+    assert payload["delivery_readiness"]["blocking_reasons"] == []
 
 
 def test_run_dry_run_reports_the_verdict_without_a_version(runner, isolated_dir):
@@ -135,6 +155,58 @@ def test_run_mesh_timeout_is_undetermined_not_invalid(runner, isolated_dir, monk
     assert payload["validation"]["undetermined_layer"] == "mesh_manifold"
     assert any("could not finish" in w for w in payload["warnings"])
     assert (isolated_dir / "v1_slow" / "output.step").is_file()
+    assert payload["delivery_readiness"]["ready"] is False
+    assert "mesh_manifold_timeout" in payload["delivery_readiness"]["blocking_reasons"]
+
+
+def test_nonmanifold_run_is_intermediate_even_when_kernel_accepts_it(runner, isolated_dir):
+    _init(runner)
+    shutil.copy(FIXTURES / "nonmanifold_edge_prism.step", isolated_dir / "input.step")
+    _script(isolated_dir, 'show_object(load_step("input.step"))\n')
+
+    result, full = _run(runner, "script.py", "--label", "full", *QUIET)
+    assert result.exit_code == 1, result.output
+    assert full["validation"]["first_failure"] == "mesh_manifold"
+    result, reduced = _run(runner, "script.py", "--label", "kernel",
+                           "--validation-profile", "kernel", *QUIET)
+    assert result.exit_code == 0, result.output
+    assert reduced["delivery_readiness"]["ready"] is False
+    meta = json.loads((isolated_dir / reduced["outputs"]["step"]).with_name("meta.json").read_text())
+    assert meta["delivery_readiness"] == reduced["delivery_readiness"]
+
+
+def test_real_imported_manifold_run_keeps_readiness_through_mcp(runner, isolated_dir):
+    from agentcad.mcp.server import _invoke
+
+    _init(runner)
+    source = Path(__file__).parent / "fixtures" / "real_world" / "pump_manifold.step"
+    shutil.copy(source, isolated_dir / "input.step")
+    _script(isolated_dir, 'show_object(load_step("input.step"))\n')
+    payload = _invoke(["run", "script.py", "--label", "manifold", *QUIET], cwd=str(isolated_dir))
+    assert payload["status"] == "success", payload
+    step = isolated_dir / payload["outputs"]["step"]
+    assert payload["delivery_readiness"] == json.loads(step.with_name("meta.json").read_text())["delivery_readiness"]
+    assert payload["delivery_readiness"]["ready"] is True
+    assert payload["delivery_readiness"]["artifact_sha256"] == hashlib.sha256(step.read_bytes()).hexdigest()
+    measured = _invoke(["measure", str(step), "--no-daemon"], cwd=str(isolated_dir))
+    assert measured["delivery_readiness"] == payload["delivery_readiness"]
+
+
+def test_mcp_run_cannot_hide_reduced_validation(runner, isolated_dir):
+    from agentcad.mcp.server import _invoke
+
+    _init(runner)
+    _script(isolated_dir, BRACKET)
+    payload = _invoke(["run", "script.py", "--label", "intermediate",
+                       "--validation-profile", "kernel", *QUIET], cwd=str(isolated_dir))
+    assert payload["status"] == "success", payload
+    assert payload["delivery_readiness"]["ready"] is False
+    assert "not ready for delivery" in payload["message"]
+    # Revalidating the saved closed solid under full policy can establish a
+    # fresh ready verdict; it never relabels the original reduced receipt.
+    measured = _invoke(["measure", payload["outputs"]["step"], "--no-daemon"], cwd=str(isolated_dir))
+    assert measured["delivery_readiness"]["ready"] is True
+    assert measured["delivery_readiness"]["artifact_sha256"] == payload["delivery_readiness"]["artifact_sha256"]
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +218,7 @@ def test_import_rejects_an_open_shell_and_kernel_profile_accepts_it(runner, isol
     _init(runner)
     shutil.copy(FIXTURES / "open_shell.step", isolated_dir / "open_shell.step")
 
-    result = runner.invoke(cli, ["import", "open_shell.step", "--no-view", "--no-diff", "--no-daemon"])
+    result = runner.invoke(cli, ["import", "open_shell.step", "--full-response", "--no-view", "--no-diff", "--no-daemon"])
     payload = json.loads(result.stdout)
     assert result.exit_code == 1, result.output
     assert payload["status"] == "invalid_geometry"
@@ -155,7 +227,7 @@ def test_import_rejects_an_open_shell_and_kernel_profile_accepts_it(runner, isol
 
     result = runner.invoke(cli, [
         "import", "open_shell.step", "--label", "surface",
-        "--validation-profile", "kernel", "--no-view", "--no-diff", "--no-daemon",
+        "--validation-profile", "kernel", "--full-response", "--no-view", "--no-diff", "--no-daemon",
     ])
     payload = json.loads(result.stdout)
     assert result.exit_code == 0, result.output
@@ -217,3 +289,47 @@ def test_inspect_honors_the_kernel_profile(runner, isolated_dir):
     assert payload["is_valid"] is True
     assert payload["validation"]["profile"] == "kernel"
     assert payload["validation"]["layers"]["shell_closure"]["status"] == "skipped"
+
+
+@pytest.mark.parametrize("replace_during", ["validation", "features"])
+def test_measure_cannot_bind_a_pass_to_replacement_bytes(runner, isolated_dir, monkeypatch, replace_during):
+    import agentcad.core_build as core
+    import importlib
+    measure_command = importlib.import_module("agentcad.commands.measure")
+
+    source = isolated_dir / "changing.step"
+    closed = (FIXTURES / "closed_box.step").read_bytes()
+    opened = (FIXTURES / "open_shell.step").read_bytes()
+    source.write_bytes(closed)
+
+    def replace_source():
+        replacement = isolated_dir / "replacement.step"
+        replacement.write_bytes(opened)
+        replacement.replace(source)
+
+    original = core.validated_metrics if replace_during == "validation" else measure_command._filter_cylindrical_features
+
+    def replace_after_real_work(*args, **kwargs):
+        result = original(*args, **kwargs)
+        replace_source()
+        return result
+
+    with monkeypatch.context() as patch:
+        if replace_during == "validation":
+            patch.setattr(core, "validated_metrics", replace_after_real_work)
+        else:
+            patch.setattr(measure_command, "_filter_cylindrical_features", replace_after_real_work)
+        result = runner.invoke(cli, ["measure", str(source), "--no-daemon"])
+    assert result.exit_code == 0, result.output
+    measured = json.loads(result.stdout)
+    receipt = measured["delivery_readiness"]
+    assert receipt["ready"] is False
+    assert "source_changed_during_measurement" in receipt["blocking_reasons"]
+    assert receipt["artifact_sha256"] == hashlib.sha256(closed).hexdigest()
+    assert "changed" in measured["message"]
+    assert any("measure" in action and "changing.step" in action for action in measured["next_actions"])
+    # A fresh measurement judges the replacement, rather than recycling a pass.
+    again = json.loads(runner.invoke(cli, ["measure", str(source), "--no-daemon"]).stdout)
+    assert again["delivery_readiness"]["ready"] is False
+    assert "shell_closure_failed" in again["delivery_readiness"]["blocking_reasons"]
+    assert again["delivery_readiness"]["artifact_sha256"] == hashlib.sha256(opened).hexdigest()

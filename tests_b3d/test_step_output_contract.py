@@ -15,7 +15,8 @@ from agentcad.validate import validate_script
     ("result = Compound(children=[Box(2, 3, 4), Pos(10, 0, 0) * Box(2, 3, 4)])", 2, 48),
     ("result = Box(2, 3, 4).wrapped", 1, 24),
 ])
-def test_capture_writes_canonical_step(runner, b3d_project, construction, solids, volume):
+@pytest.mark.parametrize("experimental", [False, True])
+def test_capture_writes_canonical_step(runner, b3d_project, construction, solids, volume, experimental):
     from build123d import import_step
 
     script = b3d_project / "model.py"
@@ -23,6 +24,7 @@ def test_capture_writes_canonical_step(runner, b3d_project, construction, solids
     result = runner.invoke(cli, [
         "run", str(script), "--label", "capture", "--no-daemon",
         "--no-preview", "--no-diff", "--no-view",
+        *(["--experimental-changes"] if experimental else []),
     ])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
@@ -30,16 +32,19 @@ def test_capture_writes_canonical_step(runner, b3d_project, construction, solids
     assert payload["artifact_created"] is True
     assert payload["outputs"]["step"] == "v1_capture/output.step"
     step = b3d_project / payload["outputs"]["step"]
-    retained_step = Path(payload["change"]["geometry"])
-    assert retained_step == (
-        b3d_project.resolve()
-        / ".agentcad/changes/attempts"
-        / payload["change"]["revision_id"]
-        / "geometry/output.step"
-    )
-    # The retained snapshot is expected; any third STEP is still a stray export.
-    assert set(b3d_project.rglob("*.step")) == {step, retained_step}
-    assert retained_step.read_bytes() == step.read_bytes()
+    if experimental:
+        retained_step = Path(payload["change"]["geometry"])
+        assert retained_step == (
+            b3d_project.resolve()
+            / ".agentcad/changes/attempts"
+            / payload["change"]["revision_id"]
+            / "geometry/output.step"
+        )
+        assert set(b3d_project.rglob("*.step")) == {step, retained_step}
+        assert retained_step.read_bytes() == step.read_bytes()
+    else:
+        assert set(b3d_project.rglob("*.step")) == {step}
+        assert "change" not in payload
     loaded = import_step(str(step))
     assert len(loaded.solids()) == solids
     assert loaded.volume == pytest.approx(volume)

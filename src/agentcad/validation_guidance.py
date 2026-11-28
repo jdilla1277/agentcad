@@ -170,29 +170,78 @@ def repair_guidance(report):
     return repairs
 
 
+def _connection_bounds(shape):
+    """Conservative bounds for pruning, never evidence of physical contact."""
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    try:
+        bounds = Bnd_Box()
+        # Add_s includes shape tolerances and mesh deflection when it uses
+        # triangulation. A loose box only costs extra exact comparisons.
+        BRepBndLib.Add_s(shape, bounds)
+        bounds.Enlarge(1e-7)
+        if bounds.IsVoid() or bounds.IsWhole():
+            return None
+        return bounds
+    except Exception:
+        return None
+
+
+def _connection_lower_bound(left, right):
+    if left is None or right is None:
+        return 0.0
+    try:
+        return left.Distance(right)
+    except Exception:
+        return 0.0
+
+
 def part_connections(raw_parts, public_parts, *, tolerance_mm=0.01):
     """Nearest physical distance, with a small explicit contact tolerance.
 
     Only named/explicitly identified parts are diagnosed. No connection is
-    inferred from names, groups, or a bounding-box overlap.
+    inferred from names, groups, or a bounding-box overlap. Conservative box
+    distances order and prune exact checks; equal exact distances retain the
+    first neighbor in input order, as in the exhaustive implementation.
     """
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 
     warnings = []
     distances = {}
+    bounds = [_connection_bounds(p["topo_shape"]) for p in raw_parts]
+    from agentcad.part_overlap import bounded_overlaps
+    diagnosed = {i for i, p in enumerate(raw_parts) if p.get("name") or p.get("explicit_id") is not None}
+    pairs = [(i, j) for i in range(len(raw_parts)) for j in range(i + 1, len(raw_parts))
+             if (i in diagnosed or j in diagnosed) and _connection_lower_bound(bounds[i], bounds[j]) == 0]
+    overlaps = bounded_overlaps([p["topo_shape"] for p in raw_parts], pairs)
     for i, (raw, public) in enumerate(zip(raw_parts, public_parts)):
         if not raw.get("name") and raw.get("explicit_id") is None:
             continue
         floating = raw.get("validation_options", {}).get("floating", False)
         nearest = None
         unavailable = False
-        for j, other in enumerate(raw_parts):
-            if i == j:
-                continue
+        candidates = sorted(
+            (_connection_lower_bound(bounds[i], bounds[j]), j)
+            for j in range(len(raw_parts)) if i != j
+        )
+        for lower_bound, j in candidates:
+            if nearest is not None and (
+                lower_bound > nearest[0]
+                or (lower_bound == nearest[0] and j >= nearest[1])
+            ):
+                # Remaining candidates cannot be closer or win an exact tie.
+                # In particular, zero is a proven minimum; box overlap alone
+                # never establishes it.
+                break
             key = tuple(sorted((i, j)))
             if key not in distances:
                 try:
-                    tool = BRepExtrema_DistShapeShape(raw["topo_shape"], other["topo_shape"])
+                    # Keep argument orientation stable even when pruning means
+                    # the higher-index part discovers this pair first.
+                    tool = BRepExtrema_DistShapeShape(
+                        raw_parts[key[0]]["topo_shape"], raw_parts[key[1]]["topo_shape"]
+                    )
                     distances[key] = tool.Value() if tool.IsDone() else None
                 except Exception:
                     distances[key] = None
@@ -200,20 +249,48 @@ def part_connections(raw_parts, public_parts, *, tolerance_mm=0.01):
             if distance is None:
                 unavailable = True
                 continue
-            if nearest is None or distance < nearest[0]:
-                nearest = (distance, public_parts[j]["id"])
+            if nearest is None or (distance, j) < nearest:
+                nearest = (distance, j)
+        disconnected = False
         if nearest is None or unavailable:
             public["connection"] = {"status": "unavailable" if unavailable else "not_applicable",
                                     "floating": floating, "tolerance_mm": tolerance_mm}
-            continue
-        distance, neighbor = nearest
-        disconnected = distance > tolerance_mm
-        public["connection"] = {
-            "status": "floating" if floating else "disconnected" if disconnected else "touching",
-            "floating": floating, "nearest_part_id": neighbor,
-            "distance_mm": round(distance, 6), "tolerance_mm": tolerance_mm,
+        else:
+            distance, neighbor_index = nearest
+            neighbor = public_parts[neighbor_index]["id"]
+            disconnected = distance > tolerance_mm
+            public["connection"] = {
+                "status": "floating" if floating else "disconnected" if disconnected else "touching",
+                "floating": floating, "nearest_part_id": neighbor,
+                "distance_mm": round(distance, 9), "tolerance_mm": tolerance_mm,
+            }
+        relevant = [(pair, overlaps[pair]) for pair in pairs if i in pair]
+        complete = all(row["status"] == "complete" for _, row in relevant)
+        found = [{"part_id": public_parts[pair[1] if pair[0] == i else pair[0]]["id"],
+                  "volume_mm3": round(row["volume_mm3"], 9),
+                  "volume_tolerance_mm3": row["volume_tolerance_mm3"]}
+                 for pair, row in relevant if row["status"] == "complete"
+                 and row["volume_mm3"] > row["volume_tolerance_mm3"]]
+        public["connection"]["overlap_check"] = {
+            "status": "complete" if complete else "partial" if any(row["status"] == "complete" for _, row in relevant) else "unavailable",
+            "candidate_pairs": len(relevant), "checked_pairs": sum(row["status"] == "complete" for _, row in relevant),
+            "overlaps": found,
+            "unavailable": [{"part_id": public_parts[pair[1] if pair[0] == i else pair[0]]["id"],
+                             "reason": row.get("reason", "unavailable")}
+                            for pair, row in relevant if row["status"] != "complete"][:10],
+            "unavailable_pairs": sum(row["status"] != "complete" for _, row in relevant),
         }
-        if disconnected and not floating:
+        if found:
+            public["connection"]["status"] = "overlapping"
+            warnings.append(f"Part {public['id']!r} overlaps material in " + ", ".join(repr(row["part_id"]) for row in found) +
+                            ". Review whether this interference is intended; contact distance alone cannot certify assembly fit.")
+        elif not complete:
+            public["connection"]["status"] = "unavailable"
+        elif nearest is not None and not unavailable and not disconnected and not floating and distance > 1e-7:
+            public["connection"]["status"] = "near"
+        if not complete:
+            warnings.append(f"Part {public['id']!r} has incomplete overlap checks; do not infer an interference-free assembly.")
+        if disconnected and not floating and not found and complete:
             warnings.append(f"Part {public['id']!r} touches no other part: nearest part "
                             f"{neighbor!r} is {distance:.4g} mm away. If intentional, "
                             "set options={'floating': True} on its show_object call.")

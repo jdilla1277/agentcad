@@ -18,8 +18,8 @@ from agentcad.mcp import server
 PROJECT = "prj_" + "a" * 24
 JOB = "job_" + "b" * 24
 SECRET = "test-secret-" + "d" * 32
-CLOUD_TOOLS = {"cloud_create_project", "cloud_projects", "cloud_project", "cloud_run", "cloud_import",
-               "cloud_measure", "cloud_inspect", "cloud_check_spec", "cloud_render", "cloud_diff", "cloud_job", "cloud_download"}
+CLOUD_TOOLS = {"cloud_activity", "cloud_create_project", "cloud_projects", "cloud_project", "cloud_run", "cloud_import",
+               "cloud_measure", "cloud_inspect", "cloud_check_spec", "cloud_render", "cloud_diff", "cloud_export", "cloud_job", "cloud_download"}
 
 
 def install(monkeypatch, handler):
@@ -102,6 +102,8 @@ def test_cloud_docs_are_discoverable_without_credentials():
     content = json.loads(result.stdout)["content"]
     assert "AGENTCAD_KEY_SECRET" in content and "idempotency" in content.lower()
     assert "cloud_job" in content and "--compare" not in content
+    assert "python -m agentcad.mcp" in content and "cloud_help" in content
+    assert "not a hosted remote MCP URL" not in content
 
 
 def test_mcp_rejects_unsupported_options_before_submitting(monkeypatch):

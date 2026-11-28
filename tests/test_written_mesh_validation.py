@@ -1,6 +1,7 @@
 """The verdict must describe the bytes delivered, without repairing the mesh."""
 
 import json
+import runpy
 from pathlib import Path
 
 import pytest
@@ -146,6 +147,62 @@ def test_real_manifold_written_mesh(tmp_path, real_world_step, fmt):
     assert report['triangle_count'] == sum(len(mesh.faces) for mesh in meshes)
     assert report['watertight'] == all(mesh.is_watertight for mesh in meshes)
     assert report['is_valid'] is True, report
+
+
+def test_public_bracket_exports_closed_meshes(runner, isolated_dir):
+    """The published bracket/spacer example must survive the GLB handoff."""
+    source = Path(__file__).parents[1] / "examples/cloud/bracket.py"
+    (isolated_dir / "bracket.py").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    assert runner.invoke(cli, ["init", "--runtime", "build123d", "--no-agent-setup"]).exit_code == 0
+    result = runner.invoke(cli, [
+        "run", "bracket.py", "--label", "bracket", "--export", "stl,glb,obj",
+        "--no-preview", "--no-view", "--no-diff", "--no-daemon",
+    ])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["metrics"]["is_valid"] is True
+    assert data["metrics"]["volume"] == pytest.approx(73143.3629, abs=0.001)
+    for fmt in ("stl", "glb", "obj"):
+        report = data["mesh_validation"][fmt]
+        assert report["is_valid"] is True, report
+        meshes = independent_meshes(data["outputs"][fmt])
+        assert all(mesh.is_watertight and mesh.is_winding_consistent for mesh in meshes)
+        assert sum(len(mesh.split(only_watertight=False)) for mesh in meshes) == 2
+
+
+@pytest.mark.parametrize("named_parts", [False, True])
+def test_bracket_glb_preserves_closed_components_orientation_and_parts(tmp_path, named_parts):
+    from agentcad.export import export_glb
+    from agentcad.written_mesh import validate_written_mesh
+
+    captured = []
+    runpy.run_path(
+        str(Path(__file__).parents[1] / "examples/cloud/bracket.py"),
+        init_globals={"show_object": captured.append},
+    )
+    [compound] = captured
+    parts = [
+        {"id": "bracket", "color": "red", "topo_shape": compound.solids()[0].wrapped},
+        {"id": "spacer", "color": "blue", "topo_shape": compound.solids()[1].wrapped},
+    ] if named_parts else None
+    output = tmp_path / "bracket.glb"
+    export_glb(compound.wrapped, output, parts=parts)
+    report = validate_written_mesh(output)
+    assert report["is_valid"] is True, report
+    assert report["layers"]["mesh_manifold"]["open_edge_count"] == 0
+    assert report["layers"]["mesh_manifold"]["closed_component_count"] == 2
+    meshes = independent_meshes(output)
+    assert all(mesh.is_watertight and mesh.is_winding_consistent for mesh in meshes)
+    assert min(mesh.bounds[0][1] for mesh in meshes) == pytest.approx(0, abs=1e-6)
+    assert max(mesh.bounds[1][1] for mesh in meshes) == pytest.approx(40)
+    assert min(mesh.bounds[0][2] for mesh in meshes) == pytest.approx(-30)
+    assert max(mesh.bounds[1][2] for mesh in meshes) == pytest.approx(30)
+    if named_parts:
+        data = output.read_bytes()
+        document = json.loads(data[20:20 + int.from_bytes(data[12:16], "little")])
+        assert {node.get("name") for node in document["nodes"]} >= {"bracket", "spacer"}
+        colors = {tuple(material["pbrMetallicRoughness"]["baseColorFactor"]) for material in document["materials"]}
+        assert (1.0, 0.0, 0.0, 1.0) in colors and (0.0, 0.0, 1.0, 1.0) in colors
 
 
 @pytest.mark.parametrize('runtime,source', [

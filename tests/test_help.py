@@ -423,3 +423,10 @@ def test_help_example_uses_default_build123d_init(runner, isolated_dir):
     assert "agentcad init" in example_block
     assert "--runtime" not in example_block
     assert '"runtime": "build123d"' in example_block
+
+
+def test_import_help_exits_cleanly_without_an_error_response(runner, isolated_dir):
+    result = runner.invoke(cli, ["import", "--help"])
+    assert result.exit_code == 0, result.stdout
+    assert "Usage:" in result.stdout and "Internal error" not in result.stdout
+    assert not (isolated_dir / "agentcad.json").exists()

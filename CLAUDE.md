@@ -35,7 +35,8 @@ pytest
 
 ## Product Contract
 
-- Commands return structured JSON.
+- Commands return structured JSON, except live `agentcad cloud docs` reads:
+  those default to Markdown, with `--format json` available. Errors remain JSON.
 - `agentcad run` creates versioned output directories and records metadata.
 - `agentcad docs` and `agentcad --help` are part of the agent-facing API.
 - Keep error messages concise and actionable for coding agents.
@@ -72,6 +73,28 @@ Keep friction artifacts under `.context/` unless they are intentional public
 fixtures. When validating unmerged CLI behavior, avoid stale installed code and
 stale daemons: use the current checkout (`PYTHONPATH=src` or editable install)
 and pass `--no-daemon` for command behavior checks.
+
+## Default changes and PR readiness
+
+When a feature becomes the default, audit old opt-in assumptions across CLI,
+MCP, browser tests, help/docs, generated recovery actions and installed-wheel
+checks. Keep explicit full-response assertions separate from bounded-default
+assertions; exercise copied snapshot recovery when optional fields are omitted.
+If the installed-wheel check now renders images, provide its headless display
+before that check runs. Do not suppress images in tests of default delivery.
+
+After updating a PR branch, verify the current head's required checks and GitHub
+merge state before calling it merge-ready. A successful push, local tests, or
+`mergeable=MERGEABLE` alone does not establish readiness. If checks are absent,
+inspect the Actions run and its jobs: zero jobs means dispatch has not created
+the checks; queued jobs have not started, so inspect runner assignment; failed
+jobs need log diagnosis.
+Confirm that a retry actually creates jobs. A no-code-change commit may not
+unstick dispatch. For persistently stalled dispatch with rejected cancel/rerun
+requests, refreshing the same PR by closing/reopening can be tried while
+preserving its branch and review history; this is an observed workaround, not
+a guaranteed remedy. Keep branch protection intact and report unresolved check
+states accurately.
 
 ## Explaining Your Work
 

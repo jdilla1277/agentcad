@@ -12,13 +12,18 @@ import time
 import uuid
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit
+from agentcad import __version__
 
 JSON_LIMIT = 8 * 1024 * 1024
 SCRIPT_LIMIT = SPEC_LIMIT = 256 * 1024
 IMPORT_LIMIT = 20 * 1024 * 1024
 STEP_LIMIT = 150 * 1024 * 1024
+MESH_LIMIT = 32 * 1024 * 1024
+ACTIVITY_CURSOR = re.compile(r"^[0-9]{20}_job_[0-9a-f]{24}\.json$")
+PERSONAL_KEY = re.compile(r"^acad_sk_[0-9a-f]{24}\.[A-Za-z0-9_-]{43}$")
+MESH_FORMATS = {"stl", "obj", "glb"}
 OPERATIONS = {"create_project", "projects", "project", "run", "import_step", "measure", "inspect",
-              "check_spec", "render", "diff", "job", "download"}
+              "check_spec", "render", "diff", "export", "job", "download", "activity"}
 
 
 class CloudError(Exception):
@@ -73,7 +78,7 @@ def _input(value, limit, cwd=None, suffixes=None):
 
 
 class CloudClient:
-    def __init__(self, api_url, key_id, secret, *, transport=None):
+    def __init__(self, api_url, key_id, secret, *, credential=None, transport=None):
         try:
             parsed = urlsplit(api_url)
             loopback = parsed.hostname == "localhost"
@@ -89,22 +94,56 @@ class CloudClient:
             valid = False
         if not valid:
             raise CloudError("invalid_config", "AGENTCAD_API_URL must be an HTTPS origin without credentials, a path, query, or fragment. HTTP is allowed only for loopback development.")
-        if not isinstance(key_id, str) or not re.fullmatch(r"key_[0-9a-f]{24}", key_id) or not isinstance(secret, str) or not 20 <= len(secret) <= 128:
+        if credential is not None:
+            from agentcad.account import CREDENTIAL
+            if not isinstance(credential, str) or not (CREDENTIAL.fullmatch(credential) or PERSONAL_KEY.fullmatch(credential)):
+                raise CloudError("invalid_config", "Use an API key from account settings or reconnect with agentcad account connect.")
+        elif not isinstance(key_id, str) or not re.fullmatch(r"key_[0-9a-f]{24}", key_id) or not isinstance(secret, str) or not 20 <= len(secret) <= 128:
             raise CloudError("invalid_config", "Set the issued AGENTCAD_KEY_ID and AGENTCAD_KEY_SECRET in the process environment.")
         try:
             import httpx
         except ImportError:
             raise CloudError("missing_dependency", "Install the cloud extra: pip install 'agentcad[cloud]' (included with agentcad[mcp]).") from None
-        self.httpx, self.secret = httpx, secret
+        self.httpx, self.secret = httpx, credential or secret
+        headers = {"Authorization": "Bearer " + credential} if credential else {"X-AgentCAD-Key-ID": key_id, "X-AgentCAD-Key-Secret": secret}
         self.http = httpx.Client(base_url=api_url.rstrip("/"), transport=transport, timeout=30,
-                                 follow_redirects=False, headers={"X-AgentCAD-Key-ID": key_id, "X-AgentCAD-Key-Secret": secret})
+                                 follow_redirects=False, headers={**headers,
+                                 "X-AgentCAD-Client-Mode": "api", "X-AgentCAD-Client-Version": __version__,
+                                 "X-AgentCAD-Client-Source": "api"})
 
     @classmethod
     def from_env(cls):
         values = [os.environ.get(name) for name in ("AGENTCAD_API_URL", "AGENTCAD_KEY_ID", "AGENTCAD_KEY_SECRET")]
+        personal_key = os.environ.get("AGENTCAD_API_KEY")
+        if personal_key is not None:
+            if not values[0] or any(values[1:]):
+                raise CloudError("invalid_config", "Set AGENTCAD_API_URL and AGENTCAD_API_KEY together; unset pilot KEY_ID and KEY_SECRET when using a personal key.")
+            return cls(values[0], None, None, credential=personal_key)
+        if not any(values[1:]):
+            from agentcad.account import AccountState, AccountError
+            try:
+                saved = AccountState().load()
+            except AccountError as error:
+                raise CloudError(error.reason, error.message) from None
+            if saved.get("credential"):
+                if values[0] and values[0].rstrip("/") != saved.get("api_url"):
+                    raise CloudError("profile_origin_mismatch", "The saved connection belongs to another cloud API. Use its original API or a separate AGENTCAD_ACCOUNT_STATE profile.")
+                return cls(saved.get("api_url"), None, None, credential=saved["credential"])
         if not all(values):
-            raise CloudError("missing_config", "Set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the CLI or MCP server process environment. Do not put secrets in project files.")
+            raise CloudError("missing_config", "Run agentcad account connect, approve in the browser, then agentcad account status. Existing pilot credentials can still use AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET.")
         return cls(*values)
+
+    def activity(self, limit=25, cursor=None):
+        if type(limit) is not int or not 1 <= limit <= 100 or (cursor is not None and (not isinstance(cursor, str) or not ACTIVITY_CURSOR.fullmatch(cursor))):
+            raise CloudError("invalid_activity_query", "Use a limit from 1 to 100 and the returned activity cursor.")
+        data = self._request("GET", "/v1/activity", params={"limit": limit, **({"cursor": cursor} if cursor else {})})
+        next_cursor = data.get("next_cursor")
+        if not isinstance(data.get("items"), list) or len(data["items"]) > limit or (next_cursor is not None and (not isinstance(next_cursor, str) or not ACTIVITY_CURSOR.fullmatch(next_cursor))):
+            raise CloudError("invalid_response", "The activity response is invalid. Retry the same request.")
+        if next_cursor:
+            data["next_actions"] = [f"agentcad cloud activity --limit {limit} --cursor {next_cursor}"]
+        data["more_at"] = "agentcad docs cloud"
+        return data
 
     def __enter__(self):
         return self
@@ -200,10 +239,12 @@ class CloudClient:
     def project(self, project):
         return self._request("GET", self._project_route(project))
 
-    def run(self, project, script, label, *, cwd=None, idempotency_key=None):
+    def run(self, project, script, label, *, cwd=None, idempotency_key=None, export_glb=False):
         route = self._project_route(project)
-        if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", label):
-            raise CloudError("invalid_label", "Supply a short label starting with a letter and containing letters, digits, _ or -.")
+        if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z](?:[A-Za-z0-9 _-]{0,62}[A-Za-z0-9_-])?", label):
+            raise CloudError("invalid_label", "Use 1 to 64 ASCII letters, digits, spaces, _ or -; start with a letter and do not end with a space.")
+        if type(export_glb) is not bool:
+            raise CloudError("invalid_export", "export_glb must be a boolean.")
         name, data = _input(script, SCRIPT_LIMIT, cwd, (".py",))
         try:
             data.decode("utf-8")
@@ -211,8 +252,14 @@ class CloudClient:
                 raise ValueError()
         except (ValueError, UnicodeError):
             raise CloudError("invalid_script", "The script must be UTF-8 Python source without NUL bytes.") from None
-        return self._submit(route + "/runs", kind="run", idempotency_key=idempotency_key,
-                            data={"label": label}, files={"file": (name, data, "text/x-python")})
+        result = self._submit(route + "/runs", kind="run", idempotency_key=idempotency_key,
+                              data={"label": label, **({"export_glb": "true"} if export_glb else {})},
+                              files={"file": (name, data, "text/x-python")})
+        if export_glb and result.get("export_glb") is not True:
+            raise CloudError("build_export_unconfirmed",
+                             "The host did not confirm the GLB request. Preserve this job and poll it; do not submit another build. Use a matching host build for build-time GLB.",
+                             job=result, idempotency_key=result["idempotency_key"])
+        return result
 
     def import_step(self, project, file, *, cwd=None, idempotency_key=None):
         route = self._project_route(project)
@@ -222,6 +269,15 @@ class CloudClient:
 
     def measure(self, project, version):
         return self._request("GET", self._version_route(project, version) + "/measure")
+
+    def export(self, project, version, formats, *, idempotency_key=None):
+        route = self._version_route(project, version)
+        if (not isinstance(formats, list) or not 1 <= len(formats) <= 3
+                or any(not isinstance(fmt, str) or fmt not in MESH_FORMATS for fmt in formats)
+                or len(set(formats)) != len(formats)):
+            raise CloudError("invalid_formats", "Choose each format once from stl, obj, glb; supply a nonempty list.")
+        return self._submit(route + "/exports", kind="export", idempotency_key=idempotency_key,
+                            json={"formats": sorted(formats)})
 
     def inspect(self, project, version, *, ids=False, summary=False, limit=100, validate_only=False, idempotency_key=None):
         route = self._version_route(project, version)
@@ -255,9 +311,21 @@ class CloudClient:
         if type(wait_seconds) is not int or not 0 <= wait_seconds <= 60:
             raise CloudError("invalid_wait", "wait_seconds must be an integer from 0 to 60. Poll the same job again if it is still running.")
         deadline = time.monotonic() + wait_seconds
+        result = None
         while True:
             timeout = min(30, max(0.1, deadline - time.monotonic())) if wait_seconds else 30
-            result = self._request("GET", route, timeout=timeout)
+            try:
+                result = self._request("GET", route, timeout=timeout)
+            except CloudError as exc:
+                # A final bounded GET can outlast the remaining wait window.
+                # Preserve only an actual authorized pending response, as the
+                # hosted MCP bridge does; the caller can poll the same job again.
+                if (result is not None and result.get("status") in {"queued", "running"} and wait_seconds
+                        and time.monotonic() >= deadline and exc.reason == "request_failed"
+                        and exc.details.get("http_status") is None):
+                    break
+                raise
+
             if result.get("status") in {"succeeded", "failed"} or time.monotonic() >= deadline:
                 break
             time.sleep(min(2, max(0, deadline - time.monotonic())))
@@ -278,8 +346,8 @@ class CloudClient:
 
     def download(self, project, destination, *, job=None, kind="step", version=None, path=None, cwd=None, overwrite=False):
         route = self._project_route(project)
-        if kind not in {"step", "render", "report"} or type(overwrite) is not bool:
-            raise CloudError("invalid_artifact", "Choose artifact kind step, render, or report.")
+        if kind not in {"step", "render", "report"} | MESH_FORMATS or type(overwrite) is not bool:
+            raise CloudError("invalid_artifact", "Choose artifact kind step, render, report, stl, obj, or glb.")
         if job is not None:
             if version is not None or path is not None:
                 raise CloudError("invalid_artifact", "Choose a job or a version/path reference, not both.")
@@ -291,9 +359,10 @@ class CloudClient:
                     raise CloudError("artifact_unavailable", "This job has no completed STEP download.")
                 version, path = artifact.get("version"), artifact.get("path")
             else:
-                route += f"/jobs/{job}/artifacts/" + ("iso.png" if kind == "render" else "result.json")
+                filename = "output." + kind if kind in MESH_FORMATS else "iso.png" if kind == "render" else "result.json"
+                route += f"/jobs/{job}/artifacts/" + filename
         elif version is None or path is None or kind != "step":
-            raise CloudError("invalid_artifact", "STEP needs a version/path reference or job ID; render/report needs a job ID.")
+            raise CloudError("invalid_artifact", "STEP needs a version/path reference or job ID; render/report/mesh needs a job ID.")
         if kind == "step":
             _version(version)
             if (not isinstance(path, str) or len(path) > 256 or "\\" in path or path.startswith("/")
@@ -306,7 +375,7 @@ class CloudClient:
             raise CloudError("invalid_destination", "Choose a file in an existing directory; symlinks and directories are not download destinations.")
         if target.exists() and not overwrite:
             raise CloudError("destination_exists", "The destination exists. Choose a new filename or explicitly set overwrite.")
-        limit = STEP_LIMIT if kind == "step" else JSON_LIMIT
+        limit = STEP_LIMIT if kind == "step" else MESH_LIMIT if kind in MESH_FORMATS else JSON_LIMIT
         temporary = None
         try:
             with self.http.stream("GET", route) as response:
@@ -354,12 +423,14 @@ class CloudClient:
                 temporary.unlink(missing_ok=True)
 
 
-def cloud_call(operation, **kwargs):
+def cloud_call(operation, *, client_mode="remote_cli", **kwargs):
     """One execution path for CLI and MCP, without changing the process directory."""
     if operation not in OPERATIONS:
         return CloudError("invalid_operation", "Unknown cloud operation.").payload(operation)
     try:
         with CloudClient.from_env() as client:
+            client.http.headers["X-AgentCAD-Client-Mode"] = client_mode
+            client.http.headers["X-AgentCAD-Client-Source"] = "mcp_client" if client_mode == "local_mcp" else "cli"
             result = getattr(client, operation)(**kwargs)
             result.setdefault("command", "cloud")
             result.setdefault("status", "success")

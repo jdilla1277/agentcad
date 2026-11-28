@@ -82,13 +82,14 @@ def test_registered_import_applies_declared_checks_without_advancing_current(
         "check_id": "length", "kind": "dimension", "axis": "x",
         "expected_mm": expected, "tolerance_mm": 0.1,
     }]}))
-    result = asyncio.run(server.mcp.call_tool("import_cad", {
+    result = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(source), "cwd": str(project), "label": "checked-import",
         "initialize": initialize, "checks_file": str(checks), "defer_checks": deferred,
+        "experimental_changes": True,
         "view": False, "diff": False, "report": False, "report_images": False,
         "build_dir": "artifacts",
         "full_response": True,
-    }))
+    })}))
     # The registered tool transports a refused import as one JSON text block.
     text, = result
     assert text.type == "text"
@@ -126,11 +127,11 @@ def test_registered_import_delivers_cli_json_and_checked_pngs(isolated_dir, monk
         return result
 
     monkeypatch.setattr(server, "_invoke", observed)
-    result = asyncio.run(server.mcp.call_tool("import_cad", {
+    result = asyncio.run(server.mcp.call_tool("import_cad", {**({
         "file": str(source), "cwd": str(project), "initialize": True,
         "view": False, "diff": False, "build_dir": "build with spaces",
         "full_response": True,
-    }))
+    })}))
     payload = _verify_images(result, project)
     assert payload == captured[0]
     assert payload["status"] == "success" and payload["_exit_code"] == 0
@@ -144,7 +145,7 @@ def test_registered_import_delivers_cli_json_and_checked_pngs(isolated_dir, monk
     assert payload["inspection"]["recognition"]["recognized_feature_count"] is None
     assert saved["source"]["filename"] == source.name
     assert (project / "edit.py").is_file()
-    assert payload["change"]["status"] == "completed"
+    assert "change" not in payload
     context = load_geometry(step)
     image_root = Path(payload["inspection"]["inventory"]["image_root"])
     for entry in payload["inspection"]["media"]:
@@ -261,9 +262,11 @@ def test_import_keeps_cli_errors_and_diagnostics(isolated_dir, error):
     if error == "uninitialized":
         options["initialize"] = False
     elif error == "malformed":
+        options["experimental_changes"] = True
         source = isolated_dir / "bad.step"
         source.write_text("not a STEP file", encoding="utf-8")
     elif error == "invalid":
+        options["experimental_changes"] = True
         source = Path(__file__).parents[1] / "tests/fixtures/validation/open_shell.step"
     elif error == "runtime":
         assert server._invoke(["init"], cwd=str(isolated_dir))["_exit_code"] == 0

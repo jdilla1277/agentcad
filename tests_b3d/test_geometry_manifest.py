@@ -1,11 +1,12 @@
 """Normalized imported identities: provenance, reload, lookup and real edits."""
 
+from tests.inspection_helpers import experimental_args
 import json
 from pathlib import Path
 
 import pytest
 
-from tests.inspection_helpers import full_response_args
+from tests.inspection_helpers import experimental_full_response_args as full_response_args
 
 from agentcad.cli import cli
 from agentcad.geometry_manifest import create_manifest, load_geometry, read_manifest
@@ -14,13 +15,13 @@ from tests_b3d.test_step_assembly import _nested_step
 
 
 def _import(runner, path, label="baseline", *extra):
-    result = runner.invoke(cli, full_response_args(["import", str(path), "--init", "--label", label, "--no-view", "--no-diff", *extra]))
+    result = runner.invoke(cli, experimental_args(full_response_args(["import", str(path), "--init", "--label", label, "--no-view", "--no-diff", *extra])))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
 
 def _json(runner, args):
-    result = runner.invoke(cli, full_response_args(args))
+    result = runner.invoke(cli, experimental_args(full_response_args(args)))
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
 
@@ -111,7 +112,7 @@ def test_wrong_version_kind_and_unknown_ids_fail(runner, isolated_dir):
     for value in ("face_v2_1", "face_v1_99999", "F1"):
         with pytest.raises(ValueError):
             context.pick_face(value)
-        response = runner.invoke(cli, ["inspect", step, "--id", value])
+        response = runner.invoke(cli, experimental_args(["inspect", step, "--id", value]))
         assert response.exit_code == 1
         assert json.loads(response.stdout)["status"] == "error"
     with pytest.raises(ValueError, match="Expected a face"):
@@ -143,7 +144,7 @@ def test_stale_data_fails_before_selection(runner, isolated_dir, monkeypatch, ch
         monkeypatch.setattr("agentcad.geometry_manifest._kernel_version", lambda: "incompatible")
     with pytest.raises(ValueError):
         load_geometry(step)
-    result = runner.invoke(cli, ["inspect", str(step), "--id", "face_v1_1"])
+    result = runner.invoke(cli, experimental_args(["inspect", str(step), "--id", "face_v1_1"]))
     assert result.exit_code == 1
 
 
@@ -210,3 +211,55 @@ def test_concurrent_manifest_publication_preserves_first_writer(tmp_path, monkey
         create_manifest(path, 1, source={"assembly_metadata": "preserved_source_document"})
     assert json.loads(path.with_name("geometry_manifest.json").read_text()) == first
     assert not list(tmp_path.glob(".geometry_manifest.json.*.tmp"))
+
+
+def test_rotated_face_normals_match_selected_faces_in_assembly_frame(tmp_path):
+    step = tmp_path / "output.step"
+    write_step_assembly(read_step_assembly(_nested_step(tmp_path / "source.step", tilted=True)), step)
+    saved = create_manifest(step, 1, source={"assembly_metadata": "preserved_source_document"})
+    geometry = load_geometry(step)
+    for entry in saved["entities"].values():
+        if entry["kind"] == "face":
+            normal = geometry.pick_face(entry["id"]).normal_at()
+            assert entry["normal"] == pytest.approx(dict(x=normal.X, y=normal.Y, z=normal.Z), abs=1e-6)
+    assert saved["inventory_revision"] == 2
+
+
+def test_pre_graduation_manifest_keeps_old_mapping_without_rewriting(tmp_path, monkeypatch):
+    import agentcad.geometry_manifest as manifests
+
+    step = tmp_path / "output.step"
+    write_step_assembly(read_step_assembly(_nested_step(tmp_path / "source.step", tilted=True)), step)
+    original_inventory = manifests._inventory
+    # Reproduce the previous face-normal measurement convention and manifest.
+    with monkeypatch.context() as patch:
+        patch.setattr(manifests, "_inventory", lambda shape: original_inventory(shape, legacy_normals=True))
+        saved = create_manifest(step, 1, source={"assembly_metadata": "preserved_source_document"})
+    saved.pop("inventory_revision")
+    saved.pop("manifest_id")
+    saved["manifest_id"] = manifests._digest(saved)
+    path = step.with_name("geometry_manifest.json")
+    path.write_text(json.dumps(saved))
+    before = path.read_bytes()
+    geometry = load_geometry(step)
+    face = geometry.record("face_v1_10")
+    assert face["normal_coordinate_frame"] == "surface_local"
+    assert face["normal"] == saved["entities"][face["id"]]["normal"]
+    assert face["normal"]["y"] == pytest.approx(1)
+    assert geometry.pick_face(face["id"]).normal_at().Z == pytest.approx(1)
+    assert geometry.pick_face(face["id"]).area == pytest.approx(face["area"])
+    assert path.read_bytes() == before
+
+
+def test_unknown_inventory_revision_refuses_selection(tmp_path):
+    import agentcad.geometry_manifest as manifests
+
+    step = tmp_path / "output.step"
+    write_step_assembly(read_step_assembly(_nested_step(tmp_path / "source.step")), step)
+    saved = create_manifest(step, 1, source={"assembly_metadata": "preserved_source_document"})
+    saved["inventory_revision"] = 99
+    saved.pop("manifest_id")
+    saved["manifest_id"] = manifests._digest(saved)
+    step.with_name("geometry_manifest.json").write_text(json.dumps(saved))
+    with pytest.raises(ValueError, match="Unsupported geometry inventory revision"):
+        load_geometry(step)

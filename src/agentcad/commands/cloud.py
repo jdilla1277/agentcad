@@ -22,10 +22,12 @@ cwd_option = click.option("--cwd", type=click.Path(file_okay=False), help="Resol
 
 @click.group()
 def cloud():
-    """Use hosted CAD projects with an API URL and issued credentials.
+    """Use hosted CAD projects with a connected CLI or an API key.
 
-    Set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the
-    process environment. See agentcad docs cloud. No local project is needed.
+    Run agentcad account connect and approve in your browser, or set AGENTCAD_API_URL, AGENTCAD_KEY_ID, and AGENTCAD_KEY_SECRET in the
+    process environment. Personal keys use AGENTCAD_API_URL and AGENTCAD_API_KEY instead.
+    See agentcad docs cloud. No local project is needed.
+    Use agentcad cloud docs for live first-use guides, without credentials.
     """
 
 
@@ -58,12 +60,13 @@ def get_project(project):
 @cloud.command("run")
 @project_arg
 @click.argument("script")
-@click.option("--label", required=True)
+@click.option("--label", required=True, help="Version label; quote names with spaces. See agentcad docs cloud for character limits.")
 @retry_option
 @cwd_option
-def run(project, script, label, idempotency_key, cwd):
+@click.option("--export", "mesh_format", type=click.Choice(["glb"]), help="Generate a part-aware GLB during this build.")
+def run(project, script, label, idempotency_key, cwd, mesh_format):
     """Upload one explicit Python CAD script; return a job immediately."""
-    _emit("run", project=project, script=script, label=label, idempotency_key=idempotency_key, cwd=cwd)
+    _emit("run", project=project, script=script, label=label, idempotency_key=idempotency_key, cwd=cwd, export_glb=mesh_format == "glb")
 
 
 @cloud.command("import")
@@ -128,6 +131,17 @@ def diff(project, from_version, to_version, idempotency_key):
     _emit("diff", project=project, from_version=from_version, to_version=to_version, idempotency_key=idempotency_key)
 
 
+@cloud.command("export")
+@project_arg
+@version_arg
+@click.option("--format", "formats", required=True, help="Comma-separated whole-model formats: stl, obj, glb.")
+@retry_option
+def export(project, version, formats, idempotency_key):
+    """Export a saved cloud version; return a job without rebuilding CAD."""
+    _emit("export", project=project, version=version, formats=[fmt.strip() for fmt in formats.split(",")],
+          idempotency_key=idempotency_key)
+
+
 @cloud.command("job")
 @project_arg
 @click.argument("job")
@@ -142,7 +156,7 @@ def job(project, job, wait, wait_seconds):
 @project_arg
 @click.argument("destination")
 @click.option("--job", default=None)
-@click.option("--kind", type=click.Choice(["step", "render", "report"]), default="step", show_default=True)
+@click.option("--kind", type=click.Choice(["step", "render", "report", "stl", "obj", "glb"]), default="step", show_default=True)
 @click.option("--version", type=click.IntRange(min=1), default=None)
 @click.option("--path", default=None, help="Returned version-relative output.step path.")
 @click.option("--overwrite", is_flag=True)
@@ -155,3 +169,38 @@ def download(project, destination, job, kind, version, path, overwrite, cwd):
     """
     _emit("download", project=project, destination=destination, job=job, kind=kind,
           version=version, path=path, overwrite=overwrite, cwd=cwd)
+
+
+@cloud.command("activity")
+@click.option("--limit", type=click.IntRange(1, 100), default=25, show_default=True)
+@click.option("--cursor", default=None, help="Continue with the next_cursor from the previous response.")
+def activity(limit, cursor):
+    """Read recent cloud jobs for this account, newest first."""
+    _emit("activity", limit=limit, cursor=cursor)
+
+
+@cloud.command("docs")
+@click.argument("page", required=False)
+@click.option("--format", "output_format", type=click.Choice(["markdown", "json"]), default="markdown", show_default=True)
+def docs(page, output_format):
+    """List live cloud guides or read PAGE. No account or API key is needed.
+
+    Markdown is the default. Use --format json for structured output.
+    Reads the same service-owned content as agentcad.dev/docs/cloud.
+    AGENTCAD_DOCS_URL selects an HTTPS website origin for preview testing.
+    Local CAD reference documentation remains available with agentcad docs.
+    """
+    from agentcad.cloud_docs import read_docs
+    result = read_docs(page)
+    if result["status"] == "error":
+        click.echo(json.dumps(result))
+        raise SystemExit(1)
+    if output_format == "markdown":
+        content = result.get("content")
+        if content is None:
+            content = "# Cloud guides\n\n" + "\n".join(
+                f"- {item['id']}: {item['title']} ({item['availability']})\n  {item['url']}"
+                for item in result["pages"])
+        click.echo(content, nl=not content.endswith("\n"))
+    else:
+        click.echo(json.dumps(result))

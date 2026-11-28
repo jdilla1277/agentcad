@@ -1,5 +1,8 @@
 # Default budgets for inspection delivery
 
+Import reports, typed geometry IDs, four-view images, jobs and artifact retrieval
+are available by default through the CLI and local MCP. No opt-in is required.
+
 Import and `inspect --report` bound the **complete JSON response** by default,
 including import metadata and job fields. With no context size supplied, the
 fallback is **2,000 estimated text tokens**, plus the existing image count and

@@ -320,7 +320,12 @@ def test_missing_build_manifest_action_can_be_executed(runner, project):
     failed = runner.invoke(cli, args)
     payload = json.loads(failed.stdout)
     assert payload["reason"] == "build_root_not_initialized"
-    action = payload["next_actions"][0]
+    inspected = runner.invoke(cli, shlex.split(payload["next_actions"][0])[1:])
+    assert inspected.exit_code == 0, inspected.output
+    assert json.loads(inspected.stdout)["build_root"] == str(project)
+    assert not (project / "new history").exists()
+    # Deliberately choosing another history still has an executable action.
+    action = payload["next_actions"][1]
     initialized = runner.invoke(cli, shlex.split(action)[1:])
     assert initialized.exit_code == 0, initialized.output
     retried = runner.invoke(cli, args)

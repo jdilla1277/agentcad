@@ -23,12 +23,13 @@ except ModuleNotFoundError:  # Python 3.10
 class ProjectError(Exception):
     def __init__(
         self, reason: str, message: str, suggestion: str,
-        *, next_actions: list[str] | None = None,
+        *, next_actions: list[str] | None = None, recovery: dict | None = None,
     ):
         super().__init__(message)
         self.reason = reason
         self.suggestion = suggestion
         self.next_actions = next_actions
+        self.recovery = recovery
 
     def payload(self, command: str) -> dict:
         payload = {
@@ -40,6 +41,8 @@ class ProjectError(Exception):
         }
         if self.next_actions is not None:
             payload["next_actions"] = self.next_actions
+        if self.recovery is not None:
+            payload["recovery"] = self.recovery
         return payload
 
 
@@ -91,14 +94,45 @@ class ProjectLayout:
         return str(path)
 
     def missing_manifest(self) -> ProjectError:
+        initialize = shlex.join(["agentcad", "init", "--build-dir", str(self.build_root)])
+        # Only an explicit override can be a mistaken selection. Resolve what
+        # omitting it would actually select, honoring TOML and nested discovery.
+        # Never silently fall back, or recommend a corrupt/foreign history.
+        existing = None
+        if self.source == "command":
+            try:
+                candidate = resolve_project()
+                if (candidate.project_root == self.project_root
+                        and candidate.build_root != self.build_root
+                        and candidate.manifest_path.is_file()):
+                    candidate.read_manifest(require_context=True)
+                    existing = candidate
+            except (ProjectError, OSError, ValueError):
+                pass  # Keep initialization guidance when no valid history exists.
+        if existing is not None:
+            return ProjectError(
+                "build_root_not_initialized",
+                f"No AgentCAD manifest at {self.manifest_path}; existing histories were left unchanged.",
+                f"Omit --build-dir to use the initialized project at {existing.build_root}. "
+                "Run `agentcad context` to inspect it, then retry your original command without --build-dir. "
+                f"If the alternate build root was intentional, run `{initialize}` to initialize a fresh history.",
+                next_actions=["agentcad context", initialize],
+                recovery={
+                    "detected_project_root": str(existing.project_root),
+                    "requested_build_root": str(self.build_root),
+                    "existing_build_root": str(existing.build_root),
+                    "action": "use_existing_project",
+                    "command": "agentcad context",
+                },
+            )
         return ProjectError(
             "build_root_not_initialized",
             f"No AgentCAD manifest at {self.manifest_path}; existing histories were left unchanged.",
             f"Run `agentcad init --build-dir {shlex.quote(str(self.build_root))}` from {self.project_root} to initialize a fresh history.",
-            next_actions=[shlex.join(["agentcad", "init", "--build-dir", str(self.build_root)])],
+            next_actions=[initialize],
         )
 
-    def read_manifest(self) -> dict:
+    def read_manifest(self, *, require_context: bool = False) -> dict:
         if not self.manifest_path.exists():
             raise self.missing_manifest()
         try:
@@ -125,6 +159,8 @@ class ProjectLayout:
                 ):
                     raise ValueError("version entries require a path")
                 self.version_dir(entry)
+            if require_context:
+                _validate_context_fields(data)
             return data
         except (OSError, ValueError) as exc:
             raise ProjectError(
@@ -153,6 +189,24 @@ class ProjectLayout:
                 f"Cannot write build directory {self.build_root}: {exc}",
                 "Choose a writable directory with --build-dir or fix its permissions.",
             ) from exc
+
+
+def _validate_context_fields(data: dict) -> None:
+    """Validate the project/history fields read directly by context.
+
+    Keep partial-manifest support for lower-level consumers, but use the same
+    checks for context itself and for a recommended context recovery action.
+    Older manifests may omit versions and optional source/runtime metadata.
+    """
+    if not isinstance(data.get("name"), str) or not data["name"].strip():
+        raise ValueError("context requires a non-empty project name")
+    for index, entry in enumerate(data.get("versions", [])):
+        number = entry.get("version")
+        if type(number) is not int or number < 1:
+            raise ValueError(f"versions[{index}].version must be a positive integer")
+        for field in ("label", "status", "path"):
+            if not isinstance(entry.get(field), str) or not entry[field].strip():
+                raise ValueError(f"versions[{index}].{field} must be a non-empty string")
 
 
 def resolve_project(
@@ -274,6 +328,18 @@ def project_options(function):
             ctx.meta["project_layout"] = resolve_project(build_dir)
         layout = get_project()
         name = ctx.command.name
+        if name in {"run", "import", "inspect"}:
+            from agentcad.experimental_inspect import validate
+            validate(ctx, kwargs)
+        from agentcad.experimental_changes import validate
+        validate(ctx, kwargs)
+        if name == "feedback" and (
+            kwargs.get("show_template")
+            or (kwargs.get("message") is None and kwargs.get("feedback_file") is None)
+        ):
+            # Template discovery/export needs no initialized or writable build
+            # root and must not create .agentcad state just to show questions.
+            return function(*args, **kwargs)
         initialize = name == "init" or (name == "import" and kwargs.get("init_flag"))
         writes = name in {
             "init",
@@ -286,8 +352,10 @@ def project_options(function):
             "feedback",
         } or (name == "diff" and kwargs.get("visual")) or (
             name == "inspect" and (kwargs.get("with_image") or kwargs.get("with_report"))
-        ) or (name == "check-spec" and kwargs.get("complete"))
-        if kwargs.get("dry_run") or (name == "run" and kwargs.get("request_status")):
+        ) or (name == "check-spec" and kwargs.get("complete")) or (
+            name in {"restore", "repair"} and not kwargs.get("request_status")
+        )
+        if kwargs.get("dry_run") or (name in {"run", "restore", "repair"} and kwargs.get("request_status")):
             writes = False
             ctx.meta["project_dry_run"] = True
         if name in {"run", "context", "recover", "parts"} or (
@@ -305,10 +373,11 @@ def project_options(function):
             layout.preflight()
         return function(*args, **kwargs)
 
-    return wrapped
+    from agentcad.experimental_changes import _COMMANDS, option
+    return option(wrapped) if function.__name__ in _COMMANDS else wrapped
 
 
-def derived_dir(command: str, *inputs: Path) -> Path:
+def derived_dir(command: str, *inputs: Path, create: bool = True) -> Path:
     """Keep legacy standalone behavior; contain configured derived artifacts."""
     layout = get_project()
     first = inputs[0].resolve()
@@ -322,7 +391,8 @@ def derived_dir(command: str, *inputs: Path) -> Path:
     stem = re.sub(r"[^\w.-]", "_", first.stem)[:64]
     result = layout.artifact_path(f"derived/{command}/{stem}-{digest}")
     try:
-        result.mkdir(parents=True, exist_ok=True)
+        if create:
+            result.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise ProjectError(
             "build_root_unwritable",
@@ -452,22 +522,27 @@ def _format_import_presentation(result, original_step, layout):
 
     report = result.get("inspection")
     if report is not None and report.get("budget", {}).get("scope") == "inspection_report":
-        from agentcad.inspection_report import ReportBudgetError, compact_report, _estimated_tokens
+        from agentcad.inspection_report import ReportBudgetError, compact_report
 
         try:
             result["inspection"] = compact_report(report)
         except ReportBudgetError as exc:
-            # Presentation failure cannot revoke the already committed CAD or
-            # mutate the original response/analysis to fit this caller's cwd.
-            result.pop("inspection")
-            recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
-                                  _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
-            result["inspection_delivery"] = {
-                "status": "omitted", "reason": "text_budget_too_small",
-                "text_tokens": report["budget"]["text_tokens"], "message": str(exc),
-                "next_actions": [shlex.join([
-                    "agentcad", "inspect", str(layout.artifact_path(original_step)),
-                    "--report", "--no-images", "--text-budget", str(recovery_budget),
-                    "--build-dir", str(layout.build_root),
-                ])],
-            }
+            _omit_import_report(result, report, original_step, layout, exc)
+
+
+def _omit_import_report(result, report, original_step, layout, error):
+    """Keep committed CAD success when caller-specific report additions overflow."""
+    from agentcad.inspection_report import _estimated_tokens
+
+    result.pop("inspection")
+    recovery_budget = max(2000, report["budget"]["text_tokens"] * 2,
+                          _estimated_tokens({**report, **layout.describe()}) * 2 + 256)
+    result["inspection_delivery"] = {
+        "status": "omitted", "reason": "text_budget_too_small",
+        "text_tokens": report["budget"]["text_tokens"], "message": str(error),
+        "next_actions": [shlex.join([
+            "agentcad", "inspect", str(layout.artifact_path(original_step)),
+            "--report", "--no-images", "--text-budget", str(recovery_budget),
+            "--build-dir", str(layout.build_root),
+        ])],
+    }
