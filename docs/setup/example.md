@@ -35,7 +35,7 @@ Before building, save this as `spec.json`:
 
 For the edit, copy `bracket.py` to `edited.py`, change only
 `HOLE_DIAMETER = 10` to `HOLE_DIAMETER = 12`, and save `edited-spec.json` with
-`diameter_mm` set to `12`. Use a new submission key and label. The edit should
+`diameter_mm` set to `12`. Use a new label and, for cloud submissions, a new retry key. The edit should
 remove about **552.9203 mm³**, preserve the spacer, and keep the same overall
 dimensions. Check the returned measurements and inspect the pictures, rather
 than treating this expected value as a test result.

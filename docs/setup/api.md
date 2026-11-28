@@ -1,9 +1,17 @@
 # API: unattended build and private download
 
-Complete [cloud access](cloud-access.md), including operator approval. Your host
-supplies `AGENTCAD_API_URL`, `AGENTCAD_KEY_ID`, and `AGENTCAD_KEY_SECRET` through
-your secret store. This pilot uses two custom headers, not a developer bearer
-token. An issued key works without an interactive browser session per job.
+Complete [cloud access](cloud-access.md): create your own named API key at
+[agentcad.dev/account/api-keys](https://agentcad.dev/account/api-keys). Production
+uses **`https://api.agentcad.dev`**. Privately load `AGENTCAD_API_KEY` and set:
+
+```sh
+export AGENTCAD_API_URL='https://api.agentcad.dev'
+```
+
+Requests use `Authorization: Bearer <API key>`. No interactive browser session is
+needed per job. The [shared cloud guide](https://agentcad.dev/docs/cloud/first-cloud-build)
+maintains the production account/key and HTTP onboarding instructions; this
+Python example uses the same service for the common local/cloud CAD task.
 
 You need an HTTPS client, not a local CAD engine. This example uses Python 3.12
 and HTTPX; `agentcad` is not required:
@@ -35,11 +43,8 @@ origin = os.environ["AGENTCAD_API_URL"].rstrip("/")
 parts = urlsplit(origin)
 if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
         or parts.path or parts.query or parts.fragment):
-    raise ValueError("Use the issued HTTPS origin without a path or credentials")
-headers = {
-    "X-AgentCAD-Key-ID": os.environ["AGENTCAD_KEY_ID"],
-    "X-AgentCAD-Key-Secret": os.environ["AGENTCAD_KEY_SECRET"],
-}
+    raise ValueError("Use an HTTPS API origin without a path or credentials")
+headers = {"Authorization": "Bearer " + os.environ["AGENTCAD_API_KEY"]}
 
 def get_json(client, path):
     # Use same-origin relative paths. Do not forward secrets to another host.
@@ -74,16 +79,26 @@ with httpx.Client(base_url=origin, headers=headers, timeout=60,
         ).raise_for_status().json()
     print("Job:", job["id"], flush=True)
     Path("job.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
-    deadline = time.monotonic() + 1200
+    deadline = time.monotonic() + 2100
     while job["status"] in {"queued", "running"}:
         if time.monotonic() >= deadline:
             raise TimeoutError("Keep job.json; poll this same job later")
         time.sleep(5)
-        job = get_json(client, job["poll_url"])
+        # Retry explicitly retryable reads; never submit another build here.
+        try:
+            next_job = get_json(client, job["poll_url"])
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code in {429, 502, 503, 504}:
+                continue
+            raise
+        job = next_job
+        Path("job.json").write_text(json.dumps(job, indent=2), encoding="utf-8")
     if job["status"] != "succeeded":
         raise RuntimeError(f"Job failed: {job.get('reason')}")
     measurement = get_json(client, job["measure_url"])
     print(json.dumps(measurement, indent=2))
+    if measurement.get("delivery_readiness", {}).get("ready") is not True:
+        raise RuntimeError("Not ready for delivery; inspect geometry/spec blockers")
     path = job["download_url"]
     if not path.startswith("/v1/") or path.startswith("//"):
         raise ValueError("Expected a private API download path")
@@ -105,8 +120,9 @@ references; keep credential values in your secret store.
 ## Check, render, edit, and deliver
 
 Every route below needs the same credential headers. Substitute actual
-`PROJECT`, `VERSION`, and `JOB` values; the host's `/openapi.json` describes
-its deployed API.
+`PROJECT`, `VERSION`, and `JOB` values;
+[production OpenAPI](https://api.agentcad.dev/openapi.json) describes
+the deployed API.
 
 | Action | Request |
 | --- | --- |
@@ -122,8 +138,12 @@ its deployed API.
 Use a different `Idempotency-Key` for each intended POST. Poll the same returned
 job; a 202 is acceptance, not completion. For a check, read its report's
 `geometry_valid` and `passed` separately from job status. Retrieve the render's
-actual PNG and the spec JSON report. STEP is the pilot's geometry export;
-hosted STL/OBJ/GLB exports and browser review/comments are unavailable.
+actual PNG and the spec JSON report. Require `delivery_readiness.ready` and
+passing task checks before delivery.
+Saved-version STL/OBJ/GLB exports are available at
+`POST /v1/projects/PROJECT/versions/VERSION/exports`; consult OpenAPI for the
+request, poll the job and inspect each mesh's validation. Hosted browser
+review/comments are not available.
 
 To edit, use `edited.py`, a new label and a new retry key, check the returned
 version with `edited-spec.json`, then compare the actual original/edited
@@ -132,20 +152,28 @@ deliver a generated picture as proof of validity or acceptance.
 
 ## Recover and revoke
 
+A timed-out or failed verification leaves the model saved but blocks delivery.
+After diagnosis, submit the same specification with a new verification key;
+replaying the failed key returns that failure. Do not rebuild a valid model
+just to retry its check.
+
 If a POST response is lost, repeat identical inputs with its saved key. If
 polling fails, keep `job.json` and retry that job's read instead of submitting
 again. A reused key with changed input conflicts. Local destination files are
 opened exclusively; choose another filename instead of overwriting evidence.
 
-Temporary 404s have been observed when polling an accepted job. Keep its
-returned IDs and retry the same read; contact the host if the error persists.
-A 404 after acceptance is not evidence that no work started.
+The example retries explicitly retryable polling statuses within its deadline.
+A genuine missing-job or cross-account 404 remains an error. On network failure,
+keep `job.json` and resume reading its `poll_url` with the same credentials;
+do not create a new submission merely because a read failed.
 
-The example buffers the downloaded STEP in memory and is intended for this
+The example saves a ready STEP for subsequent task checks; the download
+alone is not final delivery approval. It buffers the STEP in memory for this
 small fixture. Use a bounded streaming download for larger production files.
 Scripts/specs are limited to 256 KiB and imported STEP to 20 MiB. Do not follow
 redirects with credentials or fetch a different origin with these headers.
-For 401, check credentials/expiry with the operator; for 404, verify the project
+For 401, check the key, revocation and matching service environment; for 404,
+verify the project
 and job IDs and account access. Removing local credentials is not server-side
-revocation. Follow [operator replacement/revocation](cloud-access.md#replacement-and-revocation)
+revocation. Follow [key replacement/revocation](cloud-access.md#replacement-and-revocation)
 for unattended integrations and stop processes that retain old credentials.

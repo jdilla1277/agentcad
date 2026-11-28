@@ -7,7 +7,7 @@ Use Python 3.12 for this example. No cloud account or credentials are needed.
 mkdir cad-example
 cd cad-example
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'agentcad[mcp]==0.7.2'
+.venv/bin/python -m pip install 'agentcad[mcp]==0.8.2'
 .venv/bin/agentcad init --name Bracket
 .venv/bin/agentcad context
 ```
@@ -57,12 +57,13 @@ might select a different environment.
 Save the [example files](example.md), then ask the connected agent to:
 
 1. Call `context(cwd="/absolute/path/to/cad-example")` and confirm the runtime.
-2. Call `run(script="bracket.py", output="first", cwd=..., export="stl,obj", idempotency_key="first-build")`.
+2. Call `run(script="bracket.py", output="first", cwd=..., export="stl,obj")`.
 3. Read its `outputs.step`; call `inspect(file=STEP_PATH, summary=True, cwd=...)`
    and `check_spec(file=STEP_PATH, spec_file="spec.json", cwd=...)`.
-4. Review the returned preview and `project_viewer.url`. Check geometry validity,
+4. Review the returned preview and `project_viewer.url`. Check
+   `delivery_readiness.ready`, geometry validity,
    the spec verdict, and validation for every requested mesh.
-5. Run `edited.py` with `output="edited"` and a new key, check against
+5. Run `edited.py` with `output="edited"`, check against
    `edited-spec.json`, and call `diff(ref1="1", ref2="2", cwd=...)`
    using the actual returned version references.
 
@@ -71,20 +72,20 @@ calls, replace `...` with the same absolute working directory. Ask `docs` for
 the installed tool contract when needed. Deliver only the returned files that
 passed the checks.
 
-The example uses STL/OBJ. The same fixture's GLB failed closed-mesh validation
-on a clean 0.7.2 macOS arm64 install ([issue #272](https://github.com/jdilla1277/agentcad/issues/272)).
-If you request it separately, read `mesh_validation.glb`; a generated file
-with a failed verdict must not be delivered as a validated mesh.
+STL/OBJ are optional exports; GLB is also supported. Read the requested mesh's
+`mesh_validation` verdict. Require `delivery_readiness.ready` and passing task
+checks before delivery. Missing or incomplete checks are not approval.
 
-Parts/review CLI commands do not all have native MCP tools in 0.7.2. If your
+Parts/review CLI commands do not all have native MCP tools in 0.8.2. If your
 agent has shell access, it can read/reply to local review comments with the
 CLI; do not assume those commands are discoverable MCP tools.
 
 ## Recover and disconnect
 
-For a lost build response, call `run_status(idempotency_key="first-build", cwd=...)`.
-Keep the original key; a repair or deliberate new build needs a new one. A
-graphics failure can leave valid STEP output; inspect artifact statuses and
+For a lost build response, call `context(cwd=...)` and inspect saved versions
+before creating another. Local Python `run_status`/retry keys require the separate
+WIP `experimental_changes=True` workflow; this ordinary local guide does not
+enable it. A graphics failure can leave valid STEP output; inspect artifact statuses and
 use `preview=False, diff=False, view=False` for a core-only headless build.
 
 Remove or disable this server in your client to disconnect it, then reload the

@@ -38,7 +38,7 @@ for the baseline, caveats, and next evaluations.
 
 For separate local CLI, local MCP, remote CLI, remote MCP, and API instructions,
 see [Choose an AgentCAD setup](docs/setup/README.md). Cloud guides describe the
-current operator-issued pilot access and its limits.
+production API, self-service keys, and mode-specific capabilities.
 
 Install agentcad, then paste this into Claude Code, Cursor, or any coding agent:
 

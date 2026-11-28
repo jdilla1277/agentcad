@@ -31,10 +31,10 @@ credential. Public docs access grants no cloud compute permission.
 Errors remain structured JSON with a nonzero exit, including when Markdown was
 requested; outages do not fall back to a bundled guide that might be stale.
 
-## Account activity and self-service keys (next client release)
+## Account activity and self-service keys
 
-On an enabled host, create a personal API key on the website's account page.
-Set `AGENTCAD_API_URL` to that host's HTTPS API origin and `AGENTCAD_API_KEY`
+Create a personal API key at [agentcad.dev/account/api-keys](https://agentcad.dev/account/api-keys).
+Set `AGENTCAD_API_URL=https://api.agentcad.dev` and `AGENTCAD_API_KEY`
 to the key in your process environment. Unset `AGENTCAD_KEY_ID` and
 `AGENTCAD_KEY_SECRET` when choosing this method. Keep the key out of source,
 command arguments and chat messages. A browser-approved CLI installation also
@@ -60,8 +60,9 @@ credential in your MCP client's secure environment/header settings; do not paste
 credentials into a conversation. Hosts verify each request, including discovery,
 and revocation blocks subsequent requests. Old pilot headers remain supported.
 The usual local MCP server also exposes `cloud_activity`, using the same cloud
-configuration as the CLI. These additions require the next matching client
-release or the supplied Preview checkout; older clients do not have this command.
+configuration as the CLI. Activity and personal-key support are available in
+the published 0.8.2 client. Live `cloud docs` reads above require the later paired
+client release; use the website or public HTTP reader with 0.8.2.
 
 
 Your agent writes a CAD script on your machine. AgentCAD uploads that file,
@@ -74,30 +75,26 @@ tools; it does not supply the LLM.
 
 For separate first-use instructions, choose [remote CLI](setup/remote-cli.md),
 [remote MCP](setup/remote-mcp.md), or [REST API](setup/api.md). First read
-[cloud access](setup/cloud-access.md): access requires operator approval and
-issued credentials, and the published pilot has no self-service signup or login.
+[cloud access](setup/cloud-access.md) for the production origin and self-service
+API keys. All five setup paths share one bracket-and-spacer build/edit example.
 
 ## Connect directly to a hosted MCP URL
 
-If your host supplies an MCP URL, configure that URL and your issued credentials
-in a client supporting Streamable HTTP and custom HTTP headers. This connection
-does not need AgentCAD or a CAD engine installed on your machine. Your host
-must enable the hosted endpoint; an API address alone does not imply MCP access.
-
-For Codex, use this MCP configuration with your actual issued URL:
+Use **`https://api.agentcad.dev/mcp`** with a personal API key in a client
+supporting Streamable HTTP and bearer headers. No local CAD engine is needed.
+For Codex, load `AGENTCAD_API_KEY` privately and configure:
 
 ```toml
 [mcp_servers.agentcad_cloud]
-url = "https://api.example.test/mcp"
-env_http_headers = { "X-AgentCAD-Key-ID" = "AGENTCAD_KEY_ID", "X-AgentCAD-Key-Secret" = "AGENTCAD_KEY_SECRET" }
+url = "https://api.agentcad.dev/mcp"
+bearer_token_env_var = "AGENTCAD_API_KEY"
 tool_timeout_sec = 120
 ```
 
-Launch your client from the environment containing the two credential values.
-Keep values out of prompts and configuration files; this example stores only
-their environment variable names. See the [Codex MCP reference](https://developers.openai.com/codex/mcp)
-for the client configuration location. This pilot connection requires a client
-that can supply those headers; it does not provide an OAuth/login flow.
+Launch the client from the environment containing the key. See the
+[Codex MCP reference](https://developers.openai.com/codex/mcp) for configuration
+and the [remote MCP setup guide](setup/remote-mcp.md) for the complete example.
+Other hosts/environments need their own matching endpoint and credentials.
 
 Ask the connected agent to call `cloud_help`. The build-and-edit loop below
 also applies to the hosted tools, with these file-handling differences:
@@ -125,31 +122,24 @@ way to use the same cloud projects and results.
 
 ## 1. Install AgentCAD and supply your credentials
 
-This setup uses an API address, key ID, and secret issued by your host.
-Hosts that enable browser-assisted installation approval can instead use
-[`agentcad account connect`](accounts.md). Local CAD commands need no account.
+Use the production origin and a self-service personal key from
+[cloud access](setup/cloud-access.md). Browser-approved CLI installation
+credentials also work; see [account connect](accounts.md). Local CAD needs no account.
 
-Install the local cloud adapter with Python 3.10–3.12; this example uses
-Python 3.12:
+Install the local cloud adapter with Python 3.10–3.12:
 
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install 'agentcad[mcp]==0.8.2'
-.venv/bin/agentcad cloud --help
+export AGENTCAD_API_URL='https://api.agentcad.dev'
+unset AGENTCAD_KEY_ID AGENTCAD_KEY_SECRET
+# Load AGENTCAD_API_KEY privately from your secret manager.
+.venv/bin/agentcad cloud projects list
 ```
 
-Your host should supply these three environment variables to the process that
-starts your CLI or MCP server:
-
-| Variable | Value |
-| --- | --- |
-| `AGENTCAD_API_URL` | The HTTPS API address supplied by your host. |
-| `AGENTCAD_KEY_ID` | Your issued key ID. |
-| `AGENTCAD_KEY_SECRET` | Your issued secret. |
-
-Keep the values in your password manager or existing secret store. Do not put
-them in this document, your CAD script, a project file, or an agent prompt.
-Restart your agent or MCP server after changing its environment.
+Keep secrets out of CAD scripts, project config, command arguments and prompts.
+Restart the client after changing its environment. Existing operator-issued
+key-ID/secret pairs remain supported for integrations already using them.
 
 ## 2. Connect your agent
 
@@ -159,8 +149,8 @@ Use the same local AgentCAD MCP server as for local CAD work:
 /absolute/path/to/.venv/bin/python -m agentcad.mcp
 ```
 
-Configure your agent client to start that command and pass the three environment
-variables above. Use absolute paths for the Python executable and working folder.
+Configure your agent client to start that command and pass the origin and
+personal-key environment variables above. Use absolute paths for the Python executable and working folder.
 The server exposes the local tools and the explicit `cloud_*` tools together.
 Ask your agent to use the cloud tools for cloud projects.
 
@@ -173,7 +163,7 @@ containing your credentials:
 command = "/absolute/path/to/.venv/bin/python"
 args = ["-m", "agentcad.mcp"]
 cwd = "/absolute/path/to/your/cad-folder"
-env_vars = ["AGENTCAD_API_URL", "AGENTCAD_KEY_ID", "AGENTCAD_KEY_SECRET"]
+env_vars = ["AGENTCAD_API_URL", "AGENTCAD_API_KEY"]
 tool_timeout_sec = 120
 ```
 
@@ -182,8 +172,8 @@ See the [Codex MCP reference](https://developers.openai.com/codex/mcp) for your
 client's configuration location. Other agent clients can start the same command
 using their own MCP configuration format.
 
-This server runs on your machine and calls the HTTPS API. For a host-issued
-remote URL, use the hosted connection above. You do not need to initialize a
+This server runs on your machine and calls the HTTPS API. For a direct
+remote connection, use the hosted endpoint above. You do not need to initialize a
 local AgentCAD project for either connection.
 
 If you prefer the CLI, give your agent the `.venv/bin/agentcad` executable and
@@ -367,6 +357,7 @@ Keep these decisions separate:
 | --- | --- |
 | Job `status: "succeeded"` | The requested operation completed. |
 | `geometry_valid: true` or measurement `metrics.is_valid: true` | The CAD shape passed the engine's geometry validity check. |
+| `delivery_readiness.ready: true` | The saved STEP has completed deliverable geometry gates and no failed, incomplete or stale declared checks block delivery; task intent and human acceptance still need review. |
 | Spec `passed: true` | The submitted spec's supported checks passed and no unsupported requirement prevented a full verdict. |
 | Spec `passed: false` | A supported requirement failed, even if the job succeeded. |
 | Spec `passed: null` | The full spec has no pass verdict. Read the unsupported requirements and any supported-check results. |

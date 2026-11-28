@@ -1,59 +1,64 @@
 # Cloud access and credentials
 
-The current hosted pilot requires an API origin, key ID, and secret issued by
-your host. Contact the host/operator to request access and confirm the agreed
-pilot dates, processing limits, and data retention before uploading a design.
-If access is pending, wait for operator approval. Possessing credentials or
-signing in to an agent provider does not establish permission to run CAD.
+AgentCAD Cloud preview access is self-service. Sign up or sign in at
+[agentcad.dev/account](https://agentcad.dev/account), accept the terms, and
+create a named API key at
+[account/api-keys](https://agentcad.dev/account/api-keys). Copy its secret when
+shown and store it privately. See the
+[shared first-cloud-build guide](https://agentcad.dev/docs/cloud/first-cloud-build)
+for the maintained production onboarding steps.
 
-There is no self-service AgentCAD signup/login or approval-status command in
-the published 0.7.2 pilot client. Ask the operator to confirm approval/status;
-do not try an invented login command or treat an authentication-only read as
-proof of compute approval. These instructions do not claim that the current
-pilot implements the later self-service enrollment or cutoff flows.
+Production connections use:
 
-Your host supplies these values through your secret store or process environment:
-
-| Variable | Meaning |
+| Setting | Value |
 | --- | --- |
-| `AGENTCAD_API_URL` | Actual HTTPS API origin, without `/mcp`, a path, or credentials |
-| `AGENTCAD_KEY_ID` | Issued key identifier |
-| `AGENTCAD_KEY_SECRET` | Issued secret |
+| Account and key management | `https://agentcad.dev` |
+| `AGENTCAD_API_URL` | `https://api.agentcad.dev` (no path) |
+| Hosted MCP URL | `https://api.agentcad.dev/mcp` |
+| `AGENTCAD_API_KEY` | Your personal API key, loaded privately |
+| HTTP authentication | `Authorization: Bearer <your API key>` |
 
-Pass them to the process that launches the CLI or local MCP server. Remote MCP
-uses the two credential values as HTTP headers and a separately supplied `/mcp`
-URL. The API uses `X-AgentCAD-Key-ID` and `X-AgentCAD-Key-Secret` on every
-private request. This key pair is not a single `Authorization: Bearer` token.
+Set the origin and load the key from your secret manager or private process
+environment. Do not paste secrets into chat, source, URLs or committed config.
+For the CLI/local MCP adapter, unset `AGENTCAD_KEY_ID` and
+`AGENTCAD_KEY_SECRET` when choosing a personal key. Launch the agent client
+from the environment containing the key; restart it after credential changes.
 
-Store secrets outside project files, prompts, URLs, and version control. Load
-them from your existing secret manager; these guides do not require a custom
-AgentCAD launcher. Restart the client/server after changing its environment.
-The example hostname `api.example.test` is a placeholder, not a deployed service.
-Use your issued origin; do not switch domains without the host's confirmation.
+```sh
+export AGENTCAD_API_URL='https://api.agentcad.dev'
+unset AGENTCAD_KEY_ID AGENTCAD_KEY_SECRET
+# Load AGENTCAD_API_KEY privately before starting the CLI or agent client.
+```
 
-List existing projects and select a returned ID before creating a new design.
-Project names are labels, not unique identifiers. Clients using the same
-authorized account can continue a saved project and download its versions.
-There is no automatic upload or synchronization of local folders/history.
+The older operator-issued key-ID/secret pair remains supported for existing
+integrations; it is not required for this walkthrough. A preview-site key belongs
+to its matching service environment. Do not send it to production or silently
+switch API origins. The [account guide](../accounts.md) also describes browser-
+approved CLI installation credentials. MCP hosts can have their own connection
+flows; the [remote MCP guide](remote-mcp.md) uses an explicit bearer header and
+does not require an OAuth-only client to accept custom headers.
+
+List projects to verify the connection before creating work. An empty list is
+normal for a new account. For 401, check that the key is valid, unrevoked and
+from the same environment. For 404, check returned references and account access.
+Do not treat every 404 as transient or submit duplicate work after a polling
+failure. Keep the accepted job/project IDs and original retry key.
 
 ## Replacement and revocation
 
-The pilot has no self-service key list/rotate/revoke interface. Request a
-replacement or revocation from the operator. Test the replacement on the same
-project, then have the old pair revoked. Keep accepted job IDs and retry keys;
-do not create another project just because credentials changed.
+Manage or revoke keys on the website's [API keys page](https://agentcad.dev/account/api-keys).
+For replacement, create a new named key, check access to the same project, then
+revoke the old key. Revocation blocks subsequent requests; accepted work and
+project history are not deleted by removing a credential.
 
-To stop a shell from using its loaded credentials:
+To disconnect locally, remove/disable the remote MCP entry, reload the client,
+and unset the environment variables in shells and processes that inherited them:
 
 ```sh
-unset AGENTCAD_API_URL AGENTCAD_KEY_ID AGENTCAD_KEY_SECRET
+unset AGENTCAD_API_URL AGENTCAD_API_KEY AGENTCAD_KEY_ID AGENTCAD_KEY_SECRET
 ```
 
-Also stop/reload any client or MCP process that inherited them. Remove the
-remote MCP configuration when disconnecting that client. Local removal does
-**not** revoke the issued key pair on the service or disconnect other copies.
-
-Read the host's terms for operator access, the role of your LLM provider,
-retention, deletion, usage records, and pilot expiry. These guides do not
-promise an automatic trial, deletion schedule, paid conversion, or features
-that have not been implemented and verified.
+Local removal does not revoke other copies. Key revocation is separate from
+cleanup/deletion of retained designs. Read the current
+[privacy policy](https://agentcad.dev/privacy), [terms](https://agentcad.dev/terms)
+and shared guide for preview limits, retained outputs and deletion requests.
